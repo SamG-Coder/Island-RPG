@@ -1,5 +1,6 @@
 using IslandRpg.World;
 using IslandRpg.Gameplay;
+using IslandRpg.Persistence;
 using OpenTK.Mathematics;
 
 const long seed = 8675309;
@@ -218,6 +219,26 @@ try
     var negativeLoaded = store.LoadOrGenerate(new(-1, -1));
     Require(negativeLoaded.Coordinate == new ChunkCoordinate(-1, -1),
         "negative region coordinates must round-trip");
+
+    var saves = new GameSaveRepository(Path.Combine(root, "profiles"));
+    var player = saves.CreatePlayer(
+        "Test Hero", EntityGender.Female, 3, 5);
+    var world = saves.CreateWorld("Test Realm", 4321, player.Id);
+    saves.SaveWorldPlayer(
+        world.Id, new(player.Id, 12.5f, -8.25f, DateTime.UtcNow));
+    Require(saves.ListPlayers().Single().Id == player.Id,
+        "character profiles must be stored independently");
+    Require(saves.ListWorlds().Single().Id == world.Id,
+        "named world profiles must round-trip");
+    var worldPlayer = saves.LoadWorldPlayer(world.Id, player.Id);
+    Require(worldPlayer is not null &&
+            worldPlayer.PositionX == 12.5f &&
+            worldPlayer.PositionY == -8.25f,
+        "character position must be stored per world");
+    saves.DeletePlayer(player.Id);
+    Require(saves.ListPlayers().Count == 0 &&
+            saves.LoadWorldPlayer(world.Id, player.Id) is null,
+        "deleting a character must remove its world-specific states");
 }
 finally
 {

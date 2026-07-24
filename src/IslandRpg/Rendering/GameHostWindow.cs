@@ -1,6 +1,7 @@
 using IslandRpg.Assets;
 using FontStashSharp;
 using FontStashSharp.Interfaces;
+using IslandRpg.Persistence;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
@@ -18,7 +19,16 @@ internal sealed class GameHostWindow : GameWindow
     private const int ReferenceWidth = 1280;
     private const int ReferenceHeight = 720;
     internal enum PreviewMode { Assets, Island, World, Game }
-    private enum ScreenState { LoadingAssets, PreparingGpu, WorldPreview }
+    private enum ScreenState { LoadingAssets, PreparingGpu, MainMenu, WorldPreview }
+    private enum FrontendPage
+    {
+        Main,
+        CharacterSelect,
+        CharacterCreate,
+        NewWorld,
+        LoadWorld,
+        Settings
+    }
     private sealed class GpuWorldChunk(
         WorldChunk chunk, int vbo, int vertexCount,
         int weightsA, int weightsB, int weightsC, int weightsD, int shoreDistance)
@@ -48,10 +58,27 @@ internal sealed class GameHostWindow : GameWindow
         int RequestId,
         IReadOnlyList<Vector2> Path,
         QueuedWorldAction? Action = null);
+    private sealed record NewWorldPreviewResult(
+        string SeedText, long Seed, Vector2 Spawn, byte[] Pixels);
 
     private readonly string _install;
     private readonly PreviewMode _mode;
-    private readonly long _worldSeed;
+    private long _worldSeed;
+    private readonly GameSaveRepository _saves = new();
+    private WorldProfile? _activeWorld;
+    private PlayerProfile? _activePlayer;
+    private PlayerProfile? _selectedPlayer;
+    private FrontendPage _frontendPage;
+    private readonly TextBoxControlState _worldNameTextBox = new("New World");
+    private readonly TextBoxControlState _seedTextBox =
+        new(Random.Shared.NextInt64().ToString());
+    private readonly TextBoxControlState _playerNameTextBox = new();
+    private EntityGender _newPlayerGender = EntityGender.Male;
+    private int _newSkinTone = 2;
+    private int _newTeamColor;
+    private bool _menuLeftWasDown;
+    private string? _frontendError;
+    private string? _pendingDeletePlayerId;
     private WorldChunkStore? _worldStore;
     private readonly Dictionary<ChunkCoordinate, GpuWorldChunk> _worldChunks = [];
     private Task<WorldChunk>? _pendingChunkTask;
@@ -118,6 +145,10 @@ internal sealed class GameHostWindow : GameWindow
     private readonly MinimapControlState _minimapUi = new();
     private SpriteFrame? _minimapFrame;
     private int _minimapTexture;
+    private int _newWorldPreviewTexture;
+    private SpriteFrame? _newWorldPreviewFrame;
+    private Task<NewWorldPreviewResult>? _newWorldPreviewTask;
+    private string? _newWorldPreviewSeedText;
     private Vector2i _minimapCenter = new(int.MinValue, int.MinValue);
     private byte[]? _minimapTerrain;
     private Task<MinimapBuildResult>? _minimapBuildTask;
@@ -174,6 +205,9 @@ internal sealed class GameHostWindow : GameWindow
         GL.BindVertexArray(_vao);
         _streamVbo = GL.GenBuffer();
         CreateSceneTarget();
+        PrepareGameUi();
+        var settings = _saves.LoadSettings();
+        if (settings.Fullscreen) WindowState = WindowState.Fullscreen;
         var progress = new Progress<(int Done, int Total, string Name)>(value =>
         {
             _done = value.Done;
@@ -228,7 +262,14 @@ internal sealed class GameHostWindow : GameWindow
         _waterTime = (_waterTime + (float)e.Time) % 10000f;
         if (KeyboardState.IsKeyPressed(Keys.Escape))
         {
-            if (_chatUi.Input.Focused) _chatUi.BlurInput();
+            if (_screen == ScreenState.MainMenu &&
+                _frontendPage != FrontendPage.Main)
+            {
+                _frontendPage = FrontendPage.Main;
+                BlurTextBoxes();
+                _frontendError = null;
+            }
+            else if (_chatUi.Input.Focused) _chatUi.BlurInput();
             else Close();
         }
         if (_screen == ScreenState.WorldPreview && _mode == PreviewMode.World &&
@@ -295,15 +336,17 @@ internal sealed class GameHostWindow : GameWindow
                     else
                     {
                         PrepareWorldTerrain();
-                        _worldStore = new WorldChunkStore(_worldSeed);
                         _camera = Vector2.Zero;
                         _zoom = .8f;
                         if (_mode == PreviewMode.Game)
                         {
                             PrepareEntityAnimations();
-                            _player = new WorldEntity(FindPlayableSpawn());
-                            FollowPlayer();
+                            BeginMenuPreview();
+                            _screen = ScreenState.MainMenu;
+                            Title = "Island RPG";
+                            return;
                         }
+                        _worldStore = new WorldChunkStore(_worldSeed);
                         StreamWorld();
                     }
                     _screen = ScreenState.WorldPreview;
@@ -329,6 +372,12 @@ internal sealed class GameHostWindow : GameWindow
                     Title = $"Island RPG - {_worldAssets.Count} world graphics + {_catalog.TerrainTiles.Count} terrain tiles";
                 }
             }
+        }
+
+        if (_screen == ScreenState.MainMenu)
+        {
+            UpdateMenuPreview((float)e.Time);
+            UpdateFrontend();
         }
 
         if (_screen == ScreenState.WorldPreview)
@@ -374,6 +423,419 @@ internal sealed class GameHostWindow : GameWindow
             _camera += Vector2.Normalize(direction) * 720f * elapsed;
     }
 
+    private void BeginMenuPreview()
+    {
+        _worldSeed = 78193021;
+        var previewRoot = Path.Combine(
+            Path.GetTempPath(), "IslandRpg", "MenuPreview");
+        _worldStore = new WorldChunkStore(
+            _worldSeed, previewRoot, "terrain");
+        _camera = new Vector2(120, -80);
+        _zoom = .9f;
+        _selectedPlayer = _saves.ListPlayers().FirstOrDefault();
+        _frontendPage = _selectedPlayer is null
+            ? FrontendPage.CharacterCreate
+            : FrontendPage.Main;
+        if (_selectedPlayer is null) FocusTextBoxAtEnd(_playerNameTextBox);
+        else BlurTextBoxes();
+        StreamWorld();
+    }
+
+    private void UpdateMenuPreview(float elapsed)
+    {
+        _camera.X -= 7f * elapsed;
+        _camera.Y += 2f * elapsed;
+        foreach (var chunk in _worldChunks.Values)
+            chunk.Opacity = Math.Min(1, chunk.Opacity + elapsed / .38f);
+        StreamWorld();
+    }
+
+    private void UpdateFrontend()
+    {
+        if (_frontendPage == FrontendPage.NewWorld)
+            UpdateNewWorldPreview();
+        var textBox = FocusedTextBox();
+        textBox?.UpdateKeyboard(
+            KeyboardState,
+            () => ClipboardString,
+            value => ClipboardString = value);
+
+        var leftDown = MouseState.IsButtonDown(MouseButton.Left);
+        textBox?.UpdatePointer(
+            MouseState.Position, leftDown, MeasureUiText, 14);
+        var clicked = leftDown && !_menuLeftWasDown;
+        _menuLeftWasDown = leftDown;
+        if (!clicked) return;
+
+        var pointer = MouseState.Position;
+        _frontendError = null;
+        if (_frontendPage != FrontendPage.Main &&
+            FrontendCloseButtonBounds().Contains(pointer))
+        {
+            _frontendPage = FrontendPage.Main;
+            BlurTextBoxes();
+            _pendingDeletePlayerId = null;
+            return;
+        }
+        switch (_frontendPage)
+        {
+            case FrontendPage.Main:
+                if (MenuButton(0).Contains(pointer))
+                    _frontendPage = FrontendPage.NewWorld;
+                else if (MenuButton(1).Contains(pointer))
+                    _frontendPage = FrontendPage.LoadWorld;
+                else if (MenuButton(2).Contains(pointer))
+                    _frontendPage = FrontendPage.CharacterSelect;
+                else if (MenuButton(3).Contains(pointer))
+                    _frontendPage = FrontendPage.Settings;
+                else if (MenuButton(4).Contains(pointer))
+                    Close();
+                break;
+            case FrontendPage.CharacterSelect:
+                UpdateCharacterSelectClick(pointer);
+                break;
+            case FrontendPage.CharacterCreate:
+                UpdateCharacterCreateClick(pointer);
+                break;
+            case FrontendPage.NewWorld:
+                UpdateNewWorldClick(pointer);
+                break;
+            case FrontendPage.LoadWorld:
+                UpdateLoadWorldClick(pointer);
+                break;
+            case FrontendPage.Settings:
+                if (SettingsToggleBounds().Contains(pointer))
+                {
+                    var settings = _saves.LoadSettings();
+                    var fullscreen = !settings.Fullscreen;
+                    _saves.SaveSettings(settings with { Fullscreen = fullscreen });
+                    WindowState = fullscreen
+                        ? WindowState.Fullscreen
+                        : WindowState.Normal;
+                }
+                else if (BackButtonBounds().Contains(pointer))
+                    _frontendPage = FrontendPage.Main;
+                break;
+        }
+    }
+
+    private void UpdateNewWorldClick(Vector2 pointer)
+    {
+        if (NewWorldFieldBounds(0).Contains(pointer))
+            FocusTextBox(
+                _worldNameTextBox, NewWorldFieldBounds(0), pointer);
+        else if (NewWorldFieldBounds(1).Contains(pointer))
+            FocusTextBox(
+                _seedTextBox, NewWorldFieldBounds(1), pointer);
+        else if (RandomSeedButtonBounds().Contains(pointer))
+        {
+            _seedTextBox.SetText(Random.Shared.NextInt64().ToString());
+            FocusTextBoxAtEnd(_seedTextBox);
+        }
+        else if (CreateWorldButtonBounds().Contains(pointer))
+            CreateAndEnterWorld();
+        else if (BackButtonBounds().Contains(pointer))
+        {
+            _frontendPage = FrontendPage.Main;
+            BlurTextBoxes();
+        }
+        else
+            BlurTextBoxes();
+    }
+
+    private void UpdateCharacterCreateClick(Vector2 pointer)
+    {
+        if (CharacterNameBounds().Contains(pointer))
+            FocusTextBox(
+                _playerNameTextBox, CharacterNameBounds(), pointer);
+        else if (GenderButtonBounds().Contains(pointer))
+            _newPlayerGender = _newPlayerGender == EntityGender.Male
+                ? EntityGender.Female
+                : EntityGender.Male;
+        else if (CreateCharacterButtonBounds().Contains(pointer))
+            CreateCharacter();
+        else
+        {
+            for (var index = 0; index < 5; index++)
+                if (SkinSwatchBounds(index).Contains(pointer))
+                {
+                    _newSkinTone = index;
+                    return;
+                }
+            for (var index = 0; index < 8; index++)
+                if (TeamSwatchBounds(index).Contains(pointer))
+                {
+                    _newTeamColor = index;
+                    return;
+                }
+            if (_saves.ListPlayers().Count > 0 &&
+                BackButtonBounds().Contains(pointer))
+            {
+                _frontendPage = FrontendPage.CharacterSelect;
+                BlurTextBoxes();
+            }
+        }
+    }
+
+    private void CreateCharacter()
+    {
+        if (string.IsNullOrWhiteSpace(_playerNameTextBox.Text))
+        {
+            _frontendError = "Enter a character name.";
+            return;
+        }
+        _selectedPlayer = _saves.CreatePlayer(
+            _playerNameTextBox.Text, _newPlayerGender,
+            _newSkinTone, _newTeamColor);
+        _playerNameTextBox.SetText("");
+        BlurTextBoxes();
+        _frontendPage = FrontendPage.Main;
+    }
+
+    private void UpdateCharacterSelectClick(Vector2 pointer)
+    {
+        var players = _saves.ListPlayers();
+        for (var index = 0; index < Math.Min(6, players.Count); index++)
+        {
+            if (CharacterRowBounds(index).Contains(pointer))
+            {
+                _selectedPlayer = players[index];
+                return;
+            }
+            if (!DeleteCharacterBounds(index).Contains(pointer)) continue;
+            if (_pendingDeletePlayerId != players[index].Id)
+            {
+                _pendingDeletePlayerId = players[index].Id;
+                return;
+            }
+            var deletingSelected = _selectedPlayer?.Id == players[index].Id;
+            _saves.DeletePlayer(players[index].Id);
+            _pendingDeletePlayerId = null;
+            var remaining = _saves.ListPlayers();
+            if (deletingSelected) _selectedPlayer = remaining.FirstOrDefault();
+            if (remaining.Count == 0)
+            {
+                _frontendPage = FrontendPage.CharacterCreate;
+                FocusTextBoxAtEnd(_playerNameTextBox);
+            }
+            return;
+        }
+
+        if (NewCharacterButtonBounds().Contains(pointer))
+        {
+            _playerNameTextBox.SetText("");
+            _frontendPage = FrontendPage.CharacterCreate;
+            FocusTextBoxAtEnd(_playerNameTextBox);
+        }
+        else if (_selectedPlayer is not null &&
+                 ContinueCharacterButtonBounds().Contains(pointer))
+            _frontendPage = FrontendPage.Main;
+        else if (BackButtonBounds().Contains(pointer))
+            _frontendPage = FrontendPage.Main;
+    }
+
+    private void UpdateLoadWorldClick(Vector2 pointer)
+    {
+        var worlds = _saves.ListWorlds();
+        for (var index = 0; index < Math.Min(6, worlds.Count); index++)
+        {
+            if (!LoadWorldRowBounds(index).Contains(pointer)) continue;
+            if (_selectedPlayer is null)
+            {
+                _frontendPage = FrontendPage.CharacterCreate;
+                FocusTextBoxAtEnd(_playerNameTextBox);
+            }
+            else
+                EnterWorld(worlds[index], _selectedPlayer);
+            return;
+        }
+        if (BackButtonBounds().Contains(pointer))
+            _frontendPage = FrontendPage.Main;
+    }
+
+    private void CreateAndEnterWorld()
+    {
+        if (_selectedPlayer is null)
+        {
+            _frontendPage = FrontendPage.CharacterCreate;
+            FocusTextBoxAtEnd(_playerNameTextBox);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_worldNameTextBox.Text))
+        {
+            _frontendError = "A world name is required.";
+            return;
+        }
+
+        var seed = SeedFromText(_seedTextBox.Text);
+        _worldSeed = seed;
+        var spawn = FindPlayableSpawn();
+        var player = _selectedPlayer;
+        var world = _saves.CreateWorld(
+            _worldNameTextBox.Text, seed, player.Id);
+        _saves.SaveWorldPlayer(
+            world.Id,
+            new(player.Id, spawn.X, spawn.Y, DateTime.UtcNow));
+        EnterWorld(world, player);
+    }
+
+    private void EnterWorld(WorldProfile world, PlayerProfile? player = null)
+    {
+        player ??= _selectedPlayer;
+        player ??= _saves.ListPlayers().FirstOrDefault();
+        _worldSeed = world.Seed;
+        var spawn = FindPlayableSpawn();
+        player ??= _saves.CreatePlayer(
+            "Adventurer", EntityGender.Male, 2, 0);
+        var worldPlayer = _saves.LoadWorldPlayer(world.Id, player.Id)
+            ?? new WorldPlayerState(
+                player.Id, spawn.X, spawn.Y, DateTime.UtcNow);
+
+        FinishPendingMenuChunk();
+        foreach (var coordinate in _worldChunks.Keys.ToArray())
+            UnloadWorldChunk(coordinate, save: false);
+
+        _activeWorld = world with { LastPlayerId = player.Id };
+        _activePlayer = player;
+        _saves.SaveWorld(_activeWorld);
+        _worldStore = new WorldChunkStore(
+            world.Seed, _saves.WorldsRoot, world.Id);
+        _player = new WorldEntity(
+            new Vector2(worldPlayer.PositionX, worldPlayer.PositionY),
+            player.Gender);
+        _camera = Vector2.Zero;
+        _zoom = .8f;
+        FollowPlayer();
+        StreamWorld();
+        BlurTextBoxes();
+        _screen = ScreenState.WorldPreview;
+        Title = $"Island RPG - {world.Name}";
+    }
+
+    private void FinishPendingMenuChunk()
+    {
+        if (_pendingChunkTask is null) return;
+        try
+        {
+            _pendingChunkTask.GetAwaiter().GetResult();
+        }
+        finally
+        {
+            _pendingChunkTask = null;
+        }
+    }
+
+    private static long SeedFromText(string value)
+    {
+        if (long.TryParse(value.Trim(), out var numeric)) return numeric;
+        unchecked
+        {
+            const long offset = 1469598103934665603;
+            const long prime = 1099511628211;
+            var hash = offset;
+            foreach (var character in value)
+            {
+                hash ^= character;
+                hash *= prime;
+            }
+            return hash;
+        }
+    }
+
+    private void UpdateNewWorldPreview()
+    {
+        if (_newWorldPreviewTask is { IsCompleted: true })
+        {
+            var result = _newWorldPreviewTask.GetAwaiter().GetResult();
+            _newWorldPreviewTask = null;
+            if (result.SeedText == _seedTextBox.Text &&
+                _newWorldPreviewTexture != 0)
+            {
+                GL.BindTexture(
+                    TextureTarget.Texture2D, _newWorldPreviewTexture);
+                GL.TexSubImage2D(
+                    TextureTarget.Texture2D, 0, 0, 0,
+                    192, 120, PixelFormat.Rgba,
+                    PixelType.UnsignedByte, result.Pixels);
+                _newWorldPreviewSeedText = result.SeedText;
+            }
+        }
+
+        var seedText = _seedTextBox.Text;
+        if (_newWorldPreviewTask is not null ||
+            seedText == _newWorldPreviewSeedText)
+            return;
+        _newWorldPreviewTask = Task.Run(
+            () => BuildNewWorldPreview(seedText));
+    }
+
+    private static NewWorldPreviewResult BuildNewWorldPreview(
+        string seedText)
+    {
+        const int width = 192;
+        const int height = 120;
+        const float tilesPerPixel = .75f;
+        var seed = SeedFromText(seedText);
+        var spawn = FindPlayableSpawn(seed);
+        var pixels = new byte[width * height * 4];
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+        {
+            var worldX = (int)MathF.Floor(
+                spawn.X + (x - width * .5f) * tilesPerPixel);
+            var worldY = (int)MathF.Floor(
+                spawn.Y + (y - height * .5f) * tilesPerPixel);
+            var (red, green, blue) = MinimapColor(
+                InfiniteWorldGenerator.BiomeAt(seed, worldX, worldY));
+            var index = (y * width + x) * 4;
+            pixels[index] = red;
+            pixels[index + 1] = green;
+            pixels[index + 2] = blue;
+            pixels[index + 3] = 255;
+        }
+
+        for (var y = height / 2 - 4; y <= height / 2 + 4; y++)
+        for (var x = width / 2 - 4; x <= width / 2 + 4; x++)
+        {
+            var distance = Math.Abs(x - width / 2) +
+                           Math.Abs(y - height / 2);
+            if (distance > 5) continue;
+            var index = (y * width + x) * 4;
+            pixels[index] = 205;
+            pixels[index + 1] = distance == 5 ? (byte)170 : (byte)35;
+            pixels[index + 2] = 28;
+        }
+        return new(seedText, seed, spawn, pixels);
+    }
+
+    private TextBoxControlState? FocusedTextBox() =>
+        new[] { _worldNameTextBox, _seedTextBox, _playerNameTextBox }
+            .FirstOrDefault(control => control.Focused);
+
+    private void FocusTextBox(
+        TextBoxControlState control, Vector4 bounds, Vector2 pointer)
+    {
+        BlurTextBoxes();
+        control.Bounds = bounds;
+        control.Focus(pointer, MeasureUiText, 14);
+    }
+
+    private void BlurTextBoxes()
+    {
+        _worldNameTextBox.Blur();
+        _seedTextBox.Blur();
+        _playerNameTextBox.Blur();
+    }
+
+    private void FocusTextBoxAtEnd(TextBoxControlState control)
+    {
+        BlurTextBoxes();
+        control.FocusAtEnd();
+    }
+
+    private float MeasureUiText(string text) =>
+        _chatFont?.MeasureString(text).X ?? text.Length * 7;
+
     private Vector2 SceneMousePosition()
     {
         var scene = SceneClientBounds();
@@ -402,11 +864,6 @@ internal sealed class GameHostWindow : GameWindow
     private void UpdateGame(float elapsed)
     {
         if (_player is null) return;
-        if (KeyboardState.IsKeyPressed(Keys.Up))
-            _player.SetGender(EntityGender.Male);
-        if (KeyboardState.IsKeyPressed(Keys.Down))
-            _player.SetGender(EntityGender.Female);
-
         if (_pendingPathTask is { IsCompleted: true })
         {
             if (_pendingPathTask.IsFaulted)
@@ -816,14 +1273,17 @@ internal sealed class GameHostWindow : GameWindow
         }
     }
 
-    private Vector2 FindPlayableSpawn()
+    private Vector2 FindPlayableSpawn() =>
+        FindPlayableSpawn(_worldSeed);
+
+    private static Vector2 FindPlayableSpawn(long seed)
     {
         for (var radius = 0; radius <= 160; radius++)
         for (var y = -radius; y <= radius; y++)
         for (var x = -radius; x <= radius; x++)
         {
             if (Math.Max(Math.Abs(x), Math.Abs(y)) != radius) continue;
-            var biome = InfiniteWorldGenerator.BiomeAt(_worldSeed, x, y);
+            var biome = InfiniteWorldGenerator.BiomeAt(seed, x, y);
             if (biome is Biome.DeepWater or Biome.ShallowWater or
                 Biome.RiverWater or Biome.MangroveShallows)
                 continue;
@@ -1005,7 +1465,9 @@ internal sealed class GameHostWindow : GameWindow
     protected override void OnTextInput(TextInputEventArgs e)
     {
         base.OnTextInput(e);
-        if (_screen == ScreenState.WorldPreview && _mode == PreviewMode.Game)
+        if (_screen == ScreenState.MainMenu)
+            FocusedTextBox()?.Insert(e.AsString);
+        else if (_screen == ScreenState.WorldPreview && _mode == PreviewMode.Game)
             _chatUi.AppendText(e.AsString);
     }
 
@@ -1082,9 +1544,9 @@ internal sealed class GameHostWindow : GameWindow
         GL.Viewport(0, 0, ReferenceWidth, ReferenceHeight);
         GL.ClearColor(0.08f, 0.09f, 0.08f, 1);
         GL.Clear(ClearBufferMask.ColorBufferBit);
-        if (_screen == ScreenState.WorldPreview)
+        if (_screen is ScreenState.WorldPreview or ScreenState.MainMenu)
         {
-            if (_atlasOpen) RenderAtlas();
+            if (_screen == ScreenState.WorldPreview && _atlasOpen) RenderAtlas();
             else if (_mode == PreviewMode.Island) RenderIsland();
             else if (_mode is PreviewMode.World or PreviewMode.Game)
             {
@@ -1095,7 +1557,17 @@ internal sealed class GameHostWindow : GameWindow
         else RenderLoading();
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         PresentScene();
-        if (_screen == ScreenState.WorldPreview &&
+        if (_screen is ScreenState.LoadingAssets or ScreenState.PreparingGpu)
+        {
+            GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
+            RenderLoadingUi();
+        }
+        else if (_screen == ScreenState.MainMenu)
+        {
+            GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
+            RenderFrontend();
+        }
+        else if (_screen == ScreenState.WorldPreview &&
             _mode == PreviewMode.Game && !_atlasOpen)
         {
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
@@ -1106,16 +1578,538 @@ internal sealed class GameHostWindow : GameWindow
 
     private void RenderLoading()
     {
-        var margin = 90;
-        var width = Math.Max(0, ReferenceWidth - margin * 2);
-        var filled = (int)(width * Math.Clamp(_done / (float)_total, 0, 1));
-        GL.Enable(EnableCap.ScissorTest);
-        GL.Scissor(margin, ReferenceHeight / 2 - 14, filled, 28);
-        GL.ClearColor(0.32f, 0.62f, 0.25f, 1);
+        GL.ClearColor(.025f, .027f, .024f, 1);
         GL.Clear(ClearBufferMask.ColorBufferBit);
-        GL.Disable(EnableCap.ScissorTest);
         Title = $"Island RPG - Loading {_done}/{_total}: {_current}";
     }
+
+    private void RenderLoadingUi()
+    {
+        var panel = FrontendPanel(560, 190);
+        DrawAoEPanelBorder(panel);
+        DrawCenteredUiText(
+            "ISLAND RPG", new(panel.X, panel.Y + 24, panel.Z, 40),
+            new(232, 217, 166, 255));
+        DrawCenteredUiText(
+            _current, new(panel.X + 32, panel.Y + 73, panel.Z - 64, 25),
+            new(183, 173, 143, 255));
+        var track = new Vector4(
+            panel.X + 42, panel.Y + 119, panel.Z - 84, 24);
+        DrawUiColor(track, new(.025f, .024f, .020f, 1));
+        DrawPanelOutline(track, 0, new(.24f, .20f, .12f, 1));
+        var ratio = Math.Clamp(_done / (float)Math.Max(1, _total), 0, 1);
+        if (ratio > 0)
+            DrawUiColor(
+                new(track.X + 3, track.Y + 3, (track.Z - 6) * ratio, track.W - 6),
+                new(.32f, .25f, .11f, 1));
+        DrawCenteredUiText(
+            $"{(int)(ratio * 100)}%",
+            new(track.X, track.Y, track.Z, track.W),
+            new(235, 221, 179, 255));
+    }
+
+    private void RenderFrontend()
+    {
+        DrawUiColor(
+            new(0, 0, ClientSize.X, ClientSize.Y),
+            new(0, 0, 0, .22f));
+        switch (_frontendPage)
+        {
+            case FrontendPage.Main:
+                RenderMainMenu();
+                break;
+            case FrontendPage.CharacterSelect:
+                RenderCharacterSelectMenu();
+                break;
+            case FrontendPage.CharacterCreate:
+                RenderCharacterCreateMenu();
+                break;
+            case FrontendPage.NewWorld:
+                RenderNewWorldMenu();
+                break;
+            case FrontendPage.LoadWorld:
+                RenderLoadWorldMenu();
+                break;
+            case FrontendPage.Settings:
+                RenderSettingsMenu();
+                break;
+        }
+        if (_frontendPage != FrontendPage.Main)
+            DrawMenuButton(FrontendCloseButtonBounds(), "X");
+    }
+
+    private void RenderMainMenu()
+    {
+        var panel = FrontendPanel(400, 470);
+        DrawAoEPanelBorder(panel);
+        DrawCenteredUiText("ISLAND RPG", new(panel.X, panel.Y + 34, panel.Z, 42),
+            new(232, 217, 166, 255));
+        if (_selectedPlayer is not null)
+            DrawCenteredUiText(
+                $"Playing as {_selectedPlayer.Name}",
+                new(panel.X + 24, panel.Y + 78, panel.Z - 48, 26),
+                new(184, 174, 143, 255));
+        var captions = new[]
+        {
+            "New World", "Load World", "Change Character",
+            "Settings", "Exit / Quit"
+        };
+        for (var index = 0; index < captions.Length; index++)
+            DrawMenuButton(MenuButton(index), captions[index]);
+    }
+
+    private void RenderCharacterCreateMenu()
+    {
+        var panel = FrontendPanel(760, 640);
+        DrawAoEPanelBorder(panel);
+        DrawCenteredUiText(
+            "CREATE CHARACTER", new(panel.X, panel.Y + 20, panel.Z, 38),
+            new(232, 217, 166, 255));
+
+        var preview = CharacterPreviewBounds();
+        DrawUiColor(preview, new(.025f, .027f, .024f, .72f));
+        DrawPanelOutline(preview, 0, new(.28f, .23f, .14f, 1));
+        DrawCharacterPreview(
+            _newPlayerGender, _newSkinTone, _newTeamColor, preview);
+
+        var name = CharacterNameBounds();
+        _playerNameTextBox.Bounds = name;
+        DrawUiText("Name", new(name.X, name.Y - 23),
+            new(204, 190, 150, 255));
+        DrawTextField(_playerNameTextBox);
+
+        DrawUiText("Gender", new(
+            GenderButtonBounds().X, GenderButtonBounds().Y - 23),
+            new(204, 190, 150, 255));
+        DrawMenuButton(
+            GenderButtonBounds(),
+            _newPlayerGender == EntityGender.Male ? "Male" : "Female");
+
+        DrawUiText("Skin Tone", new(
+            SkinSwatchBounds(0).X, SkinSwatchBounds(0).Y - 25),
+            new(204, 190, 150, 255));
+        for (var index = 0; index < 5; index++)
+            DrawColorSwatch(
+                SkinSwatchBounds(index), SkinColor(index),
+                index == _newSkinTone);
+
+        DrawUiText("Clothing Colour", new(
+            TeamSwatchBounds(0).X, TeamSwatchBounds(0).Y - 25),
+            new(204, 190, 150, 255));
+        for (var index = 0; index < 8; index++)
+            DrawColorSwatch(
+                TeamSwatchBounds(index), TeamColor(index),
+                index == _newTeamColor);
+
+        if (_frontendError is not null)
+            DrawCenteredUiText(
+                _frontendError,
+                new(panel.X + 350, panel.Y + panel.W - 116, 340, 24),
+                new(220, 104, 82, 255));
+        DrawMenuButton(CreateCharacterButtonBounds(), "Create Character");
+        if (_saves.ListPlayers().Count > 0)
+            DrawMenuButton(BackButtonBounds(), "Back");
+    }
+
+    private void RenderCharacterSelectMenu()
+    {
+        var panel = FrontendPanel(660, 600);
+        DrawAoEPanelBorder(panel);
+        DrawCenteredUiText(
+            "SELECT CHARACTER", new(panel.X, panel.Y + 20, panel.Z, 38),
+            new(232, 217, 166, 255));
+        var players = _saves.ListPlayers();
+        for (var index = 0; index < Math.Min(6, players.Count); index++)
+        {
+            var player = players[index];
+            var row = CharacterRowBounds(index);
+            DrawMenuButton(
+                row, player.Name,
+                TeamColor(player.TeamColor));
+            if (_selectedPlayer?.Id == player.Id)
+                DrawPanelOutline(row, 3, new(.62f, .48f, .20f, 1));
+            DrawMenuButton(
+                DeleteCharacterBounds(index),
+                _pendingDeletePlayerId == player.Id ? "Confirm?" : "Delete");
+        }
+        DrawMenuButton(NewCharacterButtonBounds(), "New Character");
+        if (_selectedPlayer is not null)
+            DrawMenuButton(ContinueCharacterButtonBounds(), "Use Character");
+        DrawMenuButton(BackButtonBounds(), "Back");
+    }
+
+    private void RenderNewWorldMenu()
+    {
+        var panel = FrontendPanel(560, 590);
+        DrawAoEPanelBorder(panel);
+        DrawCenteredUiText(
+            "CREATE NEW WORLD", new(panel.X, panel.Y + 22, panel.Z, 38),
+            new(232, 217, 166, 255));
+
+        var labels = new[] { "World Name", "Seed" };
+        var controls = new[] { _worldNameTextBox, _seedTextBox };
+        for (var index = 0; index < labels.Length; index++)
+        {
+            var bounds = NewWorldFieldBounds(index);
+            controls[index].Bounds = bounds;
+            DrawUiText(labels[index], new(bounds.X, bounds.Y - 22),
+                new(204, 190, 150, 255));
+            DrawTextField(controls[index]);
+        }
+        DrawMenuButton(RandomSeedButtonBounds(), "Random");
+
+        if (_selectedPlayer is not null)
+            DrawCenteredUiText(
+                $"Character: {_selectedPlayer.Name}",
+                new(panel.X + 48, panel.Y + 285, panel.Z - 96, 42),
+                new(204, 190, 150, 255));
+        DrawUiText(
+            "Spawn Preview",
+            new(NewWorldPreviewBounds().X, NewWorldPreviewBounds().Y - 22),
+            new(204, 190, 150, 255));
+        if (_newWorldPreviewFrame is not null &&
+            _newWorldPreviewTexture != 0)
+        {
+            DrawUiSprite(
+                _newWorldPreviewFrame,
+                _newWorldPreviewTexture,
+                NewWorldPreviewBounds());
+            DrawPanelOutline(
+                NewWorldPreviewBounds(), 0,
+                new(.28f, .23f, .14f, 1));
+        }
+
+        if (_frontendError is not null)
+            DrawCenteredUiText(
+                _frontendError,
+                new(panel.X + 30, panel.Y + panel.W - 112, panel.Z - 60, 24),
+                new(220, 104, 82, 255));
+        DrawMenuButton(CreateWorldButtonBounds(), "Create World");
+        DrawMenuButton(BackButtonBounds(), "Back");
+    }
+
+    private void RenderLoadWorldMenu()
+    {
+        var panel = FrontendPanel(600, 560);
+        DrawAoEPanelBorder(panel);
+        DrawCenteredUiText(
+            "SELECT WORLD", new(panel.X, panel.Y + 22, panel.Z, 38),
+            new(232, 217, 166, 255));
+        var worlds = _saves.ListWorlds();
+        if (worlds.Count == 0)
+        {
+            DrawCenteredUiText(
+                "No worlds have been created yet.",
+                new(panel.X + 30, panel.Y + 150, panel.Z - 60, 30),
+                new(204, 190, 150, 255));
+        }
+        for (var index = 0; index < Math.Min(6, worlds.Count); index++)
+        {
+            var world = worlds[index];
+            var row = LoadWorldRowBounds(index);
+            DrawMenuButton(row, world.Name);
+            DrawUiText(
+                $"Seed {world.Seed}",
+                new(row.X + 16, row.Y + row.W - 17),
+                new(158, 148, 120, 255));
+        }
+        DrawMenuButton(BackButtonBounds(), "Back");
+    }
+
+    private void RenderSettingsMenu()
+    {
+        var panel = FrontendPanel(480, 360);
+        DrawAoEPanelBorder(panel);
+        DrawCenteredUiText(
+            "SETTINGS", new(panel.X, panel.Y + 24, panel.Z, 38),
+            new(232, 217, 166, 255));
+        var fullscreen = _saves.LoadSettings().Fullscreen;
+        DrawMenuButton(
+            SettingsToggleBounds(),
+            $"Fullscreen: {(fullscreen ? "On" : "Off")}");
+        DrawCenteredUiText(
+            "More audio and display settings can be added here.",
+            new(panel.X + 20, panel.Y + 190, panel.Z - 40, 28),
+            new(174, 164, 134, 255));
+        DrawMenuButton(BackButtonBounds(), "Back");
+    }
+
+    private void DrawTextField(TextBoxControlState control)
+    {
+        var bounds = control.Bounds;
+        var value = control.Text;
+        var focused = control.Focused;
+        DrawAoEPanelBorder(bounds);
+        if (focused)
+            DrawPanelOutline(bounds, 3, new(.46f, .37f, .18f, 1));
+        var position = VerticallyCenteredTextPosition(value, bounds, 14);
+        if (focused && control.HasSelection)
+        {
+            var startWidth = _chatFont?
+                .MeasureString(value[..control.SelectionStart]).X ?? 0;
+            var endWidth = _chatFont?
+                .MeasureString(value[..control.SelectionEnd]).X ?? startWidth;
+            DrawUiColor(
+                new(
+                    MathF.Round(position.X + startWidth),
+                    MathF.Round(position.Y),
+                    Math.Max(1, MathF.Round(endWidth - startWidth)),
+                    _chatLineHeight),
+                new(.24f, .36f, .50f, .78f));
+        }
+        DrawUiText(value, position, new(226, 214, 175, 255));
+        if (focused && (int)(_clock * 2) % 2 == 0)
+        {
+            var caret = Math.Clamp(control.Caret, 0, value.Length);
+            var width = _chatFont?.MeasureString(value[..caret]).X ?? 0;
+            DrawUiColor(
+                new(
+                    MathF.Round(position.X + width),
+                    MathF.Round(position.Y), 1, _chatLineHeight),
+                new(.78f, .72f, .54f, 1));
+        }
+    }
+
+    private void DrawMenuButton(
+        Vector4 bounds, string caption, Vector3? tint = null)
+    {
+        var hovered = bounds.Contains(MouseState.Position);
+        DrawUiColor(
+            new(bounds.X + 2, bounds.Y + 2, bounds.Z - 4, bounds.W - 4),
+            new(.075f, .068f, .052f, .96f));
+        DrawPanelOutline(bounds, 0, new(.035f, .032f, .026f, 1));
+        DrawPanelOutline(
+            bounds, 1,
+            hovered ? new(.52f, .42f, .22f, 1) : new(.25f, .21f, .13f, 1));
+        DrawPanelOutline(bounds, 2, new(.075f, .07f, .058f, 1));
+        if (tint is not null)
+            DrawUiColor(
+                new(bounds.X + 5, bounds.Y + 5, 8, bounds.W - 10),
+                new(tint.Value.X, tint.Value.Y, tint.Value.Z, 1));
+        DrawCenteredUiText(
+            caption, bounds,
+            hovered
+                ? new(255, 239, 184, 255)
+                : new(224, 211, 170, 255));
+    }
+
+    private void DrawCenteredUiText(
+        string text, Vector4 bounds, FSColor color) =>
+        DrawUiText(text, CenteredTextPosition(text, bounds), color);
+
+    private Vector4 FrontendPanel(float width, float height) =>
+        new(
+            MathF.Round((ClientSize.X - width) * .5f),
+            MathF.Round((ClientSize.Y - height) * .5f),
+            width, height);
+
+    private Vector4 FrontendCloseButtonBounds()
+    {
+        var panel = _frontendPage switch
+        {
+            FrontendPage.CharacterCreate => FrontendPanel(760, 640),
+            FrontendPage.CharacterSelect => FrontendPanel(660, 600),
+            FrontendPage.NewWorld => FrontendPanel(560, 590),
+            FrontendPage.LoadWorld => FrontendPanel(600, 560),
+            FrontendPage.Settings => FrontendPanel(480, 360),
+            _ => FrontendPanel(400, 470)
+        };
+        return new(panel.X + panel.Z - 40, panel.Y + 10, 28, 28);
+    }
+
+    private Vector4 MenuButton(int index)
+    {
+        var panel = FrontendPanel(400, 470);
+        return new(panel.X + 48, panel.Y + 112 + index * 62, panel.Z - 96, 48);
+    }
+
+    private Vector4 NewWorldFieldBounds(int index)
+    {
+        var panel = FrontendPanel(560, 590);
+        return new(
+            panel.X + 48,
+            panel.Y + 98 + index * 82,
+            index == 1 ? 340 : panel.Z - 96,
+            44);
+    }
+
+    private Vector4 RandomSeedButtonBounds()
+    {
+        var seed = NewWorldFieldBounds(1);
+        return new(seed.X + seed.Z + 8, seed.Y, 116, seed.W);
+    }
+
+    private Vector4 NewWorldPreviewBounds()
+    {
+        var panel = FrontendPanel(560, 590);
+        return new(panel.X + 48, panel.Y + 350, panel.Z - 96, 136);
+    }
+
+    private Vector4 NewWorldOptionBounds(int index)
+    {
+        var panel = FrontendPanel(560, 590);
+        const float gap = 8;
+        var width = (panel.Z - 96 - gap * 2) / 3;
+        return new(
+            panel.X + 48 + index * (width + gap),
+            panel.Y + 362, width, 46);
+    }
+
+    private Vector4 CreateWorldButtonBounds()
+    {
+        var panel = FrontendPanel(560, 590);
+        return new(panel.X + 48, panel.Y + panel.W - 92, 290, 48);
+    }
+
+    private Vector4 BackButtonBounds()
+    {
+        var panel = _frontendPage switch
+        {
+            FrontendPage.CharacterCreate => FrontendPanel(760, 640),
+            FrontendPage.CharacterSelect => FrontendPanel(660, 600),
+            FrontendPage.NewWorld => FrontendPanel(560, 590),
+            FrontendPage.LoadWorld => FrontendPanel(600, 560),
+            _ => FrontendPanel(480, 360)
+        };
+        return new(panel.X + panel.Z - 156, panel.Y + panel.W - 92, 108, 48);
+    }
+
+    private Vector4 LoadWorldRowBounds(int index)
+    {
+        var panel = FrontendPanel(600, 560);
+        return new(panel.X + 48, panel.Y + 88 + index * 62, panel.Z - 96, 54);
+    }
+
+    private Vector4 SettingsToggleBounds()
+    {
+        var panel = FrontendPanel(480, 360);
+        return new(panel.X + 60, panel.Y + 104, panel.Z - 120, 50);
+    }
+
+    private Vector4 CharacterPreviewBounds()
+    {
+        var panel = FrontendPanel(760, 640);
+        return new(panel.X + 42, panel.Y + 76, 278, 470);
+    }
+
+    private Vector4 CharacterNameBounds()
+    {
+        var panel = FrontendPanel(760, 640);
+        return new(panel.X + 358, panel.Y + 105, 350, 46);
+    }
+
+    private Vector4 GenderButtonBounds()
+    {
+        var panel = FrontendPanel(760, 640);
+        return new(panel.X + 358, panel.Y + 193, 168, 46);
+    }
+
+    private Vector4 SkinSwatchBounds(int index)
+    {
+        var panel = FrontendPanel(760, 640);
+        return new(panel.X + 358 + index * 56, panel.Y + 291, 44, 44);
+    }
+
+    private Vector4 TeamSwatchBounds(int index)
+    {
+        var panel = FrontendPanel(760, 640);
+        return new(
+            panel.X + 358 + index % 4 * 56,
+            panel.Y + 394 + index / 4 * 56,
+            44, 44);
+    }
+
+    private Vector4 CreateCharacterButtonBounds()
+    {
+        var panel = FrontendPanel(760, 640);
+        return new(panel.X + 358, panel.Y + panel.W - 78, 210, 48);
+    }
+
+    private Vector4 CharacterRowBounds(int index)
+    {
+        var panel = FrontendPanel(660, 600);
+        return new(panel.X + 48, panel.Y + 82 + index * 66, 430, 54);
+    }
+
+    private Vector4 DeleteCharacterBounds(int index)
+    {
+        var row = CharacterRowBounds(index);
+        return new(row.X + row.Z + 10, row.Y, 124, row.W);
+    }
+
+    private Vector4 NewCharacterButtonBounds()
+    {
+        var panel = FrontendPanel(660, 600);
+        return new(panel.X + 48, panel.Y + panel.W - 82, 176, 48);
+    }
+
+    private Vector4 ContinueCharacterButtonBounds()
+    {
+        var panel = FrontendPanel(660, 600);
+        return new(panel.X + 238, panel.Y + panel.W - 82, 190, 48);
+    }
+
+    private void DrawColorSwatch(
+        Vector4 bounds, Vector3 color, bool selected)
+    {
+        DrawUiColor(
+            new(bounds.X + 4, bounds.Y + 4, bounds.Z - 8, bounds.W - 8),
+            new(color.X, color.Y, color.Z, 1));
+        DrawPanelOutline(bounds, 0, new(.035f, .032f, .026f, 1));
+        DrawPanelOutline(
+            bounds, selected ? 2 : 1,
+            selected
+                ? new(.76f, .59f, .25f, 1)
+                : new(.25f, .21f, .13f, 1));
+    }
+
+    private void DrawCharacterPreview(
+        EntityGender gender, int skinTone, int teamColor, Vector4 bounds)
+    {
+        if (!_entityAnimations.TryGetValue(
+                (gender, EntityAction.Idle), out var animation))
+            return;
+        var frame = animation.Graphic.Sprite.Frames[0];
+        var texture = animation.Textures[0];
+        var scale = Math.Min(
+            (bounds.Z - 36) / frame.Width,
+            (bounds.W - 46) / frame.Height);
+        var width = frame.Width * scale;
+        var height = frame.Height * scale;
+        var target = new Vector4(
+            MathF.Round(bounds.X + (bounds.Z - width) * .5f),
+            MathF.Round(bounds.Y + bounds.W - height - 18),
+            MathF.Round(width),
+            MathF.Round(height));
+        var tint = AppearanceTint(skinTone, teamColor);
+        DrawUiSprite(
+            frame, texture, target,
+            tint: tint, tintAmount: .18f);
+    }
+
+    private static Vector3 TeamColor(int index) => index switch
+    {
+        0 => new(.16f, .35f, .75f),
+        1 => new(.72f, .13f, .11f),
+        2 => new(.18f, .55f, .24f),
+        3 => new(.78f, .68f, .13f),
+        4 => new(.48f, .18f, .62f),
+        5 => new(.18f, .67f, .69f),
+        6 => new(.82f, .40f, .13f),
+        _ => new(.68f, .68f, .68f)
+    };
+
+    private static Vector3 SkinColor(int index) => index switch
+    {
+        0 => new(.92f, .76f, .61f),
+        1 => new(.78f, .57f, .40f),
+        2 => new(.62f, .42f, .28f),
+        3 => new(.43f, .28f, .19f),
+        _ => new(.27f, .18f, .14f)
+    };
+
+    private static Vector3 AppearanceTint(int skinTone, int teamColor) =>
+        Vector3.Lerp(TeamColor(teamColor), SkinColor(skinTone), .32f);
 
     private void RenderGameUi()
     {
@@ -1433,7 +2427,9 @@ internal sealed class GameHostWindow : GameWindow
     private System.Numerics.Vector2 VerticallyCenteredTextPosition(
         string text, Vector4 bounds, float leftPadding)
     {
-        var size = _chatFont?.MeasureString(text) ?? System.Numerics.Vector2.Zero;
+        var measuredText = string.IsNullOrEmpty(text) ? "Ag" : text;
+        var size = _chatFont?.MeasureString(measuredText)
+            ?? new System.Numerics.Vector2(0, _chatLineHeight);
         return new(
             bounds.X + leftPadding,
             MathF.Round(bounds.Y + (bounds.W - size.Y) * .5f));
@@ -1763,7 +2759,8 @@ internal sealed class GameHostWindow : GameWindow
         if (player is not null)
             DrawSprite(
                 player.Frame, player.Texture, player.World,
-                mirror: player.Mirror, wading: player.Wading);
+                mirror: player.Mirror, wading: player.Wading,
+                tint: CharacterTint(), tintAmount: .18f);
         DrawTreeBatch(foregroundObjects);
         if (player is not null && playerOccluded)
             DrawSprite(
@@ -2114,7 +3111,6 @@ internal sealed class GameHostWindow : GameWindow
                 ? markerGraphic.Definition.FrameRate
                 : .08f);
         PrepareGameCursors();
-        PrepareGameUi();
     }
 
     private void PrepareGameUi()
@@ -2128,6 +3124,9 @@ internal sealed class GameHostWindow : GameWindow
             42, 42, CreateTabPixels(active: true));
         _minimapFrame = new SpriteFrame(160, 160, 0, 0, new byte[160 * 160 * 4]);
         _minimapTexture = Upload(_minimapFrame);
+        _newWorldPreviewFrame = new SpriteFrame(
+            192, 120, 0, 0, new byte[192 * 120 * 4]);
+        _newWorldPreviewTexture = Upload(_newWorldPreviewFrame);
         GL.BindTexture(TextureTarget.Texture2D, _minimapTexture);
         GL.TexParameter(
             TextureTarget.Texture2D,
@@ -2140,7 +3139,8 @@ internal sealed class GameHostWindow : GameWindow
         foreach (var texture in new[]
                  {
                      _uiPanelFillTexture, _uiSolidTexture,
-                     _uiTabTexture, _uiActiveTabTexture
+                     _uiTabTexture, _uiActiveTabTexture,
+                     _newWorldPreviewTexture
                  })
         {
             GL.BindTexture(TextureTarget.Texture2D, texture);
@@ -2759,7 +3759,9 @@ internal sealed class GameHostWindow : GameWindow
         float opacity = 1,
         bool mirror = false,
         bool outlineOnly = false,
-        bool wading = false)
+        bool wading = false,
+        Vector3? tint = null,
+        float tintAmount = 0)
     {
         var width = ReferenceWidth;
         var height = ReferenceHeight;
@@ -2786,6 +3788,10 @@ internal sealed class GameHostWindow : GameWindow
             wading && !outlineOnly ? 1 : 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "waterlineUv"),
             Math.Clamp((frame.HotspotY - 13f) / frame.Height, .45f, .88f));
+        GL.Uniform1(GL.GetUniformLocation(_program, "brightness"), 0f);
+        var tintColor = tint ?? Vector3.Zero;
+        GL.Uniform3(GL.GetUniformLocation(_program, "colorTint"), tintColor);
+        GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), tintAmount);
         GL.Uniform2(GL.GetUniformLocation(_program, "texelSize"),
             1f / frame.Width, 1f / frame.Height);
         GL.ActiveTexture(TextureUnit.Texture0);
@@ -2798,6 +3804,14 @@ internal sealed class GameHostWindow : GameWindow
             rightNdc,bottomNdc,rightU,1,
             rightNdc,topNdc,rightU,0
         ]);
+        GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), 0f);
+    }
+
+    private Vector3 CharacterTint()
+    {
+        if (_activePlayer is null) return Vector3.Zero;
+        return AppearanceTint(
+            _activePlayer.SkinTone, _activePlayer.TeamColor);
     }
 
     private void DrawTerrain(TerrainTile tile, int texture, Vector2 world)
@@ -3405,6 +4419,23 @@ internal sealed class GameHostWindow : GameWindow
 
     protected override void OnUnload()
     {
+        if (_activePlayer is not null && _player is not null)
+        {
+            _activePlayer = _activePlayer with
+            {
+                Gender = _player.Gender,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            _saves.SavePlayer(_activePlayer);
+            if (_activeWorld is not null)
+                _saves.SaveWorldPlayer(
+                    _activeWorld.Id,
+                    new(
+                        _activePlayer.Id,
+                        _player.Position.X,
+                        _player.Position.Y,
+                        DateTime.UtcNow));
+        }
         _pathCancellation?.Cancel();
         _pathCancellation?.Dispose();
         foreach (var coordinate in _worldChunks.Keys.ToArray())
@@ -3432,6 +4463,8 @@ internal sealed class GameHostWindow : GameWindow
         if (_uiTabTexture != 0) GL.DeleteTexture(_uiTabTexture);
         if (_uiActiveTabTexture != 0) GL.DeleteTexture(_uiActiveTabTexture);
         if (_minimapTexture != 0) GL.DeleteTexture(_minimapTexture);
+        if (_newWorldPreviewTexture != 0)
+            GL.DeleteTexture(_newWorldPreviewTexture);
         _fontSystem?.Dispose();
         _fontRenderer?.Dispose();
         if (_terrainArray != 0) GL.DeleteTexture(_terrainArray);

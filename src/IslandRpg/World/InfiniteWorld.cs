@@ -604,13 +604,15 @@ internal sealed class WorldChunkStore
     public string WorldDirectory { get; }
     public long Seed { get; }
 
-    public WorldChunkStore(long seed, string? root = null)
+    public WorldChunkStore(
+        long seed, string? root = null, string? worldDirectoryName = null)
     {
         Seed = seed;
         root ??= Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "IslandRpg", "Worlds");
-        WorldDirectory = Path.Combine(root, seed.ToString());
+        WorldDirectory = Path.Combine(
+            root, worldDirectoryName ?? seed.ToString());
         _chunkDirectory = Path.Combine(WorldDirectory, "chunks");
         Directory.CreateDirectory(_chunkDirectory);
         var metadataPath = Path.Combine(WorldDirectory, "world.json");
