@@ -37,7 +37,13 @@ internal sealed class GameHostWindow : GameWindow
         SpriteFrame Frame, int Texture, Vector2 World, bool Mirror, bool Wading);
     private sealed record MoveMarker(Vector2 Position, double Time);
     private sealed record WaterRipple(Vector2 Position, double StartedAt);
-    private sealed record PathResult(int RequestId, IReadOnlyList<Vector2> Path);
+    private enum WorldActionType { CutTree }
+    private sealed record QueuedWorldAction(
+        WorldActionType Type, Vector2 Target, float Range);
+    private sealed record PathResult(
+        int RequestId,
+        IReadOnlyList<Vector2> Path,
+        QueuedWorldAction? Action = null);
 
     private readonly string _install;
     private readonly PreviewMode _mode;
@@ -105,6 +111,7 @@ internal sealed class GameHostWindow : GameWindow
     private Task<PathResult>? _pendingPathTask;
     private CancellationTokenSource? _pathCancellation;
     private int _pathRequestId;
+    private QueuedWorldAction? _queuedAction;
     private readonly List<WaterRipple> _waterRipples = [];
     private int _lastWaterFootfall = -1;
     private WorldEntity? _player;
@@ -357,7 +364,10 @@ internal sealed class GameHostWindow : GameWindow
             {
                 var result = _pendingPathTask.Result;
                 if (result.RequestId == _pathRequestId)
+                {
+                    _queuedAction = result.Action;
                     _player.FollowPath(result.Path);
+                }
             }
             _pendingPathTask = null;
         }
@@ -366,6 +376,7 @@ internal sealed class GameHostWindow : GameWindow
         if (rightDown && !_gameRightWasDown)
         {
             var target = ScreenToTerrain(SceneMousePosition());
+            _queuedAction = null;
             _pathCancellation?.Cancel();
             _pathCancellation?.Dispose();
             _pathCancellation = new CancellationTokenSource();
@@ -385,12 +396,20 @@ internal sealed class GameHostWindow : GameWindow
         if (leftDown && !_gameLeftWasDown &&
             TryGetTreeUnderMouse(SceneMousePosition(), out var actionTree))
         {
+            var actionTarget = new Vector2(actionTree.X + .5f, actionTree.Y + .5f);
+            var standOff = TreeInteractionDistance(actionTree.GraphicName);
             _pathCancellation?.Cancel();
             _pathCancellation?.Dispose();
-            _pathCancellation = null;
-            _pathRequestId++;
-            _pendingPathTask = null;
-            _player.WorkAt(new Vector2(actionTree.X + .5f, actionTree.Y + .5f));
+            _pathCancellation = new CancellationTokenSource();
+            var token = _pathCancellation.Token;
+            var requestId = ++_pathRequestId;
+            var start = _player.Position;
+            _queuedAction = null;
+            _pendingPathTask = Task.Run(
+                () => FindActionPath(
+                    requestId, start, actionTarget, standOff,
+                    WorldActionType.CutTree, token),
+                token);
             _moveMarker = null;
         }
         _gameLeftWasDown = leftDown;
@@ -409,6 +428,7 @@ internal sealed class GameHostWindow : GameWindow
         _player.TerrainSpeedMultiplier =
             (wading ? .62f : 1f) / (1f + uphill * .18f);
         _player.Update(elapsed);
+        CompleteQueuedAction();
         UpdateWaterRipples(wading);
         if (_moveMarker is not null)
         {
@@ -425,6 +445,104 @@ internal sealed class GameHostWindow : GameWindow
         Title = $"Island RPG - {_player.Gender} villager - {_player.Action} - " +
                 (_pendingPathTask is null ? "" : "calculating path - ") +
                 "right-click to move, left-click to act, Up/Down changes villager";
+    }
+
+    private PathResult FindActionPath(
+        int requestId,
+        Vector2 start,
+        Vector2 target,
+        float standOff,
+        WorldActionType actionType,
+        CancellationToken cancellationToken)
+    {
+        var targetCell = new Vector2i(
+            (int)MathF.Floor(target.X),
+            (int)MathF.Floor(target.Y));
+        var candidates = new List<Vector2>(8);
+        for (var y = -1; y <= 1; y++)
+        for (var x = -1; x <= 1; x++)
+        {
+            if (x == 0 && y == 0) continue;
+            candidates.Add(new Vector2(
+                targetCell.X + x + .5f,
+                targetCell.Y + y + .5f));
+        }
+
+        List<Vector2>? bestPath = null;
+        float bestScore = float.MaxValue;
+        foreach (var candidate in candidates.OrderBy(candidate =>
+                     (candidate - start).LengthSquared))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var sameCell =
+                (int)MathF.Floor(candidate.X) == (int)MathF.Floor(start.X) &&
+                (int)MathF.Floor(candidate.Y) == (int)MathF.Floor(start.Y);
+            var path = GridPathfinder.Find(
+                _worldSeed, start, candidate,
+                maximumVisited: 8192,
+                cancellationToken: cancellationToken);
+            if (!sameCell && path.Count == 0) continue;
+            var approach = candidate - target;
+            var diagonal = MathF.Abs(approach.X) > .5f &&
+                           MathF.Abs(approach.Y) > .5f;
+            var finalDistance = diagonal
+                ? Math.Max(standOff, .72f)
+                : standOff;
+            var standPosition = target + approach.Normalized() * finalDistance;
+            var score = path.Count + (diagonal ? .35f : 0f);
+            if (score >= bestScore) continue;
+
+            bestScore = score;
+            bestPath = path.ToList();
+            if (bestPath.Count == 0)
+                bestPath.Add(standPosition);
+            else
+                bestPath[^1] = standPosition;
+        }
+
+        return bestPath is null
+            ? new PathResult(requestId, [])
+            : new PathResult(
+                requestId,
+                bestPath,
+                new QueuedWorldAction(
+                    actionType, target,
+                    Math.Max(standOff, .72f) + .08f));
+    }
+
+    private float TreeInteractionDistance(string graphicName)
+    {
+        if (!_treeAtlas.TryGetValue(graphicName, out var entry)) return .58f;
+        var frame = entry.Frame;
+        var groundY = Math.Clamp(frame.HotspotY, 1, frame.Height);
+        var startY = Math.Max(0, groundY - Math.Min(32, frame.Height / 3));
+        var trunkRadiusPixels = 0;
+        for (var y = startY; y < groundY; y++)
+        for (var x = 0; x < frame.Width; x++)
+        {
+            if (frame.Rgba[(y * frame.Width + x) * 4 + 3] <= 24) continue;
+            trunkRadiusPixels = Math.Max(
+                trunkRadiusPixels, Math.Abs(x - frame.HotspotX));
+        }
+
+        // Include the villager's body/axe clearance while keeping the final
+        // point just outside the tree's occupied tile.
+        return Math.Clamp(.50f + trunkRadiusPixels / 120f, .54f, .78f);
+    }
+
+    private void CompleteQueuedAction()
+    {
+        if (_player is null || _queuedAction is null ||
+            _player.Action == EntityAction.Move)
+            return;
+
+        var action = _queuedAction;
+        _queuedAction = null;
+        if ((_player.Position - action.Target).Length > action.Range)
+            return;
+
+        if (action.Type == WorldActionType.CutTree)
+            _player.WorkAt(action.Target);
     }
 
     private Vector2 ScreenToTerrain(Vector2 screen)
