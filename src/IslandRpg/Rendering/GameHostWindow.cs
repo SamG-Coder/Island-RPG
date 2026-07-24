@@ -35,6 +35,8 @@ internal sealed class GameHostWindow : GameWindow
         LoadedGraphic Graphic, int[] Textures, float SecondsPerFrame);
     private sealed record PlayerVisual(
         SpriteFrame Frame, int Texture, Vector2 World, bool Mirror);
+    private sealed record MoveMarker(Vector2 Position, double Time);
+    private sealed record PathResult(int RequestId, IReadOnlyList<Vector2> Path);
 
     private readonly string _install;
     private readonly PreviewMode _mode;
@@ -93,6 +95,11 @@ internal sealed class GameHostWindow : GameWindow
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<(EntityGender Gender, EntityAction Action), EntityAnimation>
         _entityAnimations = [];
+    private EntityAnimation? _moveMarkerAnimation;
+    private MoveMarker? _moveMarker;
+    private Task<PathResult>? _pendingPathTask;
+    private CancellationTokenSource? _pathCancellation;
+    private int _pathRequestId;
     private WorldEntity? _player;
     private bool _gameLeftWasDown;
     private int _vao;
@@ -300,17 +307,60 @@ internal sealed class GameHostWindow : GameWindow
         if (KeyboardState.IsKeyPressed(Keys.Down))
             _player.SetGender(EntityGender.Female);
 
+        if (_pendingPathTask is { IsCompleted: true })
+        {
+            if (_pendingPathTask.IsFaulted)
+                throw _pendingPathTask.Exception?.GetBaseException() ??
+                      new InvalidOperationException("Path calculation failed.");
+            if (_pendingPathTask.IsCompletedSuccessfully)
+            {
+                var result = _pendingPathTask.Result;
+                if (result.RequestId == _pathRequestId)
+                    _player.FollowPath(result.Path);
+            }
+            _pendingPathTask = null;
+        }
+
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         if (leftDown && !_gameLeftWasDown)
         {
             var target = ScreenToTerrain(SceneMousePosition());
-            _player.FollowPath(GridPathfinder.Find(_worldSeed, _player.Position, target));
+            _pathCancellation?.Cancel();
+            _pathCancellation?.Dispose();
+            _pathCancellation = new CancellationTokenSource();
+            var token = _pathCancellation.Token;
+            var requestId = ++_pathRequestId;
+            var start = _player.Position;
+            _pendingPathTask = Task.Run(
+                () => new PathResult(
+                    requestId,
+                    GridPathfinder.Find(_worldSeed, start, target, cancellationToken: token)),
+                token);
+            _moveMarker = new(target, 0);
         }
         _gameLeftWasDown = leftDown;
 
+        var currentHeight = InfiniteWorldGenerator.SampleRenderedHeight(
+            _worldSeed, _player.Position.X, _player.Position.Y);
+        var nextHeight = InfiniteWorldGenerator.SampleRenderedHeight(
+            _worldSeed, _player.Target.X, _player.Target.Y);
+        var uphill = Math.Max(0, nextHeight - currentHeight);
+        _player.TerrainSpeedMultiplier = 1f / (1f + uphill * .18f);
         _player.Update(elapsed);
+        if (_moveMarker is not null)
+        {
+            var nextTime = _moveMarker.Time + elapsed;
+            var duration = _moveMarkerAnimation is null
+                ? 0
+                : _moveMarkerAnimation.Textures.Length *
+                  _moveMarkerAnimation.SecondsPerFrame;
+            _moveMarker = nextTime < duration
+                ? _moveMarker with { Time = nextTime }
+                : null;
+        }
         FollowPlayer();
         Title = $"Island RPG - {_player.Gender} villager - {_player.Action} - " +
+                (_pendingPathTask is null ? "" : "calculating path - ") +
                 "click to move, Up/Down changes villager";
     }
 
@@ -321,8 +371,8 @@ internal sealed class GameHostWindow : GameWindow
         var map = ScreenWorldToMap(projected);
         for (var iteration = 0; iteration < 3; iteration++)
         {
-            var elevation = InfiniteWorldGenerator.SampleSurfaceHeight(
-                _worldSeed, (int)MathF.Floor(map.X), (int)MathF.Floor(map.Y));
+            var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
+                _worldSeed, map.X, map.Y);
             map = ScreenWorldToMap(new(projected.X, projected.Y + elevation * 20));
         }
         return map;
@@ -331,10 +381,8 @@ internal sealed class GameHostWindow : GameWindow
     private void FollowPlayer()
     {
         if (_player is null) return;
-        var elevation = InfiniteWorldGenerator.SampleSurfaceHeight(
-            _worldSeed,
-            (int)MathF.Floor(_player.Position.X),
-            (int)MathF.Floor(_player.Position.Y));
+        var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
+            _worldSeed, _player.Position.X, _player.Position.Y);
         var projected = new Vector2(
             (_player.Position.X - _player.Position.Y) * 48,
             (_player.Position.X + _player.Position.Y) * 24 - elevation * 20);
@@ -751,6 +799,7 @@ internal sealed class GameHostWindow : GameWindow
         foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible)
                      .OrderBy(gpu => gpu.Chunk.Coordinate.X + gpu.Chunk.Coordinate.Y))
             DrawWorldChunkTerrain(gpu);
+        if (_mode == PreviewMode.Game) DrawMoveMarker();
 
         var player = _mode == PreviewMode.Game ? GetPlayerVisual() : null;
         var playerDepth = player?.World.Y ?? float.MaxValue;
@@ -887,7 +936,7 @@ internal sealed class GameHostWindow : GameWindow
     {
         if (!_treeAtlas.TryGetValue(atlasKey, out var entry)) return false;
         var objectBounds = SpriteBounds(entry.Frame, world);
-        var playerBounds = SpriteBounds(player.Frame, player.World);
+        var playerBounds = SpriteBounds(player.Frame, player.World, player.Mirror);
         return objectBounds.Left < playerBounds.Right &&
                objectBounds.Right > playerBounds.Left &&
                objectBounds.Top < playerBounds.Bottom &&
@@ -895,11 +944,12 @@ internal sealed class GameHostWindow : GameWindow
     }
 
     private (float Left, float Top, float Right, float Bottom) SpriteBounds(
-        SpriteFrame frame, Vector2 world)
+        SpriteFrame frame, Vector2 world, bool mirror = false)
     {
         var anchor = SpriteAnchor(world);
         var spriteScale = SpritePixelScale();
-        var left = anchor.X - frame.HotspotX * spriteScale;
+        var hotspotX = mirror ? frame.Width - frame.HotspotX : frame.HotspotX;
+        var left = anchor.X - hotspotX * spriteScale;
         var top = anchor.Y - frame.HotspotY * spriteScale;
         return (left, top,
             left + frame.Width * spriteScale,
@@ -1019,6 +1069,7 @@ internal sealed class GameHostWindow : GameWindow
         Title = _mode == PreviewMode.Game
             ? $"Island RPG - {_player?.Gender} villager - {_player?.Action} - " +
               $"{_worldChunks.Count} chunks" +
+              (_pendingPathTask is null ? "" : " - calculating path") +
               (_pendingChunkTask is null ? "" : " - streaming")
             : $"Island RPG - World {_worldSeed} - {_worldChunks.Count} chunks" +
               (_pendingChunkTask is null ? "" : " - streaming");
@@ -1084,6 +1135,35 @@ internal sealed class GameHostWindow : GameWindow
                 throw new InvalidOperationException(
                     $"The installed assets do not contain the complete {gender} villager rig.");
         }
+
+        var markerGraphic = _catalog!.Graphics.Values.FirstOrDefault(value =>
+            value.Definition.Name.Equals("MOVEX_NN", StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException(
+                "The installed assets do not contain the MOVEX_NN movement marker.");
+        _moveMarkerAnimation = new(
+            markerGraphic,
+            markerGraphic.Sprite.Frames.Select(Upload).ToArray(),
+            markerGraphic.Definition.FrameRate is > .015f and < 2f
+                ? markerGraphic.Definition.FrameRate
+                : .08f);
+    }
+
+    private void DrawMoveMarker()
+    {
+        if (_moveMarker is null || _moveMarkerAnimation is null) return;
+        var animation = _moveMarkerAnimation;
+        var frameIndex = Math.Min(
+            animation.Textures.Length - 1,
+            (int)(_moveMarker.Time / animation.SecondsPerFrame));
+        var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
+            _worldSeed, _moveMarker.Position.X, _moveMarker.Position.Y);
+        var world = new Vector2(
+            (_moveMarker.Position.X - _moveMarker.Position.Y) * 48,
+            (_moveMarker.Position.X + _moveMarker.Position.Y) * 24 - elevation * 20);
+        DrawSprite(
+            animation.Graphic.Sprite.Frames[frameIndex],
+            animation.Textures[frameIndex],
+            world);
     }
 
     private PlayerVisual? GetPlayerVisual()
@@ -1105,11 +1185,8 @@ internal sealed class GameHostWindow : GameWindow
             graphic.Sprite.Frames.Count,
             storedVillagerAngles,
             rawFrame);
-        var tile = InfiniteWorldGenerator.SampleTile(
-            _worldSeed,
-            (int)MathF.Floor(_player.Position.X),
-            (int)MathF.Floor(_player.Position.Y));
-        var elevation = (tile.North + tile.East + tile.South + tile.West) / 4f;
+        var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
+            _worldSeed, _player.Position.X, _player.Position.Y);
         var world = new Vector2(
             (_player.Position.X - _player.Position.Y) * 48,
             (_player.Position.X + _player.Position.Y) * 24 - elevation * 20);
@@ -1525,7 +1602,8 @@ internal sealed class GameHostWindow : GameWindow
         if (screen.X < -margin || screen.Y < -margin ||
             screen.X > width + margin || screen.Y > height + margin)
             return;
-        var left = screen.X - frame.HotspotX * spriteScale;
+        var hotspotX = mirror ? frame.Width - frame.HotspotX : frame.HotspotX;
+        var left = screen.X - hotspotX * spriteScale;
         var top = screen.Y - frame.HotspotY * spriteScale;
         var right = left + frame.Width * spriteScale;
         var bottom = top + frame.Height * spriteScale;
@@ -2115,6 +2193,8 @@ internal sealed class GameHostWindow : GameWindow
 
     protected override void OnUnload()
     {
+        _pathCancellation?.Cancel();
+        _pathCancellation?.Dispose();
         foreach (var coordinate in _worldChunks.Keys.ToArray())
             UnloadWorldChunk(coordinate, save: true);
         Exception? saveFailure = null;
@@ -2130,6 +2210,9 @@ internal sealed class GameHostWindow : GameWindow
         foreach (var texture in _terrainTextures) GL.DeleteTexture(texture);
         foreach (var texture in _entityAnimations.Values
                      .SelectMany(value => value.Textures).Distinct())
+            GL.DeleteTexture(texture);
+        if (_moveMarkerAnimation is not null)
+        foreach (var texture in _moveMarkerAnimation.Textures)
             GL.DeleteTexture(texture);
         if (_terrainArray != 0) GL.DeleteTexture(_terrainArray);
         if (_biomeWeightsA != 0) GL.DeleteTexture(_biomeWeightsA);

@@ -16,7 +16,8 @@ internal static class GridPathfinder
         long seed,
         Vector2 startPosition,
         Vector2 requestedTarget,
-        int maximumVisited = 8192)
+        int maximumVisited = 8192,
+        CancellationToken cancellationToken = default)
     {
         var start = ((int)MathF.Floor(startPosition.X), (int)MathF.Floor(startPosition.Y));
         var goal = ((int)MathF.Floor(requestedTarget.X), (int)MathF.Floor(requestedTarget.Y));
@@ -29,6 +30,7 @@ internal static class GridPathfinder
         var visited = 0;
         while (frontier.Count > 0 && visited++ < maximumVisited)
         {
+            if ((visited & 63) == 0) cancellationToken.ThrowIfCancellationRequested();
             var current = frontier.Dequeue();
             if (current == goal) return Reconstruct(current);
             foreach (var neighbour in Neighbours)
@@ -41,8 +43,8 @@ internal static class GridPathfinder
                     continue;
                 var slope = Math.Abs(Height(seed, next.Item1, next.Item2) -
                                      Height(seed, current.X, current.Y));
-                if (slope > 2) continue;
-                var nextCost = costs[current] + neighbour.Cost + slope * .18f;
+                if (slope > 4) continue;
+                var nextCost = costs[current] + neighbour.Cost + slope * .32f;
                 if (costs.TryGetValue(next, out var previous) && previous <= nextCost) continue;
                 costs[next] = nextCost;
                 cameFrom[next] = current;

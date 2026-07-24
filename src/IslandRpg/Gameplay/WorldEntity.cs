@@ -27,6 +27,7 @@ internal sealed class WorldEntity
     public EntityAction Action { get; private set; } = EntityAction.Idle;
     public double ActionTime { get; private set; }
     public float MoveSpeed { get; set; } = 2.8f;
+    public float TerrainSpeedMultiplier { get; set; } = 1f;
 
     public WorldEntity(Vector2 position, EntityGender gender = EntityGender.Male)
     {
@@ -88,7 +89,9 @@ internal sealed class WorldEntity
             return;
         }
         Facing = displacement / distance;
-        Position += Facing * Math.Min(distance, MoveSpeed * elapsed);
+        Position += Facing * Math.Min(
+            distance,
+            MoveSpeed * Math.Clamp(TerrainSpeedMultiplier, .35f, 1f) * elapsed);
     }
 
     private void SetAction(EntityAction action)

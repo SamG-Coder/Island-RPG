@@ -151,6 +151,37 @@ internal static class InfiniteWorldGenerator
     internal static byte SampleSurfaceHeight(long seed, int x, int y) =>
         Surface(HeightAt(seed, x, y));
 
+    internal static float SampleRenderedHeight(long seed, float x, float y)
+    {
+        var tileX = (int)MathF.Floor(x);
+        var tileY = (int)MathF.Floor(y);
+        var fractionX = x - tileX;
+        var fractionY = y - tileY;
+        var northWest = SmoothedVertex(tileX, tileY);
+        var northEast = SmoothedVertex(tileX + 1, tileY);
+        var southWest = SmoothedVertex(tileX, tileY + 1);
+        var southEast = SmoothedVertex(tileX + 1, tileY + 1);
+        var north = northWest + (northEast - northWest) * fractionX;
+        var south = southWest + (southEast - southWest) * fractionX;
+        return north + (south - north) * fractionY;
+
+        float SmoothedVertex(int vertexX, int vertexY)
+        {
+            var weightedHeight = 0f;
+            var totalWeight = 0f;
+            for (var offsetY = -1; offsetY <= 1; offsetY++)
+            for (var offsetX = -1; offsetX <= 1; offsetX++)
+            {
+                var weight = (offsetX == 0 ? 2 : 1) *
+                             (offsetY == 0 ? 2 : 1);
+                weightedHeight += SampleSurfaceHeight(
+                    seed, vertexX + offsetX, vertexY + offsetY) * weight;
+                totalWeight += weight;
+            }
+            return weightedHeight / totalWeight;
+        }
+    }
+
     internal static (byte[] A, byte[] B, byte[] C, byte[] D, byte[] Shore) GenerateBiomeWeights(
         long seed, ChunkCoordinate coordinate)
     {
