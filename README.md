@@ -79,6 +79,11 @@ remain continuous across chunk
 boundaries. Use WASD, the arrow keys, or left-mouse dragging to move the camera.
 The original finite island renderer remains available through `--island`.
 
+Mountain ranges combine uplift, narrow ridged peaks, broad foothills, rolling
+hill fields, and eroded passes. Terrain drops of two or more elevation levels
+produce vertical cliff faces using the installed rock terrain sheet. Visible
+cliffs across loaded chunks are submitted as one GPU batch.
+
 Press `M` in the infinite world to open the top-down atlas. Its 32×32-chunk
 overview is generated asynchronously as a 512×512 texture with a progress bar.
 It fills the viewport like a slippy map: drag to pan, use the mouse wheel to

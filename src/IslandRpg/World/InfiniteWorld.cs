@@ -8,6 +8,8 @@ internal readonly record struct ChunkCoordinate(int X, int Y)
     public override string ToString() => $"{X},{Y}";
 }
 
+internal sealed record CliffFace(int X1, int Y1, int X2, int Y2, byte Top, byte Bottom);
+
 internal sealed class WorldChunk
 {
     public const int Size = 32;
@@ -20,6 +22,7 @@ internal sealed class WorldChunk
     public required byte[] BiomeWeightsA { get; init; }
     public required byte[] BiomeWeightsB { get; init; }
     public required byte[] ShoreDistance { get; init; }
+    public required CliffFace[] Cliffs { get; init; }
 }
 
 internal static class InfiniteWorldGenerator
@@ -61,6 +64,8 @@ internal static class InfiniteWorldGenerator
                 WorldBiome.Coast => .012f,
                 _ => 0
             };
+            if (region == WorldBiome.Alpine)
+                chance *= Math.Clamp((12f - average) / 4f, 0, 1);
             if (UnitHash(seed, worldX, worldY, 91) >= chance) continue;
             var variant = (int)(UnitHash(seed, worldX, worldY, 137) * 12) % 12;
             var graphic = region switch
@@ -73,6 +78,7 @@ internal static class InfiniteWorldGenerator
         }
 
         var weights = GenerateBiomeWeights(seed, coordinate);
+        var cliffs = GenerateCliffs(seed, tiles);
         return new()
         {
             Coordinate = coordinate,
@@ -80,8 +86,52 @@ internal static class InfiniteWorldGenerator
             Trees = trees.ToArray(),
             BiomeWeightsA = weights.A,
             BiomeWeightsB = weights.B,
-            ShoreDistance = weights.Shore
+            ShoreDistance = weights.Shore,
+            Cliffs = cliffs
         };
+    }
+
+    internal static CliffFace[] GenerateCliffs(long seed, IslandTile[] tiles)
+    {
+        var cliffs = new List<CliffFace>();
+        foreach (var tile in tiles)
+        {
+            var localX = PositiveMod(tile.X, WorldChunk.Size);
+            var localY = PositiveMod(tile.Y, WorldChunk.Size);
+            var height = AverageHeight(tile);
+            var east = localX + 1 < WorldChunk.Size
+                ? tiles[localY * WorldChunk.Size + localX + 1]
+                : SampleTile(seed, tile.X + 1, tile.Y);
+            var south = localY + 1 < WorldChunk.Size
+                ? tiles[(localY + 1) * WorldChunk.Size + localX]
+                : SampleTile(seed, tile.X, tile.Y + 1);
+            var eastHeight = AverageHeight(east);
+            var southHeight = AverageHeight(south);
+            var core = IsMountainCore(seed, tile.X, tile.Y, height);
+            var eastCore = IsMountainCore(seed, tile.X + 1, tile.Y, eastHeight);
+            var southCore = IsMountainCore(seed, tile.X, tile.Y + 1, southHeight);
+            if (core != eastCore)
+                cliffs.Add(new(tile.X + 1, tile.Y, tile.X + 1, tile.Y + 1,
+                    Math.Max(height, eastHeight), Math.Min(height, eastHeight)));
+            if (core != southCore)
+                cliffs.Add(new(tile.X, tile.Y + 1, tile.X + 1, tile.Y + 1,
+                    Math.Max(height, southHeight), Math.Min(height, southHeight)));
+        }
+        return cliffs.ToArray();
+
+        static byte AverageHeight(IslandTile tile) => (byte)MathF.Round(
+            (tile.North + tile.East + tile.South + tile.West) / 4f);
+    }
+
+    private static bool IsMountainCore(long seed, int x, int y, byte height)
+    {
+        if (height < 9) return false;
+        var continental = FractalNoise(seed ^ 0x6a09e667f3bcc909L, x / 720f, y / 720f, 4);
+        var rangeNoise = FractalNoise(seed ^ 0x3c6ef372fe94f82bL, x / 260f, y / 260f, 4);
+        var ridgeField = Math.Clamp(1f - MathF.Abs(rangeNoise), 0, 1);
+        var innerRidge = SmoothStep(.68f, .90f, ridgeField);
+        var uplift = Math.Clamp((continental + .15f) * 1.7f, 0, 1);
+        return innerRidge * uplift > .42f;
     }
 
     internal static IslandTile SampleTile(long seed, int x, int y)
@@ -95,6 +145,9 @@ internal static class InfiniteWorldGenerator
         return new(x, y, material, Surface(north), Surface(east),
             Surface(south), Surface(west), region);
     }
+
+    internal static byte SampleSurfaceHeight(long seed, int x, int y) =>
+        Surface(HeightAt(seed, x, y));
 
     internal static (byte[] A, byte[] B, byte[] Shore) GenerateBiomeWeights(
         long seed, ChunkCoordinate coordinate)
@@ -247,17 +300,29 @@ internal static class InfiniteWorldGenerator
         }
 
         var islandHeight = (island - .08f) * 7.2f;
-        var ridgeNoise = FractalNoise(seed ^ 0x3c6ef372fe94f82bL, x / 210f, y / 210f, 4);
-        var ridge = MathF.Pow(MathF.Max(0, 1f - MathF.Abs(ridgeNoise)), 4);
+        var rangeNoise = FractalNoise(seed ^ 0x3c6ef372fe94f82bL, x / 260f, y / 260f, 4);
+        var ridgeField = Math.Clamp(1f - MathF.Abs(rangeNoise), 0, 1);
+        // The outer field creates a long foothill/uplift ramp. The inner field
+        // turns upward much more sharply to form a consequential mountain spine.
+        var rangeRamp = SmoothStep(.20f, .82f, ridgeField);
+        var mountainCore = SmoothStep(.66f, .96f, ridgeField);
         var mountainGate = Math.Clamp((continental + .15f) * 1.7f, 0, 1);
-        var mountains = ridge * mountainGate * 5.2f;
-        var detail = FractalNoise(seed ^ 0x13198a2e03707344L, x / 22f, y / 22f, 3) * .62f;
-        var elevation = MathF.Max(continentHeight, islandHeight) + mountains + detail;
+        var passNoise = FractalNoise(seed ^ 0x428a2f98d728ae22L, x / 115f, y / 115f, 2);
+        var passCut = Math.Clamp((passNoise - .42f) * 2.3f, 0, .72f);
+        var mountains = mountainCore * mountainGate * 12.5f * (1f - passCut);
+        var foothills = rangeRamp * mountainGate * 6.0f * (1f - passCut * .55f);
+        var hillNoise = MathF.Max(0,
+            FractalNoise(seed ^ 0x7137449123ef65cdL, x / 92f, y / 92f, 3));
+        var hills = hillNoise * hillNoise *
+                    Math.Clamp((continental + .3f) * 1.25f, 0, 1) * 2.6f;
+        var detail = FractalNoise(seed ^ 0x13198a2e03707344L, x / 22f, y / 22f, 3) * .8f;
+        var elevation = MathF.Max(continentHeight, islandHeight) +
+                        mountains + foothills + hills + detail;
 
         var river = RiverStrength(seed, x, y);
         if (elevation > 1.1f)
-            elevation -= river * MathF.Min(3.2f, elevation - .35f);
-        return (byte)Math.Clamp((int)MathF.Floor(elevation), 0, 9);
+            elevation -= river * MathF.Min(5.2f, elevation - .35f);
+        return (byte)Math.Clamp((int)MathF.Floor(elevation), 0, 22);
     }
 
     private static (Biome Material, WorldBiome Region) ClassifyAt(
@@ -281,12 +346,18 @@ internal static class InfiniteWorldGenerator
         var temperature = Math.Clamp(
             .55f + climateBand * .24f +
             FractalNoise(seed ^ 0x510e527fade682d1L, x / 610f, y / 610f, 3) * .22f -
-            MathF.Max(0, elevation - 3) * .055f, 0, 1);
+            MathF.Max(0, elevation - 3) * .032f, 0, 1);
 
-        if (elevation > 6.4f)
-            return (temperature < .62f ? Biome.Snow : Biome.Rock, WorldBiome.Alpine);
-        if (elevation > 5.0f)
-            return temperature < .45f
+        if (elevation > 13.0f)
+            return temperature < .43f && moisture > .34f
+                ? (Biome.Snow, WorldBiome.Alpine)
+                : (Biome.Rock, WorldBiome.Alpine);
+        if (elevation > 9.0f)
+            return temperature < .30f && moisture > .42f
+                ? (Biome.Snow, WorldBiome.Alpine)
+                : (Biome.Rock, WorldBiome.Alpine);
+        if (elevation > 6.0f)
+            return temperature < .24f && moisture > .48f
                 ? (Biome.Snow, WorldBiome.Alpine)
                 : (Biome.Highland, WorldBiome.TemperateGrassland);
         if (temperature < .20f) return (Biome.Snow, WorldBiome.Tundra);
@@ -312,6 +383,12 @@ internal static class InfiniteWorldGenerator
     }
 
     private static byte Surface(byte height) => height <= 2 ? (byte)0 : height;
+
+    private static float SmoothStep(float edge0, float edge1, float value)
+    {
+        var t = Math.Clamp((value - edge0) / (edge1 - edge0), 0, 1);
+        return t * t * (3 - 2 * t);
+    }
 
     private static float FractalNoise(long seed, float x, float y, int octaves)
     {
@@ -365,6 +442,12 @@ internal static class InfiniteWorldGenerator
         return value < 0 && value % divisor != 0 ? quotient - 1 : quotient;
     }
 
+    private static int PositiveMod(int value, int divisor)
+    {
+        var result = value % divisor;
+        return result < 0 ? result + divisor : result;
+    }
+
     private static float Lerp(float a, float b, float amount) => a + (b - a) * amount;
 }
 
@@ -373,7 +456,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 3;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 3;
+    private const int ChunkPayloadVersion = 6;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -607,11 +690,12 @@ internal sealed class WorldChunkStore
                     coordinate.Y * WorldChunk.Size + reader.ReadByte(),
                     reader.ReadString());
             var weights = InfiniteWorldGenerator.GenerateBiomeWeights(Seed, coordinate);
+            var cliffs = InfiniteWorldGenerator.GenerateCliffs(Seed, tiles);
             return new()
             {
                 Coordinate = coordinate, Tiles = tiles, Trees = trees,
                 BiomeWeightsA = weights.A, BiomeWeightsB = weights.B,
-                ShoreDistance = weights.Shore
+                ShoreDistance = weights.Shore, Cliffs = cliffs
             };
         }
         catch (EndOfStreamException ex)
@@ -661,11 +745,12 @@ internal sealed class WorldChunkStore
             var weightsBLength = reader.ReadInt32();
             _ = reader.ReadBytes(weightsBLength);
             var weights = InfiniteWorldGenerator.GenerateBiomeWeights(Seed, coordinate);
+            var cliffs = InfiniteWorldGenerator.GenerateCliffs(Seed, tiles);
             return new()
             {
                 Coordinate = coordinate, Tiles = tiles, Trees = trees,
                 BiomeWeightsA = weights.A, BiomeWeightsB = weights.B,
-                ShoreDistance = weights.Shore
+                ShoreDistance = weights.Shore, Cliffs = cliffs
             };
         }
         catch (EndOfStreamException ex)

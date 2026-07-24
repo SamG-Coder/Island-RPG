@@ -5,6 +5,8 @@ var origin = InfiniteWorldGenerator.Generate(seed, new(0, 0));
 var repeated = InfiniteWorldGenerator.Generate(seed, new(0, 0));
 Require(origin.Tiles.SequenceEqual(repeated.Tiles), "same seed and coordinate must reproduce tiles");
 Require(origin.Trees.SequenceEqual(repeated.Trees), "same seed and coordinate must reproduce trees");
+Require(origin.Cliffs.SequenceEqual(repeated.Cliffs),
+    "same seed and coordinate must reproduce cliff faces");
 Require(origin.BiomeWeightsA.SequenceEqual(repeated.BiomeWeightsA),
     "same seed and coordinate must reproduce primary biome weights");
 Require(origin.BiomeWeightsB.SequenceEqual(repeated.BiomeWeightsB),
@@ -25,12 +27,19 @@ for (var y = 0; y < WorldChunk.Size; y++)
 
 var macroBiomes = new Dictionary<WorldBiome, int>();
 var snowSamples = 0;
+var hillSamples = 0;
+var mountainSamples = 0;
+var maximumElevation = 0f;
 for (var sampleY = -1000; sampleY <= 1000; sampleY += 40)
 for (var sampleX = -1000; sampleX <= 1000; sampleX += 40)
 {
     var tile = InfiniteWorldGenerator.SampleTile(seed, sampleX, sampleY);
     macroBiomes[tile.Region] = macroBiomes.GetValueOrDefault(tile.Region) + 1;
     if (tile.Biome == Biome.Snow) snowSamples++;
+    var elevation = (tile.North + tile.East + tile.South + tile.West) / 4f;
+    maximumElevation = Math.Max(maximumElevation, elevation);
+    if (elevation is >= 2 and < 5) hillSamples++;
+    if (elevation >= 5) mountainSamples++;
 }
 Require(macroBiomes.ContainsKey(WorldBiome.Ocean), "macro world must contain oceans");
 Require(macroBiomes.ContainsKey(WorldBiome.River), "macro world must contain river corridors");
@@ -42,6 +51,10 @@ Require(macroBiomes.ContainsKey(WorldBiome.TemperateForest) ||
 Require(macroBiomes.Keys.Count >= 7,
     $"macro climate should produce at least seven biome types; found {macroBiomes.Keys.Count}");
 Require(snowSamples > 0, "cold tundra or alpine terrain must produce visible snow");
+Require(hillSamples > 0, "continental terrain must produce rolling hills and foothills");
+Require(mountainSamples > 0, "continental terrain must produce mountain elevations");
+Require(maximumElevation >= 10,
+    $"continental ranges must include impactful high peaks; highest was {maximumElevation}");
 
 var atlasProgress = new System.Collections.Concurrent.ConcurrentBag<(int Done, int Total)>();
 Require(WorldAtlasGenerator.PixelSize == 512,
@@ -94,6 +107,7 @@ try
     var loaded = store.LoadOrGenerate(origin.Coordinate);
     Require(origin.Tiles.SequenceEqual(loaded.Tiles), "saved tiles must round-trip");
     Require(origin.Trees.SequenceEqual(loaded.Trees), "saved trees must round-trip");
+    Require(origin.Cliffs.SequenceEqual(loaded.Cliffs), "derived cliff faces must round-trip");
     Require(origin.BiomeWeightsA.SequenceEqual(loaded.BiomeWeightsA),
         "primary biome weights must round-trip");
     Require(origin.BiomeWeightsB.SequenceEqual(loaded.BiomeWeightsB),
@@ -149,5 +163,6 @@ static WorldChunk CloneAt(WorldChunk source, ChunkCoordinate coordinate) => new(
     Trees = source.Trees,
     BiomeWeightsA = source.BiomeWeightsA,
     BiomeWeightsB = source.BiomeWeightsB,
-    ShoreDistance = source.ShoreDistance
+    ShoreDistance = source.ShoreDistance,
+    Cliffs = source.Cliffs
 };

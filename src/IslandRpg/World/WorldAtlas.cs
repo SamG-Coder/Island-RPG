@@ -49,7 +49,9 @@ internal static class WorldAtlasGenerator
                     var tileY = firstTileY +
                                 (int)((imageY + .5f) * spanTiles / pixelSize);
                     var tile = InfiniteWorldGenerator.SampleTile(seed, tileX, tileY);
-                    var color = ColorFor(tile.Region);
+                    var color = tile.Biome == Biome.Snow
+                        ? (R: (byte)224, G: (byte)232, B: (byte)235)
+                        : ColorFor(tile.Region);
                     var elevation = (tile.North + tile.East + tile.South + tile.West) / 36f;
                     var shade = tile.Region switch
                     {
@@ -57,6 +59,11 @@ internal static class WorldAtlasGenerator
                         WorldBiome.River => 1f,
                         _ => .82f + elevation * .28f
                     };
+                    // A north-west light makes ridges, foothills and river valleys
+                    // legible without changing the deterministic biome colours.
+                    var slopeX = (tile.East + tile.South - tile.North - tile.West) * .5f;
+                    var slopeY = (tile.West + tile.South - tile.North - tile.East) * .5f;
+                    shade += Math.Clamp((-slopeX - slopeY) * .055f, -.25f, .25f);
                     var index = (imageY * pixelSize + imageX) * 4;
                     rgba[index] = (byte)Math.Clamp(color.R * shade, 0, 255);
                     rgba[index + 1] = (byte)Math.Clamp(color.G * shade, 0, 255);
