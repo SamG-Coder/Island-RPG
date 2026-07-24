@@ -10,11 +10,17 @@ namespace IslandRpg.Rendering;
 
 internal sealed class GameHostWindow : GameWindow
 {
-    internal enum PreviewMode { Assets, Island }
+    internal enum PreviewMode { Assets, Island, World }
     private enum ScreenState { LoadingAssets, PreparingGpu, WorldPreview }
+    private sealed record GpuWorldChunk(WorldChunk Chunk, int Vbo, int VertexCount, int WeightsA, int WeightsB);
 
     private readonly string _install;
     private readonly PreviewMode _mode;
+    private readonly long _worldSeed;
+    private WorldChunkStore? _worldStore;
+    private readonly Dictionary<ChunkCoordinate, GpuWorldChunk> _worldChunks = [];
+    private Task<WorldChunk>? _pendingChunkTask;
+    private ChunkCoordinate _pendingChunkCoordinate;
     private IslandMap? _island;
     private Task<AssetCatalog>? _loadTask;
     private AssetCatalog? _catalog;
@@ -45,7 +51,7 @@ internal sealed class GameHostWindow : GameWindow
 
     public AssetCatalog? Catalog => _catalog;
 
-    public GameHostWindow(string install, PreviewMode mode = PreviewMode.Assets) : base(
+    public GameHostWindow(string install, PreviewMode mode = PreviewMode.Assets, long worldSeed = 2187) : base(
         GameWindowSettings.Default,
         new NativeWindowSettings
         {
@@ -55,6 +61,7 @@ internal sealed class GameHostWindow : GameWindow
     {
         _install = install;
         _mode = mode;
+        _worldSeed = worldSeed;
     }
 
     protected override void OnLoad()
@@ -88,9 +95,14 @@ internal sealed class GameHostWindow : GameWindow
             _catalog = _loadTask.Result;
             if (_mode == PreviewMode.Island)
                 _island = IslandGenerator.Generate();
-            var islandGraphics = _island?.Trees
-                .SelectMany(tree => new[] { tree.GraphicName, tree.GraphicName[..^2] + "N0" })
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var islandGraphics = _mode == PreviewMode.World
+                ? Enumerable.Range(0, 12).Select(index => $"TREE{(char)('A' + index)}_NN")
+                    .Concat(["FPAL_NN", "FPIN_NN"])
+                    .SelectMany(name => new[] { name, name[..^2] + "N0" })
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase)
+                : _island?.Trees
+                    .SelectMany(tree => new[] { tree.GraphicName, tree.GraphicName[..^2] + "N0" })
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
             _worldAssets = _catalog.Graphics.Values
                 .Where(asset => asset.Kind is not (GraphicKind.Interface or GraphicKind.Unknown))
                 .Where(asset => islandGraphics is null || islandGraphics.Contains(asset.Definition.Name))
@@ -116,13 +128,26 @@ internal sealed class GameHostWindow : GameWindow
             _done = _uploadIndex;
             if (_uploadIndex == _worldAssets.Count)
             {
-                if (_mode == PreviewMode.Island)
+                if (_mode is PreviewMode.Island or PreviewMode.World)
                 {
-                    PrepareIslandTerrain();
-                    _camera = new Vector2(0, -IslandMap.Size * 24);
-                    _zoom = .65f;
+                    if (_mode == PreviewMode.Island)
+                    {
+                        PrepareIslandTerrain();
+                        _camera = new Vector2(0, -IslandMap.Size * 24);
+                        _zoom = .65f;
+                    }
+                    else
+                    {
+                        PrepareWorldTerrain();
+                        _worldStore = new WorldChunkStore(_worldSeed);
+                        _camera = Vector2.Zero;
+                        _zoom = .8f;
+                        StreamWorld();
+                    }
                     _screen = ScreenState.WorldPreview;
-                    Title = "Island RPG - Generated Island";
+                    Title = _mode == PreviewMode.Island
+                        ? "Island RPG - Generated Island"
+                        : $"Island RPG - World {_worldSeed}";
                     return;
                 }
                 var terrainStop = Math.Min(_terrainUploadIndex + 8, _catalog!.TerrainTiles.Count);
@@ -142,10 +167,14 @@ internal sealed class GameHostWindow : GameWindow
             }
         }
 
-        if (_screen == ScreenState.WorldPreview) UpdateCamera();
+        if (_screen == ScreenState.WorldPreview)
+        {
+            UpdateCamera((float)e.Time);
+            if (_mode == PreviewMode.World) StreamWorld();
+        }
     }
 
-    private void UpdateCamera()
+    private void UpdateCamera(float elapsed)
     {
         var mouse = MouseState.Position;
         if (MouseState.IsButtonDown(MouseButton.Left))
@@ -155,6 +184,14 @@ internal sealed class GameHostWindow : GameWindow
             _dragging = true;
         }
         else _dragging = false;
+
+        var direction = Vector2.Zero;
+        if (KeyboardState.IsKeyDown(Keys.A) || KeyboardState.IsKeyDown(Keys.Left)) direction.X += 1;
+        if (KeyboardState.IsKeyDown(Keys.D) || KeyboardState.IsKeyDown(Keys.Right)) direction.X -= 1;
+        if (KeyboardState.IsKeyDown(Keys.W) || KeyboardState.IsKeyDown(Keys.Up)) direction.Y += 1;
+        if (KeyboardState.IsKeyDown(Keys.S) || KeyboardState.IsKeyDown(Keys.Down)) direction.Y -= 1;
+        if (direction.LengthSquared > 0)
+            _camera += Vector2.Normalize(direction) * 720f * elapsed;
     }
 
     protected override void OnMouseWheel(MouseWheelEventArgs e)
@@ -182,6 +219,7 @@ internal sealed class GameHostWindow : GameWindow
         if (_screen == ScreenState.WorldPreview)
         {
             if (_mode == PreviewMode.Island) RenderIsland();
+            else if (_mode == PreviewMode.World) RenderWorld();
             else RenderWorldPreview();
         }
         else RenderLoading();
@@ -265,6 +303,231 @@ internal sealed class GameHostWindow : GameWindow
         }
     }
 
+    private void RenderWorld()
+    {
+        foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible))
+            DrawWorldChunkTerrain(gpu);
+
+        var graphicIndex = _worldAssets
+            .Select((asset, index) => (asset.Definition.Name, index))
+            .GroupBy(value => value.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().index, StringComparer.OrdinalIgnoreCase);
+        foreach (var tree in _worldChunks.Values.SelectMany(value => value.Chunk.Trees)
+                     .OrderBy(tree => tree.X + tree.Y))
+        {
+            if (!graphicIndex.TryGetValue(tree.GraphicName, out var index)) continue;
+            var tile = _worldChunks[new(
+                FloorDiv(tree.X, WorldChunk.Size), FloorDiv(tree.Y, WorldChunk.Size))]
+                .Chunk.Tiles[
+                    PositiveMod(tree.Y, WorldChunk.Size) * WorldChunk.Size +
+                    PositiveMod(tree.X, WorldChunk.Size)];
+            var height = (tile.North + tile.East + tile.South + tile.West) / 4f;
+            var world = new Vector2(
+                (tree.X - tree.Y) * 48,
+                (tree.X + tree.Y + 1) * 24 - height * 12);
+            var shadowName = tree.GraphicName[..^2] + "N0";
+            if (graphicIndex.TryGetValue(shadowName, out var shadowIndex))
+                DrawSprite(_worldAssets[shadowIndex].Sprite.Frames[0], _textures[shadowIndex], world);
+            DrawSprite(_worldAssets[index].Sprite.Frames[0], _textures[index], world);
+        }
+    }
+
+    private void StreamWorld()
+    {
+        if (_worldStore is null) return;
+        if (_pendingChunkTask is { IsCompleted: true })
+        {
+            if (_pendingChunkTask.IsFaulted)
+                throw _pendingChunkTask.Exception?.GetBaseException() ??
+                      new InvalidOperationException("Chunk loading failed.");
+            var loaded = _pendingChunkTask.Result;
+            if (!_worldChunks.ContainsKey(loaded.Coordinate))
+                _worldChunks.Add(loaded.Coordinate, UploadWorldChunk(loaded));
+            _pendingChunkTask = null;
+        }
+        var mapCenter = ScreenWorldToMap(-_camera / Math.Max(_zoom, .001f));
+        var center = new ChunkCoordinate(
+            FloorDiv((int)MathF.Floor(mapCenter.X), WorldChunk.Size),
+            FloorDiv((int)MathF.Floor(mapCenter.Y), WorldChunk.Size));
+        const int loadRadius = 2;
+        const int unloadRadius = 3;
+
+        var wanted = new List<ChunkCoordinate>();
+        for (var y = center.Y - loadRadius; y <= center.Y + loadRadius; y++)
+        for (var x = center.X - loadRadius; x <= center.X + loadRadius; x++)
+            if (!_worldChunks.ContainsKey(new(x, y)) &&
+                (_pendingChunkTask is null || _pendingChunkCoordinate != new ChunkCoordinate(x, y)))
+                wanted.Add(new(x, y));
+        if (wanted.Count > 0 && _pendingChunkTask is null)
+        {
+            _pendingChunkCoordinate = wanted.OrderBy(value =>
+                (value.X - center.X) * (value.X - center.X) +
+                (value.Y - center.Y) * (value.Y - center.Y)).First();
+            var store = _worldStore;
+            var coordinate = _pendingChunkCoordinate;
+            _pendingChunkTask = Task.Run(() => store.LoadOrGenerate(coordinate));
+        }
+
+        foreach (var coordinate in _worldChunks.Keys
+                     .Where(value => Math.Abs(value.X - center.X) > unloadRadius ||
+                                     Math.Abs(value.Y - center.Y) > unloadRadius)
+                     .ToArray())
+            UnloadWorldChunk(coordinate, save: true);
+        Title = $"Island RPG - World {_worldSeed} - {_worldChunks.Count} chunks" +
+                (_pendingChunkTask is null ? "" : " - streaming");
+    }
+
+    private void PrepareWorldTerrain()
+    {
+        _terrainArray = UploadTerrainArray();
+        _waterNormalArray = UploadWaterNormalArray();
+        _terrainProgram = CreateTerrainProgram();
+    }
+
+    private GpuWorldChunk UploadWorldChunk(WorldChunk chunk)
+    {
+        Vector2 Project(float x, float y, float z) =>
+            new((x - y) * 48, (x + y) * 24 - z * 12);
+        var layers = Enum.GetValues<Biome>().ToDictionary(biome => biome, biome => (float)(int)biome);
+        var vertices = new List<float>(WorldChunk.Size * WorldChunk.Size * 6 * 11);
+        foreach (var tile in chunk.Tiles)
+        {
+            var localX = PositiveMod(tile.X, WorldChunk.Size);
+            var localY = PositiveMod(tile.Y, WorldChunk.Size);
+            var points = new[]
+            {
+                Project(tile.X, tile.Y, tile.North),
+                Project(tile.X + 1, tile.Y, tile.East),
+                Project(tile.X + 1, tile.Y + 1, tile.South),
+                Project(tile.X, tile.Y + 1, tile.West)
+            };
+            var local = new[] { new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, 1), new Vector2(0, 1) };
+            var north = LayerAt(localX, localY - 1, tile.Biome);
+            var east = LayerAt(localX + 1, localY, tile.Biome);
+            var south = LayerAt(localX, localY + 1, tile.Biome);
+            var west = LayerAt(localX - 1, localY, tile.Biome);
+            foreach (var corner in new[] { 0, 1, 2, 0, 2, 3 })
+            {
+                var uv = local[corner];
+                vertices.Add(points[corner].X); vertices.Add(points[corner].Y);
+                vertices.Add((tile.X + uv.X) / 8f); vertices.Add((tile.Y + uv.Y) / 8f);
+                var haloSamples = WorldChunk.WeightHaloTiles * WorldChunk.WeightSamplesPerTile;
+                vertices.Add((haloSamples + (localX + uv.X) * WorldChunk.WeightSamplesPerTile) /
+                             (WorldChunk.WeightTextureSize - 1f));
+                vertices.Add((haloSamples + (localY + uv.Y) * WorldChunk.WeightSamplesPerTile) /
+                             (WorldChunk.WeightTextureSize - 1f));
+                vertices.Add(layers[tile.Biome]);
+                vertices.Add(north); vertices.Add(east); vertices.Add(south); vertices.Add(west);
+            }
+        }
+        var vbo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float),
+            vertices.ToArray(), BufferUsageHint.StaticDraw);
+        var weights = UploadChunkBiomeWeights(chunk);
+        return new(chunk, vbo, vertices.Count / 11, weights.A, weights.B);
+
+        float LayerAt(int x, int y, Biome fallback) =>
+            layers[x < 0 || y < 0 || x >= WorldChunk.Size || y >= WorldChunk.Size
+                ? fallback
+                : chunk.Tiles[y * WorldChunk.Size + x].Biome];
+    }
+
+    private static (int A, int B) UploadChunkBiomeWeights(WorldChunk chunk)
+    {
+        return (Upload(chunk.BiomeWeightsA), Upload(chunk.BiomeWeightsB));
+
+        static int Upload(byte[] data)
+        {
+            var texture = GL.GenTexture();
+            GL.BindTexture(TextureTarget.Texture2D, texture);
+            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
+                WorldChunk.WeightTextureSize, WorldChunk.WeightTextureSize, 0, PixelFormat.Rgba,
+                PixelType.UnsignedByte, data);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
+                (int)TextureMinFilter.Linear);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
+                (int)TextureMagFilter.Linear);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS,
+                (int)TextureWrapMode.ClampToEdge);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT,
+                (int)TextureWrapMode.ClampToEdge);
+            return texture;
+        }
+    }
+
+    private bool IsChunkVisible(GpuWorldChunk gpu)
+    {
+        var originX = gpu.Chunk.Coordinate.X * WorldChunk.Size;
+        var originY = gpu.Chunk.Coordinate.Y * WorldChunk.Size;
+        var centerX = originX + WorldChunk.Size * .5f;
+        var centerY = originY + WorldChunk.Size * .5f;
+        var projected = new Vector2(
+            (centerX - centerY) * 48,
+            (centerX + centerY) * 24 - 4.5f * 12);
+        var screen = new Vector2(Size.X * .5f, Size.Y * .5f) + _camera + projected * _zoom;
+        var halfWidth = WorldChunk.Size * 48 * _zoom + 96;
+        var halfHeight = WorldChunk.Size * 24 * _zoom + 128;
+        return screen.X + halfWidth >= 0 && screen.X - halfWidth <= Size.X &&
+               screen.Y + halfHeight >= 0 && screen.Y - halfHeight <= Size.Y;
+    }
+
+    private void DrawWorldChunkTerrain(GpuWorldChunk gpu)
+    {
+        GL.UseProgram(_terrainProgram);
+        GL.Uniform2(GL.GetUniformLocation(_terrainProgram, "viewport"),
+            (float)Math.Max(1, Size.X), (float)Math.Max(1, Size.Y));
+        GL.Uniform2(GL.GetUniformLocation(_terrainProgram, "camera"), _camera.X, _camera.Y);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "zoom"), _zoom);
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2DArray, _terrainArray);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "terrain"), 0);
+        GL.ActiveTexture(TextureUnit.Texture1);
+        GL.BindTexture(TextureTarget.Texture2D, gpu.WeightsA);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "biomeWeightsA"), 1);
+        GL.ActiveTexture(TextureUnit.Texture2);
+        GL.BindTexture(TextureTarget.Texture2D, gpu.WeightsB);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "biomeWeightsB"), 2);
+        GL.ActiveTexture(TextureUnit.Texture3);
+        GL.BindTexture(TextureTarget.Texture2DArray, _waterNormalArray);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "waterNormals"), 3);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "time"), _waterTime);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, gpu.Vbo);
+        const int stride = 11 * sizeof(float);
+        for (var attribute = 0; attribute < 5; attribute++) GL.EnableVertexAttribArray(attribute);
+        GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, stride, 0);
+        GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, stride, 2 * sizeof(float));
+        GL.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, stride, 4 * sizeof(float));
+        GL.VertexAttribPointer(3, 3, VertexAttribPointerType.Float, false, stride, 6 * sizeof(float));
+        GL.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, stride, 9 * sizeof(float));
+        GL.DrawArrays(PrimitiveType.Triangles, 0, gpu.VertexCount);
+    }
+
+    private void UnloadWorldChunk(ChunkCoordinate coordinate, bool save)
+    {
+        if (!_worldChunks.Remove(coordinate, out var gpu)) return;
+        if (save) _worldStore?.Save(gpu.Chunk);
+        GL.DeleteBuffer(gpu.Vbo);
+        GL.DeleteTexture(gpu.WeightsA);
+        GL.DeleteTexture(gpu.WeightsB);
+    }
+
+    private static Vector2 ScreenWorldToMap(Vector2 world) => new(
+        (world.Y / 24f + world.X / 48f) * .5f,
+        (world.Y / 24f - world.X / 48f) * .5f);
+
+    private static int FloorDiv(int value, int divisor)
+    {
+        var quotient = value / divisor;
+        return value < 0 && value % divisor != 0 ? quotient - 1 : quotient;
+    }
+
+    private static int PositiveMod(int value, int divisor)
+    {
+        var result = value % divisor;
+        return result < 0 ? result + divisor : result;
+    }
+
     private static string TerrainName(Biome biome)
     {
         return biome switch
@@ -304,7 +567,8 @@ internal sealed class GameHostWindow : GameWindow
                 var uv = local[corner];
                 vertices.Add(points[corner].X); vertices.Add(points[corner].Y);
                 vertices.Add((tile.X + uv.X) / 8f); vertices.Add((tile.Y + uv.Y) / 8f);
-                vertices.Add(uv.X); vertices.Add(uv.Y);
+                vertices.Add((tile.X + uv.X) / IslandMap.Size);
+                vertices.Add((tile.Y + uv.Y) / IslandMap.Size);
                 vertices.Add(layers[tile.Biome]);
                 vertices.Add(north); vertices.Add(east); vertices.Add(south); vertices.Add(west);
             }
@@ -370,6 +634,7 @@ internal sealed class GameHostWindow : GameWindow
         var y = ((frame.HotspotY - frame.Height / 2f) * _zoom - _camera.Y - world.Y * _zoom) * 2 / height;
         GL.UseProgram(_program);
         GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
+        GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, texture);
         Draw([x-halfW,y+halfH,0,0, x-halfW,y-halfH,0,1, x+halfW,y-halfH,1,1, x+halfW,y+halfH,1,0]);
     }
@@ -643,7 +908,7 @@ internal sealed class GameHostWindow : GameWindow
                 gl_Position = vec4(pixel.x * 2.0 / viewport.x,
                                   -pixel.y * 2.0 / viewport.y, 0.0, 1.0);
                 uv = textureUv;
-                mapUv = clamp(textureUv * (8.0 / 120.0), 0.0, 1.0);
+                mapUv = clamp(tileUv, 0.0, 1.0);
             }
             """;
         const string fragment = """
@@ -699,6 +964,8 @@ internal sealed class GameHostWindow : GameWindow
                 vec4 a = texture(biomeWeightsA, mapUv);
                 vec4 biomeB = texture(biomeWeightsB, mapUv);
                 vec3 b = biomeB.rgb;
+                float shorelineDistance = (biomeB.a * 2.0 - 1.0) * 8.0;
+                float shorelineProximity = 1.0 - smoothstep(0.0, 3.0, abs(shorelineDistance));
                 float total = max(dot(a, vec4(1.0)) + dot(b, vec3(1.0)), 0.001);
                 color = vec4(0.0);
                 float waterWeight = a.r + a.g;
@@ -754,7 +1021,9 @@ internal sealed class GameHostWindow : GameWindow
                     float breakup = breakupA * 0.62 + breakupB * 0.38;
                     float steepCrest = smoothstep(0.48, 0.88, waveSlope);
                     float sparsePatch = smoothstep(0.61, 0.79, breakup);
-                    float shoreBoost = smoothstep(0.10, 0.62, a.g / max(waterWeight, 0.001));
+                    float shallowBoost = smoothstep(0.10, 0.62, a.g / max(waterWeight, 0.001));
+                    float shoreBoost = max(shallowBoost,
+                        shorelineProximity * step(0.0, shorelineDistance));
                     float foam = steepCrest * sparsePatch * mix(0.42, 0.82, shoreBoost);
                     vec3 foamColor = vec3(0.84, 0.94, 0.95);
                     color.rgb = mix(color.rgb, foamColor, foam * surfaceEffect * 0.48);
@@ -795,6 +1064,8 @@ internal sealed class GameHostWindow : GameWindow
 
     protected override void OnUnload()
     {
+        foreach (var coordinate in _worldChunks.Keys.ToArray())
+            UnloadWorldChunk(coordinate, save: true);
         foreach (var texture in _textures) GL.DeleteTexture(texture);
         foreach (var texture in _terrainTextures) GL.DeleteTexture(texture);
         if (_terrainArray != 0) GL.DeleteTexture(_terrainArray);

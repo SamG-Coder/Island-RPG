@@ -14,8 +14,12 @@ dotnet run --project src/IslandRpg
 
 The program checks common Steam locations and `AGE2HD_PATH`. By default a
 single persistent game window moves through loading, GPU preparation, and a
-pannable generated-island view. The island uses a 2:1 isometric projection,
-a 120×120 normal map size, corner-based elevation, coastal/inland biomes, and
+pannable seeded infinite-world view. The world streams deterministic 32×32
+chunks around the camera, saves them under the current user's local application
+data directory, culls off-screen terrain batches, and unloads distant chunks to
+keep memory and GPU use bounded. Chunk halos preserve Gaussian biome blending
+and shoreline effects across chunk borders.
+It uses a 2:1 isometric projection, corner-based elevation, coastal/inland biomes, and
 biome-matched trees. Terrain is drawn first, then tree shadows and trees in
 map-depth order. Deep and shallow water use the installed HD normal maps for
 two-scale animated waves, refraction, and restrained specular highlights.
@@ -51,6 +55,16 @@ Open the generated island explicitly:
 ```powershell
 dotnet run --project src/IslandRpg -- --island
 ```
+
+Open or create an infinite world with a specific seed:
+
+```powershell
+dotnet run --project src/IslandRpg -- --world --seed 2187
+```
+
+The same seed produces the same island chains, elevation, ocean depth, biomes,
+and trees. Use WASD, the arrow keys, or left-mouse dragging to move the camera.
+The original finite island renderer remains available through `--island`.
 
 Press Escape to close. The current prototype supports classic SLP frames,
 palette colors, player-color pixels, shadows, hotspots, animation, and

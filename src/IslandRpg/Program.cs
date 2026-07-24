@@ -21,9 +21,12 @@ try
         {
             using var host = new GameHostWindow(
                 install,
-                options.Island
+                options.World
+                    ? GameHostWindow.PreviewMode.World
+                    : options.Island
                     ? GameHostWindow.PreviewMode.Island
-                    : GameHostWindow.PreviewMode.Assets);
+                    : GameHostWindow.PreviewMode.Assets,
+                options.Seed);
             host.Run();
             assetCatalog = host.Catalog ??
                            throw new InvalidOperationException("The asset catalogue did not finish loading.");
@@ -87,7 +90,8 @@ catch (Exception ex)
 {
     Console.Error.WriteLine(ex.Message);
     Console.Error.WriteLine(
-        "Usage: IslandRpg [--age2-path <folder>] [--graphic <SLP id> | --graphic-name <DAT name>]");
+        "Usage: IslandRpg [--world] [--seed <number>] [--island | --catalog] " +
+        "[--age2-path <folder>] [--graphic <SLP id> | --graphic-name <DAT name>]");
     Environment.ExitCode = 1;
 }
 
@@ -97,7 +101,9 @@ internal sealed record AppOptions(
     string GraphicName,
     bool ValidateOnly,
     bool Catalog,
-    bool Island)
+    bool Island,
+    bool World,
+    long Seed)
 {
     public static AppOptions Parse(string[] args)
     {
@@ -108,7 +114,9 @@ internal sealed record AppOptions(
         var graphicName = "TREEA_NN";
         var validateOnly = false;
         var catalog = true;
-        var island = true;
+        var island = false;
+        var world = true;
+        long seed = 2187;
         for (var i = 0; i < args.Length; i++)
         {
             if (args[i] == "--age2-path" && i + 1 < args.Length) path = args[++i];
@@ -116,25 +124,37 @@ internal sealed record AppOptions(
             {
                 graphic = id;
                 catalog = false;
+                world = false;
             }
             else if (args[i] == "--graphic-name" && i + 1 < args.Length)
             {
                 graphicName = args[++i];
                 catalog = false;
+                world = false;
             }
             else if (args[i] == "--catalog")
             {
                 catalog = true;
                 island = false;
+                world = false;
             }
             else if (args[i] == "--island")
             {
                 catalog = true;
                 island = true;
+                world = false;
             }
+            else if (args[i] == "--world")
+            {
+                catalog = true;
+                island = false;
+                world = true;
+            }
+            else if (args[i] == "--seed" && i + 1 < args.Length &&
+                     long.TryParse(args[++i], out var parsedSeed)) seed = parsedSeed;
             else if (args[i] == "--validate") validateOnly = true;
             else throw new ArgumentException($"Unknown or incomplete argument: {args[i]}");
         }
-        return new(path, graphic, graphicName, validateOnly, catalog, island);
+        return new(path, graphic, graphicName, validateOnly, catalog, island, world, seed);
     }
 }
