@@ -1101,6 +1101,9 @@ internal sealed class GameHostWindow : GameWindow
                 maximumHealth, maximumHealth, TreeLifecycleState.Standing);
             gpu.Chunk.TreeInstances.Add(instance);
             QueueChunkSave(gpu.Chunk);
+            _chatUi.AddMessage(
+                $"You begin cutting the {TreeDisplayName(source.GraphicName)}.",
+                ChatMessageStyle.Action);
         }
         else
         {
@@ -1135,7 +1138,21 @@ internal sealed class GameHostWindow : GameWindow
                 tree => tree.Id == _activeTreeId.Value);
             if (index < 0) continue;
             var instance = gpu.Chunk.TreeInstances[index];
-            var health = Math.Max(0, instance.Health - 25);
+            var experience = _activePlayer?.WoodcuttingExperience ?? 0;
+            var strikeResult = WoodcuttingSkill.Roll(
+                experience,
+                Random.Shared.NextSingle(),
+                Random.Shared.NextSingle());
+            if (!strikeResult.Hit)
+            {
+                _chatUi.AddMessage(
+                    $"Woodcutting {strikeResult.Level}: you miss the tree.",
+                    ChatMessageStyle.Miss);
+                return;
+            }
+
+            var damage = Math.Min(instance.Health, strikeResult.Damage);
+            var health = Math.Max(0, instance.Health - damage);
             var state = health == 0
                 ? TreeLifecycleState.Stump
                 : TreeLifecycleState.Standing;
@@ -1145,8 +1162,19 @@ internal sealed class GameHostWindow : GameWindow
                 State = state
             };
             QueueChunkSave(gpu.Chunk);
+            _chatUi.AddMessage(
+                $"You hit the {TreeDisplayName(instance.TreeType)} for {damage} damage " +
+                $"({health}/{instance.MaxHealth}).",
+                ChatMessageStyle.Damage);
+            AwardWoodcuttingExperience(
+                damage + (state == TreeLifecycleState.Stump
+                    ? Math.Max(10, instance.MaxHealth / 5)
+                    : 0));
             if (state == TreeLifecycleState.Stump)
             {
+                _chatUi.AddMessage(
+                    $"The {TreeDisplayName(instance.TreeType)} falls.",
+                    ChatMessageStyle.Action);
                 _activeTreeId = null;
                 _player.Stop();
             }
@@ -1183,6 +1211,46 @@ internal sealed class GameHostWindow : GameWindow
                 return healthByVariant[variant];
         }
         return 100;
+    }
+
+    private void AwardWoodcuttingExperience(int amount)
+    {
+        if (_activePlayer is null || amount <= 0) return;
+        var previousLevel = WoodcuttingSkill.LevelForExperience(
+            _activePlayer.WoodcuttingExperience);
+        var maximumExperience = WoodcuttingSkill.ExperienceForLevel(
+            WoodcuttingSkill.MaximumLevel);
+        var experience = Math.Min(
+            maximumExperience,
+            _activePlayer.WoodcuttingExperience + amount);
+        _activePlayer = _activePlayer with
+        {
+            WoodcuttingExperience = experience,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        _saves.SavePlayer(_activePlayer);
+        var level = WoodcuttingSkill.LevelForExperience(experience);
+        _chatUi.AddMessage(
+            $"+{amount} Woodcutting XP.", ChatMessageStyle.Experience);
+        if (level > previousLevel)
+            _chatUi.AddMessage(
+                $"Your Woodcutting level is now {level}.",
+                ChatMessageStyle.LevelUp);
+    }
+
+    private static string TreeDisplayName(string graphicName)
+    {
+        if (graphicName.StartsWith("FPAL", StringComparison.OrdinalIgnoreCase))
+            return "palm";
+        if (graphicName.StartsWith("FPIN", StringComparison.OrdinalIgnoreCase))
+            return "pine";
+        if (graphicName.StartsWith("FOAK", StringComparison.OrdinalIgnoreCase))
+            return "oak";
+        if (graphicName.StartsWith("FBAM", StringComparison.OrdinalIgnoreCase))
+            return "bamboo";
+        if (graphicName.StartsWith("FCAC", StringComparison.OrdinalIgnoreCase))
+            return "cactus";
+        return "tree";
     }
 
     private Vector2 ScreenToTerrain(Vector2 screen)
@@ -2094,15 +2162,113 @@ internal sealed class GameHostWindow : GameWindow
         _gameUi.Layout(scene);
         _chatUi.Layout(scene);
         _minimapUi.Layout(scene);
+        RenderTreeHealthBars(scene);
         RenderMinimap();
         RenderChatUi();
         if (_gameUi.Panel.Visible)
             DrawAoEPanelBorder(_gameUi.Panel.Bounds);
+        if (_gameUi.ActivePanel == GameUiPanel.Skills)
+            RenderSkillsPanel();
 
         DrawAoEUiTile(_gameUi.SkillsButton);
         DrawAoEUiTile(_gameUi.InventoryButton);
         DrawUiButtonCaption("Skills", _gameUi.SkillsButton.Bounds);
         DrawUiButtonCaption("Bag", _gameUi.InventoryButton.Bounds);
+    }
+
+    private void RenderSkillsPanel()
+    {
+        var panel = _gameUi.Panel.Bounds;
+        var experience = _activePlayer?.WoodcuttingExperience ?? 0;
+        var level = WoodcuttingSkill.LevelForExperience(experience);
+        var currentFloor = WoodcuttingSkill.ExperienceForLevel(level);
+        var nextFloor = level >= WoodcuttingSkill.MaximumLevel
+            ? currentFloor
+            : WoodcuttingSkill.ExperienceForLevel(level + 1);
+        var progress = level >= WoodcuttingSkill.MaximumLevel
+            ? 1f
+            : (experience - currentFloor) /
+              (float)Math.Max(1, nextFloor - currentFloor);
+
+        DrawCenteredUiText(
+            "SKILLS", new(panel.X + 8, panel.Y + 12, panel.Z - 16, 28),
+            new(232, 217, 166, 255));
+        DrawUiText(
+            "Woodcutting",
+            new System.Numerics.Vector2(panel.X + 18, panel.Y + 58),
+            new(229, 218, 177, 255));
+        DrawUiText(
+            $"Level {level}/{WoodcuttingSkill.MaximumLevel}",
+            new System.Numerics.Vector2(panel.X + 18, panel.Y + 82),
+            new(205, 194, 158, 255));
+
+        var track = new Vector4(panel.X + 18, panel.Y + 112, panel.Z - 36, 18);
+        DrawUiColor(track, new(.035f, .032f, .027f, .98f));
+        if (progress > 0)
+            DrawUiColor(
+                new(track.X + 2, track.Y + 2,
+                    MathF.Round((track.Z - 4) * progress), track.W - 4),
+                new(.37f, .50f, .18f, 1));
+        DrawPanelOutline(track, 0, new(.25f, .21f, .13f, 1));
+        var progressText = level >= WoodcuttingSkill.MaximumLevel
+            ? "Maximum level"
+            : $"{experience - currentFloor}/{nextFloor - currentFloor} XP";
+        DrawCenteredUiText(
+            progressText, track, new(234, 224, 186, 255));
+        DrawUiText(
+            level >= WoodcuttingSkill.MaximumLevel
+                ? $"Total XP: {experience}"
+                : $"{WoodcuttingSkill.ExperienceToNextLevel(experience)} XP to next level",
+            new System.Numerics.Vector2(panel.X + 18, panel.Y + 145),
+            new(190, 181, 150, 255));
+        DrawUiText(
+            $"Hit chance: {WoodcuttingSkill.HitChance(level) * 100:0}%",
+            new System.Numerics.Vector2(panel.X + 18, panel.Y + 174),
+            new(190, 181, 150, 255));
+    }
+
+    private void RenderTreeHealthBars(Vector4 scene)
+    {
+        var scale = scene.Z / ReferenceWidth;
+        foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible))
+        foreach (var instance in gpu.Chunk.TreeInstances)
+        {
+            if (instance.State != TreeLifecycleState.Standing ||
+                instance.Health >= instance.MaxHealth &&
+                instance.Id != _activeTreeId)
+                continue;
+            if (!_treeAtlas.TryGetValue(instance.TreeType, out var entry))
+                continue;
+            var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
+                _worldSeed, instance.X + .5f, instance.Y + .5f);
+            var world = new Vector2(
+                (instance.X - instance.Y) * 48,
+                (instance.X + instance.Y + 1) * 24 - elevation * 20);
+            var bounds = SpriteBounds(entry.Frame, world);
+            var top = bounds.Top - 9;
+            var width = Math.Clamp(42 * _zoom, 28, 64);
+            var bar = new Vector4(
+                scene.X + ((bounds.Left + bounds.Right) * .5f -
+                           width * .5f) * scale,
+                scene.Y + top * scale,
+                width * scale,
+                Math.Max(5, 7 * scale));
+            if (bar.X + bar.Z < scene.X || bar.X > scene.X + scene.Z ||
+                bar.Y + bar.W < scene.Y || bar.Y > scene.Y + scene.W)
+                continue;
+            DrawUiColor(bar, new(.035f, .028f, .022f, .96f));
+            var ratio = instance.Health / (float)instance.MaxHealth;
+            DrawUiColor(
+                new(bar.X + 2, bar.Y + 2,
+                    Math.Max(0, (bar.Z - 4) * ratio),
+                    Math.Max(1, bar.W - 4)),
+                ratio > .5f
+                    ? new(.24f, .62f, .18f, 1)
+                    : ratio > .25f
+                        ? new(.74f, .55f, .12f, 1)
+                        : new(.70f, .14f, .09f, 1));
+            DrawPanelOutline(bar, 0, new(.10f, .08f, .05f, 1));
+        }
     }
 
     private void DrawUiButtonCaption(string caption, Vector4 bounds)
@@ -2352,8 +2518,19 @@ internal sealed class GameHostWindow : GameWindow
             var row = 0;
             foreach (var message in visible)
             {
-                DrawUiText(message, new(textLeft, textTop + row * _chatLineHeight),
-                    new(218, 207, 166, 255));
+                var color = message.Style switch
+                {
+                    ChatMessageStyle.Action => new FSColor(215, 202, 158, 255),
+                    ChatMessageStyle.Damage => new FSColor(232, 157, 118, 255),
+                    ChatMessageStyle.Miss => new FSColor(176, 179, 169, 255),
+                    ChatMessageStyle.Experience => new FSColor(145, 204, 154, 255),
+                    ChatMessageStyle.LevelUp => new FSColor(238, 211, 104, 255),
+                    _ => new FSColor(218, 207, 166, 255)
+                };
+                DrawUiText(
+                    message.Text,
+                    new(textLeft, textTop + row * _chatLineHeight),
+                    color);
                 row++;
             }
 

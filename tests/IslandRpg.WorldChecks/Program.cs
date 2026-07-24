@@ -1,7 +1,40 @@
 using IslandRpg.World;
 using IslandRpg.Gameplay;
 using IslandRpg.Persistence;
+using IslandRpg.Rendering.Ui;
 using OpenTK.Mathematics;
+
+Require(WoodcuttingSkill.LevelForExperience(0) == 1,
+    "woodcutting must begin at level one");
+Require(WoodcuttingSkill.LevelForExperience(
+        WoodcuttingSkill.ExperienceForLevel(20)) == 20,
+    "woodcutting progression must reach the level twenty cap");
+for (var level = 2; level < WoodcuttingSkill.MaximumLevel; level++)
+    Require(
+        WoodcuttingSkill.ExperienceForLevel(level + 1) -
+        WoodcuttingSkill.ExperienceForLevel(level) >
+        WoodcuttingSkill.ExperienceForLevel(level) -
+        WoodcuttingSkill.ExperienceForLevel(level - 1),
+        $"woodcutting level {level + 1} must require more XP than level {level}");
+Require(
+    WoodcuttingSkill.HitChance(20) > WoodcuttingSkill.HitChance(1),
+    "higher woodcutting levels must hit more reliably");
+var noviceHit = WoodcuttingSkill.Roll(0, 0, 0);
+var masterHit = WoodcuttingSkill.Roll(
+    WoodcuttingSkill.ExperienceForLevel(20), 0, .999f);
+Require(noviceHit.Hit && masterHit.Hit && masterHit.Damage > noviceHit.Damage,
+    "higher woodcutting levels must deal more damage");
+Require(!WoodcuttingSkill.Roll(0, .9f, 0).Hit,
+    "a novice woodcutter must be able to miss");
+
+var boundedChat = new ChatUiControlState();
+boundedChat.Layout(new(0, 0, 1280, 720));
+for (var index = 0; index < 225; index++)
+    boundedChat.AddMessage($"message {index}");
+Require(boundedChat.Messages.Count == 200 &&
+        boundedChat.Messages[0].Text == "message 25" &&
+        boundedChat.IsAtBottom,
+    "chat must discard its oldest messages while following the bottom");
 
 const long seed = 8675309;
 var origin = InfiniteWorldGenerator.Generate(seed, new(0, 0));
@@ -223,11 +256,15 @@ try
     var saves = new GameSaveRepository(Path.Combine(root, "profiles"));
     var player = saves.CreatePlayer(
         "Test Hero", EntityGender.Female, 3, 5);
+    player = player with { WoodcuttingExperience = 725 };
+    saves.SavePlayer(player);
     var world = saves.CreateWorld("Test Realm", 4321, player.Id);
     saves.SaveWorldPlayer(
         world.Id, new(player.Id, 12.5f, -8.25f, DateTime.UtcNow));
-    Require(saves.ListPlayers().Single().Id == player.Id,
-        "character profiles must be stored independently");
+    Require(saves.ListPlayers().Single() is var loadedPlayer &&
+            loadedPlayer.Id == player.Id &&
+            loadedPlayer.WoodcuttingExperience == 725,
+        "character profiles and skill experience must be stored independently");
     Require(saves.ListWorlds().Single().Id == world.Id,
         "named world profiles must round-trip");
     var worldPlayer = saves.LoadWorldPlayer(world.Id, player.Id);

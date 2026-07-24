@@ -19,7 +19,8 @@ internal sealed record PlayerProfile(
     int SkinTone,
     int TeamColor,
     DateTime CreatedUtc,
-    DateTime UpdatedUtc);
+    DateTime UpdatedUtc,
+    int WoodcuttingExperience = 0);
 
 internal sealed record WorldPlayerState(
     string PlayerId,

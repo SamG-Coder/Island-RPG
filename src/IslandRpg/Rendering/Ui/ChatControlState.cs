@@ -10,6 +10,18 @@ internal enum ChatChannel
     Debug
 }
 
+internal enum ChatMessageStyle
+{
+    Normal,
+    Action,
+    Damage,
+    Miss,
+    Experience,
+    LevelUp
+}
+
+internal sealed record ChatMessage(string Text, ChatMessageStyle Style);
+
 internal sealed class ChatChannelControlState : ControlState
 {
 }
@@ -21,10 +33,11 @@ internal sealed class ChatInputControlState : ControlState
 
 internal sealed class ChatUiControlState
 {
+    private const int MaximumMessages = 200;
     private const int VisibleRows = 8;
     private const float ChannelButtonWidth = 63;
     private const float ControlGap = 4;
-    private readonly List<string> _messages = [];
+    private readonly List<ChatMessage> _messages = [];
     private bool _leftWasDown;
     private bool _draggingThumb;
     private float _thumbGrabOffset;
@@ -37,7 +50,7 @@ internal sealed class ChatUiControlState
     public ChatChannel Channel { get; private set; }
     public string InputText { get; private set; } = "";
     public int FirstVisibleLine { get; private set; }
-    public IReadOnlyList<string> Messages => _messages;
+    public IReadOnlyList<ChatMessage> Messages => _messages;
     public bool IsAtBottom => FirstVisibleLine >= MaximumFirstLine;
 
     private int MaximumFirstLine => Math.Max(0, _messages.Count - VisibleRows);
@@ -143,10 +156,17 @@ internal sealed class ChatUiControlState
 
     public void BlurInput() => Input.Focused = false;
 
-    public void AddMessage(string message)
+    public void AddMessage(
+        string message, ChatMessageStyle style = ChatMessageStyle.Normal)
     {
         var keepAtBottom = IsAtBottom;
-        _messages.Add(message);
+        _messages.Add(new(message, style));
+        var removed = Math.Max(0, _messages.Count - MaximumMessages);
+        if (removed > 0)
+        {
+            _messages.RemoveRange(0, removed);
+            FirstVisibleLine = Math.Max(0, FirstVisibleLine - removed);
+        }
         if (keepAtBottom) FirstVisibleLine = MaximumFirstLine;
         UpdateThumbBounds();
     }
