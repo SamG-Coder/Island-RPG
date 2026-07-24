@@ -4,13 +4,14 @@ using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.GraphicsLibraryFramework;
+using IslandRpg.Gameplay;
 using IslandRpg.World;
 
 namespace IslandRpg.Rendering;
 
 internal sealed class GameHostWindow : GameWindow
 {
-    internal enum PreviewMode { Assets, Island, World }
+    internal enum PreviewMode { Assets, Island, World, Game }
     private enum ScreenState { LoadingAssets, PreparingGpu, WorldPreview }
     private sealed class GpuWorldChunk(
         WorldChunk chunk, int vbo, int vertexCount,
@@ -28,6 +29,8 @@ internal sealed class GameHostWindow : GameWindow
     }
     private sealed record SpriteAtlasEntry(
         SpriteFrame Frame, float U0, float V0, float U1, float V1);
+    private sealed record EntityAnimation(
+        LoadedGraphic Graphic, int[] Textures, float SecondsPerFrame);
 
     private readonly string _install;
     private readonly PreviewMode _mode;
@@ -82,6 +85,10 @@ internal sealed class GameHostWindow : GameWindow
     private int _cliffTexture;
     private readonly Dictionary<string, SpriteAtlasEntry> _treeAtlas =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<(EntityGender Gender, EntityAction Action), EntityAnimation>
+        _entityAnimations = [];
+    private WorldEntity? _player;
+    private bool _gameLeftWasDown;
     private int _vao;
     private bool _dragging;
     private Vector2 _lastMouse;
@@ -142,7 +149,7 @@ internal sealed class GameHostWindow : GameWindow
             _catalog = _loadTask.Result;
             if (_mode == PreviewMode.Island)
                 _island = IslandGenerator.Generate();
-            var islandGraphics = _mode == PreviewMode.World
+            var islandGraphics = _mode is PreviewMode.World or PreviewMode.Game
                 ? Enumerable.Range(0, 12).Select(index => $"TREE{(char)('A' + index)}_NN")
                     .Concat(["FPAL_NN", "FPIN_NN"])
                     .Concat(Enumerable.Range(1, 9).Select(index => $"CLF{index:00}_NN"))
@@ -169,7 +176,7 @@ internal sealed class GameHostWindow : GameWindow
             var stop = Math.Min(_uploadIndex + 24, _worldAssets.Count);
             while (_uploadIndex < stop)
             {
-                if (_mode != PreviewMode.World)
+                if (_mode is not (PreviewMode.World or PreviewMode.Game))
                     _textures.Add(Upload(_worldAssets[_uploadIndex].Sprite.Frames[0]));
                 _current = _worldAssets[_uploadIndex].Definition.Name;
                 _uploadIndex++;
@@ -177,7 +184,7 @@ internal sealed class GameHostWindow : GameWindow
             _done = _uploadIndex;
             if (_uploadIndex == _worldAssets.Count)
             {
-                if (_mode is PreviewMode.Island or PreviewMode.World)
+                if (_mode is PreviewMode.Island or PreviewMode.World or PreviewMode.Game)
                 {
                     if (_mode == PreviewMode.Island)
                     {
@@ -191,12 +198,20 @@ internal sealed class GameHostWindow : GameWindow
                         _worldStore = new WorldChunkStore(_worldSeed);
                         _camera = Vector2.Zero;
                         _zoom = .8f;
+                        if (_mode == PreviewMode.Game)
+                        {
+                            PrepareEntityAnimations();
+                            _player = new WorldEntity(FindPlayableSpawn());
+                            FollowPlayer();
+                        }
                         StreamWorld();
                     }
                     _screen = ScreenState.WorldPreview;
                     Title = _mode == PreviewMode.Island
                         ? "Island RPG - Generated Island"
-                        : $"Island RPG - World {_worldSeed}";
+                        : _mode == PreviewMode.Game
+                            ? $"Island RPG - Game {_worldSeed}"
+                            : $"Island RPG - World {_worldSeed}";
                     return;
                 }
                 var terrainStop = Math.Min(_terrainUploadIndex + 8, _catalog!.TerrainTiles.Count);
@@ -222,8 +237,11 @@ internal sealed class GameHostWindow : GameWindow
                 UpdateAtlas();
             else
             {
-                UpdateCamera((float)e.Time);
-                if (_mode == PreviewMode.World)
+                if (_mode == PreviewMode.Game)
+                    UpdateGame((float)e.Time);
+                else
+                    UpdateCamera((float)e.Time);
+                if (_mode is PreviewMode.World or PreviewMode.Game)
                 {
                     foreach (var chunk in _worldChunks.Values)
                         chunk.Opacity = Math.Min(1, chunk.Opacity + (float)e.Time / .38f);
@@ -251,6 +269,71 @@ internal sealed class GameHostWindow : GameWindow
         if (KeyboardState.IsKeyDown(Keys.S) || KeyboardState.IsKeyDown(Keys.Down)) direction.Y -= 1;
         if (direction.LengthSquared > 0)
             _camera += Vector2.Normalize(direction) * 720f * elapsed;
+    }
+
+    private void UpdateGame(float elapsed)
+    {
+        if (_player is null) return;
+        if (KeyboardState.IsKeyPressed(Keys.Up))
+            _player.SetGender(EntityGender.Male);
+        if (KeyboardState.IsKeyPressed(Keys.Down))
+            _player.SetGender(EntityGender.Female);
+
+        var leftDown = MouseState.IsButtonDown(MouseButton.Left);
+        if (leftDown && !_gameLeftWasDown)
+        {
+            var target = ScreenToTerrain(MouseState.Position);
+            _player.FollowPath(GridPathfinder.Find(_worldSeed, _player.Position, target));
+        }
+        _gameLeftWasDown = leftDown;
+
+        _player.Update(elapsed);
+        FollowPlayer();
+        Title = $"Island RPG - {_player.Gender} villager - {_player.Action} - " +
+                "click to move, Up/Down changes villager";
+    }
+
+    private Vector2 ScreenToTerrain(Vector2 screen)
+    {
+        var projected = (screen - new Vector2(Size.X, Size.Y) * .5f - _camera) /
+                        Math.Max(_zoom, .001f);
+        var map = ScreenWorldToMap(projected);
+        for (var iteration = 0; iteration < 3; iteration++)
+        {
+            var elevation = InfiniteWorldGenerator.SampleSurfaceHeight(
+                _worldSeed, (int)MathF.Floor(map.X), (int)MathF.Floor(map.Y));
+            map = ScreenWorldToMap(new(projected.X, projected.Y + elevation * 20));
+        }
+        return map;
+    }
+
+    private void FollowPlayer()
+    {
+        if (_player is null) return;
+        var elevation = InfiniteWorldGenerator.SampleSurfaceHeight(
+            _worldSeed,
+            (int)MathF.Floor(_player.Position.X),
+            (int)MathF.Floor(_player.Position.Y));
+        var projected = new Vector2(
+            (_player.Position.X - _player.Position.Y) * 48,
+            (_player.Position.X + _player.Position.Y) * 24 - elevation * 20);
+        _camera = -projected * _zoom;
+    }
+
+    private Vector2 FindPlayableSpawn()
+    {
+        for (var radius = 0; radius <= 160; radius++)
+        for (var y = -radius; y <= radius; y++)
+        for (var x = -radius; x <= radius; x++)
+        {
+            if (Math.Max(Math.Abs(x), Math.Abs(y)) != radius) continue;
+            var biome = InfiniteWorldGenerator.BiomeAt(_worldSeed, x, y);
+            if (biome is Biome.DeepWater or Biome.ShallowWater or
+                Biome.RiverWater or Biome.MangroveShallows)
+                continue;
+            return new Vector2(x + .5f, y + .5f);
+        }
+        throw new InvalidOperationException("No playable land was found near the world origin.");
     }
 
     private void StartAtlasAtCamera()
@@ -424,7 +507,7 @@ internal sealed class GameHostWindow : GameWindow
         {
             if (_atlasOpen) RenderAtlas();
             else if (_mode == PreviewMode.Island) RenderIsland();
-            else if (_mode == PreviewMode.World) RenderWorld();
+            else if (_mode is PreviewMode.World or PreviewMode.Game) RenderWorld();
             else RenderWorldPreview();
         }
         else RenderLoading();
@@ -595,6 +678,7 @@ internal sealed class GameHostWindow : GameWindow
             AddTreeQuad(tree.GraphicName, world, item.Gpu.Opacity, vertices);
         }
         DrawTreeBatch(vertices);
+        if (_mode == PreviewMode.Game) DrawPlayer();
     }
 
     private void DrawCliffBatch()
@@ -762,8 +846,12 @@ internal sealed class GameHostWindow : GameWindow
                                      Math.Abs(value.Y - center.Y) > unloadRadius)
                      .ToArray())
             UnloadWorldChunk(coordinate, save: true);
-        Title = $"Island RPG - World {_worldSeed} - {_worldChunks.Count} chunks" +
-                (_pendingChunkTask is null ? "" : " - streaming");
+        Title = _mode == PreviewMode.Game
+            ? $"Island RPG - {_player?.Gender} villager - {_player?.Action} - " +
+              $"{_worldChunks.Count} chunks" +
+              (_pendingChunkTask is null ? "" : " - streaming")
+            : $"Island RPG - World {_worldSeed} - {_worldChunks.Count} chunks" +
+              (_pendingChunkTask is null ? "" : " - streaming");
     }
 
     private void PrepareWorldTerrain()
@@ -782,6 +870,84 @@ internal sealed class GameHostWindow : GameWindow
             (int)TextureWrapMode.Repeat);
         _cliffBatchVbo = GL.GenBuffer();
         PrepareTreeAtlas();
+    }
+
+    private void PrepareEntityAnimations()
+    {
+        var suffixes = new Dictionary<EntityAction, string>
+        {
+            // BAS_SN is the final skeleton/decay sheet. AoE holds a neutral
+            // frame from the living walk sheet when the basic villager is idle.
+            [EntityAction.Idle] = "WN",
+            [EntityAction.Move] = "WN",
+            [EntityAction.Attack] = "AN",
+            [EntityAction.Work] = "AN",
+            [EntityAction.Die] = "DN"
+        };
+        var uploaded = new Dictionary<string, EntityAnimation>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var gender in Enum.GetValues<EntityGender>())
+        foreach (var pair in suffixes)
+        {
+            var prefix = gender == EntityGender.Male ? "VMBAS_" : "VFBAS_";
+            var name = prefix + pair.Value;
+            if (uploaded.TryGetValue(name, out var existing))
+            {
+                _entityAnimations[(gender, pair.Key)] = existing;
+                continue;
+            }
+            var graphic = _catalog!.Graphics.Values.FirstOrDefault(value =>
+                value.Definition.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (graphic is null) continue;
+            var textures = graphic.Sprite.Frames.Select(Upload).ToArray();
+            var rate = graphic.Definition.FrameRate is > .015f and < 2f
+                ? graphic.Definition.FrameRate
+                : .09f;
+            var animation = new EntityAnimation(graphic, textures, rate);
+            uploaded[name] = animation;
+            _entityAnimations[(gender, pair.Key)] = animation;
+        }
+        foreach (var gender in Enum.GetValues<EntityGender>())
+        {
+            if (!_entityAnimations.ContainsKey((gender, EntityAction.Idle)) ||
+                !_entityAnimations.ContainsKey((gender, EntityAction.Move)))
+                throw new InvalidOperationException(
+                    $"The installed assets do not contain the complete {gender} villager rig.");
+        }
+    }
+
+    private void DrawPlayer()
+    {
+        const int storedVillagerAngles = 5;
+        if (_player is null ||
+            !_entityAnimations.TryGetValue((_player.Gender, _player.Action), out var animation))
+            return;
+        var graphic = animation.Graphic;
+        var framesPerAngle = Math.Max(
+            1, graphic.Sprite.Frames.Count / storedVillagerAngles);
+        var rawFrame = _player.Action == EntityAction.Idle
+            ? 0
+            : (int)(_player.ActionTime / animation.SecondsPerFrame);
+        if (_player.Action == EntityAction.Die)
+            rawFrame = Math.Min(rawFrame, framesPerAngle - 1);
+        var directional = VillagerDirectionRig.Resolve(
+            _player.Facing,
+            graphic.Sprite.Frames.Count,
+            storedVillagerAngles,
+            rawFrame);
+        var tile = InfiniteWorldGenerator.SampleTile(
+            _worldSeed,
+            (int)MathF.Floor(_player.Position.X),
+            (int)MathF.Floor(_player.Position.Y));
+        var elevation = (tile.North + tile.East + tile.South + tile.West) / 4f;
+        var world = new Vector2(
+            (_player.Position.X - _player.Position.Y) * 48,
+            (_player.Position.X + _player.Position.Y) * 24 - elevation * 20);
+        DrawSprite(
+            graphic.Sprite.Frames[directional.Index],
+            animation.Textures[directional.Index],
+            world,
+            mirror: directional.Mirror);
     }
 
     private void PrepareTreeAtlas()
@@ -1171,7 +1337,12 @@ internal sealed class GameHostWindow : GameWindow
         GL.DrawArrays(PrimitiveType.Triangles, 0, _islandVertexCount);
     }
 
-    private void DrawSprite(SpriteFrame frame, int texture, Vector2 world, float opacity = 1)
+    private void DrawSprite(
+        SpriteFrame frame,
+        int texture,
+        Vector2 world,
+        float opacity = 1,
+        bool mirror = false)
     {
         var width = Math.Max(1, Size.X);
         var height = Math.Max(1, Size.Y);
@@ -1189,7 +1360,14 @@ internal sealed class GameHostWindow : GameWindow
         GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), opacity);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, texture);
-        Draw([x-halfW,y+halfH,0,0, x-halfW,y-halfH,0,1, x+halfW,y-halfH,1,1, x+halfW,y+halfH,1,0]);
+        var leftU = mirror ? 1f : 0f;
+        var rightU = mirror ? 0f : 1f;
+        Draw([
+            x-halfW,y+halfH,leftU,0,
+            x-halfW,y-halfH,leftU,1,
+            x+halfW,y-halfH,rightU,1,
+            x+halfW,y+halfH,rightU,0
+        ]);
     }
 
     private void DrawTerrain(TerrainTile tile, int texture, Vector2 world)
@@ -1760,6 +1938,9 @@ internal sealed class GameHostWindow : GameWindow
         }
         foreach (var texture in _textures) GL.DeleteTexture(texture);
         foreach (var texture in _terrainTextures) GL.DeleteTexture(texture);
+        foreach (var texture in _entityAnimations.Values
+                     .SelectMany(value => value.Textures).Distinct())
+            GL.DeleteTexture(texture);
         if (_terrainArray != 0) GL.DeleteTexture(_terrainArray);
         if (_biomeWeightsA != 0) GL.DeleteTexture(_biomeWeightsA);
         if (_biomeWeightsB != 0) GL.DeleteTexture(_biomeWeightsB);

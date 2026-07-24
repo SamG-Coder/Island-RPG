@@ -12,9 +12,9 @@ or endorsed by Microsoft. Age of Empires is a trademark of Microsoft.
 dotnet run --project src/IslandRpg
 ```
 
-The program checks common Steam locations and `AGE2HD_PATH`. By default a
-single persistent game window moves through loading, GPU preparation, and a
-pannable seeded infinite-world view. The world streams deterministic 32×32
+The program checks common Steam locations and `AGE2HD_PATH`. By default it
+opens the playable villager window. Use `--world` to open the pannable
+infinite-world renderer without a player. The world streams deterministic 32×32
 chunks around the camera, saves them under the current user's local application
 data directory, culls off-screen terrain batches, and unloads distant chunks to
 keep memory and GPU use bounded. Chunk halos preserve Gaussian biome blending
@@ -68,6 +68,18 @@ Open or create an infinite world with a specific seed:
 ```powershell
 dotnet run --project src/IslandRpg -- --world --seed 2187
 ```
+
+Open the playable villager window:
+
+```powershell
+dotnet run --project src/IslandRpg -- --game --seed 2187
+```
+
+Click terrain to move the villager. Press Up for the male rig or Down for the
+female rig. Each entity owns its current action, target, facing, movement speed,
+and animation time. The base villager standing, walking, attacking, working,
+and dying sheets are rigged across eight gameplay directions from the five
+authored directions, including mirrored views.
 
 The same seed produces the same island chains, elevation, ocean depth, drainage,
 biomes, and trees. A cached macro layer fills depressions, routes rainfall

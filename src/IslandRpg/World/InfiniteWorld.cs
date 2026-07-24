@@ -286,7 +286,7 @@ internal static class InfiniteWorldGenerator
         }
     }
 
-    private static Biome BiomeAt(long seed, int x, int y)
+    internal static Biome BiomeAt(long seed, int x, int y)
     {
         var average = (HeightAt(seed, x, y) + HeightAt(seed, x + 1, y) +
                        HeightAt(seed, x + 1, y + 1) + HeightAt(seed, x, y + 1)) / 4f;

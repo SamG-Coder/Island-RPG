@@ -1,4 +1,6 @@
 using IslandRpg.World;
+using IslandRpg.Gameplay;
+using OpenTK.Mathematics;
 
 const long seed = 8675309;
 var origin = InfiniteWorldGenerator.Generate(seed, new(0, 0));
@@ -68,6 +70,25 @@ Require(macroBiomes.ContainsKey(WorldBiome.TemperateForest) ||
     "macro world must contain regional forests");
 Require(macroBiomes.Keys.Count >= 7,
     $"macro climate should produce at least seven biome types; found {macroBiomes.Keys.Count}");
+
+var entity = new WorldEntity(Vector2.Zero);
+entity.MoveTo(new Vector2(3, 0));
+entity.Update(.5f);
+Require(entity.Action == EntityAction.Move && entity.Position.X > 1,
+    "moving entity should advance toward its target");
+entity.SetGender(EntityGender.Female);
+Require(entity.Gender == EntityGender.Female,
+    "entity gender should switch without replacing the entity");
+var rigFrame = VillagerDirectionRig.Resolve(new Vector2(-1, 0), 75, 5, 4);
+Require(rigFrame.Index is >= 0 and < 75,
+    "directional rig should resolve a valid authored frame");
+var northFrame = VillagerDirectionRig.Resolve(new Vector2(-1, -1), 75, 5, 0);
+Require(northFrame.Index == 60 && !northFrame.Mirror,
+    "north movement should select the authored upward-facing animation");
+var nearSideFrame = VillagerDirectionRig.Resolve(new Vector2(.75f, -.25f), 75, 5, 0);
+var exactSideFrame = VillagerDirectionRig.Resolve(new Vector2(1, -1), 75, 5, 0);
+Require(nearSideFrame == exactSideFrame,
+    "slightly angled routes should remain in the wider cardinal facing wedge");
 Require(snowSamples > 0, "cold tundra or alpine terrain must produce visible snow");
 Require(hillSamples > 0, "continental terrain must produce rolling hills and foothills");
 Require(mountainSamples > 0, "continental terrain must produce mountain elevations");
