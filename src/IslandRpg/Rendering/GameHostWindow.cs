@@ -112,6 +112,8 @@ internal sealed class GameHostWindow : GameWindow
     private CancellationTokenSource? _pathCancellation;
     private int _pathRequestId;
     private QueuedWorldAction? _queuedAction;
+    private Guid? _activeTreeId;
+    private int _lastTreeStrike;
     private readonly List<WaterRipple> _waterRipples = [];
     private int _lastWaterFootfall = -1;
     private WorldEntity? _player;
@@ -166,9 +168,14 @@ internal sealed class GameHostWindow : GameWindow
 
         var names = Enumerable.Range(0, 12)
             .Select(index => $"TREE{(char)('A' + index)}_NN")
-            .Concat(["FPAL_NN", "FPIN_NN"])
+            .Concat([
+                "FPAL_NN", "FPIN_NN", "FOAK_NN", "FJUN_NN",
+                "FSNO_NN", "FBAM_NN", "FCAC_NN"
+            ])
             .SelectMany(name => new[] { name, name[..^2] + "N0" })
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        names.Add("STUMP_NN");
+        names.Add("STUMB_NN");
 
         if (mode is PreviewMode.World or PreviewMode.Game)
         {
@@ -213,9 +220,13 @@ internal sealed class GameHostWindow : GameWindow
                 _island = IslandGenerator.Generate();
             var islandGraphics = _mode is PreviewMode.World or PreviewMode.Game
                 ? Enumerable.Range(0, 12).Select(index => $"TREE{(char)('A' + index)}_NN")
-                    .Concat(["FPAL_NN", "FPIN_NN"])
+                    .Concat([
+                        "FPAL_NN", "FPIN_NN", "FOAK_NN", "FJUN_NN",
+                        "FSNO_NN", "FBAM_NN", "FCAC_NN"
+                    ])
                     .Concat(Enumerable.Range(1, 9).Select(index => $"CLF{index:00}_NN"))
                     .SelectMany(name => new[] { name, name[..^2] + "N0" })
+                    .Concat(["STUMP_NN", "STUMB_NN"])
                     .ToHashSet(StringComparer.OrdinalIgnoreCase)
                 : _island?.Trees
                     .SelectMany(tree => new[] { tree.GraphicName, tree.GraphicName[..^2] + "N0" })
@@ -377,6 +388,8 @@ internal sealed class GameHostWindow : GameWindow
         {
             var target = ScreenToTerrain(SceneMousePosition());
             _queuedAction = null;
+            _activeTreeId = null;
+            _player.Stop();
             _pathCancellation?.Cancel();
             _pathCancellation?.Dispose();
             _pathCancellation = new CancellationTokenSource();
@@ -398,6 +411,8 @@ internal sealed class GameHostWindow : GameWindow
         {
             var actionTarget = new Vector2(actionTree.X + .5f, actionTree.Y + .5f);
             var standOff = TreeInteractionDistance(actionTree.GraphicName);
+            _activeTreeId = null;
+            _player.Stop();
             _pathCancellation?.Cancel();
             _pathCancellation?.Dispose();
             _pathCancellation = new CancellationTokenSource();
@@ -429,6 +444,7 @@ internal sealed class GameHostWindow : GameWindow
             (wading ? .62f : 1f) / (1f + uphill * .18f);
         _player.Update(elapsed);
         CompleteQueuedAction();
+        UpdateTreeCutting();
         UpdateWaterRipples(wading);
         if (_moveMarker is not null)
         {
@@ -542,7 +558,113 @@ internal sealed class GameHostWindow : GameWindow
             return;
 
         if (action.Type == WorldActionType.CutTree)
-            _player.WorkAt(action.Target);
+            BeginTreeCutting(action.Target);
+    }
+
+    private void BeginTreeCutting(Vector2 target)
+    {
+        if (_player is null) return;
+        var x = (int)MathF.Floor(target.X);
+        var y = (int)MathF.Floor(target.Y);
+        var coordinate = new ChunkCoordinate(
+            FloorDiv(x, WorldChunk.Size), FloorDiv(y, WorldChunk.Size));
+        if (!_worldChunks.TryGetValue(coordinate, out var gpu)) return;
+        var source = gpu.Chunk.Trees.FirstOrDefault(tree => tree.X == x && tree.Y == y);
+        if (source is null) return;
+
+        var instanceIndex = gpu.Chunk.TreeInstances.FindIndex(
+            tree => tree.X == x && tree.Y == y);
+        WorldTreeInstance instance;
+        if (instanceIndex < 0)
+        {
+            var maximumHealth = TreeMaximumHealth(source.GraphicName);
+            instance = new(
+                Guid.NewGuid(), x, y, source.GraphicName,
+                maximumHealth, maximumHealth, TreeLifecycleState.Standing);
+            gpu.Chunk.TreeInstances.Add(instance);
+            QueueChunkSave(gpu.Chunk);
+        }
+        else
+        {
+            instance = gpu.Chunk.TreeInstances[instanceIndex];
+            if (instance.State == TreeLifecycleState.Stump) return;
+        }
+
+        _activeTreeId = instance.Id;
+        _lastTreeStrike = 0;
+        _player.WorkAt(target);
+    }
+
+    private void UpdateTreeCutting()
+    {
+        if (_player is null || _activeTreeId is null ||
+            _player.Action != EntityAction.Work ||
+            !_entityAnimations.TryGetValue(
+                (_player.Gender, EntityAction.Work), out var animation))
+            return;
+
+        var framesPerAngle = Math.Max(
+            1, animation.Graphic.Sprite.Frames.Count / 5);
+        var cycleDuration = Math.Max(
+            framesPerAngle * animation.SecondsPerFrame, .1f);
+        var strike = (int)(_player.ActionTime / cycleDuration);
+        if (strike <= _lastTreeStrike) return;
+        _lastTreeStrike = strike;
+
+        foreach (var gpu in _worldChunks.Values)
+        {
+            var index = gpu.Chunk.TreeInstances.FindIndex(
+                tree => tree.Id == _activeTreeId.Value);
+            if (index < 0) continue;
+            var instance = gpu.Chunk.TreeInstances[index];
+            var health = Math.Max(0, instance.Health - 25);
+            var state = health == 0
+                ? TreeLifecycleState.Stump
+                : TreeLifecycleState.Standing;
+            gpu.Chunk.TreeInstances[index] = instance with
+            {
+                Health = health,
+                State = state
+            };
+            QueueChunkSave(gpu.Chunk);
+            if (state == TreeLifecycleState.Stump)
+            {
+                _activeTreeId = null;
+                _player.Stop();
+            }
+            return;
+        }
+
+        _activeTreeId = null;
+        _player.Stop();
+    }
+
+    private static int TreeMaximumHealth(string graphicName)
+    {
+        if (graphicName.StartsWith("FPAL", StringComparison.OrdinalIgnoreCase))
+            return 75;
+        if (graphicName.StartsWith("FPIN", StringComparison.OrdinalIgnoreCase))
+            return 125;
+        if (graphicName.StartsWith("FOAK", StringComparison.OrdinalIgnoreCase))
+            return 150;
+        if (graphicName.StartsWith("FJUN", StringComparison.OrdinalIgnoreCase))
+            return 175;
+        if (graphicName.StartsWith("FSNO", StringComparison.OrdinalIgnoreCase))
+            return 135;
+        if (graphicName.StartsWith("FBAM", StringComparison.OrdinalIgnoreCase))
+            return 80;
+        if (graphicName.StartsWith("FCAC", StringComparison.OrdinalIgnoreCase))
+            return 65;
+        if (graphicName.StartsWith("TREE", StringComparison.OrdinalIgnoreCase) &&
+            graphicName.Length > 4)
+        {
+            int[] healthByVariant =
+                [100, 125, 90, 150, 110, 175, 95, 135, 105, 160, 120, 145];
+            var variant = char.ToUpperInvariant(graphicName[4]) - 'A';
+            if ((uint)variant < (uint)healthByVariant.Length)
+                return healthByVariant[variant];
+        }
+        return 100;
     }
 
     private Vector2 ScreenToTerrain(Vector2 screen)
@@ -1065,6 +1187,12 @@ internal sealed class GameHostWindow : GameWindow
                      .OrderBy(item => item.Tree.X + item.Tree.Y))
         {
             var tree = item.Tree;
+            var treeInstance = item.Gpu.Chunk.TreeInstances.FirstOrDefault(
+                instance => instance.X == tree.X && instance.Y == tree.Y);
+            var isStump = treeInstance?.State == TreeLifecycleState.Stump;
+            var visibleName = isStump
+                ? StumpAtlasKey(tree.GraphicName, shadow: false)
+                : tree.GraphicName;
             var tile = _worldChunks[new(
                 FloorDiv(tree.X, WorldChunk.Size), FloorDiv(tree.Y, WorldChunk.Size))]
                 .Chunk.Tiles[
@@ -1074,20 +1202,22 @@ internal sealed class GameHostWindow : GameWindow
             var world = new Vector2(
                 (tree.X - tree.Y) * 48,
                 (tree.X + tree.Y + 1) * 24 - height * 20);
-            var shadowName = tree.GraphicName[..^2] + "N0";
+            var shadowName = isStump
+                ? StumpAtlasKey(tree.GraphicName, shadow: true)
+                : tree.GraphicName[..^2] + "N0";
             if (world.Y <= playerDepth)
             {
                 AddTreeQuad(shadowName, world, item.Gpu.Opacity, behind);
-                AddTreeQuad(tree.GraphicName, world, item.Gpu.Opacity, behind);
+                AddTreeQuad(visibleName, world, item.Gpu.Opacity, behind);
             }
             else
             {
                 // A foreground object's ground shadow stays beneath the entity
                 // and never participates in occlusion outlining.
                 AddTreeQuad(shadowName, world, item.Gpu.Opacity, foregroundShadows);
-                AddTreeQuad(tree.GraphicName, world, item.Gpu.Opacity, foregroundObjects);
+                AddTreeQuad(visibleName, world, item.Gpu.Opacity, foregroundObjects);
                 if (player is not null &&
-                    AtlasOverlapsPlayer(tree.GraphicName, world, player))
+                    AtlasOverlapsPlayer(visibleName, world, player))
                     playerOccluded = true;
             }
         }
@@ -1194,6 +1324,10 @@ internal sealed class GameHostWindow : GameWindow
                          gpu.Chunk.Coordinate.X + gpu.Chunk.Coordinate.Y))
         foreach (var tree in gpu.Chunk.Trees.OrderByDescending(tree => tree.X + tree.Y))
         {
+            if (gpu.Chunk.TreeInstances.Any(instance =>
+                    instance.X == tree.X && instance.Y == tree.Y &&
+                    instance.State == TreeLifecycleState.Stump))
+                continue;
             if (!_treeAtlas.TryGetValue(tree.GraphicName, out var entry)) continue;
             var tileX = PositiveMod(tree.X, WorldChunk.Size);
             var tileY = PositiveMod(tree.Y, WorldChunk.Size);
@@ -1221,6 +1355,20 @@ internal sealed class GameHostWindow : GameWindow
         }
         hoveredTree = null!;
         return false;
+    }
+
+    private static string StumpAtlasKey(string treeType, bool shadow)
+    {
+        if (shadow) return "";
+        if (treeType.StartsWith("FBAM", StringComparison.OrdinalIgnoreCase))
+            return "STUMB_NN#0";
+        if (treeType.StartsWith("FPIN", StringComparison.OrdinalIgnoreCase) ||
+            treeType.StartsWith("FSNO", StringComparison.OrdinalIgnoreCase))
+            return "STUMP_NN#1";
+        if (treeType.StartsWith("FPAL", StringComparison.OrdinalIgnoreCase) ||
+            treeType.StartsWith("FJUN", StringComparison.OrdinalIgnoreCase))
+            return "STUMP_NN#2";
+        return "STUMP_NN#0";
     }
 
     private (float Left, float Top, float Right, float Bottom) SpriteBounds(
@@ -1551,7 +1699,13 @@ internal sealed class GameHostWindow : GameWindow
         foreach (var asset in _worldAssets)
         {
             var cliff = asset.Definition.Name.StartsWith("CLF", StringComparison.OrdinalIgnoreCase);
-            var frames = cliff ? asset.Sprite.Frames : [asset.Sprite.Frames[0]];
+            var stump = asset.Definition.Name.StartsWith(
+                "STUMP", StringComparison.OrdinalIgnoreCase) ||
+                asset.Definition.Name.StartsWith(
+                    "STUMB", StringComparison.OrdinalIgnoreCase);
+            var frames = cliff || stump
+                ? asset.Sprite.Frames
+                : [asset.Sprite.Frames[0]];
             for (var frameIndex = 0; frameIndex < frames.Count; frameIndex++)
             {
                 var frame = frames[frameIndex];
@@ -1577,8 +1731,13 @@ internal sealed class GameHostWindow : GameWindow
                     placement.Frame.Rgba, row * placement.Frame.Width * 4,
                     rgba, ((placement.Y + row) * atlasWidth + placement.X) * 4,
                     placement.Frame.Width * 4);
-            var key = placement.Asset.Definition.Name.StartsWith(
-                "CLF", StringComparison.OrdinalIgnoreCase)
+            var multiFrame = placement.Asset.Definition.Name.StartsWith(
+                                 "CLF", StringComparison.OrdinalIgnoreCase) ||
+                             placement.Asset.Definition.Name.StartsWith(
+                                 "STUMP", StringComparison.OrdinalIgnoreCase) ||
+                             placement.Asset.Definition.Name.StartsWith(
+                                 "STUMB", StringComparison.OrdinalIgnoreCase);
+            var key = multiFrame
                 ? $"{placement.Asset.Definition.Name}#{placement.FrameIndex}"
                 : placement.Asset.Definition.Name;
             _treeAtlas[key] = new(
@@ -1587,6 +1746,8 @@ internal sealed class GameHostWindow : GameWindow
                 placement.Y / (float)atlasHeight,
                 (placement.X + placement.Frame.Width) / (float)atlasWidth,
                 (placement.Y + placement.Frame.Height) / (float)atlasHeight);
+            if (multiFrame && placement.FrameIndex == 0)
+                _treeAtlas[placement.Asset.Definition.Name] = _treeAtlas[key];
         }
         _treeAtlasTexture = Upload(atlasWidth, atlasHeight, rgba);
         _treeBatchVbo = GL.GenBuffer();
@@ -1779,23 +1940,38 @@ internal sealed class GameHostWindow : GameWindow
     private void UnloadWorldChunk(ChunkCoordinate coordinate, bool save)
     {
         if (!_worldChunks.Remove(coordinate, out var gpu)) return;
-        if (save && _worldStore is not null)
-        {
-            var store = _worldStore;
-            var chunk = gpu.Chunk;
-            var previous = _saveTail;
-            _saveTail = Task.Run(async () =>
-            {
-                await previous.ConfigureAwait(false);
-                store.Save(chunk);
-            });
-        }
+        if (save) QueueChunkSave(gpu.Chunk);
         GL.DeleteBuffer(gpu.Vbo);
         GL.DeleteTexture(gpu.WeightsA);
         GL.DeleteTexture(gpu.WeightsB);
         GL.DeleteTexture(gpu.WeightsC);
         GL.DeleteTexture(gpu.WeightsD);
         GL.DeleteTexture(gpu.ShoreDistance);
+    }
+
+    private void QueueChunkSave(WorldChunk source)
+    {
+        if (_worldStore is null) return;
+        var store = _worldStore;
+        var snapshot = new WorldChunk
+        {
+            Coordinate = source.Coordinate,
+            Tiles = source.Tiles,
+            Trees = source.Trees,
+            BiomeWeightsA = source.BiomeWeightsA,
+            BiomeWeightsB = source.BiomeWeightsB,
+            BiomeWeightsC = source.BiomeWeightsC,
+            BiomeWeightsD = source.BiomeWeightsD,
+            ShoreDistance = source.ShoreDistance,
+            Cliffs = source.Cliffs,
+            TreeInstances = source.TreeInstances.ToList()
+        };
+        var previous = _saveTail;
+        _saveTail = Task.Run(async () =>
+        {
+            await previous.ConfigureAwait(false);
+            store.Save(snapshot);
+        });
     }
 
     private static Vector2 ScreenWorldToMap(Vector2 world) => new(

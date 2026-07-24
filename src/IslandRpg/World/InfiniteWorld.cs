@@ -9,6 +9,15 @@ internal readonly record struct ChunkCoordinate(int X, int Y)
 }
 
 internal sealed record CliffFace(int X1, int Y1, int X2, int Y2, byte Top, byte Bottom);
+internal enum TreeLifecycleState : byte { Standing, Stump }
+internal sealed record WorldTreeInstance(
+    Guid Id,
+    int X,
+    int Y,
+    string TreeType,
+    int Health,
+    int MaxHealth,
+    TreeLifecycleState State);
 
 internal sealed class WorldChunk
 {
@@ -25,6 +34,7 @@ internal sealed class WorldChunk
     public required byte[] BiomeWeightsD { get; init; }
     public required byte[] ShoreDistance { get; init; }
     public required CliffFace[] Cliffs { get; init; }
+    public List<WorldTreeInstance> TreeInstances { get; init; } = [];
 }
 
 internal static class InfiniteWorldGenerator
@@ -73,6 +83,9 @@ internal static class InfiniteWorldGenerator
             var graphic = region switch
             {
                 WorldBiome.Coast or WorldBiome.Savanna => "FPAL_NN",
+                WorldBiome.Rainforest => "FJUN_NN",
+                WorldBiome.TemperateForest => "FOAK_NN",
+                WorldBiome.Wetland => "FBAM_NN",
                 WorldBiome.Taiga or WorldBiome.Alpine => "FPIN_NN",
                 _ => $"TREE{(char)('A' + variant)}_NN"
             };
@@ -576,9 +589,9 @@ internal static class InfiniteWorldGenerator
 internal sealed class WorldChunkStore
 {
     internal const int RegionSize = 8;
-    private const int WorldFormatVersion = 3;
+    private const int WorldFormatVersion = 4;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 9;
+    private const int ChunkPayloadVersion = 10;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -764,6 +777,17 @@ internal sealed class WorldChunkStore
                 writer.Write((byte)PositiveMod(tree.Y, WorldChunk.Size));
                 writer.Write(tree.GraphicName);
             }
+            writer.Write(chunk.TreeInstances.Count);
+            foreach (var tree in chunk.TreeInstances)
+            {
+                writer.Write(tree.Id.ToByteArray());
+                writer.Write((byte)PositiveMod(tree.X, WorldChunk.Size));
+                writer.Write((byte)PositiveMod(tree.Y, WorldChunk.Size));
+                writer.Write(tree.TreeType);
+                writer.Write(tree.Health);
+                writer.Write(tree.MaxHealth);
+                writer.Write((byte)tree.State);
+            }
         }
         return stream.ToArray();
     }
@@ -811,6 +835,31 @@ internal sealed class WorldChunkStore
                     coordinate.X * WorldChunk.Size + reader.ReadByte(),
                     coordinate.Y * WorldChunk.Size + reader.ReadByte(),
                     reader.ReadString());
+            var instanceCount = reader.ReadInt32();
+            if (instanceCount < 0 || instanceCount > treeCount)
+                throw new InvalidDataException(
+                    $"Chunk tree-instance count is invalid: {instanceCount}");
+            var treeInstances = new List<WorldTreeInstance>(instanceCount);
+            for (var i = 0; i < instanceCount; i++)
+            {
+                var idBytes = reader.ReadBytes(16);
+                if (idBytes.Length != 16)
+                    throw new EndOfStreamException();
+                var instance = new WorldTreeInstance(
+                    new Guid(idBytes),
+                    coordinate.X * WorldChunk.Size + reader.ReadByte(),
+                    coordinate.Y * WorldChunk.Size + reader.ReadByte(),
+                    reader.ReadString(),
+                    reader.ReadInt32(),
+                    reader.ReadInt32(),
+                    (TreeLifecycleState)reader.ReadByte());
+                if (instance.MaxHealth <= 0 || instance.Health < 0 ||
+                    instance.Health > instance.MaxHealth ||
+                    !Enum.IsDefined(instance.State))
+                    throw new InvalidDataException(
+                        $"Chunk tree instance is invalid: {instance.Id}");
+                treeInstances.Add(instance);
+            }
             var weights = InfiniteWorldGenerator.GenerateBiomeWeights(Seed, coordinate);
             var cliffs = InfiniteWorldGenerator.GenerateCliffs(Seed, tiles);
             return new()
@@ -818,7 +867,8 @@ internal sealed class WorldChunkStore
                 Coordinate = coordinate, Tiles = tiles, Trees = trees,
                 BiomeWeightsA = weights.A, BiomeWeightsB = weights.B,
                 BiomeWeightsC = weights.C, BiomeWeightsD = weights.D,
-                ShoreDistance = weights.Shore, Cliffs = cliffs
+                ShoreDistance = weights.Shore, Cliffs = cliffs,
+                TreeInstances = treeInstances
             };
         }
         catch (EndOfStreamException ex)

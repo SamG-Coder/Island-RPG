@@ -164,6 +164,15 @@ long regionBytes = 0;
 try
 {
     var store = new WorldChunkStore(seed, root);
+    var touchedTree = origin.Trees.First();
+    origin.TreeInstances.Add(new(
+        Guid.NewGuid(),
+        touchedTree.X,
+        touchedTree.Y,
+        touchedTree.GraphicName,
+        45,
+        100,
+        TreeLifecycleState.Standing));
     for (var regionY = 0; regionY < WorldChunkStore.RegionSize; regionY++)
     for (var regionX = 0; regionX < WorldChunkStore.RegionSize; regionX++)
         store.Save(CloneAt(origin, new(regionX, regionY)));
@@ -173,6 +182,8 @@ try
     var loaded = store.LoadOrGenerate(origin.Coordinate);
     Require(origin.Tiles.SequenceEqual(loaded.Tiles), "saved tiles must round-trip");
     Require(origin.Trees.SequenceEqual(loaded.Trees), "saved trees must round-trip");
+    Require(origin.TreeInstances.SequenceEqual(loaded.TreeInstances),
+        "instantiated tree IDs, health, and lifecycle state must round-trip");
     Require(origin.Cliffs.SequenceEqual(loaded.Cliffs), "derived cliff faces must round-trip");
     Require(origin.BiomeWeightsA.SequenceEqual(loaded.BiomeWeightsA),
         "primary biome weights must round-trip");
@@ -236,5 +247,6 @@ static WorldChunk CloneAt(WorldChunk source, ChunkCoordinate coordinate) => new(
     BiomeWeightsC = source.BiomeWeightsC,
     BiomeWeightsD = source.BiomeWeightsD,
     ShoreDistance = source.ShoreDistance,
-    Cliffs = source.Cliffs
+    Cliffs = source.Cliffs,
+    TreeInstances = source.TreeInstances.ToList()
 };
