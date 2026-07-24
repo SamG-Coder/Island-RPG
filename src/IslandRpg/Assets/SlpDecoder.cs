@@ -56,7 +56,9 @@ internal static class SlpDecoder
                             var count = cmd >> 4;
                             if (count == 0) count = data[pos++];
                             for (var n = 0; n < count; n++)
-                                Put(rgba, width, x++, y, PlayerColor(data[pos++]), palette);
+                                Put(
+                                    rgba, width, x++, y,
+                                    PlayerColor(data[pos++]), palette);
                             break;
                         }
                         case 0x07:
@@ -71,8 +73,11 @@ internal static class SlpDecoder
                         {
                             var count = cmd >> 4;
                             if (count == 0) count = data[pos++];
-                            pos++; // Transform-table index; approximate the transformed run as a translucent shadow.
-                            for (var n = 0; n < count; n++) PutShadow(rgba, width, x++, y);
+                            var playerShade = data[pos++];
+                            for (var n = 0; n < count; n++)
+                                Put(
+                                    rgba, width, x++, y,
+                                    PlayerColor(playerShade), palette);
                             break;
                         }
                         case 0x0b:

@@ -74,7 +74,6 @@ internal sealed class GameHostWindow : GameWindow
         new(Random.Shared.NextInt64().ToString());
     private readonly TextBoxControlState _playerNameTextBox = new();
     private EntityGender _newPlayerGender = EntityGender.Male;
-    private int _newSkinTone = 2;
     private int _newTeamColor;
     private bool _menuLeftWasDown;
     private string? _frontendError;
@@ -556,12 +555,6 @@ internal sealed class GameHostWindow : GameWindow
             CreateCharacter();
         else
         {
-            for (var index = 0; index < 5; index++)
-                if (SkinSwatchBounds(index).Contains(pointer))
-                {
-                    _newSkinTone = index;
-                    return;
-                }
             for (var index = 0; index < 8; index++)
                 if (TeamSwatchBounds(index).Contains(pointer))
                 {
@@ -586,7 +579,7 @@ internal sealed class GameHostWindow : GameWindow
         }
         _selectedPlayer = _saves.CreatePlayer(
             _playerNameTextBox.Text, _newPlayerGender,
-            _newSkinTone, _newTeamColor);
+            skinTone: 2, teamColor: _newTeamColor);
         _playerNameTextBox.SetText("");
         BlurTextBoxes();
         _frontendPage = FrontendPage.Main;
@@ -1670,7 +1663,7 @@ internal sealed class GameHostWindow : GameWindow
         DrawUiColor(preview, new(.025f, .027f, .024f, .72f));
         DrawPanelOutline(preview, 0, new(.28f, .23f, .14f, 1));
         DrawCharacterPreview(
-            _newPlayerGender, _newSkinTone, _newTeamColor, preview);
+            _newPlayerGender, _newTeamColor, preview);
 
         var name = CharacterNameBounds();
         _playerNameTextBox.Bounds = name;
@@ -1684,14 +1677,6 @@ internal sealed class GameHostWindow : GameWindow
         DrawMenuButton(
             GenderButtonBounds(),
             _newPlayerGender == EntityGender.Male ? "Male" : "Female");
-
-        DrawUiText("Skin Tone", new(
-            SkinSwatchBounds(0).X, SkinSwatchBounds(0).Y - 25),
-            new(204, 190, 150, 255));
-        for (var index = 0; index < 5; index++)
-            DrawColorSwatch(
-                SkinSwatchBounds(index), SkinColor(index),
-                index == _newSkinTone);
 
         DrawUiText("Clothing Colour", new(
             TeamSwatchBounds(0).X, TeamSwatchBounds(0).Y - 25),
@@ -2004,18 +1989,12 @@ internal sealed class GameHostWindow : GameWindow
         return new(panel.X + 358, panel.Y + 193, 168, 46);
     }
 
-    private Vector4 SkinSwatchBounds(int index)
-    {
-        var panel = FrontendPanel(760, 640);
-        return new(panel.X + 358 + index * 56, panel.Y + 291, 44, 44);
-    }
-
     private Vector4 TeamSwatchBounds(int index)
     {
         var panel = FrontendPanel(760, 640);
         return new(
             panel.X + 358 + index % 4 * 56,
-            panel.Y + 394 + index / 4 * 56,
+            panel.Y + 306 + index / 4 * 56,
             44, 44);
     }
 
@@ -2064,7 +2043,7 @@ internal sealed class GameHostWindow : GameWindow
     }
 
     private void DrawCharacterPreview(
-        EntityGender gender, int skinTone, int teamColor, Vector4 bounds)
+        EntityGender gender, int teamColor, Vector4 bounds)
     {
         if (!_entityAnimations.TryGetValue(
                 (gender, EntityAction.Idle), out var animation))
@@ -2081,10 +2060,9 @@ internal sealed class GameHostWindow : GameWindow
             MathF.Round(bounds.Y + bounds.W - height - 18),
             MathF.Round(width),
             MathF.Round(height));
-        var tint = AppearanceTint(skinTone, teamColor);
         DrawUiSprite(
             frame, texture, target,
-            tint: tint, tintAmount: .18f);
+            teamColor: teamColor);
     }
 
     private static Vector3 TeamColor(int index) => index switch
@@ -2099,17 +2077,16 @@ internal sealed class GameHostWindow : GameWindow
         _ => new(.68f, .68f, .68f)
     };
 
-    private static Vector3 SkinColor(int index) => index switch
+    private void SetPlayerRecolor(int teamColor)
     {
-        0 => new(.92f, .76f, .61f),
-        1 => new(.78f, .57f, .40f),
-        2 => new(.62f, .42f, .28f),
-        3 => new(.43f, .28f, .19f),
-        _ => new(.27f, .18f, .14f)
-    };
-
-    private static Vector3 AppearanceTint(int skinTone, int teamColor) =>
-        Vector3.Lerp(TeamColor(teamColor), SkinColor(skinTone), .32f);
+        GL.Uniform1(
+            GL.GetUniformLocation(_program, "recolorPlayer"),
+            teamColor == 0 ? 0 : 1);
+        if (teamColor == 0) return;
+        GL.Uniform3(
+            GL.GetUniformLocation(_program, "playerColor"),
+            TeamColor(teamColor));
+    }
 
     private void RenderGameUi()
     {
@@ -2528,7 +2505,8 @@ internal sealed class GameHostWindow : GameWindow
         Vector4? uvRectangle = null,
         Vector3? tint = null,
         float tintAmount = 0,
-        float drawOpacity = 1)
+        float drawOpacity = 1,
+        int teamColor = 0)
     {
         var viewportWidth = Math.Max(1, ClientSize.X);
         var viewportHeight = Math.Max(1, ClientSize.Y);
@@ -2547,6 +2525,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), tintAmount);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, texture);
+        SetPlayerRecolor(teamColor);
         var uv = uvRectangle ?? new Vector4(0, 0, 1, 1);
         var u0 = uv.X;
         var v0 = uv.Y;
@@ -2558,6 +2537,7 @@ internal sealed class GameHostWindow : GameWindow
         ]);
         GL.Uniform1(GL.GetUniformLocation(_program, "brightness"), 0f);
         GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), 0f);
+        GL.Uniform1(GL.GetUniformLocation(_program, "recolorPlayer"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
     }
 
@@ -2760,7 +2740,7 @@ internal sealed class GameHostWindow : GameWindow
             DrawSprite(
                 player.Frame, player.Texture, player.World,
                 mirror: player.Mirror, wading: player.Wading,
-                tint: CharacterTint(), tintAmount: .18f);
+                teamColor: _activePlayer?.TeamColor ?? 0);
         DrawTreeBatch(foregroundObjects);
         if (player is not null && playerOccluded)
             DrawSprite(
@@ -3761,7 +3741,8 @@ internal sealed class GameHostWindow : GameWindow
         bool outlineOnly = false,
         bool wading = false,
         Vector3? tint = null,
-        float tintAmount = 0)
+        float tintAmount = 0,
+        int teamColor = 0)
     {
         var width = ReferenceWidth;
         var height = ReferenceHeight;
@@ -3796,6 +3777,7 @@ internal sealed class GameHostWindow : GameWindow
             1f / frame.Width, 1f / frame.Height);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, texture);
+        SetPlayerRecolor(outlineOnly ? 0 : teamColor);
         var leftU = mirror ? 1f : 0f;
         var rightU = mirror ? 0f : 1f;
         Draw([
@@ -3805,13 +3787,7 @@ internal sealed class GameHostWindow : GameWindow
             rightNdc,topNdc,rightU,0
         ]);
         GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), 0f);
-    }
-
-    private Vector3 CharacterTint()
-    {
-        if (_activePlayer is null) return Vector3.Zero;
-        return AppearanceTint(
-            _activePlayer.SkinTone, _activePlayer.TeamColor);
+        GL.Uniform1(GL.GetUniformLocation(_program, "recolorPlayer"), 0);
     }
 
     private void DrawTerrain(TerrainTile tile, int texture, Vector2 world)
@@ -4394,6 +4370,7 @@ internal sealed class GameHostWindow : GameWindow
             "void main(){uv=u;alpha=vertexOpacity;gl_Position=vec4(p,0,1);}");
         var fs = Compile(ShaderType.FragmentShader,
             "#version 330 core\nin vec2 uv;in float alpha;out vec4 c;uniform sampler2D image;" +
+            "uniform int recolorPlayer;uniform vec3 playerColor;" +
             "uniform float opacity;uniform float brightness;uniform float tintAmount;" +
             "uniform vec3 colorTint;uniform int outlineOnly;uniform int wading;" +
             "uniform float waterlineUv;uniform vec2 texelSize;" +
@@ -4406,6 +4383,13 @@ internal sealed class GameHostWindow : GameWindow
             "float ring=around*(1.0-source.a);if(ring<0.05)discard;" +
             "c=vec4(1.0,0.82,0.18,ring*opacity*alpha);}" +
             "else{c=source;" +
+            "if(recolorPlayer==1&&source.a>0.01){" +
+            "float strongestOther=max(source.r,source.g);" +
+            "bool authoredBlue=source.b>0.16&&source.b>strongestOther*1.22&&" +
+            "(source.b-strongestOther)>0.055;" +
+            "if(authoredBlue){float shade=dot(source.rgb,vec3(0.2126,0.7152,0.0722));" +
+            "float targetLuma=max(dot(playerColor,vec3(0.2126,0.7152,0.0722)),0.001);" +
+            "c.rgb=clamp(playerColor*(shade/targetLuma),0.0,1.0);}}" +
             "if(wading==1&&uv.y>=waterlineUv&&source.a>0.01){" +
             "float surface=1.0-smoothstep(waterlineUv,waterlineUv+0.035,uv.y);" +
             "c.rgb=mix(c.rgb,vec3(0.08,0.34,0.53),0.43);" +
