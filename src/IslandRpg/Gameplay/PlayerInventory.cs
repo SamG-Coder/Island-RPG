@@ -3,12 +3,11 @@ namespace IslandRpg.Gameplay;
 internal static class PlayerInventory
 {
     public const int Capacity = 28;
-    public const string AxeItemId = "axe";
 
     public static string?[] CreateStartingInventory()
     {
         var inventory = new string?[Capacity];
-        inventory[0] = AxeItemId;
+        inventory[0] = ItemIds.Axe;
         return inventory;
     }
 
@@ -26,11 +25,12 @@ internal static class PlayerInventory
     public static bool IsFull(string?[]? items) => Count(items) >= Capacity;
 
     public static bool HasAxe(string?[]? items) =>
-        items?.Any(item => item is not null && item.Equals(
-            AxeItemId, StringComparison.OrdinalIgnoreCase)) == true;
+        items?.Any(item =>
+            item is not null &&
+            ItemCatalog.Get(item).HasTag(ItemTag.Axe)) == true;
 
     public static bool CanDrop(string itemId) =>
-        !itemId.Equals(AxeItemId, StringComparison.OrdinalIgnoreCase);
+        ItemCatalog.Get(itemId).Droppable;
 
     public static bool TrySwap(
         string?[]? items, int source, int target, out string?[] updated)

@@ -699,7 +699,7 @@ internal sealed class GameHostWindow : GameWindow
             !normalizedInventory.SequenceEqual(player.Inventory);
         if (!PlayerInventory.HasAxe(normalizedInventory) &&
             PlayerInventory.TryAdd(
-                normalizedInventory, PlayerInventory.AxeItemId,
+                normalizedInventory, ItemIds.Axe,
                 out var migratedInventory))
         {
             normalizedInventory = migratedInventory;
@@ -1344,17 +1344,17 @@ internal sealed class GameHostWindow : GameWindow
             ChatMessageStyle.Experience);
     }
 
-    private static (string Id, string Name) TreeLogItem(string treeType)
+    private static ItemDefinition TreeLogItem(string treeType)
     {
         if (treeType.StartsWith("FOAK", StringComparison.OrdinalIgnoreCase))
-            return ("oak_logs", "oak logs");
+            return ItemCatalog.Get(ItemIds.OakLogs);
         if (treeType.StartsWith("FPIN", StringComparison.OrdinalIgnoreCase))
-            return ("pine_logs", "pine logs");
+            return ItemCatalog.Get(ItemIds.PineLogs);
         if (treeType.StartsWith("FPAL", StringComparison.OrdinalIgnoreCase))
-            return ("palm_logs", "palm logs");
+            return ItemCatalog.Get(ItemIds.PalmLogs);
         if (treeType.StartsWith("FBAM", StringComparison.OrdinalIgnoreCase))
-            return ("bamboo", "bamboo");
-        return ("logs", "logs");
+            return ItemCatalog.Get(ItemIds.Bamboo);
+        return ItemCatalog.Get(ItemIds.Logs);
     }
 
     private static string TreeDisplayName(string graphicName)
@@ -2518,8 +2518,8 @@ internal sealed class GameHostWindow : GameWindow
         var source = inventory[_activeInventorySlot]!;
         var target = inventory[slot]!;
         _chatUi.AddMessage(
-            $"You try to use {InventoryItemName(source)} with " +
-            $"{InventoryItemName(target)}, but nothing happens.",
+            $"You try to use {ItemCatalog.Get(source).Name} with " +
+            $"{ItemCatalog.Get(target).Name}, but nothing happens.",
             ChatMessageStyle.Action);
         _activeInventorySlot = -1;
     }
@@ -2605,7 +2605,7 @@ internal sealed class GameHostWindow : GameWindow
         if ((uint)slot >= (uint)inventory.Length ||
             inventory[slot] is not { } itemId)
             return;
-        var itemName = InventoryItemName(itemId);
+        var item = ItemCatalog.Get(itemId);
         if (option == 0)
         {
             ActivateInventorySlot(slot);
@@ -2614,7 +2614,7 @@ internal sealed class GameHostWindow : GameWindow
         if (option == 2)
         {
             _chatUi.AddMessage(
-                InventoryItemExamine(itemId),
+                item.Examine,
                 ChatMessageStyle.Normal);
             return;
         }
@@ -2637,29 +2637,9 @@ internal sealed class GameHostWindow : GameWindow
             _activeInventorySlot = -1;
         _saves.SavePlayer(_activePlayer);
         _chatUi.AddMessage(
-            $"You drop the {itemName}. It is destroyed.",
+            $"You drop the {item.Name}. It is destroyed.",
             ChatMessageStyle.Warning);
     }
-
-    private static string InventoryItemName(string itemId) => itemId switch
-    {
-        PlayerInventory.AxeItemId => "axe",
-        "oak_logs" => "oak logs",
-        "pine_logs" => "pine logs",
-        "palm_logs" => "palm logs",
-        "bamboo" => "bamboo",
-        _ => "logs"
-    };
-
-    private static string InventoryItemExamine(string itemId) => itemId switch
-    {
-        PlayerInventory.AxeItemId => "A sturdy axe for chopping down trees.",
-        "oak_logs" => "Logs cut from a sturdy oak tree.",
-        "pine_logs" => "Fresh pine logs with a sharp woodland scent.",
-        "palm_logs" => "Fibrous logs cut from a palm tree.",
-        "bamboo" => "A strong, lightweight length of bamboo.",
-        _ => "Logs cut from a tree."
-    };
 
     private void DrawPanelCaption(string caption, Vector4 panel)
     {
@@ -2671,31 +2651,18 @@ internal sealed class GameHostWindow : GameWindow
         DrawUiButtonCaption(caption, header);
     }
 
-    private static string InventoryItemCaption(string itemId) => itemId switch
-    {
-        PlayerInventory.AxeItemId => "Axe",
-        "oak_logs" => "Oak",
-        "pine_logs" => "Pine",
-        "palm_logs" => "Palm",
-        "bamboo" => "Bamb",
-        _ => "Logs"
-    };
+    private static string InventoryItemCaption(string itemId) =>
+        ItemCatalog.Get(itemId).Caption;
 
     private static Vector4? InventoryItemUv(string itemId)
     {
-        var cell = itemId switch
-        {
-            "logs" => 0,
-            "oak_logs" => 1,
-            "pine_logs" => 2,
-            "palm_logs" => 3,
-            "bamboo" => 4,
-            PlayerInventory.AxeItemId => 5,
-            _ => -1
-        };
-        return cell < 0
+        var cell = ItemCatalog.Get(itemId).SpriteCell;
+        return cell is null
             ? null
-            : new Vector4((cell % 4) * .25f, (cell / 4) * .5f, .25f, .5f);
+            : new Vector4(
+                (cell.Value % 4) * .25f,
+                (cell.Value / 4) * .5f,
+                .25f, .5f);
     }
 
     private void RenderTreeHealthBars(Vector4 scene)

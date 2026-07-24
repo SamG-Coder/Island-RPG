@@ -29,13 +29,21 @@ Require(!WoodcuttingSkill.Roll(0, .9f, 0).Hit,
 
 var startingInventory = PlayerInventory.CreateStartingInventory();
 Require(startingInventory.Length == PlayerInventory.Capacity &&
-        startingInventory[0] == PlayerInventory.AxeItemId &&
+        startingInventory[0] == ItemIds.Axe &&
         PlayerInventory.Count(startingInventory) == 1 &&
         PlayerInventory.HasAxe(startingInventory),
     "a new character must start with an axe in a fixed 28-slot inventory");
-Require(!PlayerInventory.CanDrop(PlayerInventory.AxeItemId) &&
-        PlayerInventory.CanDrop("logs"),
+Require(!PlayerInventory.CanDrop(ItemIds.Axe) &&
+        PlayerInventory.CanDrop(ItemIds.Logs),
     "the starter axe must be protected while ordinary items remain droppable");
+Require(ItemCatalog.Get(ItemIds.Axe) is var axeDefinition &&
+        axeDefinition.SpriteCell == 5 &&
+        axeDefinition.HasTag(ItemTag.Axe) &&
+        !axeDefinition.Droppable &&
+        ItemCatalog.Get(ItemIds.OakLogs).HasTag(ItemTag.Log) &&
+        ItemCatalog.All.Select(item => item.Id).Distinct().Count() ==
+        ItemCatalog.All.Count,
+    "the item catalogue must own axe/log gameplay and presentation metadata");
 Require(PlayerInventory.TrySwap(
             ["axe", "logs", "oak_logs"], 0, 2,
             out var swappedInventory) &&
