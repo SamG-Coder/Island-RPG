@@ -31,6 +31,8 @@ internal sealed class GameHostWindow : GameWindow
         SpriteFrame Frame, float U0, float V0, float U1, float V1);
     private sealed record EntityAnimation(
         LoadedGraphic Graphic, int[] Textures, float SecondsPerFrame);
+    private sealed record PlayerVisual(
+        SpriteFrame Frame, int Texture, Vector2 World, bool Mirror);
 
     private readonly string _install;
     private readonly PreviewMode _mode;
@@ -547,6 +549,7 @@ internal sealed class GameHostWindow : GameWindow
             GL.UseProgram(_program);
             GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
             GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
+            GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), 0);
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2D, texture);
             Draw([left,top,0,0, left,bottom,0,1, right,bottom,1,1, right,top,1,0]);
@@ -654,11 +657,24 @@ internal sealed class GameHostWindow : GameWindow
                      .OrderBy(gpu => gpu.Chunk.Coordinate.X + gpu.Chunk.Coordinate.Y))
             DrawWorldChunkTerrain(gpu);
 
-        var vertices = new List<float>();
+        var player = _mode == PreviewMode.Game ? GetPlayerVisual() : null;
+        var playerDepth = player?.World.Y ?? float.MaxValue;
+        var behind = new List<float>();
+        var foregroundShadows = new List<float>();
+        var foregroundObjects = new List<float>();
+        var playerOccluded = false;
         foreach (var item in _worldChunks.Values.Where(IsChunkVisible)
                      .SelectMany(gpu => gpu.Chunk.Cliffs.Select(face => (Face: face, Gpu: gpu)))
                      .OrderBy(item => item.Face.X1 + item.Face.Y1))
-            AddCliffSprite(item.Face, item.Gpu.Opacity, vertices);
+        {
+            var world = CliffWorld(item.Face);
+            var target = world.Y <= playerDepth ? behind : foregroundObjects;
+            AddCliffSprite(item.Face, item.Gpu.Opacity, target);
+            if (player is not null && world.Y > playerDepth &&
+                AtlasOverlapsPlayer($"CLF01_NN#{(item.Face.X1 == item.Face.X2 ? 6 : 0)}",
+                    world, player))
+                playerOccluded = true;
+        }
         foreach (var item in _worldChunks.Values
                      .SelectMany(gpu => gpu.Chunk.Trees.Select(tree => (Tree: tree, Gpu: gpu)))
                      .OrderBy(item => item.Tree.X + item.Tree.Y))
@@ -674,11 +690,31 @@ internal sealed class GameHostWindow : GameWindow
                 (tree.X - tree.Y) * 48,
                 (tree.X + tree.Y + 1) * 24 - height * 20);
             var shadowName = tree.GraphicName[..^2] + "N0";
-            AddTreeQuad(shadowName, world, item.Gpu.Opacity, vertices);
-            AddTreeQuad(tree.GraphicName, world, item.Gpu.Opacity, vertices);
+            if (world.Y <= playerDepth)
+            {
+                AddTreeQuad(shadowName, world, item.Gpu.Opacity, behind);
+                AddTreeQuad(tree.GraphicName, world, item.Gpu.Opacity, behind);
+            }
+            else
+            {
+                // A foreground object's ground shadow stays beneath the entity
+                // and never participates in occlusion outlining.
+                AddTreeQuad(shadowName, world, item.Gpu.Opacity, foregroundShadows);
+                AddTreeQuad(tree.GraphicName, world, item.Gpu.Opacity, foregroundObjects);
+                if (player is not null &&
+                    AtlasOverlapsPlayer(tree.GraphicName, world, player))
+                    playerOccluded = true;
+            }
         }
-        DrawTreeBatch(vertices);
-        if (_mode == PreviewMode.Game) DrawPlayer();
+        DrawTreeBatch(behind);
+        DrawTreeBatch(foregroundShadows);
+        if (player is not null)
+            DrawSprite(player.Frame, player.Texture, player.World, mirror: player.Mirror);
+        DrawTreeBatch(foregroundObjects);
+        if (player is not null && playerOccluded)
+            DrawSprite(
+                player.Frame, player.Texture, player.World,
+                mirror: player.Mirror, outlineOnly: true);
     }
 
     private void DrawCliffBatch()
@@ -739,13 +775,37 @@ internal sealed class GameHostWindow : GameWindow
         var verticalEdge = face.X1 == face.X2;
         var frame = verticalEdge ? 6 : 0;
         var name = $"CLF01_NN#{frame}";
+        AddAtlasQuad(name, CliffWorld(face), opacity, vertices);
+    }
+
+    private static Vector2 CliffWorld(CliffFace face)
+    {
         var midpointX = (face.X1 + face.X2) * .5f;
         var midpointY = (face.Y1 + face.Y2) * .5f;
         var midpointHeight = (face.Top + face.Bottom) * .5f;
-        var world = new Vector2(
+        return new Vector2(
             (midpointX - midpointY) * 48,
             (midpointX + midpointY) * 24 - midpointHeight * 20);
-        AddAtlasQuad(name, world, opacity, vertices);
+    }
+
+    private bool AtlasOverlapsPlayer(string atlasKey, Vector2 world, PlayerVisual player)
+    {
+        if (!_treeAtlas.TryGetValue(atlasKey, out var entry)) return false;
+        var objectBounds = SpriteBounds(entry.Frame, world);
+        var playerBounds = SpriteBounds(player.Frame, player.World);
+        return objectBounds.Left < playerBounds.Right &&
+               objectBounds.Right > playerBounds.Left &&
+               objectBounds.Top < playerBounds.Bottom &&
+               objectBounds.Bottom > playerBounds.Top;
+    }
+
+    private (float Left, float Top, float Right, float Bottom) SpriteBounds(
+        SpriteFrame frame, Vector2 world)
+    {
+        var anchor = new Vector2(Size.X, Size.Y) * .5f + _camera + world * _zoom;
+        var left = anchor.X - frame.HotspotX * _zoom;
+        var top = anchor.Y - frame.HotspotY * _zoom;
+        return (left, top, left + frame.Width * _zoom, top + frame.Height * _zoom);
     }
 
     private void AddAtlasQuad(string atlasKey, Vector2 world, float opacity, List<float> vertices)
@@ -785,6 +845,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.UseProgram(_program);
         GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
+        GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), 0);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, _treeAtlasTexture);
         GL.BindBuffer(BufferTarget.ArrayBuffer, _treeBatchVbo);
@@ -916,12 +977,12 @@ internal sealed class GameHostWindow : GameWindow
         }
     }
 
-    private void DrawPlayer()
+    private PlayerVisual? GetPlayerVisual()
     {
         const int storedVillagerAngles = 5;
         if (_player is null ||
             !_entityAnimations.TryGetValue((_player.Gender, _player.Action), out var animation))
-            return;
+            return null;
         var graphic = animation.Graphic;
         var framesPerAngle = Math.Max(
             1, graphic.Sprite.Frames.Count / storedVillagerAngles);
@@ -943,11 +1004,11 @@ internal sealed class GameHostWindow : GameWindow
         var world = new Vector2(
             (_player.Position.X - _player.Position.Y) * 48,
             (_player.Position.X + _player.Position.Y) * 24 - elevation * 20);
-        DrawSprite(
+        return new(
             graphic.Sprite.Frames[directional.Index],
             animation.Textures[directional.Index],
             world,
-            mirror: directional.Mirror);
+            directional.Mirror);
     }
 
     private void PrepareTreeAtlas()
@@ -1342,7 +1403,8 @@ internal sealed class GameHostWindow : GameWindow
         int texture,
         Vector2 world,
         float opacity = 1,
-        bool mirror = false)
+        bool mirror = false,
+        bool outlineOnly = false)
     {
         var width = Math.Max(1, Size.X);
         var height = Math.Max(1, Size.Y);
@@ -1358,6 +1420,9 @@ internal sealed class GameHostWindow : GameWindow
         GL.UseProgram(_program);
         GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), opacity);
+        GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), outlineOnly ? 1 : 0);
+        GL.Uniform2(GL.GetUniformLocation(_program, "texelSize"),
+            1f / frame.Width, 1f / frame.Height);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, texture);
         var leftU = mirror ? 1f : 0f;
@@ -1917,7 +1982,16 @@ internal sealed class GameHostWindow : GameWindow
             "void main(){uv=u;alpha=vertexOpacity;gl_Position=vec4(p,0,1);}");
         var fs = Compile(ShaderType.FragmentShader,
             "#version 330 core\nin vec2 uv;in float alpha;out vec4 c;uniform sampler2D image;" +
-            "uniform float opacity;void main(){c=texture(image,uv);c.a*=opacity*alpha;}");
+            "uniform float opacity;uniform int outlineOnly;uniform vec2 texelSize;" +
+            "void main(){vec4 source=texture(image,uv);" +
+            "if(outlineOnly==1){float around=0.0;" +
+            "around=max(around,texture(image,uv+vec2(texelSize.x,0)).a);" +
+            "around=max(around,texture(image,uv-vec2(texelSize.x,0)).a);" +
+            "around=max(around,texture(image,uv+vec2(0,texelSize.y)).a);" +
+            "around=max(around,texture(image,uv-vec2(0,texelSize.y)).a);" +
+            "float ring=around*(1.0-source.a);if(ring<0.05)discard;" +
+            "c=vec4(1.0,0.82,0.18,ring*opacity*alpha);}" +
+            "else{c=source;c.a*=opacity*alpha;}}");
         var program = GL.CreateProgram(); GL.AttachShader(program, vs); GL.AttachShader(program, fs); GL.LinkProgram(program);
         GL.DeleteShader(vs); GL.DeleteShader(fs);
         return program;
