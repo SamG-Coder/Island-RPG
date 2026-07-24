@@ -127,9 +127,7 @@ internal static class InfiniteWorldGenerator
     {
         if (height < 9) return false;
         var continental = FractalNoise(seed ^ 0x6a09e667f3bcc909L, x / 720f, y / 720f, 4);
-        var rangeNoise = FractalNoise(seed ^ 0x3c6ef372fe94f82bL, x / 260f, y / 260f, 4);
-        var ridgeField = Math.Clamp(1f - MathF.Abs(rangeNoise), 0, 1);
-        var innerRidge = SmoothStep(.68f, .90f, ridgeField);
+        var (_, innerRidge) = MountainProfileAt(seed, x, y);
         var uplift = Math.Clamp((continental + .15f) * 1.7f, 0, 1);
         return innerRidge * uplift > .42f;
     }
@@ -275,7 +273,7 @@ internal static class InfiniteWorldGenerator
         return ClassifyAt(seed, x, y, average).Material;
     }
 
-    private static byte HeightAt(long seed, int x, int y)
+    internal static float BaseElevationAt(long seed, int x, int y)
     {
         var continental = FractalNoise(seed ^ 0x6a09e667f3bcc909L, x / 720f, y / 720f, 4);
         var continentalDetail = FractalNoise(
@@ -300,12 +298,9 @@ internal static class InfiniteWorldGenerator
         }
 
         var islandHeight = (island - .08f) * 7.2f;
-        var rangeNoise = FractalNoise(seed ^ 0x3c6ef372fe94f82bL, x / 260f, y / 260f, 4);
-        var ridgeField = Math.Clamp(1f - MathF.Abs(rangeNoise), 0, 1);
-        // The outer field creates a long foothill/uplift ramp. The inner field
-        // turns upward much more sharply to form a consequential mountain spine.
-        var rangeRamp = SmoothStep(.20f, .82f, ridgeField);
-        var mountainCore = SmoothStep(.66f, .96f, ridgeField);
+        // Oriented tectonic spines establish coherent ranges. Their wide distance
+        // field becomes foothills; a narrower profile becomes the steep core.
+        var (rangeRamp, mountainCore) = MountainProfileAt(seed, x, y);
         var mountainGate = Math.Clamp((continental + .15f) * 1.7f, 0, 1);
         var passNoise = FractalNoise(seed ^ 0x428a2f98d728ae22L, x / 115f, y / 115f, 2);
         var passCut = Math.Clamp((passNoise - .42f) * 2.3f, 0, .72f);
@@ -316,24 +311,73 @@ internal static class InfiniteWorldGenerator
         var hills = hillNoise * hillNoise *
                     Math.Clamp((continental + .3f) * 1.25f, 0, 1) * 2.6f;
         var detail = FractalNoise(seed ^ 0x13198a2e03707344L, x / 22f, y / 22f, 3) * .8f;
-        var elevation = MathF.Max(continentHeight, islandHeight) +
-                        mountains + foothills + hills + detail;
+        return MathF.Max(continentHeight, islandHeight) +
+               mountains + foothills + hills + detail;
+    }
 
-        var river = RiverStrength(seed, x, y);
-        if (elevation > 1.1f)
-            elevation -= river * MathF.Min(5.2f, elevation - .35f);
+    private static (float Ramp, float Core) MountainProfileAt(long seed, int x, int y)
+    {
+        const int rangeCellSize = 768;
+        var warpedX = x + FractalNoise(seed ^ 0x3c6ef372fe94f82bL, x / 310f, y / 310f, 3) * 42;
+        var warpedY = y + FractalNoise(seed ^ 0x428a2f98d728ae22L, x / 310f, y / 310f, 3) * 42;
+        var cellX = FloorDiv(x, rangeCellSize);
+        var cellY = FloorDiv(y, rangeCellSize);
+        var ramp = 0f;
+        var core = 0f;
+        for (var cy = cellY - 1; cy <= cellY + 1; cy++)
+        for (var cx = cellX - 1; cx <= cellX + 1; cx++)
+        {
+            var centerX = (cx + .5f + (UnitHash(seed, cx, cy, 401) - .5f) * .34f) *
+                          rangeCellSize;
+            var centerY = (cy + .5f + (UnitHash(seed, cx, cy, 409) - .5f) * .34f) *
+                          rangeCellSize;
+            var angle = UnitHash(seed, cx, cy, 419) * MathF.PI;
+            var halfLength = 300 + UnitHash(seed, cx, cy, 421) * 250;
+            var halfWidth = 125 + UnitHash(seed, cx, cy, 431) * 105;
+            var axisX = MathF.Cos(angle);
+            var axisY = MathF.Sin(angle);
+            var relativeX = warpedX - centerX;
+            var relativeY = warpedY - centerY;
+            var along = Math.Clamp(relativeX * axisX + relativeY * axisY,
+                -halfLength, halfLength);
+            var nearestX = centerX + axisX * along;
+            var nearestY = centerY + axisY * along;
+            var distance = MathF.Sqrt(
+                (warpedX - nearestX) * (warpedX - nearestX) +
+                (warpedY - nearestY) * (warpedY - nearestY));
+            var normalized = distance / halfWidth;
+            ramp = Math.Max(ramp, 1f - SmoothStep(.15f, 1f, normalized));
+            core = Math.Max(core, 1f - SmoothStep(.05f, .34f, normalized));
+        }
+        return (ramp, core);
+    }
+
+    private static byte HeightAt(long seed, int x, int y)
+    {
+        var elevation = BaseElevationAt(seed, x, y);
+        var drainage = MacroHydrology.At(seed, x, y);
+        if (elevation > .35f)
+        {
+            var channelCarve = drainage.River * MathF.Min(6.5f, elevation - .25f);
+            var lakeCarve = drainage.Lake * MathF.Min(3.2f, elevation - .2f);
+            elevation -= Math.Max(channelCarve, lakeCarve);
+        }
         return (byte)Math.Clamp((int)MathF.Floor(elevation), 0, 22);
     }
 
     private static (Biome Material, WorldBiome Region) ClassifyAt(
         long seed, int x, int y, float elevation)
     {
-        if (elevation < .35f) return (Biome.DeepWater, WorldBiome.Ocean);
-        if (elevation < .85f) return (Biome.ShallowWater, WorldBiome.Ocean);
+        var baseElevation = BaseElevationAt(seed, x, y);
+        if (baseElevation < -.9f) return (Biome.DeepWater, WorldBiome.Ocean);
+        if (baseElevation < .9f) return (Biome.ShallowWater, WorldBiome.Ocean);
 
-        var river = RiverStrength(seed, x, y);
+        var drainage = MacroHydrology.At(seed, x, y);
+        var river = drainage.River;
         var continental = FractalNoise(seed ^ 0x6a09e667f3bcc909L, x / 720f, y / 720f, 4);
-        if (river > .56f && continental > -.18f && elevation < 4.8f)
+        if (drainage.Lake > .48f && elevation < 5.5f)
+            return (Biome.ShallowWater, WorldBiome.Wetland);
+        if (river > .48f && continental > -.18f)
             return (Biome.ShallowWater, WorldBiome.River);
         if (elevation < 1.45f) return (Biome.Beach, WorldBiome.Coast);
 
@@ -373,13 +417,27 @@ internal static class InfiniteWorldGenerator
         return (Biome.Grassland, WorldBiome.TemperateGrassland);
     }
 
-    private static float RiverStrength(long seed, int x, int y)
+    private static float RiverStrength(long seed, int x, int y) =>
+        MacroHydrology.At(seed, x, y).River;
+
+    internal static float RainfallAt(long seed, int x, int y)
     {
-        var broad = FractalNoise(seed ^ 0x1f83d9abfb41bd6bL, x / 390f, y / 390f, 3);
-        var meander = FractalNoise(seed ^ 0x5be0cd19137e2179L, x / 125f, y / 125f, 2) * .30f;
-        var distance = MathF.Abs(broad + meander);
-        var strength = 1f - Math.Clamp((distance - .018f) / .065f, 0, 1);
-        return strength * strength;
+        var broad = FractalNoise(seed ^ 0x5deece66dL, x / 430f, y / 430f, 4);
+        var detail = FractalNoise(seed ^ unchecked((long)0xa54ff53a5f1d36f1UL),
+            x / 105f, y / 105f, 2);
+        var windAngle = UnitHash(seed, 0, 0, 557) * MathF.PI * 2;
+        var windX = MathF.Cos(windAngle);
+        var windY = MathF.Sin(windAngle);
+        var localElevation = BaseElevationAt(seed, x, y);
+        var upwindNear = BaseElevationAt(
+            seed, (int)(x - windX * 72), (int)(y - windY * 72));
+        var upwindFar = BaseElevationAt(
+            seed, (int)(x - windX * 152), (int)(y - windY * 152));
+        var barrier = MathF.Max(upwindNear, upwindFar) - localElevation;
+        var rainShadow = Math.Clamp(barrier * .045f, 0, .48f);
+        var oceanMoisture = upwindFar < .5f ? .16f : 0;
+        return Math.Clamp(.65f + broad * .28f + detail * .12f +
+                          oceanMoisture - rainShadow, .10f, 1.2f);
     }
 
     private static byte Surface(byte height) => height <= 2 ? (byte)0 : height;
@@ -456,7 +514,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 3;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 6;
+    private const int ChunkPayloadVersion = 7;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;

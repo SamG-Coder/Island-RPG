@@ -8,12 +8,71 @@ internal sealed record WorldAtlasSnapshot(
     int Height,
     byte[] Rgba);
 
+internal readonly record struct WorldAtlasTileKey(int X, int Y, int ChunksAcross)
+{
+    public int SpanTiles => ChunksAcross * WorldChunk.Size;
+}
+
+internal sealed record WorldAtlasTileSnapshot(
+    WorldAtlasTileKey Key,
+    int Width,
+    int Height,
+    byte[] Rgba);
+
 internal static class WorldAtlasGenerator
 {
     public const int ChunksAcross = 32;
     public const int PixelsPerChunk = 16;
     public const int PixelSize = ChunksAcross * PixelsPerChunk;
     public const int SpanTiles = ChunksAcross * WorldChunk.Size;
+    public const int TilePixelSize = 256;
+
+    public static WorldAtlasTileSnapshot GenerateIsometricTile(
+        long seed, WorldAtlasTileKey key)
+    {
+        var size = TilePixelSize;
+        var span = key.SpanTiles;
+        var rgba = new byte[size * size * 4];
+        var samples = new System.Collections.Concurrent.ConcurrentDictionary<(int X, int Y), IslandTile>();
+        Parallel.For(0, size, imageY =>
+        {
+            for (var imageX = 0; imageX < size; imageX++)
+            {
+                var apparentIsoX = (key.X + (imageX + .5f) / size) * span;
+                var apparentIsoY = (key.Y + (imageY + .5f) / size) * span;
+                var terrainIsoY = apparentIsoY;
+                IslandTile tile = null!;
+                for (var iteration = 0; iteration < 3; iteration++)
+                {
+                    var worldX = (int)MathF.Floor(apparentIsoX + terrainIsoY);
+                    var worldY = (int)MathF.Floor(terrainIsoY - apparentIsoX);
+                    tile = samples.GetOrAdd((worldX, worldY),
+                        coordinate => InfiniteWorldGenerator.SampleTile(
+                            seed, coordinate.X, coordinate.Y));
+                    var elevation = (tile.North + tile.East + tile.South + tile.West) / 4f;
+                    // Height is exaggerated in the atlas so mountain structure
+                    // remains readable at regional zoom levels.
+                    terrainIsoY = apparentIsoY + elevation * 1.35f;
+                }
+
+                var color = BaseColor(tile);
+                var slopeX = (tile.East + tile.South - tile.North - tile.West) * .5f;
+                var slopeY = (tile.West + tile.South - tile.North - tile.East) * .5f;
+                var relief = Math.Clamp((-slopeX + slopeY) * .065f, -.24f, .22f);
+                var elevationShade =
+                    (tile.North + tile.East + tile.South + tile.West) / 88f;
+                var shade = tile.Region == WorldBiome.Ocean
+                    ? .94f
+                    : .88f + elevationShade * .15f + relief;
+                var index = (imageY * size + imageX) * 4;
+                rgba[index] = (byte)Math.Clamp(color.R * shade, 0, 255);
+                rgba[index + 1] = (byte)Math.Clamp(color.G * shade, 0, 255);
+                rgba[index + 2] = (byte)Math.Clamp(color.B * shade, 0, 255);
+                rgba[index + 3] = 255;
+            }
+        });
+        return new(key, size, size, rgba);
+    }
 
     public static WorldAtlasSnapshot Generate(
         long seed,
@@ -49,9 +108,7 @@ internal static class WorldAtlasGenerator
                     var tileY = firstTileY +
                                 (int)((imageY + .5f) * spanTiles / pixelSize);
                     var tile = InfiniteWorldGenerator.SampleTile(seed, tileX, tileY);
-                    var color = tile.Biome == Biome.Snow
-                        ? (R: (byte)224, G: (byte)232, B: (byte)235)
-                        : ColorFor(tile.Region);
+                    var color = BaseColor(tile);
                     var elevation = (tile.North + tile.East + tile.South + tile.West) / 36f;
                     var shade = tile.Region switch
                     {
@@ -76,6 +133,15 @@ internal static class WorldAtlasGenerator
         });
         return new(centerTileX, centerTileY, spanTiles, pixelSize, pixelSize, rgba);
     }
+
+    private static (byte R, byte G, byte B) BaseColor(IslandTile tile) =>
+        tile.Biome switch
+        {
+            Biome.Snow => (224, 232, 235),
+            Biome.DeepWater => (24, 72, 116),
+            Biome.ShallowWater when tile.Region == WorldBiome.Ocean => (43, 112, 151),
+            _ => ColorFor(tile.Region)
+        };
 
     private static (byte R, byte G, byte B) ColorFor(WorldBiome biome) => biome switch
     {

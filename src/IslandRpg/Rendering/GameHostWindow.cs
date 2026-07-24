@@ -35,19 +35,19 @@ internal sealed class GameHostWindow : GameWindow
     private ChunkCoordinate _pendingChunkCoordinate;
     private Task _saveTail = Task.CompletedTask;
     private bool _atlasOpen;
-    private Task<WorldAtlasSnapshot>? _atlasTask;
-    private WorldAtlasSnapshot? _atlas;
-    private int _atlasTexture;
     private int _atlasDone;
     private int _atlasTotal = 1;
     private int _atlasChunksAcross = WorldAtlasGenerator.ChunksAcross;
-    private Vector2 _atlasPan;
     private Vector2 _atlasLastMouse;
     private bool _atlasDragging;
     private bool _atlasLeftWasDown;
     private double _clock;
     private double _atlasLastClickTime = -1;
     private Vector2 _atlasLastClickPosition;
+    private Vector2 _atlasCenterIso;
+    private readonly Dictionary<WorldAtlasTileKey, int> _atlasTileTextures = [];
+    private readonly Dictionary<WorldAtlasTileKey, Task<WorldAtlasTileSnapshot>> _atlasTileTasks = [];
+    private HashSet<WorldAtlasTileKey> _visibleAtlasTiles = [];
     private IslandMap? _island;
     private Task<AssetCatalog>? _loadTask;
     private AssetCatalog? _catalog;
@@ -127,9 +127,7 @@ internal sealed class GameHostWindow : GameWindow
             KeyboardState.IsKeyPressed(Keys.M))
         {
             _atlasOpen = !_atlasOpen;
-            if (_atlasOpen && _atlasTask is null && _atlas is null)
-                StartAtlasAtCamera();
-            if (!_atlasOpen) _atlasPan = Vector2.Zero;
+            if (_atlasOpen) StartAtlasAtCamera();
         }
 
         if (_screen == ScreenState.LoadingAssets && _loadTask is { IsCompleted: true })
@@ -253,52 +251,29 @@ internal sealed class GameHostWindow : GameWindow
     private void StartAtlasAtCamera()
     {
         var mapCenter = ScreenWorldToMap(-_camera / Math.Max(_zoom, .001f));
-        StartAtlas((int)MathF.Round(mapCenter.X), (int)MathF.Round(mapCenter.Y));
-    }
-
-    private void StartAtlas(int centerTileX, int centerTileY)
-    {
-        if (_atlasTask is { IsCompleted: false }) return;
-        Interlocked.Exchange(ref _atlasDone, 0);
-        Volatile.Write(ref _atlasTotal, _atlasChunksAcross * _atlasChunksAcross);
-        var chunksAcross = _atlasChunksAcross;
-        var pixelsPerChunk = WorldAtlasGenerator.PixelSize / chunksAcross;
-        _atlasTask = Task.Run(() => WorldAtlasGenerator.Generate(
-            _worldSeed, centerTileX, centerTileY,
-            ReportAtlasProgress,
-            chunksAcross,
-            pixelsPerChunk));
-    }
-
-    private void ReportAtlasProgress(int done, int total)
-    {
-        Volatile.Write(ref _atlasTotal, total);
-        var current = Volatile.Read(ref _atlasDone);
-        while (done > current)
-        {
-            var observed = Interlocked.CompareExchange(ref _atlasDone, done, current);
-            if (observed == current) break;
-            current = observed;
-        }
+        _atlasCenterIso = new(
+            (mapCenter.X - mapCenter.Y) * .5f,
+            (mapCenter.X + mapCenter.Y) * .5f);
+        RequestVisibleAtlasTiles();
     }
 
     private void UpdateAtlas()
     {
-        if (_atlasTask is { IsCompleted: true })
+        foreach (var pair in _atlasTileTasks.Where(pair => pair.Value.IsCompleted).ToArray())
         {
-            if (_atlasTask.IsFaulted)
-                throw _atlasTask.Exception?.GetBaseException() ??
-                      new InvalidOperationException("World atlas generation failed.");
-            _atlas = _atlasTask.Result;
-            if (_atlasTexture != 0) GL.DeleteTexture(_atlasTexture);
-            _atlasTexture = Upload(_atlas.Width, _atlas.Height, _atlas.Rgba);
-            GL.BindTexture(TextureTarget.Texture2D, _atlasTexture);
+            if (pair.Value.IsFaulted)
+                throw pair.Value.Exception?.GetBaseException() ??
+                      new InvalidOperationException("Isometric map tile generation failed.");
+            var result = pair.Value.Result;
+            var texture = Upload(result.Width, result.Height, result.Rgba);
+            GL.BindTexture(TextureTarget.Texture2D, texture);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
                 (int)TextureMinFilter.Linear);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
                 (int)TextureMagFilter.Linear);
-            _atlasTask = null;
-            _atlasPan = Vector2.Zero;
+            if (_atlasTileTextures.Remove(pair.Key, out var previous)) GL.DeleteTexture(previous);
+            _atlasTileTextures[pair.Key] = texture;
+            _atlasTileTasks.Remove(pair.Key);
         }
 
         var mouse = MouseState.Position;
@@ -319,69 +294,98 @@ internal sealed class GameHostWindow : GameWindow
         }
         else if (leftDown && _atlasDragging)
         {
-            _atlasPan += mouse - _atlasLastMouse;
+            var delta = mouse - _atlasLastMouse;
+            _atlasCenterIso -= delta / AtlasPixelsPerTile();
             _atlasLastMouse = mouse;
+            RequestVisibleAtlasTiles();
         }
         else if (!leftDown && _atlasDragging)
-        {
             _atlasDragging = false;
-            RecenterAtlasAfterDrag();
-        }
         _atlasLeftWasDown = leftDown;
-    }
-
-    private void RecenterAtlasAfterDrag()
-    {
-        if (_atlas is null || _atlasPan.LengthSquared < 24 * 24) return;
-        var mapSize = AtlasDisplaySize();
-        var centerX = _atlas.CenterTileX -
-                      (int)MathF.Round(_atlasPan.X / mapSize * _atlas.SpanTiles);
-        var centerY = _atlas.CenterTileY -
-                      (int)MathF.Round(_atlasPan.Y / mapSize * _atlas.SpanTiles);
-        StartAtlas(centerX, centerY);
+        RequestVisibleAtlasTiles();
     }
 
     private void TravelToAtlasPosition(Vector2 mouse)
     {
-        if (_atlas is null) return;
-        var mapSize = AtlasDisplaySize();
-        var topLeft = new Vector2(
-            (Size.X - mapSize) * .5f + _atlasPan.X,
-            (Size.Y - mapSize) * .5f + _atlasPan.Y);
-        var uv = (mouse - topLeft) / mapSize;
-        if (uv.X < 0 || uv.Y < 0 || uv.X > 1 || uv.Y > 1) return;
-        var tileX = _atlas.CenterTileX + (uv.X - .5f) * _atlas.SpanTiles;
-        var tileY = _atlas.CenterTileY + (uv.Y - .5f) * _atlas.SpanTiles;
+        var apparent = _atlasCenterIso +
+                       (mouse - new Vector2(Size.X, Size.Y) * .5f) / AtlasPixelsPerTile();
+        var terrainIsoY = apparent.Y;
+        float tileX = 0;
+        float tileY = 0;
+        for (var iteration = 0; iteration < 3; iteration++)
+        {
+            tileX = apparent.X + terrainIsoY;
+            tileY = terrainIsoY - apparent.X;
+            var tile = InfiniteWorldGenerator.SampleTile(
+                _worldSeed, (int)MathF.Floor(tileX), (int)MathF.Floor(tileY));
+            var elevation = (tile.North + tile.East + tile.South + tile.West) / 4f;
+            terrainIsoY = apparent.Y + elevation * 1.35f;
+        }
         var projected = new Vector2((tileX - tileY) * 48, (tileX + tileY) * 24);
         _zoom = .8f;
         _camera = -projected * _zoom;
         _atlasOpen = false;
-        _atlasPan = Vector2.Zero;
         StreamWorld();
     }
 
     private float AtlasDisplaySize() => Math.Max(1f, Math.Max(Size.X, Size.Y));
+    private float AtlasPixelsPerTile() =>
+        AtlasDisplaySize() / (_atlasChunksAcross * WorldChunk.Size);
 
     private void ZoomAtlas(float wheelOffset)
     {
-        if (_atlas is null || _atlasTask is { IsCompleted: false } || wheelOffset == 0) return;
+        if (wheelOffset == 0) return;
         var nextChunksAcross = wheelOffset > 0
             ? Math.Max(4, _atlasChunksAcross / 2)
             : Math.Min(64, _atlasChunksAcross * 2);
         if (nextChunksAcross == _atlasChunksAcross) return;
 
-        var mapSize = AtlasDisplaySize();
-        var topLeft = new Vector2(
-            (Size.X - mapSize) * .5f + _atlasPan.X,
-            (Size.Y - mapSize) * .5f + _atlasPan.Y);
-        var uv = (MouseState.Position - topLeft) / mapSize;
-        var tileUnderCursorX = _atlas.CenterTileX + (uv.X - .5f) * _atlas.SpanTiles;
-        var tileUnderCursorY = _atlas.CenterTileY + (uv.Y - .5f) * _atlas.SpanTiles;
-        var nextSpan = nextChunksAcross * WorldChunk.Size;
-        var nextCenterX = tileUnderCursorX - (uv.X - .5f) * nextSpan;
-        var nextCenterY = tileUnderCursorY - (uv.Y - .5f) * nextSpan;
+        var screenOffset = MouseState.Position - new Vector2(Size.X, Size.Y) * .5f;
+        var isoUnderCursor = _atlasCenterIso + screenOffset / AtlasPixelsPerTile();
         _atlasChunksAcross = nextChunksAcross;
-        StartAtlas((int)MathF.Round(nextCenterX), (int)MathF.Round(nextCenterY));
+        _atlasCenterIso = isoUnderCursor - screenOffset / AtlasPixelsPerTile();
+        RequestVisibleAtlasTiles();
+    }
+
+    private void RequestVisibleAtlasTiles()
+    {
+        var chunksPerTile = Math.Max(1, _atlasChunksAcross / 4);
+        var span = chunksPerTile * WorldChunk.Size;
+        var scale = AtlasPixelsPerTile();
+        var halfWidth = Size.X * .5f / scale;
+        var halfHeight = Size.Y * .5f / scale;
+        var firstX = (int)MathF.Floor((_atlasCenterIso.X - halfWidth) / span);
+        var lastX = (int)MathF.Floor((_atlasCenterIso.X + halfWidth) / span);
+        var firstY = (int)MathF.Floor((_atlasCenterIso.Y - halfHeight) / span);
+        var lastY = (int)MathF.Floor((_atlasCenterIso.Y + halfHeight) / span);
+        var visible = new HashSet<WorldAtlasTileKey>();
+        for (var y = firstY; y <= lastY; y++)
+        for (var x = firstX; x <= lastX; x++)
+            visible.Add(new(x, y, chunksPerTile));
+        _visibleAtlasTiles = visible;
+
+        foreach (var key in visible
+                     .OrderBy(key => Math.Abs((key.X + .5f) * span - _atlasCenterIso.X) +
+                                     Math.Abs((key.Y + .5f) * span - _atlasCenterIso.Y)))
+        {
+            if (_atlasTileTextures.ContainsKey(key) || _atlasTileTasks.ContainsKey(key)) continue;
+            if (_atlasTileTasks.Count >= 3) break;
+            _atlasTileTasks[key] = Task.Run(
+                () => WorldAtlasGenerator.GenerateIsometricTile(_worldSeed, key));
+        }
+
+        if (_atlasTileTextures.Count > 48)
+        {
+            foreach (var key in _atlasTileTextures.Keys.Where(key => !visible.Contains(key)).ToArray())
+            {
+                GL.DeleteTexture(_atlasTileTextures[key]);
+                _atlasTileTextures.Remove(key);
+                if (_atlasTileTextures.Count <= 48) break;
+            }
+        }
+        Volatile.Write(ref _atlasTotal, visible.Count);
+        Interlocked.Exchange(ref _atlasDone,
+            visible.Count(key => _atlasTileTextures.ContainsKey(key)));
     }
 
     protected override void OnMouseWheel(MouseWheelEventArgs e)
@@ -437,53 +441,59 @@ internal sealed class GameHostWindow : GameWindow
 
     private void RenderAtlas()
     {
-        if (_atlasTexture != 0)
+        var width = Math.Max(1, Size.X);
+        var height = Math.Max(1, Size.Y);
+        var scale = AtlasPixelsPerTile();
+        foreach (var key in _visibleAtlasTiles.OrderBy(key => key.Y).ThenBy(key => key.X))
         {
-            var width = Math.Max(1, Size.X);
-            var height = Math.Max(1, Size.Y);
-            var mapSize = Math.Max(width, height);
-            var center = new Vector2(width * .5f, height * .5f) + _atlasPan;
-            var left = (center.X - mapSize * .5f - width * .5f) * 2 / width;
-            var right = (center.X + mapSize * .5f - width * .5f) * 2 / width;
-            var top = -(center.Y - mapSize * .5f - height * .5f) * 2 / height;
-            var bottom = -(center.Y + mapSize * .5f - height * .5f) * 2 / height;
+            if (!_atlasTileTextures.TryGetValue(key, out var texture)) continue;
+            var span = key.SpanTiles;
+            var pixelLeft = width * .5f + (key.X * span - _atlasCenterIso.X) * scale;
+            var pixelTop = height * .5f + (key.Y * span - _atlasCenterIso.Y) * scale;
+            var pixelRight = pixelLeft + span * scale;
+            var pixelBottom = pixelTop + span * scale;
+            var left = (pixelLeft - width * .5f) * 2 / width;
+            var right = (pixelRight - width * .5f) * 2 / width;
+            var top = -(pixelTop - height * .5f) * 2 / height;
+            var bottom = -(pixelBottom - height * .5f) * 2 / height;
             GL.UseProgram(_program);
             GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
             GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
             GL.ActiveTexture(TextureUnit.Texture0);
-            GL.BindTexture(TextureTarget.Texture2D, _atlasTexture);
+            GL.BindTexture(TextureTarget.Texture2D, texture);
             Draw([left,top,0,0, left,bottom,0,1, right,bottom,1,1, right,top,1,0]);
-
-            GL.Enable(EnableCap.ScissorTest);
-            GL.Scissor((int)center.X - 1, height - (int)center.Y - 10, 3, 21);
-            GL.ClearColor(.95f, .82f, .24f, 1);
-            GL.Clear(ClearBufferMask.ColorBufferBit);
-            GL.Scissor((int)center.X - 10, height - (int)center.Y - 1, 21, 3);
-            GL.Clear(ClearBufferMask.ColorBufferBit);
-            GL.Disable(EnableCap.ScissorTest);
         }
 
-        if (_atlasTask is not null)
+        GL.Enable(EnableCap.ScissorTest);
+        GL.Scissor(width / 2 - 1, height / 2 - 10, 3, 21);
+        GL.ClearColor(.95f, .82f, .24f, 1);
+        GL.Clear(ClearBufferMask.ColorBufferBit);
+        GL.Scissor(width / 2 - 10, height / 2 - 1, 21, 3);
+        GL.Clear(ClearBufferMask.ColorBufferBit);
+        GL.Disable(EnableCap.ScissorTest);
+
+        if (_atlasTileTasks.Count > 0)
         {
             const int margin = 90;
             const int barHeight = 18;
-            var width = Math.Max(0, FramebufferSize.X - margin * 2);
+            var barWidth = Math.Max(0, FramebufferSize.X - margin * 2);
             var atlasDone = Volatile.Read(ref _atlasDone);
             var atlasTotal = Volatile.Read(ref _atlasTotal);
-            var filled = (int)(width * Math.Clamp(atlasDone / (float)Math.Max(1, atlasTotal), 0, 1));
+            var filled = (int)(barWidth * Math.Clamp(
+                atlasDone / (float)Math.Max(1, atlasTotal), 0, 1));
             GL.Enable(EnableCap.ScissorTest);
-            GL.Scissor(margin, 32, width, barHeight);
+            GL.Scissor(margin, 32, barWidth, barHeight);
             GL.ClearColor(.12f, .14f, .12f, 1);
             GL.Clear(ClearBufferMask.ColorBufferBit);
             GL.Scissor(margin, 32, filled, barHeight);
             GL.ClearColor(.35f, .68f, .28f, 1);
             GL.Clear(ClearBufferMask.ColorBufferBit);
             GL.Disable(EnableCap.ScissorTest);
-            Title = $"Island RPG - Mapping {atlasDone}/{atlasTotal} chunks";
+            Title = $"Island RPG - Mapping visible sections {atlasDone}/{atlasTotal}";
         }
-        else if (_atlas is not null)
-            Title = $"Island RPG - Atlas centered {_atlas.CenterTileX}, {_atlas.CenterTileY} - " +
-                    "drag or double-click to travel";
+        else
+            Title = $"Island RPG - Isometric map - {_atlasChunksAcross} chunks across - " +
+                    "drag, zoom, or double-click to travel";
     }
 
     private void RenderWorldPreview()
@@ -1671,7 +1681,7 @@ internal sealed class GameHostWindow : GameWindow
         if (_biomeWeightsB != 0) GL.DeleteTexture(_biomeWeightsB);
         if (_shoreDistance != 0) GL.DeleteTexture(_shoreDistance);
         if (_waterNormalArray != 0) GL.DeleteTexture(_waterNormalArray);
-        if (_atlasTexture != 0) GL.DeleteTexture(_atlasTexture);
+        foreach (var texture in _atlasTileTextures.Values) GL.DeleteTexture(texture);
         if (_islandVbo != 0) GL.DeleteBuffer(_islandVbo);
         if (_streamVbo != 0) GL.DeleteBuffer(_streamVbo);
         if (_treeBatchVbo != 0) GL.DeleteBuffer(_treeBatchVbo);

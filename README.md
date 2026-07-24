@@ -69,29 +69,32 @@ Open or create an infinite world with a specific seed:
 dotnet run --project src/IslandRpg -- --world --seed 2187
 ```
 
-The same seed produces the same island chains, elevation, ocean depth, biomes,
-and trees. Low-frequency continental fields create large mainlands alongside
-offshore islands. Separate elevation, moisture, and temperature fields produce
-ocean, coast, river, wetland, grassland, temperate forest, rainforest, savanna,
-desert, taiga, tundra, and alpine regions. Ridged mountain belts, exposed rock,
-snow-covered tundra and peaks, broad forest zones, and carved river corridors
-remain continuous across chunk
-boundaries. Use WASD, the arrow keys, or left-mouse dragging to move the camera.
+The same seed produces the same island chains, elevation, ocean depth, drainage,
+biomes, and trees. A cached macro layer fills depressions, routes rainfall
+downhill, accumulates tributary flow, and carves connected rivers and inland
+water before detailed chunks are produced. Deep ocean basins transition through
+shallow continental shelves into warped coastlines. Temperature, rainfall,
+prevailing wind, rain shadows, elevation, and drainage produce ocean, coast,
+river, wetland, grassland, temperate forest, rainforest, savanna, desert, taiga,
+tundra, and alpine regions. These fields remain continuous across chunk
+boundaries while the macro cache stays bounded during long-distance travel.
+Use WASD, the arrow keys, or left-mouse dragging to move the camera.
 The original finite island renderer remains available through `--island`.
 
-Mountain ranges combine uplift, narrow ridged peaks, broad foothills, rolling
-hill fields, and eroded passes. Terrain drops of two or more elevation levels
-produce vertical cliff faces using the installed rock terrain sheet. Visible
-cliffs across loaded chunks are submitted as one GPU batch.
+Mountain ranges grow around oriented regional uplift spines, with long foothill
+ramps, steep inner cores, rolling hill fields, river-cut valleys, and eroded
+passes. Major mountain cores receive directional installed `CLF` sprite
+contours; ordinary hills remain smoothly deformed and directionally shaded.
 
-Press `M` in the infinite world to open the top-down atlas. Its 32×32-chunk
-overview is generated asynchronously as a 512×512 texture with a progress bar.
-It fills the viewport like a slippy map: drag to pan, use the mouse wheel to
-zoom around the location beneath the cursor, or double-click a location to
-close it and move the detailed world camera there. Zoom levels cover between
-4×4 and 64×64 chunks. The atlas samples deterministic macro terrain without
-creating thousands of full GPU chunks; detailed chunks stream normally after
-travel.
+Press `M` in the infinite world to open the isometric relief map. It is divided
+into deterministic 256×256 map sections and generates only sections visible in
+the viewport, with up to three generation jobs running asynchronously. Visible
+sections provide roughly 1024 horizontal source pixels at the standard viewport,
+twice the previous whole-atlas resolution, while a bounded 48-section GPU cache
+avoids regenerating nearby areas. Drag to pan, use the mouse wheel to zoom around
+the location beneath the cursor, or double-click elevated terrain to close the
+map and move the detailed world camera there. Zoom levels cover between 4×4 and
+64×64 chunks. Detailed gameplay chunks stream normally only after travel.
 
 Visible world trees and their shadows are packed into one texture atlas and
 submitted as one depth-ordered GPU batch, so repeated tree types across many

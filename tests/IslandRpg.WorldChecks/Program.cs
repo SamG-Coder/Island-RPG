@@ -30,12 +30,25 @@ var snowSamples = 0;
 var hillSamples = 0;
 var mountainSamples = 0;
 var maximumElevation = 0f;
+var deepOceanSamples = 0;
+var shallowOceanSamples = 0;
+var drainageSamples = 0;
+var accumulatedRiverFlow = 0f;
 for (var sampleY = -1000; sampleY <= 1000; sampleY += 40)
 for (var sampleX = -1000; sampleX <= 1000; sampleX += 40)
 {
     var tile = InfiniteWorldGenerator.SampleTile(seed, sampleX, sampleY);
+    var drainage = MacroHydrology.At(seed, sampleX, sampleY);
     macroBiomes[tile.Region] = macroBiomes.GetValueOrDefault(tile.Region) + 1;
     if (tile.Biome == Biome.Snow) snowSamples++;
+    if (tile.Biome == Biome.DeepWater) deepOceanSamples++;
+    if (tile.Biome == Biome.ShallowWater && tile.Region == WorldBiome.Ocean)
+        shallowOceanSamples++;
+    if (drainage.River > .45f)
+    {
+        drainageSamples++;
+        accumulatedRiverFlow += drainage.Flow;
+    }
     var elevation = (tile.North + tile.East + tile.South + tile.West) / 4f;
     maximumElevation = Math.Max(maximumElevation, elevation);
     if (elevation is >= 2 and < 5) hillSamples++;
@@ -55,6 +68,19 @@ Require(hillSamples > 0, "continental terrain must produce rolling hills and foo
 Require(mountainSamples > 0, "continental terrain must produce mountain elevations");
 Require(maximumElevation >= 10,
     $"continental ranges must include impactful high peaks; highest was {maximumElevation}");
+Require(deepOceanSamples > 0 && shallowOceanSamples > 0,
+    "oceans must contain both deep basins and shallow continental shelves");
+Require(drainageSamples > 0 && accumulatedRiverFlow / drainageSamples > 5,
+    "rivers must be selected from cells with accumulated upstream rainfall");
+for (var seamY = -384; seamY <= 384; seamY += 64)
+{
+    var westDrainage = MacroHydrology.At(seed, 511.99f, seamY);
+    var eastDrainage = MacroHydrology.At(seed, 512.01f, seamY);
+    Require(Math.Abs(westDrainage.River - eastDrainage.River) < .03f,
+        $"macro river field must blend across region seams at y={seamY}");
+    Require(Math.Abs(westDrainage.Lake - eastDrainage.Lake) < .03f,
+        $"macro lake field must blend across region seams at y={seamY}");
+}
 
 var atlasProgress = new System.Collections.Concurrent.ConcurrentBag<(int Done, int Total)>();
 Require(WorldAtlasGenerator.PixelSize == 512,
@@ -73,6 +99,13 @@ Require(atlasProgress.Count == 4 && atlasProgress.Max(value => value.Done) == 4 
     "atlas progress must report every generated chunk");
 Require(atlas.Width == 6 && atlas.Height == 6 && atlas.SpanTiles == 64,
     "atlas dimensions must follow its chunk and pixel resolution");
+var isometricKey = new WorldAtlasTileKey(0, 0, 1);
+var isometricTile = WorldAtlasGenerator.GenerateIsometricTile(seed, isometricKey);
+var repeatedIsometricTile = WorldAtlasGenerator.GenerateIsometricTile(seed, isometricKey);
+Require(isometricTile.Width == 256 && isometricTile.Height == 256,
+    "isometric map sections must render at high-resolution 256x256");
+Require(isometricTile.Rgba.SequenceEqual(repeatedIsometricTile.Rgba),
+    "isometric map section generation must be deterministic");
 
 var textureSize = WorldChunk.WeightTextureSize;
 var halo = WorldChunk.WeightHaloTiles * WorldChunk.WeightSamplesPerTile;
