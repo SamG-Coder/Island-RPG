@@ -2,10 +2,12 @@ using IslandRpg.Assets;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
+using OpenTK.Windowing.Common.Input;
 using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.GraphicsLibraryFramework;
 using IslandRpg.Gameplay;
 using IslandRpg.World;
+using IslandRpg.Rendering.Ui;
 
 namespace IslandRpg.Rendering;
 
@@ -103,10 +105,15 @@ internal sealed class GameHostWindow : GameWindow
     private readonly Dictionary<(EntityGender Gender, EntityAction Action), EntityAnimation>
         _entityAnimations = [];
     private EntityAnimation? _moveMarkerAnimation;
-    private SpriteFrame? _defaultCursorFrame;
-    private SpriteFrame? _cutCursorFrame;
-    private int _defaultCursorTexture;
-    private int _cutCursorTexture;
+    private MouseCursor? _defaultNativeCursor;
+    private MouseCursor? _cutNativeCursor;
+    private bool _usingCutCursor;
+    private int _uiPanelFillTexture;
+    private int _uiSolidTexture;
+    private SpriteFrame? _uiTabFrame;
+    private int _uiTabTexture;
+    private int _uiActiveTabTexture;
+    private static readonly SpriteFrame SolidUiFrame = new(1, 1, 0, 0, []);
     private MoveMarker? _moveMarker;
     private Task<PathResult>? _pendingPathTask;
     private CancellationTokenSource? _pathCancellation;
@@ -119,6 +126,7 @@ internal sealed class GameHostWindow : GameWindow
     private WorldEntity? _player;
     private bool _gameLeftWasDown;
     private bool _gameRightWasDown;
+    private readonly GameUiControlState _gameUi = new();
     private int _vao;
     private bool _dragging;
     private Vector2 _lastMouse;
@@ -311,7 +319,10 @@ internal sealed class GameHostWindow : GameWindow
             else
             {
                 if (_mode == PreviewMode.Game)
+                {
+                    UpdateGameUi();
                     UpdateGame((float)e.Time);
+                }
                 else
                     UpdateCamera((float)e.Time);
                 if (_mode is PreviewMode.World or PreviewMode.Game)
@@ -346,16 +357,27 @@ internal sealed class GameHostWindow : GameWindow
 
     private Vector2 SceneMousePosition()
     {
-        var windowWidth = Math.Max(1, Size.X);
-        var windowHeight = Math.Max(1, Size.Y);
-        var scale = Math.Min(
-            windowWidth / (float)ReferenceWidth,
-            windowHeight / (float)ReferenceHeight);
-        var left = (windowWidth - ReferenceWidth * scale) * .5f;
-        var top = (windowHeight - ReferenceHeight * scale) * .5f;
+        var scene = SceneClientBounds();
+        var scale = scene.Z / ReferenceWidth;
         return new Vector2(
-            (MouseState.Position.X - left) / Math.Max(scale, .001f),
-            (MouseState.Position.Y - top) / Math.Max(scale, .001f));
+            (MouseState.Position.X - scene.X) / Math.Max(scale, .001f),
+            (MouseState.Position.Y - scene.Y) / Math.Max(scale, .001f));
+    }
+
+    private Vector4 SceneClientBounds()
+    {
+        var clientWidth = Math.Max(1, ClientSize.X);
+        var clientHeight = Math.Max(1, ClientSize.Y);
+        var scale = Math.Min(
+            clientWidth / (float)ReferenceWidth,
+            clientHeight / (float)ReferenceHeight);
+        var width = ReferenceWidth * scale;
+        var height = ReferenceHeight * scale;
+        return new Vector4(
+            (clientWidth - width) * .5f,
+            (clientHeight - height) * .5f,
+            width,
+            height);
     }
 
     private void UpdateGame(float elapsed)
@@ -384,7 +406,8 @@ internal sealed class GameHostWindow : GameWindow
         }
 
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
-        if (rightDown && !_gameRightWasDown)
+        if (rightDown && !_gameRightWasDown &&
+            !IsPointerOverGameUi(MouseState.Position))
         {
             var target = ScreenToTerrain(SceneMousePosition());
             _queuedAction = null;
@@ -407,6 +430,7 @@ internal sealed class GameHostWindow : GameWindow
 
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         if (leftDown && !_gameLeftWasDown &&
+            !IsPointerOverGameUi(MouseState.Position) &&
             TryGetTreeUnderMouse(SceneMousePosition(), out var actionTree))
         {
             var actionTarget = new Vector2(actionTree.X + .5f, actionTree.Y + .5f);
@@ -443,6 +467,7 @@ internal sealed class GameHostWindow : GameWindow
         _player.TerrainSpeedMultiplier =
             (wading ? .62f : 1f) / (1f + uphill * .18f);
         _player.Update(elapsed);
+        UpdateNativeCursor();
         CompleteQueuedAction();
         UpdateTreeCutting();
         UpdateWaterRipples(wading);
@@ -462,6 +487,17 @@ internal sealed class GameHostWindow : GameWindow
                 (_pendingPathTask is null ? "" : "calculating path - ") +
                 "right-click to move, left-click to act, Up/Down changes villager";
     }
+
+    private void UpdateGameUi()
+    {
+        _gameUi.Layout(SceneClientBounds());
+        _gameUi.UpdatePointer(
+            MouseState.Position,
+            MouseState.IsButtonDown(MouseButton.Left));
+    }
+
+    private bool IsPointerOverGameUi(Vector2 mouse) =>
+        _gameUi.BlocksWorldInput(mouse);
 
     private PathResult FindActionPath(
         int requestId,
@@ -1006,12 +1042,21 @@ internal sealed class GameHostWindow : GameWindow
         {
             if (_atlasOpen) RenderAtlas();
             else if (_mode == PreviewMode.Island) RenderIsland();
-            else if (_mode is PreviewMode.World or PreviewMode.Game) RenderWorld();
+            else if (_mode is PreviewMode.World or PreviewMode.Game)
+            {
+                RenderWorld();
+            }
             else RenderWorldPreview();
         }
         else RenderLoading();
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         PresentScene();
+        if (_screen == ScreenState.WorldPreview &&
+            _mode == PreviewMode.Game && !_atlasOpen)
+        {
+            GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
+            RenderGameUi();
+        }
         SwapBuffers();
     }
 
@@ -1026,6 +1071,105 @@ internal sealed class GameHostWindow : GameWindow
         GL.Clear(ClearBufferMask.ColorBufferBit);
         GL.Disable(EnableCap.ScissorTest);
         Title = $"Island RPG - Loading {_done}/{_total}: {_current}";
+    }
+
+    private void RenderGameUi()
+    {
+        _gameUi.Layout(SceneClientBounds());
+        if (_gameUi.Panel.Visible)
+            DrawAoEPanelBorder(_gameUi.Panel.Bounds);
+
+        DrawAoEUiTile(_gameUi.SkillsButton);
+        DrawAoEUiTile(_gameUi.InventoryButton);
+    }
+
+    private void DrawAoEUiTile(TabControlState control)
+    {
+        if (_uiTabFrame is null || _uiTabTexture == 0) return;
+        DrawUiSprite(
+            _uiTabFrame,
+            control.Selected ? _uiActiveTabTexture : _uiTabTexture,
+            control.Bounds,
+            control.Pressed ? -.16f : control.Hovered ? .14f : 0);
+    }
+
+    private void DrawAoEPanelBorder(Vector4 box)
+    {
+        if (_uiPanelFillTexture != 0)
+            DrawUiSprite(
+                SolidUiFrame,
+                _uiPanelFillTexture,
+                new(box.X + 5, box.Y + 5, box.Z - 10, box.W - 10));
+        // Five native pixels, built in the same material language as the tabs.
+        DrawPanelOutline(box, 0, new(.035f, .032f, .026f, 1));
+        DrawPanelOutline(box, 1, new(.24f, .205f, .13f, 1));
+        DrawPanelOutline(box, 2, new(.075f, .07f, .058f, 1));
+        DrawPanelOutline(box, 3, new(.16f, .15f, .12f, 1));
+        DrawPanelOutline(box, 4, new(.028f, .026f, .022f, 1));
+    }
+
+    private void DrawPanelOutline(Vector4 box, float inset, Vector4 color)
+    {
+        var width = box.Z - inset * 2;
+        var height = box.W - inset * 2;
+        if (width <= 0 || height <= 0) return;
+        DrawUiColor(new(box.X + inset, box.Y + inset, width, 1), color);
+        DrawUiColor(new(box.X + inset, box.Y + box.W - inset - 1, width, 1), color);
+        DrawUiColor(new(box.X + inset, box.Y + inset, 1, height), color);
+        DrawUiColor(new(box.X + box.Z - inset - 1, box.Y + inset, 1, height), color);
+    }
+
+    private void DrawUiColor(Vector4 rectangle, Vector4 color)
+    {
+        if (_uiSolidTexture == 0) return;
+        DrawUiSprite(
+            SolidUiFrame,
+            _uiSolidTexture,
+            rectangle,
+            tint: new Vector3(color.X, color.Y, color.Z),
+            tintAmount: 1,
+            drawOpacity: color.W);
+    }
+
+    private void DrawUiSprite(
+        SpriteFrame frame,
+        int texture,
+        Vector4 rectangle,
+        float brightness = 0,
+        Vector4? uvRectangle = null,
+        Vector3? tint = null,
+        float tintAmount = 0,
+        float drawOpacity = 1)
+    {
+        var viewportWidth = Math.Max(1, ClientSize.X);
+        var viewportHeight = Math.Max(1, ClientSize.Y);
+        var left = (rectangle.X - viewportWidth * .5f) * 2 / viewportWidth;
+        var right = (rectangle.X + rectangle.Z - viewportWidth * .5f) * 2 / viewportWidth;
+        var top = -(rectangle.Y - viewportHeight * .5f) * 2 / viewportHeight;
+        var bottom = -(rectangle.Y + rectangle.W - viewportHeight * .5f) * 2 / viewportHeight;
+        GL.UseProgram(_program);
+        GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
+        GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), drawOpacity);
+        GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), 0);
+        GL.Uniform1(GL.GetUniformLocation(_program, "wading"), 0);
+        GL.Uniform1(GL.GetUniformLocation(_program, "brightness"), brightness);
+        var tintColor = tint ?? Vector3.Zero;
+        GL.Uniform3(GL.GetUniformLocation(_program, "colorTint"), tintColor);
+        GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), tintAmount);
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, texture);
+        var uv = uvRectangle ?? new Vector4(0, 0, 1, 1);
+        var u0 = uv.X;
+        var v0 = uv.Y;
+        var u1 = uv.X + uv.Z;
+        var v1 = uv.Y + uv.W;
+        Draw([
+            left,top,u0,v0, left,bottom,u0,v1,
+            right,bottom,u1,v1, right,top,u1,v0
+        ]);
+        GL.Uniform1(GL.GetUniformLocation(_program, "brightness"), 0f);
+        GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), 0f);
+        GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
     }
 
     private void RenderAtlas()
@@ -1232,7 +1376,6 @@ internal sealed class GameHostWindow : GameWindow
             DrawSprite(
                 player.Frame, player.Texture, player.World,
                 mirror: player.Mirror, outlineOnly: true, wading: player.Wading);
-        if (_mode == PreviewMode.Game) DrawGameCursor();
     }
 
     private void DrawCliffBatch()
@@ -1578,6 +1721,93 @@ internal sealed class GameHostWindow : GameWindow
                 ? markerGraphic.Definition.FrameRate
                 : .08f);
         PrepareGameCursors();
+        PrepareGameUi();
+    }
+
+    private void PrepareGameUi()
+    {
+        _uiPanelFillTexture = Upload(1, 1, [20, 20, 19, 148]);
+        _uiSolidTexture = Upload(1, 1, [255, 255, 255, 255]);
+        _uiTabFrame = new SpriteFrame(
+            42, 42, 0, 0, CreateTabPixels(active: false));
+        _uiTabTexture = Upload(_uiTabFrame);
+        _uiActiveTabTexture = Upload(
+            42, 42, CreateTabPixels(active: true));
+        foreach (var texture in new[]
+                 {
+                     _uiPanelFillTexture, _uiSolidTexture,
+                     _uiTabTexture, _uiActiveTabTexture
+                 })
+        {
+            GL.BindTexture(TextureTarget.Texture2D, texture);
+            GL.TexParameter(
+                TextureTarget.Texture2D,
+                TextureParameterName.TextureMinFilter,
+                (int)TextureMinFilter.Linear);
+            GL.TexParameter(
+                TextureTarget.Texture2D,
+                TextureParameterName.TextureMagFilter,
+                (int)TextureMagFilter.Linear);
+        }
+    }
+
+    private static byte[] CreateTabPixels(bool active)
+    {
+        const int size = 42;
+        var rgba = new byte[size * size * 4];
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            if (!InsideRoundedTab(x, y, 0, 8)) continue;
+            byte red;
+            byte green;
+            byte blue;
+            if (!InsideRoundedTab(x, y, 1, 7))
+            {
+                red = 13; green = 12; blue = 10;
+            }
+            else if (!InsideRoundedTab(x, y, 2, 6))
+            {
+                red = 91; green = 78; blue = 49;
+            }
+            else if (!InsideRoundedTab(x, y, 4, 5))
+            {
+                red = 24; green = 23; blue = 19;
+            }
+            else
+            {
+                var noise = ((x * 37 + y * 57 + x * y * 3) & 7) - 3;
+                var topLight = Math.Max(0, 7 - y / 5);
+                red = (byte)Math.Clamp(
+                    (active ? 61 : 39) + noise + topLight, 0, 255);
+                green = (byte)Math.Clamp(
+                    (active ? 15 : 38) + noise + topLight, 0, 255);
+                blue = (byte)Math.Clamp(
+                    (active ? 16 : 34) + noise + topLight, 0, 255);
+            }
+
+            var index = (y * size + x) * 4;
+            rgba[index] = red;
+            rgba[index + 1] = green;
+            rgba[index + 2] = blue;
+            rgba[index + 3] = 255;
+        }
+        return rgba;
+
+        static bool InsideRoundedTab(int x, int y, int inset, int radius)
+        {
+            const int extent = 41;
+            var left = inset;
+            var top = inset;
+            var right = extent - inset;
+            var bottom = extent - inset;
+            if (x < left || x > right || y < top || y > bottom) return false;
+            var nearestX = Math.Clamp(x, left + radius, right - radius);
+            var nearestY = Math.Clamp(y, top + radius, bottom - radius);
+            var deltaX = x - nearestX;
+            var deltaY = y - nearestY;
+            return deltaX * deltaX + deltaY * deltaY <= radius * radius;
+        }
     }
 
     private void PrepareGameCursors()
@@ -1593,43 +1823,42 @@ internal sealed class GameHostWindow : GameWindow
             throw new InvalidDataException(
                 "The installed AoE cursor sheet does not contain the tree-cut cursor.");
 
-        _defaultCursorFrame = cursorSheet.Frames[0];
-        _cutCursorFrame = cursorSheet.Frames[8];
-        _defaultCursorTexture = Upload(_defaultCursorFrame);
-        _cutCursorTexture = Upload(_cutCursorFrame);
-        CursorState = CursorState.Hidden;
+        var defaultFrame = cursorSheet.Frames[0];
+        var cutFrame = cursorSheet.Frames[8];
+        _defaultNativeCursor = CreateNativeCursor(defaultFrame);
+        _cutNativeCursor = CreateNativeCursor(cutFrame);
+        Cursor = _defaultNativeCursor;
+        CursorState = CursorState.Normal;
     }
 
-    private void DrawGameCursor()
+    private static MouseCursor CreateNativeCursor(SpriteFrame frame)
     {
-        var overTree = TryGetTreeUnderMouse(SceneMousePosition(), out _);
-        var frame = overTree ? _cutCursorFrame : _defaultCursorFrame;
-        var texture = overTree ? _cutCursorTexture : _defaultCursorTexture;
-        if (frame is null || texture == 0) return;
+        var pixels = (byte[])frame.Rgba.Clone();
+        // GLFW's Windows backend expects premultiplied RGB for translucent
+        // custom-cursor pixels.
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            var alpha = pixels[i + 3];
+            pixels[i] = (byte)(pixels[i] * alpha / 255);
+            pixels[i + 1] = (byte)(pixels[i + 1] * alpha / 255);
+            pixels[i + 2] = (byte)(pixels[i + 2] * alpha / 255);
+        }
+        return new MouseCursor(
+            Math.Clamp(frame.HotspotX, 0, frame.Width - 1),
+            Math.Clamp(frame.HotspotY, 0, frame.Height - 1),
+            frame.Width,
+            frame.Height,
+            pixels);
+    }
 
-        var mouse = SceneMousePosition();
-        var left = MathF.Round(mouse.X - frame.HotspotX);
-        var top = MathF.Round(mouse.Y - frame.HotspotY);
-        var right = left + frame.Width;
-        var bottom = top + frame.Height;
-        var leftNdc = (left - ReferenceWidth * .5f) * 2 / ReferenceWidth;
-        var rightNdc = (right - ReferenceWidth * .5f) * 2 / ReferenceWidth;
-        var topNdc = -(top - ReferenceHeight * .5f) * 2 / ReferenceHeight;
-        var bottomNdc = -(bottom - ReferenceHeight * .5f) * 2 / ReferenceHeight;
-
-        GL.UseProgram(_program);
-        GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
-        GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
-        GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), 0);
-        GL.Uniform1(GL.GetUniformLocation(_program, "wading"), 0);
-        GL.ActiveTexture(TextureUnit.Texture0);
-        GL.BindTexture(TextureTarget.Texture2D, texture);
-        Draw([
-            leftNdc, topNdc, 0, 0,
-            leftNdc, bottomNdc, 0, 1,
-            rightNdc, bottomNdc, 1, 1,
-            rightNdc, topNdc, 1, 0
-        ]);
+    private void UpdateNativeCursor()
+    {
+        if (_defaultNativeCursor is null || _cutNativeCursor is null) return;
+        var cut = !IsPointerOverGameUi(MouseState.Position) &&
+                  TryGetTreeUnderMouse(SceneMousePosition(), out _);
+        if (cut == _usingCutCursor) return;
+        _usingCutCursor = cut;
+        Cursor = cut ? _cutNativeCursor : _defaultNativeCursor;
     }
 
     private void DrawMoveMarker()
@@ -2732,7 +2961,8 @@ internal sealed class GameHostWindow : GameWindow
             "void main(){uv=u;alpha=vertexOpacity;gl_Position=vec4(p,0,1);}");
         var fs = Compile(ShaderType.FragmentShader,
             "#version 330 core\nin vec2 uv;in float alpha;out vec4 c;uniform sampler2D image;" +
-            "uniform float opacity;uniform int outlineOnly;uniform int wading;" +
+            "uniform float opacity;uniform float brightness;uniform float tintAmount;" +
+            "uniform vec3 colorTint;uniform int outlineOnly;uniform int wading;" +
             "uniform float waterlineUv;uniform vec2 texelSize;" +
             "void main(){vec4 source=texture(image,uv);" +
             "if(outlineOnly==1){float around=0.0;" +
@@ -2747,6 +2977,7 @@ internal sealed class GameHostWindow : GameWindow
             "float surface=1.0-smoothstep(waterlineUv,waterlineUv+0.035,uv.y);" +
             "c.rgb=mix(c.rgb,vec3(0.08,0.34,0.53),0.43);" +
             "c.rgb+=vec3(0.16,0.42,0.55)*surface*0.22;c.a*=0.68;}" +
+            "c.rgb*=1.0+brightness;c.rgb=mix(c.rgb,colorTint,tintAmount);" +
             "c.a*=opacity*alpha;}}");
         var program = GL.CreateProgram(); GL.AttachShader(program, vs); GL.AttachShader(program, fs); GL.LinkProgram(program);
         GL.DeleteShader(vs); GL.DeleteShader(fs);
@@ -2776,8 +3007,11 @@ internal sealed class GameHostWindow : GameWindow
         if (_moveMarkerAnimation is not null)
         foreach (var texture in _moveMarkerAnimation.Textures)
             GL.DeleteTexture(texture);
-        if (_defaultCursorTexture != 0) GL.DeleteTexture(_defaultCursorTexture);
-        if (_cutCursorTexture != 0) GL.DeleteTexture(_cutCursorTexture);
+        Cursor = MouseCursor.Default;
+        if (_uiPanelFillTexture != 0) GL.DeleteTexture(_uiPanelFillTexture);
+        if (_uiSolidTexture != 0) GL.DeleteTexture(_uiSolidTexture);
+        if (_uiTabTexture != 0) GL.DeleteTexture(_uiTabTexture);
+        if (_uiActiveTabTexture != 0) GL.DeleteTexture(_uiActiveTabTexture);
         if (_terrainArray != 0) GL.DeleteTexture(_terrainArray);
         if (_biomeWeightsA != 0) GL.DeleteTexture(_biomeWeightsA);
         if (_biomeWeightsB != 0) GL.DeleteTexture(_biomeWeightsB);
