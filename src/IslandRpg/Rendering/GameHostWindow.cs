@@ -166,8 +166,13 @@ internal sealed class GameHostWindow : GameWindow
     private WorldEntity? _player;
     private bool _gameLeftWasDown;
     private bool _gameRightWasDown;
+    private bool _inventoryRightWasDown;
+    private bool _inventoryLeftWasDown;
     private readonly GameUiControlState _gameUi = new();
     private readonly ChatUiControlState _chatUi = new();
+    private readonly ContextMenuControlState _inventoryContext = new();
+    private int _inventoryContextSlot = -1;
+    private int _activeInventorySlot = -1;
     private FontSystem? _fontSystem;
     private DynamicSpriteFont? _chatFont;
     private OpenGlFontRenderer? _fontRenderer;
@@ -192,6 +197,7 @@ internal sealed class GameHostWindow : GameWindow
         _install = install;
         _mode = mode;
         _worldSeed = worldSeed;
+        _inventoryContext.Selected += HandleInventoryContextSelection;
     }
 
     protected override void OnLoad()
@@ -969,6 +975,34 @@ internal sealed class GameHostWindow : GameWindow
         _chatUi.UpdatePointer(
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
+        _inventoryContext.UpdatePointer(
+            MouseState.Position,
+            MouseState.IsButtonDown(MouseButton.Left));
+        var leftDown = MouseState.IsButtonDown(MouseButton.Left);
+        if (leftDown && !_inventoryLeftWasDown)
+            UpdateInventorySelection(MouseState.Position);
+        _inventoryLeftWasDown = leftDown;
+        var rightDown = MouseState.IsButtonDown(MouseButton.Right);
+        if (rightDown && !_inventoryRightWasDown &&
+            _gameUi.ActivePanel == GameUiPanel.Inventory)
+        {
+            var inventory = _activePlayer?.Inventory ?? [];
+            for (var slot = 0;
+                 slot < PlayerInventory.Count(inventory);
+                 slot++)
+            {
+                if (!InventorySlotBounds(_gameUi.Panel.Bounds, slot)
+                        .Contains(MouseState.Position))
+                    continue;
+                _inventoryContextSlot = slot;
+                _inventoryContext.Open(
+                    MouseState.Position,
+                    ["Use", "Drop", "Examine"],
+                    scene);
+                break;
+            }
+        }
+        _inventoryRightWasDown = rightDown;
         if (_chatUi.Input.Focused)
         {
             if (KeyboardState.IsKeyPressed(Keys.Backspace)) _chatUi.Backspace();
@@ -979,6 +1013,7 @@ internal sealed class GameHostWindow : GameWindow
     private bool IsPointerOverGameUi(Vector2 mouse) =>
         _gameUi.BlocksWorldInput(mouse) ||
         _chatUi.BlocksWorldInput(mouse) ||
+        _inventoryContext.HitTest(mouse) ||
         _minimapUi.HitTest(mouse);
 
     private PathResult FindActionPath(
@@ -1089,6 +1124,14 @@ internal sealed class GameHostWindow : GameWindow
         if (!_worldChunks.TryGetValue(coordinate, out var gpu)) return;
         var source = gpu.Chunk.Trees.FirstOrDefault(tree => tree.X == x && tree.Y == y);
         if (source is null) return;
+        if (PlayerInventory.IsFull(_activePlayer?.Inventory))
+        {
+            _chatUi.AddMessage(
+                "Your inventory is full. You cannot begin woodcutting.",
+                ChatMessageStyle.Warning);
+            _player.Stop();
+            return;
+        }
 
         var instanceIndex = gpu.Chunk.TreeInstances.FindIndex(
             tree => tree.X == x && tree.Y == y);
@@ -1172,6 +1215,7 @@ internal sealed class GameHostWindow : GameWindow
                     : 0));
             if (state == TreeLifecycleState.Stump)
             {
+                AddWoodcuttingLog(instance.TreeType);
                 _chatUi.AddMessage(
                     $"The {TreeDisplayName(instance.TreeType)} falls.",
                     ChatMessageStyle.Action);
@@ -1236,6 +1280,42 @@ internal sealed class GameHostWindow : GameWindow
             _chatUi.AddMessage(
                 $"Your Woodcutting level is now {level}.",
                 ChatMessageStyle.LevelUp);
+    }
+
+    private void AddWoodcuttingLog(string treeType)
+    {
+        if (_activePlayer is null) return;
+        var item = TreeLogItem(treeType);
+        if (!PlayerInventory.TryAdd(
+                _activePlayer.Inventory, item.Id, out var inventory))
+        {
+            _chatUi.AddMessage(
+                "Your inventory is full. The logs were left behind.",
+                ChatMessageStyle.Warning);
+            return;
+        }
+        _activePlayer = _activePlayer with
+        {
+            Inventory = inventory,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        _saves.SavePlayer(_activePlayer);
+        _chatUi.AddMessage(
+            $"You add {item.Name} to your inventory.",
+            ChatMessageStyle.Experience);
+    }
+
+    private static (string Id, string Name) TreeLogItem(string treeType)
+    {
+        if (treeType.StartsWith("FOAK", StringComparison.OrdinalIgnoreCase))
+            return ("oak_logs", "oak logs");
+        if (treeType.StartsWith("FPIN", StringComparison.OrdinalIgnoreCase))
+            return ("pine_logs", "pine logs");
+        if (treeType.StartsWith("FPAL", StringComparison.OrdinalIgnoreCase))
+            return ("palm_logs", "palm logs");
+        if (treeType.StartsWith("FBAM", StringComparison.OrdinalIgnoreCase))
+            return ("bamboo", "bamboo");
+        return ("logs", "logs");
     }
 
     private static string TreeDisplayName(string graphicName)
@@ -2169,11 +2249,14 @@ internal sealed class GameHostWindow : GameWindow
             DrawAoEPanelBorder(_gameUi.Panel.Bounds);
         if (_gameUi.ActivePanel == GameUiPanel.Skills)
             RenderSkillsPanel();
+        else if (_gameUi.ActivePanel == GameUiPanel.Inventory)
+            RenderInventoryPanel();
 
         DrawAoEUiTile(_gameUi.SkillsButton);
         DrawAoEUiTile(_gameUi.InventoryButton);
         DrawUiButtonCaption("Skills", _gameUi.SkillsButton.Bounds);
         DrawUiButtonCaption("Bag", _gameUi.InventoryButton.Bounds);
+        RenderInventoryContextMenu();
     }
 
     private void RenderSkillsPanel()
@@ -2190,9 +2273,7 @@ internal sealed class GameHostWindow : GameWindow
             : (experience - currentFloor) /
               (float)Math.Max(1, nextFloor - currentFloor);
 
-        DrawCenteredUiText(
-            "SKILLS", new(panel.X + 8, panel.Y + 12, panel.Z - 16, 28),
-            new(232, 217, 166, 255));
+        DrawPanelCaption("Skills", panel);
         DrawUiText(
             "Woodcutting",
             new System.Numerics.Vector2(panel.X + 18, panel.Y + 58),
@@ -2226,6 +2307,221 @@ internal sealed class GameHostWindow : GameWindow
             new System.Numerics.Vector2(panel.X + 18, panel.Y + 174),
             new(190, 181, 150, 255));
     }
+
+    private void RenderInventoryPanel()
+    {
+        var panel = _gameUi.Panel.Bounds;
+        var inventory = _activePlayer?.Inventory ?? [];
+        var count = PlayerInventory.Count(inventory);
+        DrawPanelCaption("Bag", panel);
+        DrawUiText(
+            $"{count}/{PlayerInventory.Capacity}",
+            new System.Numerics.Vector2(panel.X + panel.Z - 48, panel.Y + 44),
+            count >= PlayerInventory.Capacity
+                ? new(228, 135, 108, 255)
+                : new(184, 177, 149, 255));
+
+        for (var slot = 0; slot < PlayerInventory.Capacity; slot++)
+        {
+            var bounds = InventorySlotBounds(panel, slot);
+            if (slot >= count) continue;
+            var caption = InventoryItemCaption(inventory[slot]);
+            DrawCenteredUiText(
+                caption, bounds, new(211, 198, 158, 255));
+            if (slot == _activeInventorySlot)
+            {
+                DrawPanelOutline(bounds, 0, new(.96f, .95f, .88f, 1));
+                DrawPanelOutline(bounds, 1, new(.74f, .72f, .65f, 1));
+            }
+        }
+    }
+
+    private void UpdateInventorySelection(Vector2 pointer)
+    {
+        if (_inventoryContext.Visible) return;
+        if (_gameUi.ActivePanel != GameUiPanel.Inventory)
+        {
+            _activeInventorySlot = -1;
+            return;
+        }
+
+        var inventory = _activePlayer?.Inventory ?? [];
+        var clickedSlot = -1;
+        for (var slot = 0; slot < PlayerInventory.Count(inventory); slot++)
+            if (InventorySlotBounds(_gameUi.Panel.Bounds, slot).Contains(pointer))
+            {
+                clickedSlot = slot;
+                break;
+            }
+
+        if (clickedSlot < 0)
+        {
+            _activeInventorySlot = -1;
+            return;
+        }
+        ActivateInventorySlot(clickedSlot);
+    }
+
+    private void ActivateInventorySlot(int slot)
+    {
+        var inventory = _activePlayer?.Inventory ?? [];
+        if ((uint)slot >= (uint)inventory.Length) return;
+        if (_activeInventorySlot < 0 ||
+            (uint)_activeInventorySlot >= (uint)inventory.Length)
+        {
+            _activeInventorySlot = slot;
+            return;
+        }
+
+        var source = inventory[_activeInventorySlot];
+        var target = inventory[slot];
+        _chatUi.AddMessage(
+            $"You try to use {InventoryItemName(source)} with " +
+            $"{InventoryItemName(target)}, but nothing happens.",
+            ChatMessageStyle.Action);
+        _activeInventorySlot = -1;
+    }
+
+    private static Vector4 InventorySlotBounds(Vector4 panel, int slot)
+    {
+        const float slotWidth = 45;
+        const float slotHeight = 28;
+        const float gap = 3;
+        return new(
+            panel.X + 17 + slot % 4 * (slotWidth + gap),
+            panel.Y + 63 + slot / 4 * (slotHeight + gap),
+            slotWidth,
+            slotHeight);
+    }
+
+    private void RenderInventoryContextMenu()
+    {
+        if (!_inventoryContext.Visible) return;
+        var shadow = _inventoryContext.Bounds;
+        shadow.X += 3;
+        shadow.Y += 3;
+        DrawUiColor(shadow, new(0, 0, 0, .55f));
+        DrawUiColor(
+            _inventoryContext.Bounds,
+            new(.045f, .040f, .031f, .99f));
+        DrawPanelOutline(
+            _inventoryContext.Bounds, 0, new(.018f, .016f, .013f, 1));
+        DrawPanelOutline(
+            _inventoryContext.Bounds, 1, new(.40f, .31f, .15f, 1));
+        DrawPanelOutline(
+            _inventoryContext.Bounds, 2, new(.10f, .085f, .055f, 1));
+
+        var header = new Vector4(
+            _inventoryContext.Bounds.X + 3,
+            _inventoryContext.Bounds.Y + 3,
+            _inventoryContext.Bounds.Z - 6,
+            ContextMenuControlState.HeaderHeight - 3);
+        DrawUiColor(header, new(.075f, .064f, .043f, 1));
+        DrawUiText(
+            "Choose option",
+            VerticallyCenteredTextPosition("Choose option", header, 7),
+            new(224, 209, 165, 255));
+        DrawUiColor(
+            new(header.X, header.Y + header.W - 1, header.Z, 1),
+            new(.35f, .27f, .13f, 1));
+
+        for (var index = 0; index < _inventoryContext.Items.Count; index++)
+        {
+            var bounds = _inventoryContext.ItemBounds(index);
+            if (_inventoryContext.HoveredIndex == index)
+                DrawUiColor(bounds, new(.27f, .21f, .105f, .92f));
+            DrawUiText(
+                _inventoryContext.Items[index],
+                VerticallyCenteredTextPosition(
+                    _inventoryContext.Items[index], bounds, 9),
+                index == 1
+                    ? new(224, 151, 124, 255)
+                    : new(224, 213, 175, 255));
+            if (index + 1 < _inventoryContext.Items.Count)
+                DrawUiColor(
+                    new(bounds.X + 5, bounds.Y + bounds.W - 1,
+                        bounds.Z - 10, 1),
+                    new(.12f, .10f, .065f, 1));
+        }
+    }
+
+    private void HandleInventoryContextSelection(int option)
+    {
+        if (_activePlayer is null) return;
+        var inventory = _activePlayer.Inventory ?? [];
+        var slot = _inventoryContextSlot;
+        _inventoryContextSlot = -1;
+        if ((uint)slot >= (uint)inventory.Length) return;
+        var itemId = inventory[slot];
+        var itemName = InventoryItemName(itemId);
+        if (option == 0)
+        {
+            ActivateInventorySlot(slot);
+            return;
+        }
+        if (option == 2)
+        {
+            _chatUi.AddMessage(
+                InventoryItemExamine(itemId),
+                ChatMessageStyle.Normal);
+            return;
+        }
+        if (option != 1) return;
+        var updated = inventory
+            .Where((_, index) => index != slot)
+            .Take(PlayerInventory.Capacity)
+            .ToArray();
+        _activePlayer = _activePlayer with
+        {
+            Inventory = updated,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        if (_activeInventorySlot == slot)
+            _activeInventorySlot = -1;
+        else if (_activeInventorySlot > slot)
+            _activeInventorySlot--;
+        _saves.SavePlayer(_activePlayer);
+        _chatUi.AddMessage(
+            $"You drop the {itemName}. It is destroyed.",
+            ChatMessageStyle.Warning);
+    }
+
+    private static string InventoryItemName(string itemId) => itemId switch
+    {
+        "oak_logs" => "oak logs",
+        "pine_logs" => "pine logs",
+        "palm_logs" => "palm logs",
+        "bamboo" => "bamboo",
+        _ => "logs"
+    };
+
+    private static string InventoryItemExamine(string itemId) => itemId switch
+    {
+        "oak_logs" => "Logs cut from a sturdy oak tree.",
+        "pine_logs" => "Fresh pine logs with a sharp woodland scent.",
+        "palm_logs" => "Fibrous logs cut from a palm tree.",
+        "bamboo" => "A strong, lightweight length of bamboo.",
+        _ => "Logs cut from a tree."
+    };
+
+    private void DrawPanelCaption(string caption, Vector4 panel)
+    {
+        var header = new Vector4(
+            panel.X + 8, panel.Y + 8, panel.Z - 16, 30);
+        DrawUiColor(header, new(.055f, .050f, .040f, .82f));
+        DrawPanelOutline(header, 0, new(.035f, .032f, .026f, 1));
+        DrawPanelOutline(header, 1, new(.24f, .205f, .13f, 1));
+        DrawUiButtonCaption(caption, header);
+    }
+
+    private static string InventoryItemCaption(string itemId) => itemId switch
+    {
+        "oak_logs" => "Oak",
+        "pine_logs" => "Pine",
+        "palm_logs" => "Palm",
+        "bamboo" => "Bamb",
+        _ => "Logs"
+    };
 
     private void RenderTreeHealthBars(Vector4 scene)
     {
@@ -2525,6 +2821,7 @@ internal sealed class GameHostWindow : GameWindow
                     ChatMessageStyle.Miss => new FSColor(176, 179, 169, 255),
                     ChatMessageStyle.Experience => new FSColor(145, 204, 154, 255),
                     ChatMessageStyle.LevelUp => new FSColor(238, 211, 104, 255),
+                    ChatMessageStyle.Warning => new FSColor(236, 145, 112, 255),
                     _ => new FSColor(218, 207, 166, 255)
                 };
                 DrawUiText(

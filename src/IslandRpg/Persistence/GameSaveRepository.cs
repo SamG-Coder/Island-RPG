@@ -20,7 +20,8 @@ internal sealed record PlayerProfile(
     int TeamColor,
     DateTime CreatedUtc,
     DateTime UpdatedUtc,
-    int WoodcuttingExperience = 0);
+    int WoodcuttingExperience = 0,
+    string[]? Inventory = null);
 
 internal sealed record WorldPlayerState(
     string PlayerId,

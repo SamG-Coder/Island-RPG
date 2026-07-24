@@ -27,6 +27,38 @@ Require(noviceHit.Hit && masterHit.Hit && masterHit.Damage > noviceHit.Damage,
 Require(!WoodcuttingSkill.Roll(0, .9f, 0).Hit,
     "a novice woodcutter must be able to miss");
 
+string[] inventory = [];
+for (var slot = 0; slot < PlayerInventory.Capacity; slot++)
+    Require(PlayerInventory.TryAdd(inventory, "logs", out inventory),
+        $"inventory slot {slot + 1} must accept an item");
+Require(PlayerInventory.Count(inventory) == 28 &&
+        PlayerInventory.IsFull(inventory) &&
+        !PlayerInventory.TryAdd(inventory, "logs", out var unchanged) &&
+        unchanged.Length == 28,
+    "inventory must have exactly 28 non-stacking slots");
+
+var contextMenu = new ContextMenuControlState();
+var selectedContextItem = -1;
+contextMenu.Selected += index => selectedContextItem = index;
+contextMenu.Open(
+    new(100, 100), ["Use", "Drop", "Examine"],
+    new(0, 0, 300, 240));
+Require(contextMenu.Items[^1] == "Examine" &&
+        contextMenu.ItemBounds(2).Y > contextMenu.ItemBounds(1).Y,
+    "Examine must be the final inventory context-menu action");
+var dropBounds = contextMenu.ItemBounds(1);
+var dropPoint = new Vector2(
+    dropBounds.X + dropBounds.Z / 2,
+    dropBounds.Y + dropBounds.W / 2);
+contextMenu.UpdatePointer(dropPoint, leftDown: true);
+contextMenu.UpdatePointer(dropPoint, leftDown: false);
+Require(selectedContextItem == 1 && !contextMenu.Visible,
+    "inventory context menu must select Drop and close");
+contextMenu.Open(new(100, 100), ["Use", "Drop"], new(0, 0, 300, 200));
+contextMenu.UpdatePointer(new(0, 0), leftDown: false);
+Require(!contextMenu.Visible,
+    "context menu must close when the pointer moves away");
+
 var boundedChat = new ChatUiControlState();
 boundedChat.Layout(new(0, 0, 1280, 720));
 for (var index = 0; index < 225; index++)
@@ -256,15 +288,20 @@ try
     var saves = new GameSaveRepository(Path.Combine(root, "profiles"));
     var player = saves.CreatePlayer(
         "Test Hero", EntityGender.Female, 3, 5);
-    player = player with { WoodcuttingExperience = 725 };
+    player = player with
+    {
+        WoodcuttingExperience = 725,
+        Inventory = ["logs", "oak_logs"]
+    };
     saves.SavePlayer(player);
     var world = saves.CreateWorld("Test Realm", 4321, player.Id);
     saves.SaveWorldPlayer(
         world.Id, new(player.Id, 12.5f, -8.25f, DateTime.UtcNow));
     Require(saves.ListPlayers().Single() is var loadedPlayer &&
             loadedPlayer.Id == player.Id &&
-            loadedPlayer.WoodcuttingExperience == 725,
-        "character profiles and skill experience must be stored independently");
+            loadedPlayer.WoodcuttingExperience == 725 &&
+            loadedPlayer.Inventory?.SequenceEqual(["logs", "oak_logs"]) == true,
+        "character skills and inventory must persist independently");
     Require(saves.ListWorlds().Single().Id == world.Id,
         "named world profiles must round-trip");
     var worldPlayer = saves.LoadWorldPlayer(world.Id, player.Id);

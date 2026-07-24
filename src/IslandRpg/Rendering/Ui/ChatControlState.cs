@@ -17,7 +17,8 @@ internal enum ChatMessageStyle
     Damage,
     Miss,
     Experience,
-    LevelUp
+    LevelUp,
+    Warning
 }
 
 internal sealed record ChatMessage(string Text, ChatMessageStyle Style);
