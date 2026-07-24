@@ -97,6 +97,10 @@ internal sealed class GameHostWindow : GameWindow
     private readonly Dictionary<(EntityGender Gender, EntityAction Action), EntityAnimation>
         _entityAnimations = [];
     private EntityAnimation? _moveMarkerAnimation;
+    private SpriteFrame? _defaultCursorFrame;
+    private SpriteFrame? _cutCursorFrame;
+    private int _defaultCursorTexture;
+    private int _cutCursorTexture;
     private MoveMarker? _moveMarker;
     private Task<PathResult>? _pendingPathTask;
     private CancellationTokenSource? _pathCancellation;
@@ -932,6 +936,7 @@ internal sealed class GameHostWindow : GameWindow
             DrawSprite(
                 player.Frame, player.Texture, player.World,
                 mirror: player.Mirror, outlineOnly: true, wading: player.Wading);
+        if (_mode == PreviewMode.Game) DrawGameCursor();
     }
 
     private void DrawCliffBatch()
@@ -1014,6 +1019,36 @@ internal sealed class GameHostWindow : GameWindow
                objectBounds.Right > playerBounds.Left &&
                objectBounds.Top < playerBounds.Bottom &&
                objectBounds.Bottom > playerBounds.Top;
+    }
+
+    private bool IsMouseOverTree(Vector2 mouse)
+    {
+        foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible))
+        foreach (var tree in gpu.Chunk.Trees)
+        {
+            if (!_treeAtlas.TryGetValue(tree.GraphicName, out var entry)) continue;
+            var tileX = PositiveMod(tree.X, WorldChunk.Size);
+            var tileY = PositiveMod(tree.Y, WorldChunk.Size);
+            var tile = gpu.Chunk.Tiles[tileY * WorldChunk.Size + tileX];
+            var height = (tile.North + tile.East + tile.South + tile.West) / 4f;
+            var world = new Vector2(
+                (tree.X - tree.Y) * 48,
+                (tree.X + tree.Y + 1) * 24 - height * 20);
+            var bounds = SpriteBounds(entry.Frame, world);
+            if (mouse.X < bounds.Left || mouse.X >= bounds.Right ||
+                mouse.Y < bounds.Top || mouse.Y >= bounds.Bottom)
+                continue;
+
+            var scale = Math.Max(SpritePixelScale(), .001f);
+            var x = (int)((mouse.X - bounds.Left) / scale);
+            var y = (int)((mouse.Y - bounds.Top) / scale);
+            if ((uint)x >= (uint)entry.Frame.Width ||
+                (uint)y >= (uint)entry.Frame.Height)
+                continue;
+            if (entry.Frame.Rgba[(y * entry.Frame.Width + x) * 4 + 3] > 24)
+                return true;
+        }
+        return false;
     }
 
     private (float Left, float Top, float Right, float Bottom) SpriteBounds(
@@ -1220,6 +1255,59 @@ internal sealed class GameHostWindow : GameWindow
             markerGraphic.Definition.FrameRate is > .015f and < 2f
                 ? markerGraphic.Definition.FrameRate
                 : .08f);
+        PrepareGameCursors();
+    }
+
+    private void PrepareGameCursors()
+    {
+        var path = Path.Combine(
+            _install, "resources", "_common", "drs", "interface", "51000.slp");
+        if (!File.Exists(path))
+            throw new FileNotFoundException(
+                "The installed interface assets do not contain the AoE cursor sheet.", path);
+        var palette = JascPalette.Load(Age2PaletteResolver.Resolve(_install, path).Path);
+        var cursorSheet = SlpDecoder.Decode(path, palette);
+        if (cursorSheet.Frames.Count <= 8)
+            throw new InvalidDataException(
+                "The installed AoE cursor sheet does not contain the tree-cut cursor.");
+
+        _defaultCursorFrame = cursorSheet.Frames[0];
+        _cutCursorFrame = cursorSheet.Frames[8];
+        _defaultCursorTexture = Upload(_defaultCursorFrame);
+        _cutCursorTexture = Upload(_cutCursorFrame);
+        CursorState = CursorState.Hidden;
+    }
+
+    private void DrawGameCursor()
+    {
+        var overTree = IsMouseOverTree(SceneMousePosition());
+        var frame = overTree ? _cutCursorFrame : _defaultCursorFrame;
+        var texture = overTree ? _cutCursorTexture : _defaultCursorTexture;
+        if (frame is null || texture == 0) return;
+
+        var mouse = SceneMousePosition();
+        var left = MathF.Round(mouse.X - frame.HotspotX);
+        var top = MathF.Round(mouse.Y - frame.HotspotY);
+        var right = left + frame.Width;
+        var bottom = top + frame.Height;
+        var leftNdc = (left - ReferenceWidth * .5f) * 2 / ReferenceWidth;
+        var rightNdc = (right - ReferenceWidth * .5f) * 2 / ReferenceWidth;
+        var topNdc = -(top - ReferenceHeight * .5f) * 2 / ReferenceHeight;
+        var bottomNdc = -(bottom - ReferenceHeight * .5f) * 2 / ReferenceHeight;
+
+        GL.UseProgram(_program);
+        GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
+        GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
+        GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), 0);
+        GL.Uniform1(GL.GetUniformLocation(_program, "wading"), 0);
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, texture);
+        Draw([
+            leftNdc, topNdc, 0, 0,
+            leftNdc, bottomNdc, 0, 1,
+            rightNdc, bottomNdc, 1, 1,
+            rightNdc, topNdc, 1, 0
+        ]);
     }
 
     private void DrawMoveMarker()
@@ -2338,6 +2426,8 @@ internal sealed class GameHostWindow : GameWindow
         if (_moveMarkerAnimation is not null)
         foreach (var texture in _moveMarkerAnimation.Textures)
             GL.DeleteTexture(texture);
+        if (_defaultCursorTexture != 0) GL.DeleteTexture(_defaultCursorTexture);
+        if (_cutCursorTexture != 0) GL.DeleteTexture(_cutCursorTexture);
         if (_terrainArray != 0) GL.DeleteTexture(_terrainArray);
         if (_biomeWeightsA != 0) GL.DeleteTexture(_biomeWeightsA);
         if (_biomeWeightsB != 0) GL.DeleteTexture(_biomeWeightsB);
