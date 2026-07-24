@@ -21,7 +21,7 @@ internal sealed record PlayerProfile(
     DateTime CreatedUtc,
     DateTime UpdatedUtc,
     int WoodcuttingExperience = 0,
-    string[]? Inventory = null);
+    string?[]? Inventory = null);
 
 internal sealed record WorldPlayerState(
     string PlayerId,
@@ -90,7 +90,8 @@ internal sealed class GameSaveRepository
             id, CleanName(name, "Adventurer"), gender,
             Math.Clamp(skinTone, 0, 4),
             Math.Clamp(teamColor, 0, 7),
-            now, now);
+            now, now,
+            Inventory: PlayerInventory.CreateStartingInventory());
         SavePlayer(profile);
         return profile;
     }

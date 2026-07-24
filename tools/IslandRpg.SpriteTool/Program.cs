@@ -1,0 +1,232 @@
+using System.Globalization;
+using System.IO;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+
+return SpriteSheetTool.Run(args);
+
+internal static class SpriteSheetTool
+{
+    public static int Run(string[] args)
+    {
+        try
+        {
+            var options = Options.Parse(args);
+            Process(options);
+            Console.WriteLine(
+                $"Created {options.OutputPath} ({options.Columns * options.CellSize}x" +
+                $"{options.Rows * options.CellSize}, {options.Columns * options.Rows} " +
+                $"{options.CellSize}x{options.CellSize} cells).");
+            return 0;
+        }
+        catch (ArgumentException exception)
+        {
+            Console.Error.WriteLine(exception.Message);
+            Console.Error.WriteLine();
+            Options.PrintUsage();
+            return 2;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"Sprite-sheet processing failed: {exception.Message}");
+            return 1;
+        }
+    }
+
+    private static void Process(Options options)
+    {
+        var source = LoadBgra32(options.InputPath);
+        var sourcePixels = new byte[source.PixelWidth * source.PixelHeight * 4];
+        source.CopyPixels(
+            sourcePixels, source.PixelWidth * 4, 0);
+
+        var crop = CalculateCenteredCrop(
+            source.PixelWidth, source.PixelHeight,
+            options.Columns, options.Rows);
+        var outputWidth = options.Columns * options.CellSize;
+        var outputHeight = options.Rows * options.CellSize;
+        var outputPixels = new byte[outputWidth * outputHeight * 4];
+
+        for (var y = 0; y < outputHeight; y++)
+        {
+            var sourceY = crop.Y + y * crop.Height / outputHeight;
+            for (var x = 0; x < outputWidth; x++)
+            {
+                var sourceX = crop.X + x * crop.Width / outputWidth;
+                var sourceOffset =
+                    (sourceY * source.PixelWidth + sourceX) * 4;
+                var outputOffset = (y * outputWidth + x) * 4;
+                var blue = sourcePixels[sourceOffset];
+                var green = sourcePixels[sourceOffset + 1];
+                var red = sourcePixels[sourceOffset + 2];
+                var alpha = sourcePixels[sourceOffset + 3];
+
+                if (IsChroma(
+                        red, green, blue, options.Chroma,
+                        options.ChromaTolerance))
+                {
+                    outputPixels[outputOffset] = 0;
+                    outputPixels[outputOffset + 1] = 0;
+                    outputPixels[outputOffset + 2] = 0;
+                    outputPixels[outputOffset + 3] = 0;
+                    continue;
+                }
+
+                outputPixels[outputOffset] = blue;
+                outputPixels[outputOffset + 1] = green;
+                outputPixels[outputOffset + 2] = red;
+                outputPixels[outputOffset + 3] = alpha;
+            }
+        }
+
+        var outputDirectory = Path.GetDirectoryName(options.OutputPath);
+        if (!string.IsNullOrWhiteSpace(outputDirectory))
+            Directory.CreateDirectory(outputDirectory);
+
+        var bitmap = BitmapSource.Create(
+            outputWidth, outputHeight, 96, 96, PixelFormats.Bgra32,
+            null, outputPixels, outputWidth * 4);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var output = File.Create(options.OutputPath);
+        encoder.Save(output);
+    }
+
+    private static BitmapSource LoadBgra32(string path)
+    {
+        if (!File.Exists(path))
+            throw new ArgumentException($"Input image does not exist: {path}");
+
+        using var stream = File.OpenRead(path);
+        var decoder = BitmapDecoder.Create(
+            stream, BitmapCreateOptions.PreservePixelFormat,
+            BitmapCacheOption.OnLoad);
+        var frame = decoder.Frames[0];
+        if (frame.Format == PixelFormats.Bgra32)
+            return frame;
+        return new FormatConvertedBitmap(
+            frame, PixelFormats.Bgra32, null, 0);
+    }
+
+    private static CropRectangle CalculateCenteredCrop(
+        int width, int height, int columns, int rows)
+    {
+        var targetAspect = (double)columns / rows;
+        var sourceAspect = (double)width / height;
+        if (sourceAspect > targetAspect)
+        {
+            var cropWidth = Math.Max(1, (int)Math.Round(height * targetAspect));
+            return new((width - cropWidth) / 2, 0, cropWidth, height);
+        }
+
+        var cropHeight = Math.Max(1, (int)Math.Round(width / targetAspect));
+        return new(0, (height - cropHeight) / 2, width, cropHeight);
+    }
+
+    private static bool IsChroma(
+        byte red, byte green, byte blue, Rgb chroma, int tolerance) =>
+        Math.Abs(red - chroma.Red) <= tolerance &&
+        Math.Abs(green - chroma.Green) <= tolerance &&
+        Math.Abs(blue - chroma.Blue) <= tolerance;
+
+    private readonly record struct CropRectangle(
+        int X, int Y, int Width, int Height);
+
+    private readonly record struct Rgb(byte Red, byte Green, byte Blue)
+    {
+        public static Rgb Parse(string value)
+        {
+            var hex = value.Trim().TrimStart('#');
+            if (hex.Length != 6 ||
+                !int.TryParse(
+                    hex, NumberStyles.HexNumber,
+                    CultureInfo.InvariantCulture, out var packed))
+                throw new ArgumentException(
+                    $"Invalid chroma colour '{value}'. Use six-digit RGB hex, e.g. #FF00FF.");
+            return new(
+                (byte)(packed >> 16),
+                (byte)(packed >> 8),
+                (byte)packed);
+        }
+    }
+
+    private sealed record Options(
+        string InputPath,
+        string OutputPath,
+        int Columns,
+        int Rows,
+        int CellSize,
+        Rgb Chroma,
+        int ChromaTolerance)
+    {
+        public static Options Parse(string[] args)
+        {
+            if (args.Length < 2 || args.Contains("--help"))
+                throw new ArgumentException(
+                    args.Contains("--help") ? "Sprite-sheet image processor." :
+                    "Input and output paths are required.");
+
+            var columns = 4;
+            var rows = 2;
+            var cellSize = 32;
+            var chroma = new Rgb(255, 0, 255);
+            var tolerance = 32;
+
+            for (var index = 2; index < args.Length; index++)
+            {
+                var option = args[index];
+                if (index + 1 >= args.Length)
+                    throw new ArgumentException($"Missing value for {option}.");
+                var value = args[++index];
+                switch (option)
+                {
+                    case "--columns":
+                        columns = PositiveInteger(option, value);
+                        break;
+                    case "--rows":
+                        rows = PositiveInteger(option, value);
+                        break;
+                    case "--cell-size":
+                        cellSize = PositiveInteger(option, value);
+                        break;
+                    case "--chroma":
+                        chroma = Rgb.Parse(value);
+                        break;
+                    case "--tolerance":
+                        if (!int.TryParse(value, out tolerance) ||
+                            tolerance is < 0 or > 255)
+                            throw new ArgumentException(
+                                "--tolerance must be between 0 and 255.");
+                        break;
+                    default:
+                        throw new ArgumentException($"Unknown option: {option}");
+                }
+            }
+
+            return new(
+                Path.GetFullPath(args[0]),
+                Path.GetFullPath(args[1]),
+                columns, rows, cellSize, chroma, tolerance);
+        }
+
+        private static int PositiveInteger(string option, string value)
+        {
+            if (!int.TryParse(value, out var result) || result <= 0)
+                throw new ArgumentException(
+                    $"{option} must be a positive whole number.");
+            return result;
+        }
+
+        public static void PrintUsage()
+        {
+            Console.Error.WriteLine(
+                "Usage: dotnet run --project tools/IslandRpg.SpriteTool -- " +
+                "<input> <output> [options]");
+            Console.Error.WriteLine("  --columns <n>      Sheet columns (default: 4)");
+            Console.Error.WriteLine("  --rows <n>         Sheet rows (default: 2)");
+            Console.Error.WriteLine("  --cell-size <px>   Square cell size (default: 32)");
+            Console.Error.WriteLine("  --chroma <#RRGGBB> Transparent colour (default: #FF00FF)");
+            Console.Error.WriteLine("  --tolerance <0-255> Chroma tolerance (default: 32)");
+        }
+    }
+}

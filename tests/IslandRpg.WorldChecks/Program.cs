@@ -27,7 +27,39 @@ Require(noviceHit.Hit && masterHit.Hit && masterHit.Damage > noviceHit.Damage,
 Require(!WoodcuttingSkill.Roll(0, .9f, 0).Hit,
     "a novice woodcutter must be able to miss");
 
-string[] inventory = [];
+var startingInventory = PlayerInventory.CreateStartingInventory();
+Require(startingInventory.Length == PlayerInventory.Capacity &&
+        startingInventory[0] == PlayerInventory.AxeItemId &&
+        PlayerInventory.Count(startingInventory) == 1 &&
+        PlayerInventory.HasAxe(startingInventory),
+    "a new character must start with an axe in a fixed 28-slot inventory");
+Require(!PlayerInventory.CanDrop(PlayerInventory.AxeItemId) &&
+        PlayerInventory.CanDrop("logs"),
+    "the starter axe must be protected while ordinary items remain droppable");
+Require(PlayerInventory.TrySwap(
+            ["axe", "logs", "oak_logs"], 0, 2,
+            out var swappedInventory) &&
+        swappedInventory[0] == "oak_logs" &&
+        swappedInventory[1] == "logs" &&
+        swappedInventory[2] == "axe",
+    "dragging between occupied inventory slots must swap their items");
+Require(PlayerInventory.TrySwap(
+            swappedInventory, 0, 5, out var movedToEmptySlot) &&
+        movedToEmptySlot[0] is null &&
+        movedToEmptySlot[5] == "oak_logs",
+    "inventory items must move into empty fixed slots without compacting");
+var gameUi = new GameUiControlState();
+gameUi.Layout(new(0, 0, 1280, 720));
+var inventoryGridBottom =
+    GameUiControlState.InventoryGridTop +
+    GameUiControlState.InventoryRows *
+    GameUiControlState.InventorySlotSize +
+    (GameUiControlState.InventoryRows - 1) *
+    GameUiControlState.InventoryRowGap;
+Require(gameUi.Panel.Bounds.W > inventoryGridBottom,
+    "the inventory panel must include padding beneath all seven grid rows");
+
+string?[] inventory = [];
 for (var slot = 0; slot < PlayerInventory.Capacity; slot++)
     Require(PlayerInventory.TryAdd(inventory, "logs", out inventory),
         $"inventory slot {slot + 1} must accept an item");
@@ -291,7 +323,7 @@ try
     player = player with
     {
         WoodcuttingExperience = 725,
-        Inventory = ["logs", "oak_logs"]
+        Inventory = PlayerInventory.Normalize(["logs", "oak_logs"])
     };
     saves.SavePlayer(player);
     var world = saves.CreateWorld("Test Realm", 4321, player.Id);
@@ -300,7 +332,10 @@ try
     Require(saves.ListPlayers().Single() is var loadedPlayer &&
             loadedPlayer.Id == player.Id &&
             loadedPlayer.WoodcuttingExperience == 725 &&
-            loadedPlayer.Inventory?.SequenceEqual(["logs", "oak_logs"]) == true,
+            loadedPlayer.Inventory?.Length == PlayerInventory.Capacity &&
+            loadedPlayer.Inventory[0] == "logs" &&
+            loadedPlayer.Inventory[1] == "oak_logs" &&
+            PlayerInventory.Count(loadedPlayer.Inventory) == 2,
         "character skills and inventory must persist independently");
     Require(saves.ListWorlds().Single().Id == world.Id,
         "named world profiles must round-trip");

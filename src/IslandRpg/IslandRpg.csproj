@@ -13,5 +13,6 @@
   <ItemGroup>
     <Content Include="Resources\Fonts\Arimo-Variable.ttf" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Fonts\OFL-Arimo.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\woodcutting-items.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

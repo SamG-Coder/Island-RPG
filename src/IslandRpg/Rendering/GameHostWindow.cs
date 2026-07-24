@@ -11,6 +11,7 @@ using OpenTK.Windowing.GraphicsLibraryFramework;
 using IslandRpg.Gameplay;
 using IslandRpg.World;
 using IslandRpg.Rendering.Ui;
+using StbImageSharp;
 
 namespace IslandRpg.Rendering;
 
@@ -141,6 +142,9 @@ internal sealed class GameHostWindow : GameWindow
     private SpriteFrame? _uiTabFrame;
     private int _uiTabTexture;
     private int _uiActiveTabTexture;
+    private int _woodcuttingItemsTexture;
+    private static readonly SpriteFrame WoodcuttingItemsFrame =
+        new(128, 64, 0, 0, []);
     private readonly MinimapControlState _minimapUi = new();
     private SpriteFrame? _minimapFrame;
     private int _minimapTexture;
@@ -173,6 +177,9 @@ internal sealed class GameHostWindow : GameWindow
     private readonly ContextMenuControlState _inventoryContext = new();
     private int _inventoryContextSlot = -1;
     private int _activeInventorySlot = -1;
+    private int _inventoryPressedSlot = -1;
+    private int _inventoryDraggingSlot = -1;
+    private Vector2 _inventoryPressPosition;
     private FontSystem? _fontSystem;
     private DynamicSpriteFont? _chatFont;
     private OpenGlFontRenderer? _fontRenderer;
@@ -686,6 +693,29 @@ internal sealed class GameHostWindow : GameWindow
         var spawn = FindPlayableSpawn();
         player ??= _saves.CreatePlayer(
             "Adventurer", EntityGender.Male, 2, 0);
+        var normalizedInventory = PlayerInventory.Normalize(player.Inventory);
+        var inventoryMigrated =
+            player.Inventory is null ||
+            !normalizedInventory.SequenceEqual(player.Inventory);
+        if (!PlayerInventory.HasAxe(normalizedInventory) &&
+            PlayerInventory.TryAdd(
+                normalizedInventory, PlayerInventory.AxeItemId,
+                out var migratedInventory))
+        {
+            normalizedInventory = migratedInventory;
+            inventoryMigrated = true;
+        }
+        if (inventoryMigrated)
+        {
+            player = player with
+            {
+                Inventory = normalizedInventory,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            _saves.SavePlayer(player);
+            if (_selectedPlayer?.Id == player.Id)
+                _selectedPlayer = player;
+        }
         var worldPlayer = _saves.LoadWorldPlayer(world.Id, player.Id)
             ?? new WorldPlayerState(
                 player.Id, spawn.X, spawn.Y, DateTime.UtcNow);
@@ -979,18 +1009,18 @@ internal sealed class GameHostWindow : GameWindow
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
-        if (leftDown && !_inventoryLeftWasDown)
-            UpdateInventorySelection(MouseState.Position);
+        UpdateInventoryDrag(MouseState.Position, leftDown);
         _inventoryLeftWasDown = leftDown;
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
         if (rightDown && !_inventoryRightWasDown &&
             _gameUi.ActivePanel == GameUiPanel.Inventory)
         {
             var inventory = _activePlayer?.Inventory ?? [];
-            for (var slot = 0;
-                 slot < PlayerInventory.Count(inventory);
-                 slot++)
+            for (var slot = 0; slot < PlayerInventory.Capacity; slot++)
             {
+                if (slot >= inventory.Length ||
+                    inventory[slot] is null)
+                    continue;
                 if (!InventorySlotBounds(_gameUi.Panel.Bounds, slot)
                         .Contains(MouseState.Position))
                     continue;
@@ -1014,6 +1044,7 @@ internal sealed class GameHostWindow : GameWindow
         _gameUi.BlocksWorldInput(mouse) ||
         _chatUi.BlocksWorldInput(mouse) ||
         _inventoryContext.HitTest(mouse) ||
+        _inventoryDraggingSlot >= 0 ||
         _minimapUi.HitTest(mouse);
 
     private PathResult FindActionPath(
@@ -1124,6 +1155,14 @@ internal sealed class GameHostWindow : GameWindow
         if (!_worldChunks.TryGetValue(coordinate, out var gpu)) return;
         var source = gpu.Chunk.Trees.FirstOrDefault(tree => tree.X == x && tree.Y == y);
         if (source is null) return;
+        if (!PlayerInventory.HasAxe(_activePlayer?.Inventory))
+        {
+            _chatUi.AddMessage(
+                "You need an axe to chop down this tree.",
+                ChatMessageStyle.Warning);
+            _player.Stop();
+            return;
+        }
         if (PlayerInventory.IsFull(_activePlayer?.Inventory))
         {
             _chatUi.AddMessage(
@@ -2316,7 +2355,7 @@ internal sealed class GameHostWindow : GameWindow
         DrawPanelCaption("Bag", panel);
         DrawUiText(
             $"{count}/{PlayerInventory.Capacity}",
-            new System.Numerics.Vector2(panel.X + panel.Z - 48, panel.Y + 44),
+            new System.Numerics.Vector2(panel.X + panel.Z - 48, panel.Y + 13),
             count >= PlayerInventory.Capacity
                 ? new(228, 135, 108, 255)
                 : new(184, 177, 149, 255));
@@ -2324,57 +2363,160 @@ internal sealed class GameHostWindow : GameWindow
         for (var slot = 0; slot < PlayerInventory.Capacity; slot++)
         {
             var bounds = InventorySlotBounds(panel, slot);
-            if (slot >= count) continue;
-            var caption = InventoryItemCaption(inventory[slot]);
-            DrawCenteredUiText(
-                caption, bounds, new(211, 198, 158, 255));
-            if (slot == _activeInventorySlot)
+            if (slot >= inventory.Length ||
+                inventory[slot] is not { } itemId ||
+                slot == _inventoryDraggingSlot)
+                continue;
+            var itemUv = InventoryItemUv(itemId);
+            var hasSprite =
+                _woodcuttingItemsTexture != 0 && itemUv is not null;
+            if (hasSprite)
+                DrawUiSprite(
+                    WoodcuttingItemsFrame,
+                    _woodcuttingItemsTexture,
+                    bounds,
+                    uvRectangle: itemUv,
+                    spriteOutline: slot == _activeInventorySlot
+                        ? Vector3.One
+                        : Vector3.Zero);
+            else
+                DrawCenteredUiText(
+                    InventoryItemCaption(itemId),
+                    bounds, new(211, 198, 158, 255));
+            if (slot == _activeInventorySlot && !hasSprite)
             {
                 DrawPanelOutline(bounds, 0, new(.96f, .95f, .88f, 1));
                 DrawPanelOutline(bounds, 1, new(.74f, .72f, .65f, 1));
             }
         }
+
+        if ((uint)_inventoryDraggingSlot < (uint)inventory.Length &&
+            inventory[_inventoryDraggingSlot] is { } draggedItemId)
+        {
+            var itemUv = InventoryItemUv(draggedItemId);
+            var dragBounds = new Vector4(
+                MouseState.Position.X - 16,
+                MouseState.Position.Y - 16, 32, 32);
+            if (_woodcuttingItemsTexture != 0 && itemUv is not null)
+                DrawUiSprite(
+                    WoodcuttingItemsFrame,
+                    _woodcuttingItemsTexture,
+                    dragBounds,
+                    uvRectangle: itemUv,
+                    drawOpacity: .62f,
+                    spriteOutline:
+                    _inventoryDraggingSlot == _activeInventorySlot
+                        ? Vector3.One
+                        : Vector3.Zero);
+            else
+            {
+                DrawCenteredUiText(
+                    InventoryItemCaption(draggedItemId), dragBounds,
+                    new(211, 198, 158, 180));
+                DrawPanelOutline(
+                    dragBounds, 0, new(.96f, .95f, .88f, .7f));
+            }
+        }
     }
 
-    private void UpdateInventorySelection(Vector2 pointer)
+    private void UpdateInventoryDrag(Vector2 pointer, bool leftDown)
     {
-        if (_inventoryContext.Visible) return;
         if (_gameUi.ActivePanel != GameUiPanel.Inventory)
         {
-            _activeInventorySlot = -1;
+            _inventoryPressedSlot = -1;
+            _inventoryDraggingSlot = -1;
             return;
         }
 
-        var inventory = _activePlayer?.Inventory ?? [];
-        var clickedSlot = -1;
-        for (var slot = 0; slot < PlayerInventory.Count(inventory); slot++)
-            if (InventorySlotBounds(_gameUi.Panel.Bounds, slot).Contains(pointer))
-            {
-                clickedSlot = slot;
-                break;
-            }
-
-        if (clickedSlot < 0)
+        if (leftDown && !_inventoryLeftWasDown)
         {
-            _activeInventorySlot = -1;
+            if (_inventoryContext.Visible) return;
+            _inventoryPressedSlot = InventorySlotAt(
+                pointer, includeEmpty: false);
+            _inventoryPressPosition = pointer;
             return;
         }
-        ActivateInventorySlot(clickedSlot);
+
+        if (leftDown)
+        {
+            if (_inventoryPressedSlot >= 0 &&
+                _inventoryDraggingSlot < 0 &&
+                (pointer - _inventoryPressPosition).LengthSquared >= 16)
+                _inventoryDraggingSlot = _inventoryPressedSlot;
+            return;
+        }
+
+        if (_inventoryLeftWasDown)
+        {
+            if (_inventoryDraggingSlot >= 0)
+            {
+                var target = InventorySlotAt(pointer, includeEmpty: true);
+                SwapInventorySlots(_inventoryDraggingSlot, target);
+            }
+            else if (_inventoryPressedSlot >= 0 &&
+                     InventorySlotAt(pointer, includeEmpty: false) ==
+                     _inventoryPressedSlot)
+                ActivateInventorySlot(_inventoryPressedSlot);
+            else if (_inventoryPressedSlot < 0 &&
+                     _gameUi.Panel.Bounds.Contains(pointer))
+                _activeInventorySlot = -1;
+        }
+
+        _inventoryPressedSlot = -1;
+        _inventoryDraggingSlot = -1;
+    }
+
+    private int InventorySlotAt(Vector2 pointer, bool includeEmpty)
+    {
+        var inventory = _activePlayer?.Inventory ?? [];
+        for (var slot = 0; slot < PlayerInventory.Capacity; slot++)
+        {
+            if (!includeEmpty &&
+                (slot >= inventory.Length || inventory[slot] is null))
+                continue;
+            if (InventorySlotBounds(_gameUi.Panel.Bounds, slot)
+                    .Contains(pointer))
+                return slot;
+        }
+        return -1;
+    }
+
+    private void SwapInventorySlots(int source, int target)
+    {
+        if (_activePlayer is null || source == target || target < 0)
+            return;
+        if (!PlayerInventory.TrySwap(
+                _activePlayer.Inventory, source, target,
+                out var inventory))
+            return;
+        _activePlayer = _activePlayer with
+        {
+            Inventory = inventory,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        if (_activeInventorySlot == source)
+            _activeInventorySlot = target;
+        else if (_activeInventorySlot == target)
+            _activeInventorySlot = source;
+        _saves.SavePlayer(_activePlayer);
     }
 
     private void ActivateInventorySlot(int slot)
     {
         var inventory = _activePlayer?.Inventory ?? [];
-        if ((uint)slot >= (uint)inventory.Length) return;
+        if ((uint)slot >= (uint)inventory.Length ||
+            inventory[slot] is null)
+            return;
         if (_activeInventorySlot < 0 ||
-            (uint)_activeInventorySlot >= (uint)inventory.Length)
+            (uint)_activeInventorySlot >= (uint)inventory.Length ||
+            inventory[_activeInventorySlot] is null)
         {
             _activeInventorySlot = slot;
             return;
         }
 
-        var source = inventory[_activeInventorySlot];
-        var target = inventory[slot];
+        var source = inventory[_activeInventorySlot]!;
+        var target = inventory[slot]!;
         _chatUi.AddMessage(
             $"You try to use {InventoryItemName(source)} with " +
             $"{InventoryItemName(target)}, but nothing happens.",
@@ -2384,14 +2526,23 @@ internal sealed class GameHostWindow : GameWindow
 
     private static Vector4 InventorySlotBounds(Vector4 panel, int slot)
     {
-        const float slotWidth = 45;
-        const float slotHeight = 28;
-        const float gap = 3;
+        var gridWidth =
+            GameUiControlState.InventorySlotSize *
+            GameUiControlState.InventoryColumns +
+            GameUiControlState.InventoryColumnGap *
+            (GameUiControlState.InventoryColumns - 1);
+        var left = MathF.Round((panel.Z - gridWidth) / 2);
         return new(
-            panel.X + 17 + slot % 4 * (slotWidth + gap),
-            panel.Y + 63 + slot / 4 * (slotHeight + gap),
-            slotWidth,
-            slotHeight);
+            panel.X + left +
+            slot % GameUiControlState.InventoryColumns *
+            (GameUiControlState.InventorySlotSize +
+             GameUiControlState.InventoryColumnGap),
+            panel.Y + GameUiControlState.InventoryGridTop +
+            slot / GameUiControlState.InventoryColumns *
+            (GameUiControlState.InventorySlotSize +
+             GameUiControlState.InventoryRowGap),
+            GameUiControlState.InventorySlotSize,
+            GameUiControlState.InventorySlotSize);
     }
 
     private void RenderInventoryContextMenu()
@@ -2451,8 +2602,9 @@ internal sealed class GameHostWindow : GameWindow
         var inventory = _activePlayer.Inventory ?? [];
         var slot = _inventoryContextSlot;
         _inventoryContextSlot = -1;
-        if ((uint)slot >= (uint)inventory.Length) return;
-        var itemId = inventory[slot];
+        if ((uint)slot >= (uint)inventory.Length ||
+            inventory[slot] is not { } itemId)
+            return;
         var itemName = InventoryItemName(itemId);
         if (option == 0)
         {
@@ -2467,10 +2619,15 @@ internal sealed class GameHostWindow : GameWindow
             return;
         }
         if (option != 1) return;
-        var updated = inventory
-            .Where((_, index) => index != slot)
-            .Take(PlayerInventory.Capacity)
-            .ToArray();
+        if (!PlayerInventory.CanDrop(itemId))
+        {
+            _chatUi.AddMessage(
+                "I shouldn't get rid of that. I need it for woodcutting.",
+                ChatMessageStyle.Warning);
+            return;
+        }
+        if (!PlayerInventory.TryRemove(inventory, slot, out var updated))
+            return;
         _activePlayer = _activePlayer with
         {
             Inventory = updated,
@@ -2478,8 +2635,6 @@ internal sealed class GameHostWindow : GameWindow
         };
         if (_activeInventorySlot == slot)
             _activeInventorySlot = -1;
-        else if (_activeInventorySlot > slot)
-            _activeInventorySlot--;
         _saves.SavePlayer(_activePlayer);
         _chatUi.AddMessage(
             $"You drop the {itemName}. It is destroyed.",
@@ -2488,6 +2643,7 @@ internal sealed class GameHostWindow : GameWindow
 
     private static string InventoryItemName(string itemId) => itemId switch
     {
+        PlayerInventory.AxeItemId => "axe",
         "oak_logs" => "oak logs",
         "pine_logs" => "pine logs",
         "palm_logs" => "palm logs",
@@ -2497,6 +2653,7 @@ internal sealed class GameHostWindow : GameWindow
 
     private static string InventoryItemExamine(string itemId) => itemId switch
     {
+        PlayerInventory.AxeItemId => "A sturdy axe for chopping down trees.",
         "oak_logs" => "Logs cut from a sturdy oak tree.",
         "pine_logs" => "Fresh pine logs with a sharp woodland scent.",
         "palm_logs" => "Fibrous logs cut from a palm tree.",
@@ -2516,12 +2673,30 @@ internal sealed class GameHostWindow : GameWindow
 
     private static string InventoryItemCaption(string itemId) => itemId switch
     {
+        PlayerInventory.AxeItemId => "Axe",
         "oak_logs" => "Oak",
         "pine_logs" => "Pine",
         "palm_logs" => "Palm",
         "bamboo" => "Bamb",
         _ => "Logs"
     };
+
+    private static Vector4? InventoryItemUv(string itemId)
+    {
+        var cell = itemId switch
+        {
+            "logs" => 0,
+            "oak_logs" => 1,
+            "pine_logs" => 2,
+            "palm_logs" => 3,
+            "bamboo" => 4,
+            PlayerInventory.AxeItemId => 5,
+            _ => -1
+        };
+        return cell < 0
+            ? null
+            : new Vector4((cell % 4) * .25f, (cell / 4) * .5f, .25f, .5f);
+    }
 
     private void RenderTreeHealthBars(Vector4 scene)
     {
@@ -2980,7 +3155,8 @@ internal sealed class GameHostWindow : GameWindow
         Vector3? tint = null,
         float tintAmount = 0,
         float drawOpacity = 1,
-        int teamColor = 0)
+        int teamColor = 0,
+        Vector3? spriteOutline = null)
     {
         var viewportWidth = Math.Max(1, ClientSize.X);
         var viewportHeight = Math.Max(1, ClientSize.Y);
@@ -2993,10 +3169,18 @@ internal sealed class GameHostWindow : GameWindow
         GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), drawOpacity);
         GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "wading"), 0);
+        GL.Uniform1(
+            GL.GetUniformLocation(_program, "spriteOutline"),
+            spriteOutline is null ? 0 : 1);
+        GL.Uniform3(
+            GL.GetUniformLocation(_program, "spriteOutlineColor"),
+            spriteOutline ?? Vector3.Zero);
         GL.Uniform1(GL.GetUniformLocation(_program, "brightness"), brightness);
         var tintColor = tint ?? Vector3.Zero;
         GL.Uniform3(GL.GetUniformLocation(_program, "colorTint"), tintColor);
         GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), tintAmount);
+        GL.Uniform2(GL.GetUniformLocation(_program, "texelSize"),
+            1f / frame.Width, 1f / frame.Height);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, texture);
         SetPlayerRecolor(teamColor);
@@ -3013,6 +3197,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), 0f);
         GL.Uniform1(GL.GetUniformLocation(_program, "recolorPlayer"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
+        GL.Uniform1(GL.GetUniformLocation(_program, "spriteOutline"), 0);
     }
 
     private void RenderAtlas()
@@ -3581,6 +3766,17 @@ internal sealed class GameHostWindow : GameWindow
         _newWorldPreviewFrame = new SpriteFrame(
             192, 120, 0, 0, new byte[192 * 120 * 4]);
         _newWorldPreviewTexture = Upload(_newWorldPreviewFrame);
+        var itemSheetPath = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Images",
+            "woodcutting-items.png");
+        if (File.Exists(itemSheetPath))
+        {
+            using var itemSheetStream = File.OpenRead(itemSheetPath);
+            var itemSheet = ImageResult.FromStream(
+                itemSheetStream, ColorComponents.RedGreenBlueAlpha);
+            _woodcuttingItemsTexture = Upload(
+                itemSheet.Width, itemSheet.Height, itemSheet.Data);
+        }
         GL.BindTexture(TextureTarget.Texture2D, _minimapTexture);
         GL.TexParameter(
             TextureTarget.Texture2D,
@@ -4847,6 +5043,7 @@ internal sealed class GameHostWindow : GameWindow
             "uniform int recolorPlayer;uniform vec3 playerColor;" +
             "uniform float opacity;uniform float brightness;uniform float tintAmount;" +
             "uniform vec3 colorTint;uniform int outlineOnly;uniform int wading;" +
+            "uniform int spriteOutline;uniform vec3 spriteOutlineColor;" +
             "uniform float waterlineUv;uniform vec2 texelSize;" +
             "void main(){vec4 source=texture(image,uv);" +
             "if(outlineOnly==1){float around=0.0;" +
@@ -4857,6 +5054,16 @@ internal sealed class GameHostWindow : GameWindow
             "float ring=around*(1.0-source.a);if(ring<0.05)discard;" +
             "c=vec4(1.0,0.82,0.18,ring*opacity*alpha);}" +
             "else{c=source;" +
+            "if(spriteOutline==1&&source.a<0.05){float around=0.0;" +
+            "around=max(around,texture(image,uv+vec2(texelSize.x,0)).a);" +
+            "around=max(around,texture(image,uv-vec2(texelSize.x,0)).a);" +
+            "around=max(around,texture(image,uv+vec2(0,texelSize.y)).a);" +
+            "around=max(around,texture(image,uv-vec2(0,texelSize.y)).a);" +
+            "around=max(around,texture(image,uv+texelSize).a);" +
+            "around=max(around,texture(image,uv-texelSize).a);" +
+            "around=max(around,texture(image,uv+vec2(texelSize.x,-texelSize.y)).a);" +
+            "around=max(around,texture(image,uv+vec2(-texelSize.x,texelSize.y)).a);" +
+            "if(around>=0.05){c=vec4(spriteOutlineColor,around*opacity*alpha);return;}}" +
             "if(recolorPlayer==1&&source.a>0.01){" +
             "float strongestOther=max(source.r,source.g);" +
             "bool authoredBlue=source.b>0.16&&source.b>strongestOther*1.22&&" +
@@ -4918,6 +5125,8 @@ internal sealed class GameHostWindow : GameWindow
         Cursor = MouseCursor.Default;
         if (_uiPanelFillTexture != 0) GL.DeleteTexture(_uiPanelFillTexture);
         if (_uiSolidTexture != 0) GL.DeleteTexture(_uiSolidTexture);
+        if (_woodcuttingItemsTexture != 0)
+            GL.DeleteTexture(_woodcuttingItemsTexture);
         if (_uiTabTexture != 0) GL.DeleteTexture(_uiTabTexture);
         if (_uiActiveTabTexture != 0) GL.DeleteTexture(_uiActiveTabTexture);
         if (_minimapTexture != 0) GL.DeleteTexture(_minimapTexture);

@@ -44,6 +44,19 @@ internal sealed class GameUiControlState
 {
     private const float ButtonSize = 38;
     private const float ControlGap = 4;
+    internal const int InventoryColumns = 4;
+    internal const int InventoryRows = 7;
+    internal const float InventorySlotSize = 32;
+    internal const float InventoryGridTop = 42;
+    internal const float InventoryColumnGap = 6;
+    internal const float InventoryRowGap = 4;
+    private const float PanelWidth = 172;
+    private const float PanelBottomPadding = 8;
+    private const float PanelHeight =
+        InventoryGridTop +
+        InventoryRows * InventorySlotSize +
+        (InventoryRows - 1) * InventoryRowGap +
+        PanelBottomPadding;
     private readonly ControlState[] _hitOrder;
     private ControlState? _captured;
     private bool _leftWasDown;
@@ -76,12 +89,14 @@ internal sealed class GameUiControlState
             ButtonSize,
             ButtonSize);
         Panel.Bounds = new(
-            Math.Max(viewport.X, viewport.X + viewport.Z - 242),
+            Math.Max(
+                viewport.X,
+                viewport.X + viewport.Z - PanelWidth - 12),
             Math.Max(
                 viewport.Y,
-                InventoryButton.Bounds.Y - ControlGap - 290),
-            230,
-            290);
+                InventoryButton.Bounds.Y - ControlGap - PanelHeight),
+            PanelWidth,
+            PanelHeight);
         Panel.Visible = ActivePanel != GameUiPanel.None;
     }
 

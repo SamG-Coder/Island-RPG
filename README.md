@@ -12,6 +12,22 @@ or endorsed by Microsoft. Age of Empires is a trademark of Microsoft.
 dotnet run --project src/IslandRpg
 ```
 
+## Sprite-sheet tool
+
+Generated bitmap art can be converted into an exact transparent sprite sheet
+with the repository tool. It centre-crops to the sheet aspect ratio, removes a
+configurable chroma-key colour, and uses nearest-neighbour resizing so pixel art
+stays sharp:
+
+```powershell
+dotnet run --project tools/IslandRpg.SpriteTool -- `
+  input.png output.png `
+  --columns 4 --rows 2 --cell-size 32 `
+  --chroma "#FF00FF" --tolerance 32
+```
+
+The example creates a transparent 128×64 PNG containing eight 32×32 cells.
+
 The program checks common Steam locations and `AGE2HD_PATH`. By default it
 opens the playable villager window. Use `--world` to open the pannable
 infinite-world renderer without a player. The world streams deterministic 32×32
