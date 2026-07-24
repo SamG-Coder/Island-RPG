@@ -109,6 +109,7 @@ internal sealed class GameHostWindow : GameWindow
     private int _lastWaterFootfall = -1;
     private WorldEntity? _player;
     private bool _gameLeftWasDown;
+    private bool _gameRightWasDown;
     private int _vao;
     private bool _dragging;
     private Vector2 _lastMouse;
@@ -147,7 +148,40 @@ internal sealed class GameHostWindow : GameWindow
             _total = Math.Max(1, value.Total);
             _current = value.Name;
         });
-        _loadTask = Task.Run(() => AssetLoader.LoadAll(_install, progress));
+        var requiredGraphics = RequiredGraphicsFor(_mode);
+        _loadTask = Task.Run(() =>
+            AssetLoader.LoadAll(_install, progress, requiredGraphics));
+    }
+
+    private static IReadOnlySet<string>? RequiredGraphicsFor(PreviewMode mode)
+    {
+        if (mode == PreviewMode.Assets) return null;
+
+        var names = Enumerable.Range(0, 12)
+            .Select(index => $"TREE{(char)('A' + index)}_NN")
+            .Concat(["FPAL_NN", "FPIN_NN"])
+            .SelectMany(name => new[] { name, name[..^2] + "N0" })
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (mode is PreviewMode.World or PreviewMode.Game)
+        {
+            foreach (var name in Enumerable.Range(1, 9)
+                         .Select(index => $"CLF{index:00}_NN"))
+                names.Add(name);
+        }
+
+        if (mode == PreviewMode.Game)
+        {
+            foreach (var name in new[]
+            {
+                "VMBAS_WN", "VMBAS_AN", "VMBAS_DN",
+                "VFBAS_WN", "VFBAS_AN", "VFBAS_DN",
+                "VMLUM_AN", "VFLUM_AN", "MOVEX_NN"
+            })
+                names.Add(name);
+        }
+
+        return names;
     }
 
     protected override void OnUpdateFrame(FrameEventArgs e)
@@ -328,8 +362,8 @@ internal sealed class GameHostWindow : GameWindow
             _pendingPathTask = null;
         }
 
-        var leftDown = MouseState.IsButtonDown(MouseButton.Left);
-        if (leftDown && !_gameLeftWasDown)
+        var rightDown = MouseState.IsButtonDown(MouseButton.Right);
+        if (rightDown && !_gameRightWasDown)
         {
             var target = ScreenToTerrain(SceneMousePosition());
             _pathCancellation?.Cancel();
@@ -344,6 +378,20 @@ internal sealed class GameHostWindow : GameWindow
                     GridPathfinder.Find(_worldSeed, start, target, cancellationToken: token)),
                 token);
             _moveMarker = new(target, 0);
+        }
+        _gameRightWasDown = rightDown;
+
+        var leftDown = MouseState.IsButtonDown(MouseButton.Left);
+        if (leftDown && !_gameLeftWasDown &&
+            TryGetTreeUnderMouse(SceneMousePosition(), out var actionTree))
+        {
+            _pathCancellation?.Cancel();
+            _pathCancellation?.Dispose();
+            _pathCancellation = null;
+            _pathRequestId++;
+            _pendingPathTask = null;
+            _player.WorkAt(new Vector2(actionTree.X + .5f, actionTree.Y + .5f));
+            _moveMarker = null;
         }
         _gameLeftWasDown = leftDown;
 
@@ -376,7 +424,7 @@ internal sealed class GameHostWindow : GameWindow
         FollowPlayer();
         Title = $"Island RPG - {_player.Gender} villager - {_player.Action} - " +
                 (_pendingPathTask is null ? "" : "calculating path - ") +
-                "click to move, Up/Down changes villager";
+                "right-click to move, left-click to act, Up/Down changes villager";
     }
 
     private Vector2 ScreenToTerrain(Vector2 screen)
@@ -1021,10 +1069,12 @@ internal sealed class GameHostWindow : GameWindow
                objectBounds.Bottom > playerBounds.Top;
     }
 
-    private bool IsMouseOverTree(Vector2 mouse)
+    private bool TryGetTreeUnderMouse(Vector2 mouse, out IslandTree hoveredTree)
     {
-        foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible))
-        foreach (var tree in gpu.Chunk.Trees)
+        foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible)
+                     .OrderByDescending(gpu =>
+                         gpu.Chunk.Coordinate.X + gpu.Chunk.Coordinate.Y))
+        foreach (var tree in gpu.Chunk.Trees.OrderByDescending(tree => tree.X + tree.Y))
         {
             if (!_treeAtlas.TryGetValue(tree.GraphicName, out var entry)) continue;
             var tileX = PositiveMod(tree.X, WorldChunk.Size);
@@ -1046,8 +1096,12 @@ internal sealed class GameHostWindow : GameWindow
                 (uint)y >= (uint)entry.Frame.Height)
                 continue;
             if (entry.Frame.Rgba[(y * entry.Frame.Width + x) * 4 + 3] > 24)
+            {
+                hoveredTree = tree;
                 return true;
+            }
         }
+        hoveredTree = null!;
         return false;
     }
 
@@ -1219,7 +1273,9 @@ internal sealed class GameHostWindow : GameWindow
         foreach (var gender in Enum.GetValues<EntityGender>())
         foreach (var pair in suffixes)
         {
-            var prefix = gender == EntityGender.Male ? "VMBAS_" : "VFBAS_";
+            var prefix = pair.Key == EntityAction.Work
+                ? gender == EntityGender.Male ? "VMLUM_" : "VFLUM_"
+                : gender == EntityGender.Male ? "VMBAS_" : "VFBAS_";
             var name = prefix + pair.Value;
             if (uploaded.TryGetValue(name, out var existing))
             {
@@ -1280,7 +1336,7 @@ internal sealed class GameHostWindow : GameWindow
 
     private void DrawGameCursor()
     {
-        var overTree = IsMouseOverTree(SceneMousePosition());
+        var overTree = TryGetTreeUnderMouse(SceneMousePosition(), out _);
         var frame = overTree ? _cutCursorFrame : _defaultCursorFrame;
         var texture = overTree ? _cutCursorTexture : _defaultCursorTexture;
         if (frame is null || texture == 0) return;

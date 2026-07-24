@@ -66,6 +66,16 @@ internal sealed class WorldEntity
     public void Work() => SetAction(EntityAction.Work);
     public void Die() => SetAction(EntityAction.Die);
 
+    public void WorkAt(Vector2 target)
+    {
+        _path.Clear();
+        Target = Position;
+        var direction = target - Position;
+        if (direction.LengthSquared > .0001f)
+            Facing = direction.Normalized();
+        SetAction(EntityAction.Work);
+    }
+
     public void SetGender(EntityGender gender)
     {
         if (Gender == gender) return;

@@ -4,11 +4,17 @@ using StbImageSharp;
 
 internal static class AssetLoader
 {
-    public static AssetCatalog LoadAll(string install, IProgress<(int Done, int Total, string Name)> progress)
+    public static AssetCatalog LoadAll(
+        string install,
+        IProgress<(int Done, int Total, string Name)> progress,
+        IReadOnlySet<string>? requiredGraphics = null)
     {
         var common = Path.Combine(install, "resources", "_common");
         var dat = Path.Combine(common, "dat", "empires2_x2_p1.dat");
-        var definitions = GenieDatReader.FindAllGraphics(dat);
+        var definitions = GenieDatReader.FindAllGraphics(dat)
+            .Where(definition => requiredGraphics is null ||
+                requiredGraphics.Contains(definition.Name))
+            .ToArray();
         var loaded = new Dictionary<short, LoadedGraphic>();
         var missing = new List<MissingGraphic>();
         var paletteCache = new Dictionary<string, uint[]>(StringComparer.OrdinalIgnoreCase);
@@ -16,9 +22,9 @@ internal static class AssetLoader
             Path.Combine(common, "terrain", "textures"), "*.png", SearchOption.TopDirectoryOnly);
         var waterFiles = Directory.GetFiles(
             Path.Combine(common, "terrain", "water"), "normal*.png", SearchOption.TopDirectoryOnly);
-        var total = definitions.Count + terrainFiles.Length + waterFiles.Length;
+        var total = definitions.Length + terrainFiles.Length + waterFiles.Length;
 
-        for (var i = 0; i < definitions.Count; i++)
+        for (var i = 0; i < definitions.Length; i++)
         {
             var definition = definitions[i];
             progress.Report((i, total, definition.Name));
@@ -48,7 +54,7 @@ internal static class AssetLoader
         for (var i = 0; i < terrainFiles.Length; i++)
         {
             var path = terrainFiles[i];
-            progress.Report((definitions.Count + i, total, Path.GetFileNameWithoutExtension(path)));
+            progress.Report((definitions.Length + i, total, Path.GetFileNameWithoutExtension(path)));
             using var stream = File.OpenRead(path);
             var image = ImageResult.FromStream(stream, ColorComponents.RedGreenBlueAlpha);
             terrainTiles.Add(new(
@@ -59,7 +65,7 @@ internal static class AssetLoader
         for (var i = 0; i < waterFiles.Length; i++)
         {
             var path = waterFiles[i];
-            progress.Report((definitions.Count + terrainFiles.Length + i, total, Path.GetFileNameWithoutExtension(path)));
+            progress.Report((definitions.Length + terrainFiles.Length + i, total, Path.GetFileNameWithoutExtension(path)));
             using var stream = File.OpenRead(path);
             var image = ImageResult.FromStream(stream, ColorComponents.RedGreenBlueAlpha);
             waterTextures.Add(new(
