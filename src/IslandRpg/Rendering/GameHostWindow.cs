@@ -13,15 +13,18 @@ internal sealed class GameHostWindow : GameWindow
     internal enum PreviewMode { Assets, Island, World }
     private enum ScreenState { LoadingAssets, PreparingGpu, WorldPreview }
     private sealed class GpuWorldChunk(
-        WorldChunk chunk, int vbo, int vertexCount, int weightsA, int weightsB)
+        WorldChunk chunk, int vbo, int vertexCount, int weightsA, int weightsB, int shoreDistance)
     {
         public WorldChunk Chunk { get; } = chunk;
         public int Vbo { get; } = vbo;
         public int VertexCount { get; } = vertexCount;
         public int WeightsA { get; } = weightsA;
         public int WeightsB { get; } = weightsB;
+        public int ShoreDistance { get; } = shoreDistance;
         public float Opacity { get; set; }
     }
+    private sealed record SpriteAtlasEntry(
+        SpriteFrame Frame, float U0, float V0, float U1, float V1);
 
     private readonly string _install;
     private readonly PreviewMode _mode;
@@ -31,6 +34,20 @@ internal sealed class GameHostWindow : GameWindow
     private Task<WorldChunk>? _pendingChunkTask;
     private ChunkCoordinate _pendingChunkCoordinate;
     private Task _saveTail = Task.CompletedTask;
+    private bool _atlasOpen;
+    private Task<WorldAtlasSnapshot>? _atlasTask;
+    private WorldAtlasSnapshot? _atlas;
+    private int _atlasTexture;
+    private int _atlasDone;
+    private int _atlasTotal = 1;
+    private int _atlasChunksAcross = WorldAtlasGenerator.ChunksAcross;
+    private Vector2 _atlasPan;
+    private Vector2 _atlasLastMouse;
+    private bool _atlasDragging;
+    private bool _atlasLeftWasDown;
+    private double _clock;
+    private double _atlasLastClickTime = -1;
+    private Vector2 _atlasLastClickPosition;
     private IslandMap? _island;
     private Task<AssetCatalog>? _loadTask;
     private AssetCatalog? _catalog;
@@ -50,8 +67,13 @@ internal sealed class GameHostWindow : GameWindow
     private int _terrainArray;
     private int _biomeWeightsA;
     private int _biomeWeightsB;
+    private int _shoreDistance;
     private int _waterNormalArray;
     private int _streamVbo;
+    private int _treeBatchVbo;
+    private int _treeAtlasTexture;
+    private readonly Dictionary<string, SpriteAtlasEntry> _treeAtlas =
+        new(StringComparer.OrdinalIgnoreCase);
     private int _vao;
     private bool _dragging;
     private Vector2 _lastMouse;
@@ -95,8 +117,17 @@ internal sealed class GameHostWindow : GameWindow
     protected override void OnUpdateFrame(FrameEventArgs e)
     {
         base.OnUpdateFrame(e);
+        _clock += e.Time;
         _waterTime = (_waterTime + (float)e.Time) % 10000f;
         if (KeyboardState.IsKeyDown(Keys.Escape)) Close();
+        if (_screen == ScreenState.WorldPreview && _mode == PreviewMode.World &&
+            KeyboardState.IsKeyPressed(Keys.M))
+        {
+            _atlasOpen = !_atlasOpen;
+            if (_atlasOpen && _atlasTask is null && _atlas is null)
+                StartAtlasAtCamera();
+            if (!_atlasOpen) _atlasPan = Vector2.Zero;
+        }
 
         if (_screen == ScreenState.LoadingAssets && _loadTask is { IsCompleted: true })
         {
@@ -131,7 +162,8 @@ internal sealed class GameHostWindow : GameWindow
             var stop = Math.Min(_uploadIndex + 24, _worldAssets.Count);
             while (_uploadIndex < stop)
             {
-                _textures.Add(Upload(_worldAssets[_uploadIndex].Sprite.Frames[0]));
+                if (_mode != PreviewMode.World)
+                    _textures.Add(Upload(_worldAssets[_uploadIndex].Sprite.Frames[0]));
                 _current = _worldAssets[_uploadIndex].Definition.Name;
                 _uploadIndex++;
             }
@@ -179,12 +211,17 @@ internal sealed class GameHostWindow : GameWindow
 
         if (_screen == ScreenState.WorldPreview)
         {
-            UpdateCamera((float)e.Time);
-            if (_mode == PreviewMode.World)
+            if (_atlasOpen)
+                UpdateAtlas();
+            else
             {
-                foreach (var chunk in _worldChunks.Values)
-                    chunk.Opacity = Math.Min(1, chunk.Opacity + (float)e.Time / .38f);
-                StreamWorld();
+                UpdateCamera((float)e.Time);
+                if (_mode == PreviewMode.World)
+                {
+                    foreach (var chunk in _worldChunks.Values)
+                        chunk.Opacity = Math.Min(1, chunk.Opacity + (float)e.Time / .38f);
+                    StreamWorld();
+                }
             }
         }
     }
@@ -209,10 +246,149 @@ internal sealed class GameHostWindow : GameWindow
             _camera += Vector2.Normalize(direction) * 720f * elapsed;
     }
 
+    private void StartAtlasAtCamera()
+    {
+        var mapCenter = ScreenWorldToMap(-_camera / Math.Max(_zoom, .001f));
+        StartAtlas((int)MathF.Round(mapCenter.X), (int)MathF.Round(mapCenter.Y));
+    }
+
+    private void StartAtlas(int centerTileX, int centerTileY)
+    {
+        if (_atlasTask is { IsCompleted: false }) return;
+        Interlocked.Exchange(ref _atlasDone, 0);
+        Volatile.Write(ref _atlasTotal, _atlasChunksAcross * _atlasChunksAcross);
+        var chunksAcross = _atlasChunksAcross;
+        var pixelsPerChunk = WorldAtlasGenerator.PixelSize / chunksAcross;
+        _atlasTask = Task.Run(() => WorldAtlasGenerator.Generate(
+            _worldSeed, centerTileX, centerTileY,
+            ReportAtlasProgress,
+            chunksAcross,
+            pixelsPerChunk));
+    }
+
+    private void ReportAtlasProgress(int done, int total)
+    {
+        Volatile.Write(ref _atlasTotal, total);
+        var current = Volatile.Read(ref _atlasDone);
+        while (done > current)
+        {
+            var observed = Interlocked.CompareExchange(ref _atlasDone, done, current);
+            if (observed == current) break;
+            current = observed;
+        }
+    }
+
+    private void UpdateAtlas()
+    {
+        if (_atlasTask is { IsCompleted: true })
+        {
+            if (_atlasTask.IsFaulted)
+                throw _atlasTask.Exception?.GetBaseException() ??
+                      new InvalidOperationException("World atlas generation failed.");
+            _atlas = _atlasTask.Result;
+            if (_atlasTexture != 0) GL.DeleteTexture(_atlasTexture);
+            _atlasTexture = Upload(_atlas.Width, _atlas.Height, _atlas.Rgba);
+            GL.BindTexture(TextureTarget.Texture2D, _atlasTexture);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
+                (int)TextureMinFilter.Linear);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
+                (int)TextureMagFilter.Linear);
+            _atlasTask = null;
+            _atlasPan = Vector2.Zero;
+        }
+
+        var mouse = MouseState.Position;
+        var leftDown = MouseState.IsButtonDown(MouseButton.Left);
+        if (leftDown && !_atlasLeftWasDown)
+        {
+            if (_clock - _atlasLastClickTime <= .36 &&
+                (mouse - _atlasLastClickPosition).LengthSquared <= 18 * 18)
+            {
+                TravelToAtlasPosition(mouse);
+                _atlasLeftWasDown = true;
+                return;
+            }
+            _atlasLastClickTime = _clock;
+            _atlasLastClickPosition = mouse;
+            _atlasLastMouse = mouse;
+            _atlasDragging = true;
+        }
+        else if (leftDown && _atlasDragging)
+        {
+            _atlasPan += mouse - _atlasLastMouse;
+            _atlasLastMouse = mouse;
+        }
+        else if (!leftDown && _atlasDragging)
+        {
+            _atlasDragging = false;
+            RecenterAtlasAfterDrag();
+        }
+        _atlasLeftWasDown = leftDown;
+    }
+
+    private void RecenterAtlasAfterDrag()
+    {
+        if (_atlas is null || _atlasPan.LengthSquared < 24 * 24) return;
+        var mapSize = AtlasDisplaySize();
+        var centerX = _atlas.CenterTileX -
+                      (int)MathF.Round(_atlasPan.X / mapSize * _atlas.SpanTiles);
+        var centerY = _atlas.CenterTileY -
+                      (int)MathF.Round(_atlasPan.Y / mapSize * _atlas.SpanTiles);
+        StartAtlas(centerX, centerY);
+    }
+
+    private void TravelToAtlasPosition(Vector2 mouse)
+    {
+        if (_atlas is null) return;
+        var mapSize = AtlasDisplaySize();
+        var topLeft = new Vector2(
+            (Size.X - mapSize) * .5f + _atlasPan.X,
+            (Size.Y - mapSize) * .5f + _atlasPan.Y);
+        var uv = (mouse - topLeft) / mapSize;
+        if (uv.X < 0 || uv.Y < 0 || uv.X > 1 || uv.Y > 1) return;
+        var tileX = _atlas.CenterTileX + (uv.X - .5f) * _atlas.SpanTiles;
+        var tileY = _atlas.CenterTileY + (uv.Y - .5f) * _atlas.SpanTiles;
+        var projected = new Vector2((tileX - tileY) * 48, (tileX + tileY) * 24);
+        _zoom = .8f;
+        _camera = -projected * _zoom;
+        _atlasOpen = false;
+        _atlasPan = Vector2.Zero;
+        StreamWorld();
+    }
+
+    private float AtlasDisplaySize() => Math.Max(1f, Math.Max(Size.X, Size.Y));
+
+    private void ZoomAtlas(float wheelOffset)
+    {
+        if (_atlas is null || _atlasTask is { IsCompleted: false } || wheelOffset == 0) return;
+        var nextChunksAcross = wheelOffset > 0
+            ? Math.Max(4, _atlasChunksAcross / 2)
+            : Math.Min(64, _atlasChunksAcross * 2);
+        if (nextChunksAcross == _atlasChunksAcross) return;
+
+        var mapSize = AtlasDisplaySize();
+        var topLeft = new Vector2(
+            (Size.X - mapSize) * .5f + _atlasPan.X,
+            (Size.Y - mapSize) * .5f + _atlasPan.Y);
+        var uv = (MouseState.Position - topLeft) / mapSize;
+        var tileUnderCursorX = _atlas.CenterTileX + (uv.X - .5f) * _atlas.SpanTiles;
+        var tileUnderCursorY = _atlas.CenterTileY + (uv.Y - .5f) * _atlas.SpanTiles;
+        var nextSpan = nextChunksAcross * WorldChunk.Size;
+        var nextCenterX = tileUnderCursorX - (uv.X - .5f) * nextSpan;
+        var nextCenterY = tileUnderCursorY - (uv.Y - .5f) * nextSpan;
+        _atlasChunksAcross = nextChunksAcross;
+        StartAtlas((int)MathF.Round(nextCenterX), (int)MathF.Round(nextCenterY));
+    }
+
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         base.OnMouseWheel(e);
         if (_screen != ScreenState.WorldPreview || e.OffsetY == 0) return;
+        if (_atlasOpen)
+        {
+            ZoomAtlas(e.OffsetY);
+            return;
+        }
         var old = _zoom;
         _zoom = Math.Clamp(old * MathF.Pow(1.12f, e.OffsetY), 0.45f, 1.75f);
         var cursor = MouseState.Position - new Vector2(Size.X / 2f, Size.Y / 2f);
@@ -233,7 +409,8 @@ internal sealed class GameHostWindow : GameWindow
         GL.Clear(ClearBufferMask.ColorBufferBit);
         if (_screen == ScreenState.WorldPreview)
         {
-            if (_mode == PreviewMode.Island) RenderIsland();
+            if (_atlasOpen) RenderAtlas();
+            else if (_mode == PreviewMode.Island) RenderIsland();
             else if (_mode == PreviewMode.World) RenderWorld();
             else RenderWorldPreview();
         }
@@ -252,6 +429,57 @@ internal sealed class GameHostWindow : GameWindow
         GL.Clear(ClearBufferMask.ColorBufferBit);
         GL.Disable(EnableCap.ScissorTest);
         Title = $"Island RPG - Loading {_done}/{_total}: {_current}";
+    }
+
+    private void RenderAtlas()
+    {
+        if (_atlasTexture != 0)
+        {
+            var width = Math.Max(1, Size.X);
+            var height = Math.Max(1, Size.Y);
+            var mapSize = Math.Max(width, height);
+            var center = new Vector2(width * .5f, height * .5f) + _atlasPan;
+            var left = (center.X - mapSize * .5f - width * .5f) * 2 / width;
+            var right = (center.X + mapSize * .5f - width * .5f) * 2 / width;
+            var top = -(center.Y - mapSize * .5f - height * .5f) * 2 / height;
+            var bottom = -(center.Y + mapSize * .5f - height * .5f) * 2 / height;
+            GL.UseProgram(_program);
+            GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
+            GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2D, _atlasTexture);
+            Draw([left,top,0,0, left,bottom,0,1, right,bottom,1,1, right,top,1,0]);
+
+            GL.Enable(EnableCap.ScissorTest);
+            GL.Scissor((int)center.X - 1, height - (int)center.Y - 10, 3, 21);
+            GL.ClearColor(.95f, .82f, .24f, 1);
+            GL.Clear(ClearBufferMask.ColorBufferBit);
+            GL.Scissor((int)center.X - 10, height - (int)center.Y - 1, 21, 3);
+            GL.Clear(ClearBufferMask.ColorBufferBit);
+            GL.Disable(EnableCap.ScissorTest);
+        }
+
+        if (_atlasTask is not null)
+        {
+            const int margin = 90;
+            const int barHeight = 18;
+            var width = Math.Max(0, FramebufferSize.X - margin * 2);
+            var atlasDone = Volatile.Read(ref _atlasDone);
+            var atlasTotal = Volatile.Read(ref _atlasTotal);
+            var filled = (int)(width * Math.Clamp(atlasDone / (float)Math.Max(1, atlasTotal), 0, 1));
+            GL.Enable(EnableCap.ScissorTest);
+            GL.Scissor(margin, 32, width, barHeight);
+            GL.ClearColor(.12f, .14f, .12f, 1);
+            GL.Clear(ClearBufferMask.ColorBufferBit);
+            GL.Scissor(margin, 32, filled, barHeight);
+            GL.ClearColor(.35f, .68f, .28f, 1);
+            GL.Clear(ClearBufferMask.ColorBufferBit);
+            GL.Disable(EnableCap.ScissorTest);
+            Title = $"Island RPG - Mapping {atlasDone}/{atlasTotal} chunks";
+        }
+        else if (_atlas is not null)
+            Title = $"Island RPG - Atlas centered {_atlas.CenterTileX}, {_atlas.CenterTileY} - " +
+                    "drag or double-click to travel";
     }
 
     private void RenderWorldPreview()
@@ -323,16 +551,12 @@ internal sealed class GameHostWindow : GameWindow
         foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible))
             DrawWorldChunkTerrain(gpu);
 
-        var graphicIndex = _worldAssets
-            .Select((asset, index) => (asset.Definition.Name, index))
-            .GroupBy(value => value.Name, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First().index, StringComparer.OrdinalIgnoreCase);
+        var vertices = new List<float>();
         foreach (var item in _worldChunks.Values
                      .SelectMany(gpu => gpu.Chunk.Trees.Select(tree => (Tree: tree, Gpu: gpu)))
                      .OrderBy(item => item.Tree.X + item.Tree.Y))
         {
             var tree = item.Tree;
-            if (!graphicIndex.TryGetValue(tree.GraphicName, out var index)) continue;
             var tile = _worldChunks[new(
                 FloorDiv(tree.X, WorldChunk.Size), FloorDiv(tree.Y, WorldChunk.Size))]
                 .Chunk.Tiles[
@@ -343,12 +567,64 @@ internal sealed class GameHostWindow : GameWindow
                 (tree.X - tree.Y) * 48,
                 (tree.X + tree.Y + 1) * 24 - height * 12);
             var shadowName = tree.GraphicName[..^2] + "N0";
-            if (graphicIndex.TryGetValue(shadowName, out var shadowIndex))
-                DrawSprite(_worldAssets[shadowIndex].Sprite.Frames[0], _textures[shadowIndex],
-                    world, item.Gpu.Opacity);
-            DrawSprite(_worldAssets[index].Sprite.Frames[0], _textures[index],
-                world, item.Gpu.Opacity);
+            AddTreeQuad(shadowName, world, item.Gpu.Opacity, vertices);
+            AddTreeQuad(tree.GraphicName, world, item.Gpu.Opacity, vertices);
         }
+        DrawTreeBatch(vertices);
+    }
+
+    private void AddTreeQuad(string graphicName, Vector2 world, float opacity, List<float> vertices)
+    {
+        if (!_treeAtlas.TryGetValue(graphicName, out var entry)) return;
+        var frame = entry.Frame;
+        var width = Math.Max(1, Size.X);
+        var height = Math.Max(1, Size.Y);
+        var screen = new Vector2(width / 2f, height / 2f) + _camera + world * _zoom;
+        var margin = Math.Max(frame.Width, frame.Height) * _zoom;
+        if (screen.X < -margin || screen.Y < -margin ||
+            screen.X > width + margin || screen.Y > height + margin)
+            return;
+        var halfW = frame.Width * _zoom / width;
+        var halfH = frame.Height * _zoom / height;
+        var centerX = (((frame.Width / 2f - frame.HotspotX) + world.X) * _zoom + _camera.X) *
+                      2 / width;
+        var centerY = ((frame.HotspotY - frame.Height / 2f) * _zoom -
+                       _camera.Y - world.Y * _zoom) * 2 / height;
+        Add(centerX - halfW, centerY + halfH, entry.U0, entry.V0);
+        Add(centerX - halfW, centerY - halfH, entry.U0, entry.V1);
+        Add(centerX + halfW, centerY - halfH, entry.U1, entry.V1);
+        Add(centerX - halfW, centerY + halfH, entry.U0, entry.V0);
+        Add(centerX + halfW, centerY - halfH, entry.U1, entry.V1);
+        Add(centerX + halfW, centerY + halfH, entry.U1, entry.V0);
+
+        void Add(float px, float py, float u, float v)
+        {
+            vertices.Add(px); vertices.Add(py); vertices.Add(u); vertices.Add(v);
+            vertices.Add(opacity);
+        }
+    }
+
+    private void DrawTreeBatch(List<float> vertices)
+    {
+        if (vertices.Count == 0 || _treeAtlasTexture == 0) return;
+        GL.UseProgram(_program);
+        GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
+        GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, _treeAtlasTexture);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _treeBatchVbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float),
+            vertices.ToArray(), BufferUsageHint.StreamDraw);
+        const int stride = 5 * sizeof(float);
+        GL.EnableVertexAttribArray(0);
+        GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, stride, 0);
+        GL.EnableVertexAttribArray(1);
+        GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, stride, 2 * sizeof(float));
+        GL.EnableVertexAttribArray(2);
+        GL.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, stride, 4 * sizeof(float));
+        GL.DisableVertexAttribArray(3);
+        GL.DisableVertexAttribArray(4);
+        GL.DrawArrays(PrimitiveType.Triangles, 0, vertices.Count / 5);
     }
 
     private void StreamWorld()
@@ -404,6 +680,50 @@ internal sealed class GameHostWindow : GameWindow
         _terrainArray = UploadTerrainArray();
         _waterNormalArray = UploadWaterNormalArray();
         _terrainProgram = CreateTerrainProgram();
+        PrepareTreeAtlas();
+    }
+
+    private void PrepareTreeAtlas()
+    {
+        const int atlasWidth = 2048;
+        const int padding = 1;
+        var placements = new List<(LoadedGraphic Asset, SpriteFrame Frame, int X, int Y)>();
+        var x = padding;
+        var y = padding;
+        var rowHeight = 0;
+        foreach (var asset in _worldAssets)
+        {
+            var frame = asset.Sprite.Frames[0];
+            if (x + frame.Width + padding > atlasWidth)
+            {
+                x = padding;
+                y += rowHeight + padding;
+                rowHeight = 0;
+            }
+            placements.Add((asset, frame, x, y));
+            x += frame.Width + padding;
+            rowHeight = Math.Max(rowHeight, frame.Height);
+        }
+        var requiredHeight = y + rowHeight + padding;
+        var atlasHeight = 1;
+        while (atlasHeight < requiredHeight) atlasHeight *= 2;
+        var rgba = new byte[atlasWidth * atlasHeight * 4];
+        foreach (var placement in placements)
+        {
+            for (var row = 0; row < placement.Frame.Height; row++)
+                System.Buffer.BlockCopy(
+                    placement.Frame.Rgba, row * placement.Frame.Width * 4,
+                    rgba, ((placement.Y + row) * atlasWidth + placement.X) * 4,
+                    placement.Frame.Width * 4);
+            _treeAtlas[placement.Asset.Definition.Name] = new(
+                placement.Frame,
+                placement.X / (float)atlasWidth,
+                placement.Y / (float)atlasHeight,
+                (placement.X + placement.Frame.Width) / (float)atlasWidth,
+                (placement.Y + placement.Frame.Height) / (float)atlasHeight);
+        }
+        _treeAtlasTexture = Upload(atlasWidth, atlasHeight, rgba);
+        _treeBatchVbo = GL.GenBuffer();
     }
 
     private GpuWorldChunk UploadWorldChunk(WorldChunk chunk)
@@ -447,7 +767,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float),
             vertices.ToArray(), BufferUsageHint.StaticDraw);
         var weights = UploadChunkBiomeWeights(chunk);
-        return new(chunk, vbo, vertices.Count / 11, weights.A, weights.B);
+        return new(chunk, vbo, vertices.Count / 11, weights.A, weights.B, weights.Shore);
 
         float LayerAt(int x, int y, Biome fallback) =>
             layers[x < 0 || y < 0 || x >= WorldChunk.Size || y >= WorldChunk.Size
@@ -455,16 +775,18 @@ internal sealed class GameHostWindow : GameWindow
                 : chunk.Tiles[y * WorldChunk.Size + x].Biome];
     }
 
-    private static (int A, int B) UploadChunkBiomeWeights(WorldChunk chunk)
+    private static (int A, int B, int Shore) UploadChunkBiomeWeights(WorldChunk chunk)
     {
-        return (Upload(chunk.BiomeWeightsA), Upload(chunk.BiomeWeightsB));
+        return (Upload(chunk.BiomeWeightsA, PixelInternalFormat.Rgba8, PixelFormat.Rgba),
+            Upload(chunk.BiomeWeightsB, PixelInternalFormat.Rgba8, PixelFormat.Rgba),
+            Upload(chunk.ShoreDistance, PixelInternalFormat.R8, PixelFormat.Red));
 
-        static int Upload(byte[] data)
+        static int Upload(byte[] data, PixelInternalFormat internalFormat, PixelFormat format)
         {
             var texture = GL.GenTexture();
             GL.BindTexture(TextureTarget.Texture2D, texture);
-            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
-                WorldChunk.WeightTextureSize, WorldChunk.WeightTextureSize, 0, PixelFormat.Rgba,
+            GL.TexImage2D(TextureTarget.Texture2D, 0, internalFormat,
+                WorldChunk.WeightTextureSize, WorldChunk.WeightTextureSize, 0, format,
                 PixelType.UnsignedByte, data);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
                 (int)TextureMinFilter.Linear);
@@ -513,6 +835,9 @@ internal sealed class GameHostWindow : GameWindow
         GL.ActiveTexture(TextureUnit.Texture3);
         GL.BindTexture(TextureTarget.Texture2DArray, _waterNormalArray);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "waterNormals"), 3);
+        GL.ActiveTexture(TextureUnit.Texture4);
+        GL.BindTexture(TextureTarget.Texture2D, gpu.ShoreDistance);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "shoreDistance"), 4);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "time"), _waterTime);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "opacity"), gpu.Opacity);
         GL.BindBuffer(BufferTarget.ArrayBuffer, gpu.Vbo);
@@ -543,6 +868,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.DeleteBuffer(gpu.Vbo);
         GL.DeleteTexture(gpu.WeightsA);
         GL.DeleteTexture(gpu.WeightsB);
+        GL.DeleteTexture(gpu.ShoreDistance);
     }
 
     private static Vector2 ScreenWorldToMap(Vector2 world) => new(
@@ -571,6 +897,7 @@ internal sealed class GameHostWindow : GameWindow
             Biome.Forest => "g_for_00_color",
             Biome.Highland => "g_gr3_00_color",
             Biome.Rock => "g_rck_00_COLOR",
+            Biome.Snow => "g_sno_00_color",
             _ => "g_grs_00_color"
         };
     }
@@ -612,7 +939,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float), vertices.ToArray(), BufferUsageHint.StaticDraw);
         _terrainArray = UploadTerrainArray();
         _waterNormalArray = UploadWaterNormalArray();
-        (_biomeWeightsA, _biomeWeightsB) = UploadBiomeWeights();
+        (_biomeWeightsA, _biomeWeightsB, _shoreDistance) = UploadBiomeWeights();
         _terrainProgram = CreateTerrainProgram();
 
         float LayerAt(int x, int y, Biome fallback) =>
@@ -639,6 +966,9 @@ internal sealed class GameHostWindow : GameWindow
         GL.ActiveTexture(TextureUnit.Texture3);
         GL.BindTexture(TextureTarget.Texture2DArray, _waterNormalArray);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "waterNormals"), 3);
+        GL.ActiveTexture(TextureUnit.Texture4);
+        GL.BindTexture(TextureTarget.Texture2D, _shoreDistance);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "shoreDistance"), 4);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "time"), _waterTime);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "opacity"), 1f);
         GL.ActiveTexture(TextureUnit.Texture0);
@@ -697,6 +1027,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.EnableVertexAttribArray(1);
         GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 16, 8);
         GL.DisableVertexAttribArray(2);
+        GL.VertexAttrib1(2, 1f);
         GL.DisableVertexAttribArray(3);
         GL.DisableVertexAttribArray(4);
         GL.DrawArrays(PrimitiveType.TriangleFan, 0, 4);
@@ -775,7 +1106,7 @@ internal sealed class GameHostWindow : GameWindow
         return textureArray;
     }
 
-    private (int A, int B) UploadBiomeWeights()
+    private (int A, int B, int Shore) UploadBiomeWeights()
     {
         const int samplesPerTile = 4;
         const int radius = 10;
@@ -829,6 +1160,7 @@ internal sealed class GameHostWindow : GameWindow
 
         var a = new byte[size * size * 4];
         var b = new byte[size * size * 4];
+        var shore = new byte[size * size];
         for (var pixel = 0; pixel < size * size; pixel++)
         {
             var total = 0f;
@@ -863,11 +1195,13 @@ internal sealed class GameHostWindow : GameWindow
         {
             var signedSamples = waterPixels[pixel] ? distanceToLand[pixel] : -distanceToWater[pixel];
             var signedTiles = signedSamples / samplesPerTile;
-            b[pixel * 4 + 3] = (byte)Math.Clamp(
+            shore[pixel] = (byte)Math.Clamp(
                 MathF.Round((signedTiles / encodedRangeTiles * .5f + .5f) * 255), 0, 255);
         }
 
-        return (UploadWeightTexture(a), UploadWeightTexture(b));
+        return (UploadWeightTexture(a, PixelInternalFormat.Rgba8, PixelFormat.Rgba),
+            UploadWeightTexture(b, PixelInternalFormat.Rgba8, PixelFormat.Rgba),
+            UploadWeightTexture(shore, PixelInternalFormat.R8, PixelFormat.Red));
 
         float[] DistanceTo(bool targetWater)
         {
@@ -900,12 +1234,13 @@ internal sealed class GameHostWindow : GameWindow
             return distance;
         }
 
-        int UploadWeightTexture(byte[] rgba)
+        int UploadWeightTexture(
+            byte[] data, PixelInternalFormat internalFormat, PixelFormat format)
         {
             var texture = GL.GenTexture();
             GL.BindTexture(TextureTarget.Texture2D, texture);
-            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, size, size, 0,
-                PixelFormat.Rgba, PixelType.UnsignedByte, rgba);
+            GL.TexImage2D(TextureTarget.Texture2D, 0, internalFormat, size, size, 0,
+                format, PixelType.UnsignedByte, data);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
@@ -953,6 +1288,7 @@ internal sealed class GameHostWindow : GameWindow
             uniform sampler2DArray terrain;
             uniform sampler2D biomeWeightsA;
             uniform sampler2D biomeWeightsB;
+            uniform sampler2D shoreDistance;
             uniform sampler2DArray waterNormals;
             uniform float time;
             uniform float opacity;
@@ -998,11 +1334,10 @@ internal sealed class GameHostWindow : GameWindow
             }
             void main() {
                 vec4 a = texture(biomeWeightsA, mapUv);
-                vec4 biomeB = texture(biomeWeightsB, mapUv);
-                vec3 b = biomeB.rgb;
-                float shorelineDistance = (biomeB.a * 2.0 - 1.0) * 8.0;
+                vec4 b = texture(biomeWeightsB, mapUv);
+                float shorelineDistance = (texture(shoreDistance, mapUv).r * 2.0 - 1.0) * 8.0;
                 float shorelineProximity = 1.0 - smoothstep(0.0, 3.0, abs(shorelineDistance));
-                float total = max(dot(a, vec4(1.0)) + dot(b, vec3(1.0)), 0.001);
+                float total = max(dot(a, vec4(1.0)) + dot(b, vec4(1.0)), 0.001);
                 color = vec4(0.0);
                 float waterWeight = a.r + a.g;
                 float waterCoverage = clamp(waterWeight / total, 0.0, 1.0);
@@ -1038,6 +1373,7 @@ internal sealed class GameHostWindow : GameWindow
                 if (b.r > 0.002) color += sampleLayer(4.0) * b.r;
                 if (b.g > 0.002) color += sampleLayer(5.0) * b.g;
                 if (b.b > 0.002) color += sampleLayer(6.0) * b.b;
+                if (b.a > 0.002) color += sampleLayer(7.0) * b.a;
                 color /= total;
                 if (waterWeight > 0.002) {
                     vec3 lightDirection = normalize(vec3(-0.38, -0.48, 0.79));
@@ -1091,10 +1427,12 @@ internal sealed class GameHostWindow : GameWindow
             return shader;
         }
         var vs = Compile(ShaderType.VertexShader,
-            "#version 330 core\nlayout(location=0) in vec2 p;layout(location=1) in vec2 u;out vec2 uv;void main(){uv=u;gl_Position=vec4(p,0,1);}");
+            "#version 330 core\nlayout(location=0) in vec2 p;layout(location=1) in vec2 u;" +
+            "layout(location=2) in float vertexOpacity;out vec2 uv;out float alpha;" +
+            "void main(){uv=u;alpha=vertexOpacity;gl_Position=vec4(p,0,1);}");
         var fs = Compile(ShaderType.FragmentShader,
-            "#version 330 core\nin vec2 uv;out vec4 c;uniform sampler2D image;uniform float opacity;" +
-            "void main(){c=texture(image,uv);c.a*=opacity;}");
+            "#version 330 core\nin vec2 uv;in float alpha;out vec4 c;uniform sampler2D image;" +
+            "uniform float opacity;void main(){c=texture(image,uv);c.a*=opacity*alpha;}");
         var program = GL.CreateProgram(); GL.AttachShader(program, vs); GL.AttachShader(program, fs); GL.LinkProgram(program);
         GL.DeleteShader(vs); GL.DeleteShader(fs);
         return program;
@@ -1118,9 +1456,13 @@ internal sealed class GameHostWindow : GameWindow
         if (_terrainArray != 0) GL.DeleteTexture(_terrainArray);
         if (_biomeWeightsA != 0) GL.DeleteTexture(_biomeWeightsA);
         if (_biomeWeightsB != 0) GL.DeleteTexture(_biomeWeightsB);
+        if (_shoreDistance != 0) GL.DeleteTexture(_shoreDistance);
         if (_waterNormalArray != 0) GL.DeleteTexture(_waterNormalArray);
+        if (_atlasTexture != 0) GL.DeleteTexture(_atlasTexture);
         if (_islandVbo != 0) GL.DeleteBuffer(_islandVbo);
         if (_streamVbo != 0) GL.DeleteBuffer(_streamVbo);
+        if (_treeBatchVbo != 0) GL.DeleteBuffer(_treeBatchVbo);
+        if (_treeAtlasTexture != 0) GL.DeleteTexture(_treeAtlasTexture);
         if (_terrainProgram != 0) GL.DeleteProgram(_terrainProgram);
         GL.DeleteVertexArray(_vao);
         GL.DeleteProgram(_program);

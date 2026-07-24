@@ -9,6 +9,8 @@ Require(origin.BiomeWeightsA.SequenceEqual(repeated.BiomeWeightsA),
     "same seed and coordinate must reproduce primary biome weights");
 Require(origin.BiomeWeightsB.SequenceEqual(repeated.BiomeWeightsB),
     "same seed and coordinate must reproduce secondary biome and coastline weights");
+Require(origin.ShoreDistance.SequenceEqual(repeated.ShoreDistance),
+    "same seed and coordinate must reproduce shoreline distance");
 
 var east = InfiniteWorldGenerator.Generate(seed, new(1, 0));
 for (var y = 0; y < WorldChunk.Size; y++)
@@ -20,6 +22,44 @@ for (var y = 0; y < WorldChunk.Size; y++)
     Require(westEdge.South == eastEdge.West,
         $"south-east height seam differs on row {y}: {westEdge.South} != {eastEdge.West}");
 }
+
+var macroBiomes = new Dictionary<WorldBiome, int>();
+var snowSamples = 0;
+for (var sampleY = -1000; sampleY <= 1000; sampleY += 40)
+for (var sampleX = -1000; sampleX <= 1000; sampleX += 40)
+{
+    var tile = InfiniteWorldGenerator.SampleTile(seed, sampleX, sampleY);
+    macroBiomes[tile.Region] = macroBiomes.GetValueOrDefault(tile.Region) + 1;
+    if (tile.Biome == Biome.Snow) snowSamples++;
+}
+Require(macroBiomes.ContainsKey(WorldBiome.Ocean), "macro world must contain oceans");
+Require(macroBiomes.ContainsKey(WorldBiome.River), "macro world must contain river corridors");
+Require(macroBiomes.ContainsKey(WorldBiome.Alpine), "macro world must contain mountain ranges");
+Require(macroBiomes.ContainsKey(WorldBiome.TemperateForest) ||
+        macroBiomes.ContainsKey(WorldBiome.Rainforest) ||
+        macroBiomes.ContainsKey(WorldBiome.Taiga),
+    "macro world must contain regional forests");
+Require(macroBiomes.Keys.Count >= 7,
+    $"macro climate should produce at least seven biome types; found {macroBiomes.Keys.Count}");
+Require(snowSamples > 0, "cold tundra or alpine terrain must produce visible snow");
+
+var atlasProgress = new System.Collections.Concurrent.ConcurrentBag<(int Done, int Total)>();
+Require(WorldAtlasGenerator.PixelSize == 512,
+    "default atlas output must use the high-resolution 512x512 texture");
+var atlas = WorldAtlasGenerator.Generate(
+    seed, 128, -96,
+    (done, total) => atlasProgress.Add((done, total)),
+    chunksAcross: 2,
+    pixelsPerChunk: 3);
+var repeatedAtlas = WorldAtlasGenerator.Generate(
+    seed, 128, -96, chunksAcross: 2, pixelsPerChunk: 3);
+Require(atlas.Rgba.SequenceEqual(repeatedAtlas.Rgba),
+    "atlas generation must be deterministic");
+Require(atlasProgress.Count == 4 && atlasProgress.Max(value => value.Done) == 4 &&
+        atlasProgress.All(value => value.Total == 4),
+    "atlas progress must report every generated chunk");
+Require(atlas.Width == 6 && atlas.Height == 6 && atlas.SpanTiles == 64,
+    "atlas dimensions must follow its chunk and pixel resolution");
 
 var textureSize = WorldChunk.WeightTextureSize;
 var halo = WorldChunk.WeightHaloTiles * WorldChunk.WeightSamplesPerTile;
@@ -35,6 +75,10 @@ for (var channel = 0; channel < 4; channel++)
             east.BiomeWeightsB[(y * textureSize + eastEdgeX) * 4 + channel],
         $"secondary biome/coast blend seam differs at sample {y}, channel {channel}");
 }
+for (var y = halo; y <= halo + WorldChunk.Size * WorldChunk.WeightSamplesPerTile; y++)
+    Require(origin.ShoreDistance[y * textureSize + originEdgeX] ==
+            east.ShoreDistance[y * textureSize + eastEdgeX],
+        $"shoreline distance seam differs at sample {y}");
 
 var root = Path.Combine(Path.GetTempPath(), $"IslandRpg.WorldChecks.{Guid.NewGuid():N}");
 long regionBytes = 0;
@@ -54,6 +98,8 @@ try
         "primary biome weights must round-trip");
     Require(origin.BiomeWeightsB.SequenceEqual(loaded.BiomeWeightsB),
         "secondary biome and coastline weights must round-trip");
+    Require(origin.ShoreDistance.SequenceEqual(loaded.ShoreDistance),
+        "shoreline distance must round-trip");
     Require(File.Exists(Path.Combine(store.WorldDirectory, "world.json")), "world metadata must be saved");
     var positiveRegion = store.RegionPathFor(new(7, 7));
     Require(File.Exists(positiveRegion), "positive region file must exist");
@@ -88,8 +134,8 @@ finally
 }
 
 Console.WriteLine(
-    $"World checks passed: deterministic generation, seams, persistence, and 64-slot region storage " +
-    $"({regionBytes:N0} bytes for the test region).");
+    $"World checks passed: {macroBiomes.Count} macro biomes, deterministic generation, seams, " +
+    $"persistence, and 64-slot region storage ({regionBytes:N0} bytes for the test region).");
 
 static void Require(bool condition, string message)
 {
@@ -102,5 +148,6 @@ static WorldChunk CloneAt(WorldChunk source, ChunkCoordinate coordinate) => new(
     Tiles = source.Tiles,
     Trees = source.Trees,
     BiomeWeightsA = source.BiomeWeightsA,
-    BiomeWeightsB = source.BiomeWeightsB
+    BiomeWeightsB = source.BiomeWeightsB,
+    ShoreDistance = source.ShoreDistance
 };

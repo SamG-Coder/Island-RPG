@@ -1,8 +1,15 @@
 namespace IslandRpg.World;
 
-internal enum Biome { DeepWater, ShallowWater, Beach, Grassland, Forest, Highland, Rock }
+internal enum Biome { DeepWater, ShallowWater, Beach, Grassland, Forest, Highland, Rock, Snow }
+internal enum WorldBiome
+{
+    Ocean, Coast, River, Wetland, TemperateGrassland, TemperateForest,
+    Rainforest, Savanna, Desert, Taiga, Tundra, Alpine
+}
 
-internal sealed record IslandTile(int X, int Y, Biome Biome, byte North, byte East, byte South, byte West);
+internal sealed record IslandTile(
+    int X, int Y, Biome Biome, byte North, byte East, byte South, byte West,
+    WorldBiome Region = WorldBiome.Ocean);
 internal sealed record IslandTree(int X, int Y, string GraphicName);
 
 internal sealed class IslandMap

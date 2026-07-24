@@ -70,8 +70,27 @@ dotnet run --project src/IslandRpg -- --world --seed 2187
 ```
 
 The same seed produces the same island chains, elevation, ocean depth, biomes,
-and trees. Use WASD, the arrow keys, or left-mouse dragging to move the camera.
+and trees. Low-frequency continental fields create large mainlands alongside
+offshore islands. Separate elevation, moisture, and temperature fields produce
+ocean, coast, river, wetland, grassland, temperate forest, rainforest, savanna,
+desert, taiga, tundra, and alpine regions. Ridged mountain belts, exposed rock,
+snow-covered tundra and peaks, broad forest zones, and carved river corridors
+remain continuous across chunk
+boundaries. Use WASD, the arrow keys, or left-mouse dragging to move the camera.
 The original finite island renderer remains available through `--island`.
+
+Press `M` in the infinite world to open the top-down atlas. Its 32×32-chunk
+overview is generated asynchronously as a 512×512 texture with a progress bar.
+It fills the viewport like a slippy map: drag to pan, use the mouse wheel to
+zoom around the location beneath the cursor, or double-click a location to
+close it and move the detailed world camera there. Zoom levels cover between
+4×4 and 64×64 chunks. The atlas samples deterministic macro terrain without
+creating thousands of full GPU chunks; detailed chunks stream normally after
+travel.
+
+Visible world trees and their shadows are packed into one texture atlas and
+submitted as one depth-ordered GPU batch, so repeated tree types across many
+chunks do not create a draw call per sprite.
 
 Press Escape to close. The current prototype supports classic SLP frames,
 palette colors, player-color pixels, shadows, hotspots, animation, and

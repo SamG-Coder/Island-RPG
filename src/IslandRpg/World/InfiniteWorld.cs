@@ -19,6 +19,7 @@ internal sealed class WorldChunk
     public required IslandTree[] Trees { get; init; }
     public required byte[] BiomeWeightsA { get; init; }
     public required byte[] BiomeWeightsB { get; init; }
+    public required byte[] ShoreDistance { get; init; }
 }
 
 internal static class InfiniteWorldGenerator
@@ -43,30 +44,29 @@ internal static class InfiniteWorldGenerator
             var worldY = originY + y;
             var average = (heights[x, y] + heights[x + 1, y] +
                            heights[x + 1, y + 1] + heights[x, y + 1]) / 4f;
-            var moisture = FractalNoise(seed ^ 0x5deece66dL, worldX / 70f, worldY / 70f, 3);
-            var biome = average switch
-            {
-                < .35f => Biome.DeepWater,
-                < .85f => Biome.ShallowWater,
-                < 1.45f => Biome.Beach,
-                > 6.5f => Biome.Rock,
-                > 4.6f => Biome.Highland,
-                _ when moisture > -.08f => Biome.Forest,
-                _ => Biome.Grassland
-            };
+            var (biome, region) = ClassifyAt(seed, worldX, worldY, average);
             tiles[y * WorldChunk.Size + x] = new(
                 worldX, worldY, biome,
                 Surface(heights[x, y]), Surface(heights[x + 1, y]),
-                Surface(heights[x + 1, y + 1]), Surface(heights[x, y + 1]));
+                Surface(heights[x + 1, y + 1]), Surface(heights[x, y + 1]), region);
 
-            var chance = biome == Biome.Forest ? .18f :
-                biome == Biome.Highland ? .055f : biome == Biome.Beach ? .012f : 0;
+            var chance = region switch
+            {
+                WorldBiome.Rainforest => .31f,
+                WorldBiome.TemperateForest => .23f,
+                WorldBiome.Taiga => .19f,
+                WorldBiome.Wetland => .13f,
+                WorldBiome.Savanna => .065f,
+                WorldBiome.Alpine => .045f,
+                WorldBiome.Coast => .012f,
+                _ => 0
+            };
             if (UnitHash(seed, worldX, worldY, 91) >= chance) continue;
             var variant = (int)(UnitHash(seed, worldX, worldY, 137) * 12) % 12;
-            var graphic = biome switch
+            var graphic = region switch
             {
-                Biome.Beach => "FPAL_NN",
-                Biome.Highland => "FPIN_NN",
+                WorldBiome.Coast or WorldBiome.Savanna => "FPAL_NN",
+                WorldBiome.Taiga or WorldBiome.Alpine => "FPIN_NN",
                 _ => $"TREE{(char)('A' + variant)}_NN"
             };
             trees.Add(new(worldX, worldY, graphic));
@@ -79,11 +79,25 @@ internal static class InfiniteWorldGenerator
             Tiles = tiles,
             Trees = trees.ToArray(),
             BiomeWeightsA = weights.A,
-            BiomeWeightsB = weights.B
+            BiomeWeightsB = weights.B,
+            ShoreDistance = weights.Shore
         };
     }
 
-    internal static (byte[] A, byte[] B) GenerateBiomeWeights(long seed, ChunkCoordinate coordinate)
+    internal static IslandTile SampleTile(long seed, int x, int y)
+    {
+        var north = HeightAt(seed, x, y);
+        var east = HeightAt(seed, x + 1, y);
+        var south = HeightAt(seed, x + 1, y + 1);
+        var west = HeightAt(seed, x, y + 1);
+        var average = (north + east + south + west) / 4f;
+        var (material, region) = ClassifyAt(seed, x, y, average);
+        return new(x, y, material, Surface(north), Surface(east),
+            Surface(south), Surface(west), region);
+    }
+
+    internal static (byte[] A, byte[] B, byte[] Shore) GenerateBiomeWeights(
+        long seed, ChunkCoordinate coordinate)
     {
         const int radius = 10;
         var size = WorldChunk.WeightTextureSize;
@@ -141,6 +155,7 @@ internal static class InfiniteWorldGenerator
 
         var a = new byte[size * size * 4];
         var b = new byte[size * size * 4];
+        var shore = new byte[size * size];
         for (var pixel = 0; pixel < size * size; pixel++)
         {
             var total = 0f;
@@ -163,10 +178,10 @@ internal static class InfiniteWorldGenerator
         {
             var signedSamples = water[pixel] ? distanceToLand[pixel] : -distanceToWater[pixel];
             var signedTiles = signedSamples / WorldChunk.WeightSamplesPerTile;
-            b[pixel * 4 + 3] = (byte)Math.Clamp(
+            shore[pixel] = (byte)Math.Clamp(
                 MathF.Round((signedTiles / encodedRangeTiles * .5f + .5f) * 255), 0, 255);
         }
-        return (a, b);
+        return (a, b, shore);
 
         float[] DistanceTo(bool targetWater)
         {
@@ -204,21 +219,16 @@ internal static class InfiniteWorldGenerator
     {
         var average = (HeightAt(seed, x, y) + HeightAt(seed, x + 1, y) +
                        HeightAt(seed, x + 1, y + 1) + HeightAt(seed, x, y + 1)) / 4f;
-        var moisture = FractalNoise(seed ^ 0x5deece66dL, x / 70f, y / 70f, 3);
-        return average switch
-        {
-            < .35f => Biome.DeepWater,
-            < .85f => Biome.ShallowWater,
-            < 1.45f => Biome.Beach,
-            > 6.5f => Biome.Rock,
-            > 4.6f => Biome.Highland,
-            _ when moisture > -.08f => Biome.Forest,
-            _ => Biome.Grassland
-        };
+        return ClassifyAt(seed, x, y, average).Material;
     }
 
     private static byte HeightAt(long seed, int x, int y)
     {
+        var continental = FractalNoise(seed ^ 0x6a09e667f3bcc909L, x / 720f, y / 720f, 4);
+        var continentalDetail = FractalNoise(
+            seed ^ unchecked((long)0xbb67ae8584caa73bUL), x / 280f, y / 280f, 3);
+        var continentHeight = (continental + continentalDetail * .22f + .12f) * 5.4f;
+
         var cellX = FloorDiv(x, IslandCellSize);
         var cellY = FloorDiv(y, IslandCellSize);
         var island = -1f;
@@ -236,8 +246,69 @@ internal static class InfiniteWorldGenerator
             island = MathF.Max(island, 1f - distance + warp);
         }
 
-        var detail = FractalNoise(seed ^ 0x13198a2e03707344L, x / 19f, y / 19f, 3) * .55f;
-        return (byte)Math.Clamp((int)MathF.Floor((island - .03f) * 8.5f + detail), 0, 9);
+        var islandHeight = (island - .08f) * 7.2f;
+        var ridgeNoise = FractalNoise(seed ^ 0x3c6ef372fe94f82bL, x / 210f, y / 210f, 4);
+        var ridge = MathF.Pow(MathF.Max(0, 1f - MathF.Abs(ridgeNoise)), 4);
+        var mountainGate = Math.Clamp((continental + .15f) * 1.7f, 0, 1);
+        var mountains = ridge * mountainGate * 5.2f;
+        var detail = FractalNoise(seed ^ 0x13198a2e03707344L, x / 22f, y / 22f, 3) * .62f;
+        var elevation = MathF.Max(continentHeight, islandHeight) + mountains + detail;
+
+        var river = RiverStrength(seed, x, y);
+        if (elevation > 1.1f)
+            elevation -= river * MathF.Min(3.2f, elevation - .35f);
+        return (byte)Math.Clamp((int)MathF.Floor(elevation), 0, 9);
+    }
+
+    private static (Biome Material, WorldBiome Region) ClassifyAt(
+        long seed, int x, int y, float elevation)
+    {
+        if (elevation < .35f) return (Biome.DeepWater, WorldBiome.Ocean);
+        if (elevation < .85f) return (Biome.ShallowWater, WorldBiome.Ocean);
+
+        var river = RiverStrength(seed, x, y);
+        var continental = FractalNoise(seed ^ 0x6a09e667f3bcc909L, x / 720f, y / 720f, 4);
+        if (river > .56f && continental > -.18f && elevation < 4.8f)
+            return (Biome.ShallowWater, WorldBiome.River);
+        if (elevation < 1.45f) return (Biome.Beach, WorldBiome.Coast);
+
+        var moisture = Math.Clamp(
+            .5f + FractalNoise(seed ^ 0x5deece66dL, x / 430f, y / 430f, 4) * .34f +
+            FractalNoise(seed ^ unchecked((long)0xa54ff53a5f1d36f1UL),
+                x / 105f, y / 105f, 2) * .16f +
+            river * .24f, 0, 1);
+        var climateBand = MathF.Sin((y + seed % 10000) / 1450f);
+        var temperature = Math.Clamp(
+            .55f + climateBand * .24f +
+            FractalNoise(seed ^ 0x510e527fade682d1L, x / 610f, y / 610f, 3) * .22f -
+            MathF.Max(0, elevation - 3) * .055f, 0, 1);
+
+        if (elevation > 6.4f)
+            return (temperature < .62f ? Biome.Snow : Biome.Rock, WorldBiome.Alpine);
+        if (elevation > 5.0f)
+            return temperature < .45f
+                ? (Biome.Snow, WorldBiome.Alpine)
+                : (Biome.Highland, WorldBiome.TemperateGrassland);
+        if (temperature < .20f) return (Biome.Snow, WorldBiome.Tundra);
+        if (temperature < .36f)
+            return moisture > .43f
+                ? (Biome.Forest, WorldBiome.Taiga)
+                : (Biome.Snow, WorldBiome.Tundra);
+        if (moisture < .22f && temperature > .5f) return (Biome.Beach, WorldBiome.Desert);
+        if (moisture < .39f && temperature > .55f) return (Biome.Grassland, WorldBiome.Savanna);
+        if (river > .24f && moisture > .62f) return (Biome.Forest, WorldBiome.Wetland);
+        if (moisture > .72f && temperature > .58f) return (Biome.Forest, WorldBiome.Rainforest);
+        if (moisture > .53f) return (Biome.Forest, WorldBiome.TemperateForest);
+        return (Biome.Grassland, WorldBiome.TemperateGrassland);
+    }
+
+    private static float RiverStrength(long seed, int x, int y)
+    {
+        var broad = FractalNoise(seed ^ 0x1f83d9abfb41bd6bL, x / 390f, y / 390f, 3);
+        var meander = FractalNoise(seed ^ 0x5be0cd19137e2179L, x / 125f, y / 125f, 2) * .30f;
+        var distance = MathF.Abs(broad + meander);
+        var strength = 1f - Math.Clamp((distance - .018f) / .065f, 0, 1);
+        return strength * strength;
     }
 
     private static byte Surface(byte height) => height <= 2 ? (byte)0 : height;
@@ -302,7 +373,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 3;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 1;
+    private const int ChunkPayloadVersion = 3;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -479,6 +550,7 @@ internal sealed class WorldChunkStore
                 writer.Write((byte)tile.Biome);
                 writer.Write(tile.North); writer.Write(tile.East);
                 writer.Write(tile.South); writer.Write(tile.West);
+                writer.Write((byte)tile.Region);
             }
             writer.Write(chunk.Trees.Length);
             foreach (var tree in chunk.Trees)
@@ -496,9 +568,14 @@ internal sealed class WorldChunkStore
         try
         {
             using var reader = new BinaryReader(new MemoryStream(payload));
-            if (reader.ReadInt32() != ChunkPayloadVersion ||
-                reader.ReadInt32() != coordinate.X || reader.ReadInt32() != coordinate.Y)
+            var payloadVersion = reader.ReadInt32();
+            var storedX = reader.ReadInt32();
+            var storedY = reader.ReadInt32();
+            if (payloadVersion < 1 || payloadVersion > ChunkPayloadVersion ||
+                storedX != coordinate.X || storedY != coordinate.Y)
                 throw new InvalidDataException($"Chunk payload does not match {coordinate}.");
+            if (payloadVersion < ChunkPayloadVersion)
+                return InfiniteWorldGenerator.Generate(Seed, coordinate);
             var tileCount = reader.ReadInt32();
             if (tileCount != WorldChunk.Size * WorldChunk.Size)
                 throw new InvalidDataException($"Chunk tile count is invalid: {tileCount}");
@@ -507,11 +584,18 @@ internal sealed class WorldChunkStore
             {
                 var localX = i % WorldChunk.Size;
                 var localY = i / WorldChunk.Size;
+                var material = (Biome)reader.ReadByte();
+                var north = reader.ReadByte();
+                var east = reader.ReadByte();
+                var south = reader.ReadByte();
+                var west = reader.ReadByte();
+                var region = payloadVersion >= 2
+                    ? (WorldBiome)reader.ReadByte()
+                    : InferWorldBiome(material);
                 tiles[i] = new(
                     coordinate.X * WorldChunk.Size + localX,
                     coordinate.Y * WorldChunk.Size + localY,
-                    (Biome)reader.ReadByte(),
-                    reader.ReadByte(), reader.ReadByte(), reader.ReadByte(), reader.ReadByte());
+                    material, north, east, south, west, region);
             }
             var treeCount = reader.ReadInt32();
             if (treeCount < 0 || treeCount > tileCount)
@@ -526,7 +610,8 @@ internal sealed class WorldChunkStore
             return new()
             {
                 Coordinate = coordinate, Tiles = tiles, Trees = trees,
-                BiomeWeightsA = weights.A, BiomeWeightsB = weights.B
+                BiomeWeightsA = weights.A, BiomeWeightsB = weights.B,
+                ShoreDistance = weights.Shore
             };
         }
         catch (EndOfStreamException ex)
@@ -534,6 +619,15 @@ internal sealed class WorldChunkStore
             throw new InvalidDataException($"Chunk payload is truncated: {coordinate}", ex);
         }
     }
+
+    private static WorldBiome InferWorldBiome(Biome material) => material switch
+    {
+        Biome.DeepWater or Biome.ShallowWater => WorldBiome.Ocean,
+        Biome.Beach => WorldBiome.Coast,
+        Biome.Forest => WorldBiome.TemperateForest,
+        Biome.Highland or Biome.Rock => WorldBiome.Alpine,
+        _ => WorldBiome.TemperateGrassland
+    };
 
     private WorldChunk? LoadLegacyChunk(ChunkCoordinate coordinate)
     {
@@ -550,8 +644,14 @@ internal sealed class WorldChunkStore
             var tileCount = reader.ReadInt32();
             var tiles = new IslandTile[tileCount];
             for (var i = 0; i < tileCount; i++)
-                tiles[i] = new(reader.ReadInt32(), reader.ReadInt32(), (Biome)reader.ReadByte(),
-                    reader.ReadByte(), reader.ReadByte(), reader.ReadByte(), reader.ReadByte());
+            {
+                var tileX = reader.ReadInt32();
+                var tileY = reader.ReadInt32();
+                var material = (Biome)reader.ReadByte();
+                tiles[i] = new(tileX, tileY, material,
+                    reader.ReadByte(), reader.ReadByte(), reader.ReadByte(), reader.ReadByte(),
+                    InferWorldBiome(material));
+            }
             var treeCount = reader.ReadInt32();
             var trees = new IslandTree[treeCount];
             for (var i = 0; i < treeCount; i++)
@@ -564,7 +664,8 @@ internal sealed class WorldChunkStore
             return new()
             {
                 Coordinate = coordinate, Tiles = tiles, Trees = trees,
-                BiomeWeightsA = weights.A, BiomeWeightsB = weights.B
+                BiomeWeightsA = weights.A, BiomeWeightsB = weights.B,
+                ShoreDistance = weights.Shore
             };
         }
         catch (EndOfStreamException ex)
