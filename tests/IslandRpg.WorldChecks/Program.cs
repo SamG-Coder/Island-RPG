@@ -11,6 +11,9 @@ Require(origin.BiomeWeightsA.SequenceEqual(repeated.BiomeWeightsA),
     "same seed and coordinate must reproduce primary biome weights");
 Require(origin.BiomeWeightsB.SequenceEqual(repeated.BiomeWeightsB),
     "same seed and coordinate must reproduce secondary biome and coastline weights");
+Require(origin.BiomeWeightsC.SequenceEqual(repeated.BiomeWeightsC) &&
+        origin.BiomeWeightsD.SequenceEqual(repeated.BiomeWeightsD),
+    "same seed and coordinate must reproduce extended material weights");
 Require(origin.ShoreDistance.SequenceEqual(repeated.ShoreDistance),
     "same seed and coordinate must reproduce shoreline distance");
 
@@ -34,10 +37,12 @@ var deepOceanSamples = 0;
 var shallowOceanSamples = 0;
 var drainageSamples = 0;
 var accumulatedRiverFlow = 0f;
+var surfaceMaterials = new HashSet<Biome>();
 for (var sampleY = -1000; sampleY <= 1000; sampleY += 40)
 for (var sampleX = -1000; sampleX <= 1000; sampleX += 40)
 {
     var tile = InfiniteWorldGenerator.SampleTile(seed, sampleX, sampleY);
+    surfaceMaterials.Add(tile.Biome);
     var drainage = MacroHydrology.At(seed, sampleX, sampleY);
     macroBiomes[tile.Region] = macroBiomes.GetValueOrDefault(tile.Region) + 1;
     if (tile.Biome == Biome.Snow) snowSamples++;
@@ -72,6 +77,8 @@ Require(deepOceanSamples > 0 && shallowOceanSamples > 0,
     "oceans must contain both deep basins and shallow continental shelves");
 Require(drainageSamples > 0 && accumulatedRiverFlow / drainageSamples > 5,
     "rivers must be selected from cells with accumulated upstream rainfall");
+Require(surfaceMaterials.Count >= 12,
+    $"macro climate must exercise the expanded natural material palette; found {surfaceMaterials.Count}");
 for (var seamY = -384; seamY <= 384; seamY += 64)
 {
     var westDrainage = MacroHydrology.At(seed, 511.99f, seamY);
@@ -120,6 +127,11 @@ for (var channel = 0; channel < 4; channel++)
     Require(origin.BiomeWeightsB[(y * textureSize + originEdgeX) * 4 + channel] ==
             east.BiomeWeightsB[(y * textureSize + eastEdgeX) * 4 + channel],
         $"secondary biome/coast blend seam differs at sample {y}, channel {channel}");
+    Require(origin.BiomeWeightsC[(y * textureSize + originEdgeX) * 4 + channel] ==
+            east.BiomeWeightsC[(y * textureSize + eastEdgeX) * 4 + channel] &&
+            origin.BiomeWeightsD[(y * textureSize + originEdgeX) * 4 + channel] ==
+            east.BiomeWeightsD[(y * textureSize + eastEdgeX) * 4 + channel],
+        $"extended material blend seam differs at sample {y}, channel {channel}");
 }
 for (var y = halo; y <= halo + WorldChunk.Size * WorldChunk.WeightSamplesPerTile; y++)
     Require(origin.ShoreDistance[y * textureSize + originEdgeX] ==
@@ -145,6 +157,9 @@ try
         "primary biome weights must round-trip");
     Require(origin.BiomeWeightsB.SequenceEqual(loaded.BiomeWeightsB),
         "secondary biome and coastline weights must round-trip");
+    Require(origin.BiomeWeightsC.SequenceEqual(loaded.BiomeWeightsC) &&
+            origin.BiomeWeightsD.SequenceEqual(loaded.BiomeWeightsD),
+        "extended natural-material weights must round-trip");
     Require(origin.ShoreDistance.SequenceEqual(loaded.ShoreDistance),
         "shoreline distance must round-trip");
     Require(File.Exists(Path.Combine(store.WorldDirectory, "world.json")), "world metadata must be saved");
@@ -162,7 +177,8 @@ try
         "saving an unchanged chunk must not append duplicate region data");
     Require(new FileInfo(positiveRegion).Length <
             (long)WorldChunkStore.RegionSize * WorldChunkStore.RegionSize *
-            (origin.BiomeWeightsA.Length + origin.BiomeWeightsB.Length),
+            (origin.BiomeWeightsA.Length + origin.BiomeWeightsB.Length +
+             origin.BiomeWeightsC.Length + origin.BiomeWeightsD.Length),
         "region storage must be smaller than persisting deterministic render textures");
     var farLoaded = store.LoadOrGenerate(new(7, 7));
     Require(farLoaded.Coordinate == new ChunkCoordinate(7, 7),
@@ -196,6 +212,8 @@ static WorldChunk CloneAt(WorldChunk source, ChunkCoordinate coordinate) => new(
     Trees = source.Trees,
     BiomeWeightsA = source.BiomeWeightsA,
     BiomeWeightsB = source.BiomeWeightsB,
+    BiomeWeightsC = source.BiomeWeightsC,
+    BiomeWeightsD = source.BiomeWeightsD,
     ShoreDistance = source.ShoreDistance,
     Cliffs = source.Cliffs
 };

@@ -1,6 +1,12 @@
 namespace IslandRpg.World;
 
-internal enum Biome { DeepWater, ShallowWater, Beach, Grassland, Forest, Highland, Rock, Snow }
+internal enum Biome
+{
+    DeepWater, ShallowWater, RiverWater, MangroveShallows,
+    Beach, Grassland, DryGrass, Mud,
+    Forest, JungleFloor, Highland, Rock,
+    Tundra, Snow, DesertSand, CrackedEarth
+}
 internal enum WorldBiome
 {
     Ocean, Coast, River, Wetland, TemperateGrassland, TemperateForest,
@@ -54,7 +60,7 @@ internal static class IslandGenerator
             var moisture = (MathF.Sin(x * .29f) + MathF.Cos(y * .23f) + MathF.Sin((x-y)*.11f)) / 3f;
             var biome = average switch
             {
-                < .35f => Biome.DeepWater,
+                < .62f => Biome.DeepWater,
                 < .85f => Biome.ShallowWater,
                 < 1.45f => Biome.Beach,
                 > 4.8f => Biome.Rock,

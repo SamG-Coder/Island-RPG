@@ -13,13 +13,16 @@ internal sealed class GameHostWindow : GameWindow
     internal enum PreviewMode { Assets, Island, World }
     private enum ScreenState { LoadingAssets, PreparingGpu, WorldPreview }
     private sealed class GpuWorldChunk(
-        WorldChunk chunk, int vbo, int vertexCount, int weightsA, int weightsB, int shoreDistance)
+        WorldChunk chunk, int vbo, int vertexCount,
+        int weightsA, int weightsB, int weightsC, int weightsD, int shoreDistance)
     {
         public WorldChunk Chunk { get; } = chunk;
         public int Vbo { get; } = vbo;
         public int VertexCount { get; } = vertexCount;
         public int WeightsA { get; } = weightsA;
         public int WeightsB { get; } = weightsB;
+        public int WeightsC { get; } = weightsC;
+        public int WeightsD { get; } = weightsD;
         public int ShoreDistance { get; } = shoreDistance;
         public float Opacity { get; set; }
     }
@@ -68,6 +71,8 @@ internal sealed class GameHostWindow : GameWindow
     private int _terrainArray;
     private int _biomeWeightsA;
     private int _biomeWeightsB;
+    private int _biomeWeightsC;
+    private int _biomeWeightsD;
     private int _shoreDistance;
     private int _waterNormalArray;
     private int _streamVbo;
@@ -884,7 +889,8 @@ internal sealed class GameHostWindow : GameWindow
         GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float),
             vertices.ToArray(), BufferUsageHint.StaticDraw);
         var weights = UploadChunkBiomeWeights(chunk);
-        return new(chunk, vbo, vertices.Count / 12, weights.A, weights.B, weights.Shore);
+        return new(chunk, vbo, vertices.Count / 12,
+            weights.A, weights.B, weights.C, weights.D, weights.Shore);
 
         float LayerAt(int x, int y, Biome fallback) =>
             layers[x < 0 || y < 0 || x >= WorldChunk.Size || y >= WorldChunk.Size
@@ -929,10 +935,12 @@ internal sealed class GameHostWindow : GameWindow
         }
     }
 
-    private static (int A, int B, int Shore) UploadChunkBiomeWeights(WorldChunk chunk)
+    private static (int A, int B, int C, int D, int Shore) UploadChunkBiomeWeights(WorldChunk chunk)
     {
         return (Upload(chunk.BiomeWeightsA, PixelInternalFormat.Rgba8, PixelFormat.Rgba),
             Upload(chunk.BiomeWeightsB, PixelInternalFormat.Rgba8, PixelFormat.Rgba),
+            Upload(chunk.BiomeWeightsC, PixelInternalFormat.Rgba8, PixelFormat.Rgba),
+            Upload(chunk.BiomeWeightsD, PixelInternalFormat.Rgba8, PixelFormat.Rgba),
             Upload(chunk.ShoreDistance, PixelInternalFormat.R8, PixelFormat.Red));
 
         static int Upload(byte[] data, PixelInternalFormat internalFormat, PixelFormat format)
@@ -987,11 +995,17 @@ internal sealed class GameHostWindow : GameWindow
         GL.BindTexture(TextureTarget.Texture2D, gpu.WeightsB);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "biomeWeightsB"), 2);
         GL.ActiveTexture(TextureUnit.Texture3);
-        GL.BindTexture(TextureTarget.Texture2DArray, _waterNormalArray);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "waterNormals"), 3);
+        GL.BindTexture(TextureTarget.Texture2D, gpu.WeightsC);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "biomeWeightsC"), 3);
         GL.ActiveTexture(TextureUnit.Texture4);
+        GL.BindTexture(TextureTarget.Texture2D, gpu.WeightsD);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "biomeWeightsD"), 4);
+        GL.ActiveTexture(TextureUnit.Texture5);
+        GL.BindTexture(TextureTarget.Texture2DArray, _waterNormalArray);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "waterNormals"), 5);
+        GL.ActiveTexture(TextureUnit.Texture6);
         GL.BindTexture(TextureTarget.Texture2D, gpu.ShoreDistance);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "shoreDistance"), 4);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "shoreDistance"), 6);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "time"), _waterTime);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "opacity"), gpu.Opacity);
         GL.BindBuffer(BufferTarget.ArrayBuffer, gpu.Vbo);
@@ -1023,6 +1037,8 @@ internal sealed class GameHostWindow : GameWindow
         GL.DeleteBuffer(gpu.Vbo);
         GL.DeleteTexture(gpu.WeightsA);
         GL.DeleteTexture(gpu.WeightsB);
+        GL.DeleteTexture(gpu.WeightsC);
+        GL.DeleteTexture(gpu.WeightsD);
         GL.DeleteTexture(gpu.ShoreDistance);
     }
 
@@ -1046,13 +1062,21 @@ internal sealed class GameHostWindow : GameWindow
     {
         return biome switch
         {
-            Biome.DeepWater => "g_wtr_00_color",
-            Biome.ShallowWater => "g_sha_00_color",
+            Biome.DeepWater => "g_wt4_00_COLOR",
+            Biome.ShallowWater => "g_wt3_00_color",
+            Biome.RiverWater => "g_sha_00_color",
+            Biome.MangroveShallows => "g_sh3_00_color",
             Biome.Beach => "g_bch_00_color",
             Biome.Forest => "g_for_00_color",
+            Biome.JungleFloor => "g_fo2_00_color",
+            Biome.DryGrass => "g_gr5_00_color",
+            Biome.Mud => "g_gr4_00_color",
             Biome.Highland => "g_gr3_00_color",
             Biome.Rock => "g_rck_00_COLOR",
+            Biome.Tundra => "g_sng_00_color",
             Biome.Snow => "g_sno_00_color",
+            Biome.DesertSand => "g_pal_00_color",
+            Biome.CrackedEarth => "g_pal1_00_COLOR",
             _ => "g_grs_00_color"
         };
     }
@@ -1094,7 +1118,8 @@ internal sealed class GameHostWindow : GameWindow
         GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float), vertices.ToArray(), BufferUsageHint.StaticDraw);
         _terrainArray = UploadTerrainArray();
         _waterNormalArray = UploadWaterNormalArray();
-        (_biomeWeightsA, _biomeWeightsB, _shoreDistance) = UploadBiomeWeights();
+        (_biomeWeightsA, _biomeWeightsB, _biomeWeightsC, _biomeWeightsD, _shoreDistance) =
+            UploadBiomeWeights();
         _terrainProgram = CreateTerrainProgram();
 
         float LayerAt(int x, int y, Biome fallback) =>
@@ -1119,11 +1144,17 @@ internal sealed class GameHostWindow : GameWindow
         GL.BindTexture(TextureTarget.Texture2D, _biomeWeightsB);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "biomeWeightsB"), 2);
         GL.ActiveTexture(TextureUnit.Texture3);
-        GL.BindTexture(TextureTarget.Texture2DArray, _waterNormalArray);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "waterNormals"), 3);
+        GL.BindTexture(TextureTarget.Texture2D, _biomeWeightsC);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "biomeWeightsC"), 3);
         GL.ActiveTexture(TextureUnit.Texture4);
+        GL.BindTexture(TextureTarget.Texture2D, _biomeWeightsD);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "biomeWeightsD"), 4);
+        GL.ActiveTexture(TextureUnit.Texture5);
+        GL.BindTexture(TextureTarget.Texture2DArray, _waterNormalArray);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "waterNormals"), 5);
+        GL.ActiveTexture(TextureUnit.Texture6);
         GL.BindTexture(TextureTarget.Texture2D, _shoreDistance);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "shoreDistance"), 4);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "shoreDistance"), 6);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "time"), _waterTime);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "opacity"), 1f);
         GL.ActiveTexture(TextureUnit.Texture0);
@@ -1263,7 +1294,7 @@ internal sealed class GameHostWindow : GameWindow
         return textureArray;
     }
 
-    private (int A, int B, int Shore) UploadBiomeWeights()
+    private (int A, int B, int C, int D, int Shore) UploadBiomeWeights()
     {
         const int samplesPerTile = 4;
         const int radius = 10;
@@ -1317,6 +1348,8 @@ internal sealed class GameHostWindow : GameWindow
 
         var a = new byte[size * size * 4];
         var b = new byte[size * size * 4];
+        var c = new byte[size * size * 4];
+        var d = new byte[size * size * 4];
         var shore = new byte[size * size];
         for (var pixel = 0; pixel < size * size; pixel++)
         {
@@ -1329,7 +1362,9 @@ internal sealed class GameHostWindow : GameWindow
                     MathF.Round(weights[pixel * channels + channel] / Math.Max(total, .0001f) * 255),
                     0, 255);
                 if (channel < 4) a[pixel * 4 + channel] = value;
-                else b[pixel * 4 + channel - 4] = value;
+                else if (channel < 8) b[pixel * 4 + channel - 4] = value;
+                else if (channel < 12) c[pixel * 4 + channel - 8] = value;
+                else d[pixel * 4 + channel - 12] = value;
             }
         }
 
@@ -1343,7 +1378,9 @@ internal sealed class GameHostWindow : GameWindow
             var tile = _island!.Tiles[
                 Math.Min(IslandMap.Size - 1, y / samplesPerTile) * IslandMap.Size +
                 Math.Min(IslandMap.Size - 1, x / samplesPerTile)];
-            waterPixels[y * size + x] = tile.Biome is Biome.DeepWater or Biome.ShallowWater;
+            waterPixels[y * size + x] = tile.Biome is
+                Biome.DeepWater or Biome.ShallowWater or
+                Biome.RiverWater or Biome.MangroveShallows;
         }
         var distanceToWater = DistanceTo(targetWater: true);
         var distanceToLand = DistanceTo(targetWater: false);
@@ -1358,6 +1395,8 @@ internal sealed class GameHostWindow : GameWindow
 
         return (UploadWeightTexture(a, PixelInternalFormat.Rgba8, PixelFormat.Rgba),
             UploadWeightTexture(b, PixelInternalFormat.Rgba8, PixelFormat.Rgba),
+            UploadWeightTexture(c, PixelInternalFormat.Rgba8, PixelFormat.Rgba),
+            UploadWeightTexture(d, PixelInternalFormat.Rgba8, PixelFormat.Rgba),
             UploadWeightTexture(shore, PixelInternalFormat.R8, PixelFormat.Red));
 
         float[] DistanceTo(bool targetWater)
@@ -1501,6 +1540,8 @@ internal sealed class GameHostWindow : GameWindow
             uniform sampler2DArray terrain;
             uniform sampler2D biomeWeightsA;
             uniform sampler2D biomeWeightsB;
+            uniform sampler2D biomeWeightsC;
+            uniform sampler2D biomeWeightsD;
             uniform sampler2D shoreDistance;
             uniform sampler2DArray waterNormals;
             uniform float time;
@@ -1542,17 +1583,27 @@ internal sealed class GameHostWindow : GameWindow
                 return result;
             }
             vec4 sampleLayer(float layer) { return sampleLayerAt(layer, uv); }
+            vec4 sampleWaterLayer(float layer, vec2 coordinates) {
+                // Retain some of the soft, cloudy variation from the stochastic
+                // terrain blend, but keep the original water sheet dominant.
+                vec4 primary = texture(terrain, vec3(coordinates, layer));
+                vec4 organic = sampleLayerAt(layer, coordinates * 0.72);
+                return mix(primary, organic, 0.32);
+            }
             vec2 normalXY(float layer, vec2 coordinates) {
                 return texture(waterNormals, vec3(coordinates, layer)).xy * 2.0 - 1.0;
             }
             void main() {
                 vec4 a = texture(biomeWeightsA, mapUv);
                 vec4 b = texture(biomeWeightsB, mapUv);
+                vec4 c = texture(biomeWeightsC, mapUv);
+                vec4 d = texture(biomeWeightsD, mapUv);
                 float shorelineDistance = (texture(shoreDistance, mapUv).r * 2.0 - 1.0) * 8.0;
                 float shorelineProximity = 1.0 - smoothstep(0.0, 3.0, abs(shorelineDistance));
-                float total = max(dot(a, vec4(1.0)) + dot(b, vec4(1.0)), 0.001);
+                float total = max(dot(a, vec4(1.0)) + dot(b, vec4(1.0)) +
+                                  dot(c, vec4(1.0)) + dot(d, vec4(1.0)), 0.001);
                 color = vec4(0.0);
-                float waterWeight = a.r + a.g;
+                float waterWeight = dot(a, vec4(1.0));
                 float waterCoverage = clamp(waterWeight / total, 0.0, 1.0);
                 float surfaceEffect = smoothstep(0.38, 0.72, waterCoverage);
                 vec3 waterNormal = vec3(0.0, 0.0, 1.0);
@@ -1561,36 +1612,67 @@ internal sealed class GameHostWindow : GameWindow
                 vec2 secondaryFlow = vec2(0.0, 1.0);
                 float waveSlope = 0.0;
                 if (waterWeight > 0.002) {
-                    // Smooth regional flow cells prevent the entire ocean from
-                    // travelling in one visibly uniform direction.
-                    float flowAngle = (valueNoise(mapUv * 7.0) - 0.5) * 5.2;
+                    // IslandMap-style regional currents, evaluated in global
+                    // world UVs so neighbouring streamed chunks remain seamless.
+                    float flowAngle = (valueNoise(uv * 0.11) - 0.5) * 5.2;
                     primaryFlow = vec2(cos(flowAngle), sin(flowAngle));
                     float secondAngle = flowAngle + 1.75 +
-                                        (valueNoise(mapUv * 11.0 + 19.7) - 0.5) * 0.8;
+                        (valueNoise(uv * 0.17 + 19.7) - 0.5) * 0.8;
                     secondaryFlow = vec2(cos(secondAngle), sin(secondAngle));
-                    vec2 deepA = normalXY(0.0, uv * 1.35 + primaryFlow * time * 0.034);
-                    vec2 deepB = normalXY(1.0, uv * 0.73 + secondaryFlow * time * 0.025);
-                    vec2 shoreA = normalXY(2.0, uv * 1.65 + primaryFlow * time * 0.021);
-                    vec2 shoreB = normalXY(3.0, uv * 0.92 - secondaryFlow * time * 0.019);
-                    float shallow = a.g / max(waterWeight, 0.001);
+                    vec2 deepA = normalXY(
+                        0.0, uv * 1.35 + primaryFlow * time * 0.034);
+                    vec2 deepB = normalXY(
+                        1.0, uv * 0.73 + secondaryFlow * time * 0.025);
+                    vec2 shoreA = normalXY(
+                        2.0, uv * 1.65 + primaryFlow * time * 0.021);
+                    vec2 shoreB = normalXY(
+                        3.0, uv * 0.92 - secondaryFlow * time * 0.019);
+                    float shallow = (a.g + a.b + a.a) / max(waterWeight, 0.001);
                     vec2 waves = mix(deepA * 0.62 + deepB * 0.38,
-                                     shoreA * 0.42 + shoreB * 0.25, shallow);
+                                     shoreA * 0.62 + shoreB * 0.38, shallow);
                     waveSlope = length(waves);
-                    waterNormal = normalize(vec3(waves * mix(1.12, 0.68, shallow), 1.0));
-                    waterDistortion = waterNormal.xy * mix(0.027, 0.014, shallow);
+                    // Shallow water keeps its own wave pattern, but uses the
+                    // same normal strength so its moving shine does not disappear.
+                    waterNormal = normalize(vec3(waves * 1.12, 1.0));
+                    waterDistortion =
+                        waterNormal.xy * mix(0.027, 0.014, shallow);
                 }
-                if (a.r > 0.002) color += sampleLayerAt(0.0, uv + waterDistortion) * a.r;
-                if (a.g > 0.002) color += sampleLayerAt(1.0, uv + waterDistortion) * a.g;
-                if (a.b > 0.002) color += sampleLayer(2.0) * a.b;
-                if (a.a > 0.002) color += sampleLayer(3.0) * a.a;
+                vec4 deepWaterSample = vec4(0.0);
+                if (a.r > 0.002 || a.g > 0.002) {
+                    deepWaterSample = sampleWaterLayer(0.0, uv + waterDistortion);
+                }
+                if (a.r > 0.002) color += deepWaterSample * a.r;
+                if (a.g > 0.002) {
+                    vec4 lightWaterSample =
+                        sampleWaterLayer(1.0, uv + waterDistortion);
+                    // Three-stage ocean falloff: dark open sea, a related
+                    // mid-blue shelf, then the lighter blue immediately offshore.
+                    float coastalStage = 1.0 - smoothstep(0.35, 7.0,
+                        max(shorelineDistance, 0.0));
+                    // Keep the middle shelf related to the deep ocean, while
+                    // allowing the actual coastal strip to reach the light sheet.
+                    float shelfLight = mix(0.72, 1.0, coastalStage);
+                    vec4 stagedShelf = mix(deepWaterSample, lightWaterSample, shelfLight);
+                    color += stagedShelf * a.g;
+                }
+                if (a.b > 0.002) color += sampleWaterLayer(2.0, uv + waterDistortion) * a.b;
+                if (a.a > 0.002) color += sampleWaterLayer(3.0, uv + waterDistortion) * a.a;
                 if (b.r > 0.002) color += sampleLayer(4.0) * b.r;
                 if (b.g > 0.002) color += sampleLayer(5.0) * b.g;
                 if (b.b > 0.002) color += sampleLayer(6.0) * b.b;
                 if (b.a > 0.002) color += sampleLayer(7.0) * b.a;
+                if (c.r > 0.002) color += sampleLayer(8.0) * c.r;
+                if (c.g > 0.002) color += sampleLayer(9.0) * c.g;
+                if (c.b > 0.002) color += sampleLayer(10.0) * c.b;
+                if (c.a > 0.002) color += sampleLayer(11.0) * c.a;
+                if (d.r > 0.002) color += sampleLayer(12.0) * d.r;
+                if (d.g > 0.002) color += sampleLayer(13.0) * d.g;
+                if (d.b > 0.002) color += sampleLayer(14.0) * d.b;
+                if (d.a > 0.002) color += sampleLayer(15.0) * d.a;
                 color /= total;
                 // Directional relief lighting affects land only. The upper-right
                 // light direction matches the classic isometric hill treatment.
-                float snowCoverage = clamp(b.a / total, 0.0, 1.0);
+                float snowCoverage = clamp(d.g / total, 0.0, 1.0);
                 float softenedShade = mix(terrainShade, 1.0, snowCoverage * 0.62);
                 color.rgb *= mix(softenedShade, 1.0, waterCoverage);
                 if (snowCoverage > 0.001 && softenedShade < 1.0) {
@@ -1606,7 +1688,8 @@ internal sealed class GameHostWindow : GameWindow
                     vec3 reflection = vec3(0.38, 0.70, 0.84) * broadHighlight * 0.11 +
                                       vec3(0.86, 0.97, 1.0) * sparkle * 0.38 +
                                       vec3(0.24, 0.58, 0.67) * crest * 0.075;
-                    color.rgb = mix(color.rgb, color.rgb * (0.96 + broadHighlight * 0.11), surfaceEffect);
+                    color.rgb = mix(color.rgb,
+                        color.rgb * (0.96 + broadHighlight * 0.11), surfaceEffect);
                     color.rgb += reflection * surfaceEffect;
 
                     // Whitecaps only form where an animated wave is steep and
@@ -1616,7 +1699,8 @@ internal sealed class GameHostWindow : GameWindow
                     float breakup = breakupA * 0.62 + breakupB * 0.38;
                     float steepCrest = smoothstep(0.48, 0.88, waveSlope);
                     float sparsePatch = smoothstep(0.61, 0.79, breakup);
-                    float shallowBoost = smoothstep(0.10, 0.62, a.g / max(waterWeight, 0.001));
+                    float shallowBoost = smoothstep(
+                        0.10, 0.62, (a.g + a.b + a.a) / max(waterWeight, 0.001));
                     float shoreBoost = max(shallowBoost,
                         shorelineProximity * step(0.0, shorelineDistance));
                     float foam = steepCrest * sparsePatch * mix(0.42, 0.82, shoreBoost);
@@ -1679,6 +1763,8 @@ internal sealed class GameHostWindow : GameWindow
         if (_terrainArray != 0) GL.DeleteTexture(_terrainArray);
         if (_biomeWeightsA != 0) GL.DeleteTexture(_biomeWeightsA);
         if (_biomeWeightsB != 0) GL.DeleteTexture(_biomeWeightsB);
+        if (_biomeWeightsC != 0) GL.DeleteTexture(_biomeWeightsC);
+        if (_biomeWeightsD != 0) GL.DeleteTexture(_biomeWeightsD);
         if (_shoreDistance != 0) GL.DeleteTexture(_shoreDistance);
         if (_waterNormalArray != 0) GL.DeleteTexture(_waterNormalArray);
         foreach (var texture in _atlasTileTextures.Values) GL.DeleteTexture(texture);

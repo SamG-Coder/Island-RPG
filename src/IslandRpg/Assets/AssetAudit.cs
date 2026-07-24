@@ -15,6 +15,7 @@ internal static class AssetAudit
             loadedCount = catalog.Graphics.Count,
             unavailableReferenceCount = catalog.Missing.Count,
             terrainTileCount = catalog.TerrainTiles.Count,
+            waterTextureCount = catalog.WaterTextures.Count,
             classifications = catalog.Graphics.Values
                 .GroupBy(value => value.Kind)
                 .ToDictionary(group => group.Key.ToString(), group => group.Count()),
@@ -35,6 +36,13 @@ internal static class AssetAudit
                 value.Reason
             }),
             terrainTiles = catalog.TerrainTiles.Select(value => new
+            {
+                value.Name,
+                value.Width,
+                value.Height,
+                value.SourcePath
+            }),
+            waterTextures = catalog.WaterTextures.Select(value => new
             {
                 value.Name,
                 value.Width,

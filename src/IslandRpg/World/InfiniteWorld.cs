@@ -21,6 +21,8 @@ internal sealed class WorldChunk
     public required IslandTree[] Trees { get; init; }
     public required byte[] BiomeWeightsA { get; init; }
     public required byte[] BiomeWeightsB { get; init; }
+    public required byte[] BiomeWeightsC { get; init; }
+    public required byte[] BiomeWeightsD { get; init; }
     public required byte[] ShoreDistance { get; init; }
     public required CliffFace[] Cliffs { get; init; }
 }
@@ -86,6 +88,8 @@ internal static class InfiniteWorldGenerator
             Trees = trees.ToArray(),
             BiomeWeightsA = weights.A,
             BiomeWeightsB = weights.B,
+            BiomeWeightsC = weights.C,
+            BiomeWeightsD = weights.D,
             ShoreDistance = weights.Shore,
             Cliffs = cliffs
         };
@@ -147,13 +151,13 @@ internal static class InfiniteWorldGenerator
     internal static byte SampleSurfaceHeight(long seed, int x, int y) =>
         Surface(HeightAt(seed, x, y));
 
-    internal static (byte[] A, byte[] B, byte[] Shore) GenerateBiomeWeights(
+    internal static (byte[] A, byte[] B, byte[] C, byte[] D, byte[] Shore) GenerateBiomeWeights(
         long seed, ChunkCoordinate coordinate)
     {
         const int radius = 10;
         var size = WorldChunk.WeightTextureSize;
-        var channels = Enum.GetValues<Biome>().Length;
-        var weights = new float[size * size * channels];
+        var labels = new byte[size * size];
+        var usedMaterials = new bool[Enum.GetValues<Biome>().Length];
         var water = new bool[size * size];
         var firstTileX = coordinate.X * WorldChunk.Size - WorldChunk.WeightHaloTiles;
         var firstTileY = coordinate.Y * WorldChunk.Size - WorldChunk.WeightHaloTiles;
@@ -167,10 +171,21 @@ internal static class InfiniteWorldGenerator
                 var x = tileX * WorldChunk.WeightSamplesPerTile + sampleX;
                 var y = tileY * WorldChunk.WeightSamplesPerTile + sampleY;
                 var pixel = y * size + x;
-                weights[pixel * channels + (int)biome] = 1;
-                water[pixel] = biome is Biome.DeepWater or Biome.ShallowWater;
+                labels[pixel] = (byte)biome;
+                usedMaterials[(int)biome] = true;
+                water[pixel] = biome is Biome.DeepWater or Biome.ShallowWater or
+                    Biome.RiverWater or Biome.MangroveShallows;
             }
         }
+        var activeMaterials = Enumerable.Range(0, usedMaterials.Length)
+            .Where(index => usedMaterials[index]).ToArray();
+        var activeLookup = new int[usedMaterials.Length];
+        for (var channel = 0; channel < activeMaterials.Length; channel++)
+            activeLookup[activeMaterials[channel]] = channel;
+        var channels = activeMaterials.Length;
+        var weights = new float[size * size * channels];
+        for (var pixel = 0; pixel < labels.Length; pixel++)
+            weights[pixel * channels + activeLookup[labels[pixel]]] = 1;
 
         var kernel = new float[radius * 2 + 1];
         var kernelTotal = 0f;
@@ -206,6 +221,8 @@ internal static class InfiniteWorldGenerator
 
         var a = new byte[size * size * 4];
         var b = new byte[size * size * 4];
+        var c = new byte[size * size * 4];
+        var d = new byte[size * size * 4];
         var shore = new byte[size * size];
         for (var pixel = 0; pixel < size * size; pixel++)
         {
@@ -217,8 +234,11 @@ internal static class InfiniteWorldGenerator
                 var value = (byte)Math.Clamp(
                     MathF.Round(weights[pixel * channels + channel] / Math.Max(total, .0001f) * 255),
                     0, 255);
-                if (channel < 4) a[pixel * 4 + channel] = value;
-                else b[pixel * 4 + channel - 4] = value;
+                var material = activeMaterials[channel];
+                if (material < 4) a[pixel * 4 + material] = value;
+                else if (material < 8) b[pixel * 4 + material - 4] = value;
+                else if (material < 12) c[pixel * 4 + material - 8] = value;
+                else d[pixel * 4 + material - 12] = value;
             }
         }
 
@@ -232,7 +252,7 @@ internal static class InfiniteWorldGenerator
             shore[pixel] = (byte)Math.Clamp(
                 MathF.Round((signedTiles / encodedRangeTiles * .5f + .5f) * 255), 0, 255);
         }
-        return (a, b, shore);
+        return (a, b, c, d, shore);
 
         float[] DistanceTo(bool targetWater)
         {
@@ -369,16 +389,24 @@ internal static class InfiniteWorldGenerator
         long seed, int x, int y, float elevation)
     {
         var baseElevation = BaseElevationAt(seed, x, y);
-        if (baseElevation < -.9f) return (Biome.DeepWater, WorldBiome.Ocean);
+        // Keep the bright continental shelf close to land. The renderer adds a
+        // mid-water stage between this boundary and the light coastal fringe.
+        if (baseElevation < -.35f) return (Biome.DeepWater, WorldBiome.Ocean);
         if (baseElevation < .9f) return (Biome.ShallowWater, WorldBiome.Ocean);
 
         var drainage = MacroHydrology.At(seed, x, y);
         var river = drainage.River;
         var continental = FractalNoise(seed ^ 0x6a09e667f3bcc909L, x / 720f, y / 720f, 4);
         if (drainage.Lake > .48f && elevation < 5.5f)
-            return (Biome.ShallowWater, WorldBiome.Wetland);
+        {
+            var warmBand = MathF.Sin((y + seed % 10000) / 1450f) > -.05f;
+            var coastalMangrove = baseElevation < 1.7f && warmBand &&
+                                   RainfallAt(seed, x, y) > .72f;
+            return (coastalMangrove ? Biome.MangroveShallows : Biome.RiverWater,
+                WorldBiome.Wetland);
+        }
         if (river > .48f && continental > -.18f)
-            return (Biome.ShallowWater, WorldBiome.River);
+            return (Biome.RiverWater, WorldBiome.River);
         if (elevation < 1.45f) return (Biome.Beach, WorldBiome.Coast);
 
         var moisture = Math.Clamp(
@@ -404,15 +432,20 @@ internal static class InfiniteWorldGenerator
             return temperature < .24f && moisture > .48f
                 ? (Biome.Snow, WorldBiome.Alpine)
                 : (Biome.Highland, WorldBiome.TemperateGrassland);
-        if (temperature < .20f) return (Biome.Snow, WorldBiome.Tundra);
+        if (temperature < .20f) return (Biome.Tundra, WorldBiome.Tundra);
         if (temperature < .36f)
             return moisture > .43f
                 ? (Biome.Forest, WorldBiome.Taiga)
-                : (Biome.Snow, WorldBiome.Tundra);
-        if (moisture < .22f && temperature > .5f) return (Biome.Beach, WorldBiome.Desert);
-        if (moisture < .39f && temperature > .55f) return (Biome.Grassland, WorldBiome.Savanna);
-        if (river > .24f && moisture > .62f) return (Biome.Forest, WorldBiome.Wetland);
-        if (moisture > .72f && temperature > .58f) return (Biome.Forest, WorldBiome.Rainforest);
+                : (Biome.Tundra, WorldBiome.Tundra);
+        if (moisture < .18f && temperature > .58f)
+            return (Biome.CrackedEarth, WorldBiome.Desert);
+        if (moisture < .30f && temperature > .5f)
+            return (Biome.DesertSand, WorldBiome.Desert);
+        if (moisture < .43f && temperature > .55f)
+            return (Biome.DryGrass, WorldBiome.Savanna);
+        if (river > .24f && moisture > .62f) return (Biome.Mud, WorldBiome.Wetland);
+        if (moisture > .72f && temperature > .58f)
+            return (Biome.JungleFloor, WorldBiome.Rainforest);
         if (moisture > .53f) return (Biome.Forest, WorldBiome.TemperateForest);
         return (Biome.Grassland, WorldBiome.TemperateGrassland);
     }
@@ -514,7 +547,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 3;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 7;
+    private const int ChunkPayloadVersion = 9;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -753,6 +786,7 @@ internal sealed class WorldChunkStore
             {
                 Coordinate = coordinate, Tiles = tiles, Trees = trees,
                 BiomeWeightsA = weights.A, BiomeWeightsB = weights.B,
+                BiomeWeightsC = weights.C, BiomeWeightsD = weights.D,
                 ShoreDistance = weights.Shore, Cliffs = cliffs
             };
         }
@@ -765,8 +799,14 @@ internal sealed class WorldChunkStore
     private static WorldBiome InferWorldBiome(Biome material) => material switch
     {
         Biome.DeepWater or Biome.ShallowWater => WorldBiome.Ocean,
+        Biome.RiverWater => WorldBiome.River,
+        Biome.MangroveShallows or Biome.Mud => WorldBiome.Wetland,
         Biome.Beach => WorldBiome.Coast,
         Biome.Forest => WorldBiome.TemperateForest,
+        Biome.JungleFloor => WorldBiome.Rainforest,
+        Biome.DryGrass => WorldBiome.Savanna,
+        Biome.DesertSand or Biome.CrackedEarth => WorldBiome.Desert,
+        Biome.Tundra => WorldBiome.Tundra,
         Biome.Highland or Biome.Rock => WorldBiome.Alpine,
         _ => WorldBiome.TemperateGrassland
     };
@@ -808,6 +848,7 @@ internal sealed class WorldChunkStore
             {
                 Coordinate = coordinate, Tiles = tiles, Trees = trees,
                 BiomeWeightsA = weights.A, BiomeWeightsB = weights.B,
+                BiomeWeightsC = weights.C, BiomeWeightsD = weights.D,
                 ShoreDistance = weights.Shore, Cliffs = cliffs
             };
         }

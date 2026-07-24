@@ -140,6 +140,8 @@ internal static class WorldAtlasGenerator
             Biome.Snow => (224, 232, 235),
             Biome.DeepWater => (24, 72, 116),
             Biome.ShallowWater when tile.Region == WorldBiome.Ocean => (43, 112, 151),
+            Biome.RiverWater => (45, 125, 171),
+            Biome.MangroveShallows => (62, 119, 113),
             _ => ColorFor(tile.Region)
         };
 

@@ -81,6 +81,13 @@ boundaries while the macro cache stays bounded during long-distance travel.
 Use WASD, the arrow keys, or left-mouse dragging to move the camera.
 The original finite island renderer remains available through `--island`.
 
+Natural terrain uses a curated 16-layer AoE2 HD material array: deep and
+shallow water, azure rivers, mangrove shallows, beach, temperate grass,
+savanna ground, mud, forest underbrush, jungle underbrush, highland grass,
+rock, tundra, snow, desert sand, and cracked earth. Four RGBA blend maps keep
+transitions smooth in one terrain draw call per chunk. CPU blending processes
+only materials present inside each chunk halo instead of all 16 layers.
+
 Mountain ranges grow around oriented regional uplift spines, with long foothill
 ramps, steep inner cores, rolling hill fields, river-cut valleys, and eroded
 passes. Major mountain cores receive directional installed `CLF` sprite
