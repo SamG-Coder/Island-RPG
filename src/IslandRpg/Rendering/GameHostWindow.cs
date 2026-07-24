@@ -113,6 +113,14 @@ internal sealed class GameHostWindow : GameWindow
     private SpriteFrame? _uiTabFrame;
     private int _uiTabTexture;
     private int _uiActiveTabTexture;
+    private readonly MinimapControlState _minimapUi = new();
+    private SpriteFrame? _minimapFrame;
+    private int _minimapTexture;
+    private Vector2i _minimapCenter = new(int.MinValue, int.MinValue);
+    private byte[]? _minimapTerrain;
+    private Task<MinimapBuildResult>? _minimapBuildTask;
+    private sealed record MinimapBuildResult(
+        Vector2i Center, byte[] Terrain, byte[] Pixels);
     private static readonly SpriteFrame SolidUiFrame = new(1, 1, 0, 0, []);
     private MoveMarker? _moveMarker;
     private Task<PathResult>? _pendingPathTask;
@@ -127,6 +135,7 @@ internal sealed class GameHostWindow : GameWindow
     private bool _gameLeftWasDown;
     private bool _gameRightWasDown;
     private readonly GameUiControlState _gameUi = new();
+    private readonly ChatUiControlState _chatUi = new();
     private int _vao;
     private bool _dragging;
     private Vector2 _lastMouse;
@@ -211,7 +220,11 @@ internal sealed class GameHostWindow : GameWindow
         base.OnUpdateFrame(e);
         _clock += e.Time;
         _waterTime = (_waterTime + (float)e.Time) % 10000f;
-        if (KeyboardState.IsKeyDown(Keys.Escape)) Close();
+        if (KeyboardState.IsKeyPressed(Keys.Escape))
+        {
+            if (_chatUi.Input.Focused) _chatUi.BlurInput();
+            else Close();
+        }
         if (_screen == ScreenState.WorldPreview && _mode == PreviewMode.World &&
             KeyboardState.IsKeyPressed(Keys.M))
         {
@@ -490,14 +503,27 @@ internal sealed class GameHostWindow : GameWindow
 
     private void UpdateGameUi()
     {
-        _gameUi.Layout(SceneClientBounds());
+        var scene = SceneClientBounds();
+        _gameUi.Layout(scene);
+        _chatUi.Layout(scene);
+        _minimapUi.Layout(scene);
         _gameUi.UpdatePointer(
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
+        _chatUi.UpdatePointer(
+            MouseState.Position,
+            MouseState.IsButtonDown(MouseButton.Left));
+        if (_chatUi.Input.Focused)
+        {
+            if (KeyboardState.IsKeyPressed(Keys.Backspace)) _chatUi.Backspace();
+            if (KeyboardState.IsKeyPressed(Keys.Enter)) _chatUi.Submit();
+        }
     }
 
     private bool IsPointerOverGameUi(Vector2 mouse) =>
-        _gameUi.BlocksWorldInput(mouse);
+        _gameUi.BlocksWorldInput(mouse) ||
+        _chatUi.BlocksWorldInput(mouse) ||
+        _minimapUi.HitTest(mouse);
 
     private PathResult FindActionPath(
         int requestId,
@@ -947,6 +973,11 @@ internal sealed class GameHostWindow : GameWindow
     {
         base.OnMouseWheel(e);
         if (_screen != ScreenState.WorldPreview || e.OffsetY == 0) return;
+        if (_mode == PreviewMode.Game)
+        {
+            _chatUi.Layout(SceneClientBounds());
+            if (_chatUi.Scroll(MouseState.Position, e.OffsetY)) return;
+        }
         if (_atlasOpen)
         {
             ZoomAtlas(e.OffsetY);
@@ -963,6 +994,13 @@ internal sealed class GameHostWindow : GameWindow
     {
         base.OnResize(e);
         GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
+    }
+
+    protected override void OnTextInput(TextInputEventArgs e)
+    {
+        base.OnTextInput(e);
+        if (_screen == ScreenState.WorldPreview && _mode == PreviewMode.Game)
+            _chatUi.AppendText(e.AsString);
     }
 
     private void CreateSceneTarget()
@@ -1075,12 +1113,262 @@ internal sealed class GameHostWindow : GameWindow
 
     private void RenderGameUi()
     {
-        _gameUi.Layout(SceneClientBounds());
+        var scene = SceneClientBounds();
+        _gameUi.Layout(scene);
+        _chatUi.Layout(scene);
+        _minimapUi.Layout(scene);
+        RenderMinimap();
+        RenderChatUi();
         if (_gameUi.Panel.Visible)
             DrawAoEPanelBorder(_gameUi.Panel.Bounds);
 
         DrawAoEUiTile(_gameUi.SkillsButton);
         DrawAoEUiTile(_gameUi.InventoryButton);
+    }
+
+    private void RenderMinimap()
+    {
+        if (_player is null || _minimapFrame is null || _minimapTexture == 0) return;
+        var center = new Vector2i(
+            (int)MathF.Floor(_player.Position.X),
+            (int)MathF.Floor(_player.Position.Y));
+        if (_minimapBuildTask is { IsCompleted: true })
+        {
+            var result = _minimapBuildTask.GetAwaiter().GetResult();
+            _minimapBuildTask = null;
+            _minimapCenter = result.Center;
+            _minimapTerrain = result.Terrain;
+            GL.BindTexture(TextureTarget.Texture2D, _minimapTexture);
+            GL.TexSubImage2D(
+                TextureTarget.Texture2D,
+                0,
+                0,
+                0,
+                _minimapFrame.Width,
+                _minimapFrame.Height,
+                PixelFormat.Rgba,
+                PixelType.UnsignedByte,
+                result.Pixels);
+        }
+
+        if (_minimapBuildTask is null && center != _minimapCenter)
+        {
+            var previousCenter = _minimapCenter;
+            var previousTerrain = _minimapTerrain;
+            _minimapBuildTask = Task.Run(() =>
+                BuildMinimap(center, previousCenter, previousTerrain));
+        }
+        DrawUiSprite(_minimapFrame, _minimapTexture, _minimapUi.Bounds);
+    }
+
+    private MinimapBuildResult BuildMinimap(
+        Vector2i center, Vector2i previousCenter, byte[]? previousTerrain)
+    {
+        const int terrainSize = 105;
+        const int terrainRadius = terrainSize / 2;
+        var terrain = new byte[terrainSize * terrainSize * 3];
+        var delta = previousTerrain is null
+            ? Vector2i.Zero
+            : center - previousCenter;
+        var canShift = previousTerrain is not null &&
+                       Math.Abs(delta.X) < terrainSize &&
+                       Math.Abs(delta.Y) < terrainSize;
+
+        for (var y = 0; y < terrainSize; y++)
+        for (var x = 0; x < terrainSize; x++)
+        {
+            var sourceX = x + delta.X;
+            var sourceY = y + delta.Y;
+            var targetIndex = (y * terrainSize + x) * 3;
+            if (canShift &&
+                sourceX >= 0 && sourceX < terrainSize &&
+                sourceY >= 0 && sourceY < terrainSize)
+            {
+                var sourceIndex = (sourceY * terrainSize + sourceX) * 3;
+                terrain[targetIndex] = previousTerrain![sourceIndex];
+                terrain[targetIndex + 1] = previousTerrain[sourceIndex + 1];
+                terrain[targetIndex + 2] = previousTerrain[sourceIndex + 2];
+                continue;
+            }
+
+            var (red, green, blue) = MinimapColor(
+                InfiniteWorldGenerator.BiomeAt(
+                    _worldSeed,
+                    center.X + x - terrainRadius,
+                    center.Y + y - terrainRadius));
+            terrain[targetIndex] = red;
+            terrain[targetIndex + 1] = green;
+            terrain[targetIndex + 2] = blue;
+        }
+
+        return new MinimapBuildResult(
+            center, terrain, ComposeMinimapPixels(terrain, terrainSize));
+    }
+
+    private static byte[] ComposeMinimapPixels(byte[] terrain, int terrainSize)
+    {
+        const int size = 160;
+        const float radius = 79;
+        const float mapRadius = 73;
+        var pixels = new byte[size * size * 4];
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            var deltaX = x + .5f - size * .5f;
+            var deltaY = y + .5f - size * .5f;
+            var distance = MathF.Sqrt(deltaX * deltaX + deltaY * deltaY);
+            if (distance > radius) continue;
+
+            byte red;
+            byte green;
+            byte blue;
+            if (distance > 78)
+            {
+                (red, green, blue) = (9, 8, 7);
+            }
+            else if (distance > 77)
+            {
+                (red, green, blue) = (61, 52, 33);
+            }
+            else if (distance > 75)
+            {
+                (red, green, blue) = (19, 18, 15);
+            }
+            else if (distance > 74)
+            {
+                (red, green, blue) = (41, 38, 30);
+            }
+            else if (distance > mapRadius)
+            {
+                (red, green, blue) = (7, 7, 6);
+            }
+            else
+            {
+                var sampleX = deltaX / mapRadius * 52 + 52;
+                var sampleY = deltaY / mapRadius * 52 + 52;
+                (red, green, blue) = SampleMinimapTerrain(
+                    terrain, terrainSize, sampleX, sampleY);
+            }
+
+            var output = (y * size + x) * 4;
+            pixels[output] = red;
+            pixels[output + 1] = green;
+            pixels[output + 2] = blue;
+            pixels[output + 3] = 255;
+        }
+
+        // Fixed north-up player arrow at the center.
+        for (var y = 72; y <= 87; y++)
+        for (var x = 75; x <= 84; x++)
+        {
+            var arrow = y <= 80
+                ? Math.Abs(x - 79.5f) <= (y - 71) * .48f
+                : x is >= 78 and <= 81;
+            if (!arrow) continue;
+            var index = (y * size + x) * 4;
+            var outline = x is 75 or 84 || y is 72 or 87;
+            pixels[index] = outline ? (byte)35 : (byte)205;
+            pixels[index + 1] = outline ? (byte)24 : (byte)30;
+            pixels[index + 2] = outline ? (byte)18 : (byte)24;
+            pixels[index + 3] = 255;
+        }
+        return pixels;
+    }
+
+    private static (byte Red, byte Green, byte Blue) SampleMinimapTerrain(
+        byte[] terrain, int size, float x, float y)
+    {
+        var x0 = Math.Clamp((int)MathF.Floor(x), 0, size - 1);
+        var y0 = Math.Clamp((int)MathF.Floor(y), 0, size - 1);
+        var x1 = Math.Min(size - 1, x0 + 1);
+        var y1 = Math.Min(size - 1, y0 + 1);
+        var fractionX = x - x0;
+        var fractionY = y - y0;
+
+        byte Channel(int channel)
+        {
+            var top = MathHelper.Lerp(
+                terrain[(y0 * size + x0) * 3 + channel],
+                terrain[(y0 * size + x1) * 3 + channel],
+                fractionX);
+            var bottom = MathHelper.Lerp(
+                terrain[(y1 * size + x0) * 3 + channel],
+                terrain[(y1 * size + x1) * 3 + channel],
+                fractionX);
+            return (byte)Math.Clamp(
+                (int)MathF.Round(MathHelper.Lerp(top, bottom, fractionY)),
+                0,
+                255);
+        }
+        return (Channel(0), Channel(1), Channel(2));
+    }
+
+    private static (byte Red, byte Green, byte Blue) MinimapColor(Biome biome) =>
+        biome switch
+        {
+            Biome.DeepWater => (43, 77, 120),
+            Biome.ShallowWater or Biome.RiverWater => (55, 104, 142),
+            Biome.MangroveShallows => (68, 114, 119),
+            Biome.Beach or Biome.DesertSand => (184, 165, 101),
+            Biome.Grassland => (104, 139, 65),
+            Biome.DryGrass => (142, 139, 72),
+            Biome.Forest or Biome.JungleFloor => (48, 93, 47),
+            Biome.Highland => (103, 111, 69),
+            Biome.Rock or Biome.CrackedEarth => (105, 99, 83),
+            Biome.Mud => (91, 75, 54),
+            Biome.Tundra => (128, 137, 119),
+            Biome.Snow => (205, 213, 207),
+            _ => (92, 116, 69)
+        };
+
+    private void RenderChatUi()
+    {
+        DrawAoEPanelBorder(_chatUi.LogPanel.Bounds);
+        DrawAoEPanelBorder(_chatUi.Input.Bounds);
+
+        if (_uiTabFrame is not null && _uiTabTexture != 0)
+        {
+            var tint = _chatUi.Channel switch
+            {
+                ChatChannel.Combat => new Vector3(.30f, .035f, .025f),
+                ChatChannel.Story => new Vector3(.06f, .11f, .28f),
+                ChatChannel.Debug => new Vector3(.10f, .24f, .08f),
+                _ => new Vector3(.20f, .17f, .10f)
+            };
+            DrawUiSprite(
+                _uiTabFrame,
+                _uiTabTexture,
+                _chatUi.ChannelButton.Bounds,
+                _chatUi.ChannelButton.Pressed
+                    ? -.16f
+                    : _chatUi.ChannelButton.Hovered ? .14f : 0,
+                tint: tint,
+                tintAmount: .42f);
+        }
+
+        DrawUiColor(_chatUi.ScrollTrack.Bounds, new(.035f, .032f, .027f, .95f));
+        DrawUiColor(
+            _chatUi.ScrollThumb.Bounds,
+            _chatUi.ScrollThumb.Pressed || _chatUi.ScrollThumb.Hovered
+                ? new(.34f, .30f, .20f, 1)
+                : new(.22f, .20f, .15f, 1));
+        DrawPanelOutline(
+            _chatUi.ScrollTrack.Bounds, 0, new(.22f, .19f, .12f, 1));
+
+        if (_chatUi.Input.Focused)
+        {
+            DrawPanelOutline(
+                _chatUi.Input.Bounds, 3, new(.32f, .27f, .16f, 1));
+            if ((int)(_clock * 2) % 2 == 0)
+            {
+                var caretX = Math.Min(
+                    _chatUi.Input.Bounds.X + _chatUi.Input.Bounds.Z - 10,
+                    _chatUi.Input.Bounds.X + 9 + _chatUi.InputText.Length * 6);
+                DrawUiColor(
+                    new(caretX, _chatUi.Input.Bounds.Y + 10, 1, 18),
+                    new(.72f, .68f, .55f, 1));
+            }
+        }
     }
 
     private void DrawAoEUiTile(TabControlState control)
@@ -1733,6 +2021,17 @@ internal sealed class GameHostWindow : GameWindow
         _uiTabTexture = Upload(_uiTabFrame);
         _uiActiveTabTexture = Upload(
             42, 42, CreateTabPixels(active: true));
+        _minimapFrame = new SpriteFrame(160, 160, 0, 0, new byte[160 * 160 * 4]);
+        _minimapTexture = Upload(_minimapFrame);
+        GL.BindTexture(TextureTarget.Texture2D, _minimapTexture);
+        GL.TexParameter(
+            TextureTarget.Texture2D,
+            TextureParameterName.TextureMinFilter,
+            (int)TextureMinFilter.Linear);
+        GL.TexParameter(
+            TextureTarget.Texture2D,
+            TextureParameterName.TextureMagFilter,
+            (int)TextureMagFilter.Linear);
         foreach (var texture in new[]
                  {
                      _uiPanelFillTexture, _uiSolidTexture,
@@ -3012,6 +3311,7 @@ internal sealed class GameHostWindow : GameWindow
         if (_uiSolidTexture != 0) GL.DeleteTexture(_uiSolidTexture);
         if (_uiTabTexture != 0) GL.DeleteTexture(_uiTabTexture);
         if (_uiActiveTabTexture != 0) GL.DeleteTexture(_uiActiveTabTexture);
+        if (_minimapTexture != 0) GL.DeleteTexture(_minimapTexture);
         if (_terrainArray != 0) GL.DeleteTexture(_terrainArray);
         if (_biomeWeightsA != 0) GL.DeleteTexture(_biomeWeightsA);
         if (_biomeWeightsB != 0) GL.DeleteTexture(_biomeWeightsB);
