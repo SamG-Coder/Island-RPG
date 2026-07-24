@@ -34,8 +34,9 @@ internal sealed class GameHostWindow : GameWindow
     private sealed record EntityAnimation(
         LoadedGraphic Graphic, int[] Textures, float SecondsPerFrame);
     private sealed record PlayerVisual(
-        SpriteFrame Frame, int Texture, Vector2 World, bool Mirror);
+        SpriteFrame Frame, int Texture, Vector2 World, bool Mirror, bool Wading);
     private sealed record MoveMarker(Vector2 Position, double Time);
+    private sealed record WaterRipple(Vector2 Position, double StartedAt);
     private sealed record PathResult(int RequestId, IReadOnlyList<Vector2> Path);
 
     private readonly string _install;
@@ -100,6 +101,8 @@ internal sealed class GameHostWindow : GameWindow
     private Task<PathResult>? _pendingPathTask;
     private CancellationTokenSource? _pathCancellation;
     private int _pathRequestId;
+    private readonly List<WaterRipple> _waterRipples = [];
+    private int _lastWaterFootfall = -1;
     private WorldEntity? _player;
     private bool _gameLeftWasDown;
     private int _vao;
@@ -345,8 +348,16 @@ internal sealed class GameHostWindow : GameWindow
         var nextHeight = InfiniteWorldGenerator.SampleRenderedHeight(
             _worldSeed, _player.Target.X, _player.Target.Y);
         var uphill = Math.Max(0, nextHeight - currentHeight);
-        _player.TerrainSpeedMultiplier = 1f / (1f + uphill * .18f);
+        var playerBiome = InfiniteWorldGenerator.BiomeAt(
+            _worldSeed,
+            (int)MathF.Floor(_player.Position.X),
+            (int)MathF.Floor(_player.Position.Y));
+        var wading = playerBiome is Biome.ShallowWater or
+            Biome.RiverWater or Biome.MangroveShallows;
+        _player.TerrainSpeedMultiplier =
+            (wading ? .62f : 1f) / (1f + uphill * .18f);
         _player.Update(elapsed);
+        UpdateWaterRipples(wading);
         if (_moveMarker is not null)
         {
             var nextTime = _moveMarker.Time + elapsed;
@@ -387,6 +398,62 @@ internal sealed class GameHostWindow : GameWindow
             (_player.Position.X - _player.Position.Y) * 48,
             (_player.Position.X + _player.Position.Y) * 24 - elevation * 20);
         _camera = -projected * _zoom;
+    }
+
+    private void UpdateWaterRipples(bool wading)
+    {
+        const double lifetime = 1.35;
+        _waterRipples.RemoveAll(ripple => _clock - ripple.StartedAt > lifetime);
+        if (_player is null || !wading || _player.Action != EntityAction.Move)
+        {
+            _lastWaterFootfall = -1;
+            return;
+        }
+
+        if (!_entityAnimations.TryGetValue(
+                (_player.Gender, EntityAction.Move), out var animation))
+            return;
+
+        const int authoredAngles = 5;
+        var framesPerAngle = Math.Max(
+            1, animation.Graphic.Sprite.Frames.Count / authoredAngles);
+        var cycleDuration = Math.Max(
+            animation.SecondsPerFrame * framesPerAngle, .1f);
+
+        // Two contacts per walk cycle. Offset the phase so the first ripple
+        // occurs as a foot plants, rather than immediately upon entering water.
+        var footfall = (int)Math.Floor(
+            (_player.ActionTime / cycleDuration + .34) * 2.0);
+        if (footfall == _lastWaterFootfall) return;
+
+        var facing = _player.Facing.LengthSquared > .0001f
+            ? _player.Facing.Normalized()
+            : Vector2.UnitX;
+        var sideways = new Vector2(-facing.Y, facing.X);
+        var side = (footfall & 1) == 0 ? -1f : 1f;
+        var contact = _player.Position + sideways * (.065f * side) -
+                      facing * .025f;
+        _waterRipples.Add(new(contact, _clock));
+        if (_waterRipples.Count > 4) _waterRipples.RemoveAt(0);
+        _lastWaterFootfall = footfall;
+    }
+
+    private void UploadWaterRipples()
+    {
+        const int maximumRipples = 4;
+        var count = Math.Min(maximumRipples, _waterRipples.Count);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "rippleCount"), count);
+        for (var index = 0; index < count; index++)
+        {
+            var ripple = _waterRipples[_waterRipples.Count - count + index];
+            GL.Uniform2(
+                GL.GetUniformLocation(_terrainProgram, $"ripplePositions[{index}]"),
+                ripple.Position.X / 8f,
+                ripple.Position.Y / 8f);
+            GL.Uniform1(
+                GL.GetUniformLocation(_terrainProgram, $"rippleAges[{index}]"),
+                (float)(_clock - ripple.StartedAt));
+        }
     }
 
     private Vector2 FindPlayableSpawn()
@@ -621,6 +688,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
         GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), 0);
+        GL.Uniform1(GL.GetUniformLocation(_program, "wading"), 0);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, _sceneColor);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
@@ -689,6 +757,7 @@ internal sealed class GameHostWindow : GameWindow
             GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
             GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
             GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), 0);
+            GL.Uniform1(GL.GetUniformLocation(_program, "wading"), 0);
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2D, texture);
             Draw([left,top,0,0, left,bottom,0,1, right,bottom,1,1, right,top,1,0]);
@@ -796,6 +865,8 @@ internal sealed class GameHostWindow : GameWindow
 
     private void RenderWorld()
     {
+        GL.UseProgram(_terrainProgram);
+        UploadWaterRipples();
         foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible)
                      .OrderBy(gpu => gpu.Chunk.Coordinate.X + gpu.Chunk.Coordinate.Y))
             DrawWorldChunkTerrain(gpu);
@@ -853,12 +924,14 @@ internal sealed class GameHostWindow : GameWindow
         DrawTreeBatch(behind);
         DrawTreeBatch(foregroundShadows);
         if (player is not null)
-            DrawSprite(player.Frame, player.Texture, player.World, mirror: player.Mirror);
+            DrawSprite(
+                player.Frame, player.Texture, player.World,
+                mirror: player.Mirror, wading: player.Wading);
         DrawTreeBatch(foregroundObjects);
         if (player is not null && playerOccluded)
             DrawSprite(
                 player.Frame, player.Texture, player.World,
-                mirror: player.Mirror, outlineOnly: true);
+                mirror: player.Mirror, outlineOnly: true, wading: player.Wading);
     }
 
     private void DrawCliffBatch()
@@ -1005,6 +1078,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
         GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), 0);
+        GL.Uniform1(GL.GetUniformLocation(_program, "wading"), 0);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, _treeAtlasTexture);
         GL.BindBuffer(BufferTarget.ArrayBuffer, _treeBatchVbo);
@@ -1190,11 +1264,17 @@ internal sealed class GameHostWindow : GameWindow
         var world = new Vector2(
             (_player.Position.X - _player.Position.Y) * 48,
             (_player.Position.X + _player.Position.Y) * 24 - elevation * 20);
+        var biome = InfiniteWorldGenerator.BiomeAt(
+            _worldSeed,
+            (int)MathF.Floor(_player.Position.X),
+            (int)MathF.Floor(_player.Position.Y));
         return new(
             graphic.Sprite.Frames[directional.Index],
             animation.Textures[directional.Index],
             world,
-            directional.Mirror);
+            directional.Mirror,
+            biome is Biome.ShallowWater or
+                Biome.RiverWater or Biome.MangroveShallows);
     }
 
     private void PrepareTreeAtlas()
@@ -1592,7 +1672,8 @@ internal sealed class GameHostWindow : GameWindow
         Vector2 world,
         float opacity = 1,
         bool mirror = false,
-        bool outlineOnly = false)
+        bool outlineOnly = false,
+        bool wading = false)
     {
         var width = ReferenceWidth;
         var height = ReferenceHeight;
@@ -1615,6 +1696,10 @@ internal sealed class GameHostWindow : GameWindow
         GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), opacity);
         GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), outlineOnly ? 1 : 0);
+        GL.Uniform1(GL.GetUniformLocation(_program, "wading"),
+            wading && !outlineOnly ? 1 : 0);
+        GL.Uniform1(GL.GetUniformLocation(_program, "waterlineUv"),
+            Math.Clamp((frame.HotspotY - 13f) / frame.Height, .45f, .88f));
         GL.Uniform2(GL.GetUniformLocation(_program, "texelSize"),
             1f / frame.Width, 1f / frame.Height);
         GL.ActiveTexture(TextureUnit.Texture0);
@@ -1983,6 +2068,9 @@ internal sealed class GameHostWindow : GameWindow
             uniform sampler2DArray waterNormals;
             uniform float time;
             uniform float opacity;
+            uniform int rippleCount;
+            uniform vec2 ripplePositions[8];
+            uniform float rippleAges[8];
             out vec4 color;
             vec2 hash22(vec2 p) {
                 vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
@@ -2143,6 +2231,36 @@ internal sealed class GameHostWindow : GameWindow
                     float foam = steepCrest * sparsePatch * mix(0.42, 0.82, shoreBoost);
                     vec3 foamColor = vec3(0.84, 0.94, 0.95);
                     color.rgb = mix(color.rgb, foamColor, foam * surfaceEffect * 0.48);
+
+                    // Each planted foot emits a circular world-space impulse.
+                    // Isometric projection turns the circle into the correct
+                    // screen-space ellipse; overlapping impulses superpose.
+                    float rippleWave = 0.0;
+                    for (int rippleIndex = 0; rippleIndex < 8; rippleIndex++) {
+                        if (rippleIndex >= rippleCount) break;
+                        float age = rippleAges[rippleIndex];
+                        vec2 rippleDelta =
+                            (uv - ripplePositions[rippleIndex]) * 8.0;
+                        float distanceFromFoot = length(rippleDelta);
+                        float radius = 0.035 + age * 0.18;
+                        float fade = (1.0 - smoothstep(0.72, 1.35, age)) *
+                                     smoothstep(0.0, 0.08, age);
+                        float crest = 1.0 - smoothstep(
+                            0.012, 0.030, abs(distanceFromFoot - radius));
+                        float troughRadius = max(0.0, radius - 0.040);
+                        float trough = 1.0 - smoothstep(
+                            0.010, 0.025,
+                            abs(distanceFromFoot - troughRadius));
+                        rippleWave += (crest - trough * 0.62) * fade;
+                    }
+                    // Quantized crest/trough bands preserve the reference
+                    // resolution's pixel-art character.
+                    float rippleLight =
+                        smoothstep(0.24, 0.48, rippleWave) * surfaceEffect;
+                    float rippleShadow =
+                        smoothstep(0.18, 0.38, -rippleWave) * surfaceEffect;
+                    color.rgb *= 1.0 - rippleShadow * 0.035;
+                    color.rgb += vec3(0.42, 0.70, 0.77) * rippleLight * 0.115;
                 }
                 color.a *= opacity;
 
@@ -2176,7 +2294,8 @@ internal sealed class GameHostWindow : GameWindow
             "void main(){uv=u;alpha=vertexOpacity;gl_Position=vec4(p,0,1);}");
         var fs = Compile(ShaderType.FragmentShader,
             "#version 330 core\nin vec2 uv;in float alpha;out vec4 c;uniform sampler2D image;" +
-            "uniform float opacity;uniform int outlineOnly;uniform vec2 texelSize;" +
+            "uniform float opacity;uniform int outlineOnly;uniform int wading;" +
+            "uniform float waterlineUv;uniform vec2 texelSize;" +
             "void main(){vec4 source=texture(image,uv);" +
             "if(outlineOnly==1){float around=0.0;" +
             "around=max(around,texture(image,uv+vec2(texelSize.x,0)).a);" +
@@ -2185,7 +2304,12 @@ internal sealed class GameHostWindow : GameWindow
             "around=max(around,texture(image,uv-vec2(0,texelSize.y)).a);" +
             "float ring=around*(1.0-source.a);if(ring<0.05)discard;" +
             "c=vec4(1.0,0.82,0.18,ring*opacity*alpha);}" +
-            "else{c=source;c.a*=opacity*alpha;}}");
+            "else{c=source;" +
+            "if(wading==1&&uv.y>=waterlineUv&&source.a>0.01){" +
+            "float surface=1.0-smoothstep(waterlineUv,waterlineUv+0.035,uv.y);" +
+            "c.rgb=mix(c.rgb,vec3(0.08,0.34,0.53),0.43);" +
+            "c.rgb+=vec3(0.16,0.42,0.55)*surface*0.22;c.a*=0.68;}" +
+            "c.a*=opacity*alpha;}}");
         var program = GL.CreateProgram(); GL.AttachShader(program, vs); GL.AttachShader(program, fs); GL.LinkProgram(program);
         GL.DeleteShader(vs); GL.DeleteShader(fs);
         return program;

@@ -71,8 +71,7 @@ internal static class GridPathfinder
     private static bool Passable(long seed, int x, int y)
     {
         var biome = InfiniteWorldGenerator.BiomeAt(seed, x, y);
-        return biome is not (Biome.DeepWater or Biome.ShallowWater or
-            Biome.RiverWater or Biome.MangroveShallows);
+        return biome != Biome.DeepWater;
     }
 
     private static int Height(long seed, int x, int y) =>
