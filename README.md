@@ -18,7 +18,14 @@ pannable seeded infinite-world view. The world streams deterministic 32×32
 chunks around the camera, saves them under the current user's local application
 data directory, culls off-screen terrain batches, and unloads distant chunks to
 keep memory and GPU use bounded. Chunk halos preserve Gaussian biome blending
-and shoreline effects across chunk borders.
+and shoreline effects across chunk borders. Generation, region reads,
+decompression, and unload saves run away from the render thread; newly uploaded
+terrain and trees fade in briefly instead of appearing in a single frame.
+
+World saves group each 8×8 range into one indexed region file. Its fixed
+64-entry directory provides direct chunk seeks while each logical chunk payload
+is compressed independently with Brotli. Deterministic GPU biome-weight textures
+are regenerated from the seed instead of being stored on disk.
 It uses a 2:1 isometric projection, corner-based elevation, coastal/inland biomes, and
 biome-matched trees. Terrain is drawn first, then tree shadows and trees in
 map-depth order. Deep and shallow water use the installed HD normal maps for

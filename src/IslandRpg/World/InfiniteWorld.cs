@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.IO.Compression;
 
 namespace IslandRpg.World;
 
@@ -71,7 +72,7 @@ internal static class InfiniteWorldGenerator
             trees.Add(new(worldX, worldY, graphic));
         }
 
-        var weights = BuildBiomeWeights(seed, coordinate);
+        var weights = GenerateBiomeWeights(seed, coordinate);
         return new()
         {
             Coordinate = coordinate,
@@ -82,7 +83,7 @@ internal static class InfiniteWorldGenerator
         };
     }
 
-    private static (byte[] A, byte[] B) BuildBiomeWeights(long seed, ChunkCoordinate coordinate)
+    internal static (byte[] A, byte[] B) GenerateBiomeWeights(long seed, ChunkCoordinate coordinate)
     {
         const int radius = 10;
         var size = WorldChunk.WeightTextureSize;
@@ -298,9 +299,18 @@ internal static class InfiniteWorldGenerator
 
 internal sealed class WorldChunkStore
 {
-    private const int FormatVersion = 2;
-    private const int Magic = 0x49524348; // IRCH
+    internal const int RegionSize = 8;
+    private const int WorldFormatVersion = 3;
+    private const int RegionFormatVersion = 1;
+    private const int ChunkPayloadVersion = 1;
+    private const int RegionMagic = 0x49525247; // IRRG
+    private const int LegacyChunkMagic = 0x49524348; // IRCH
+    private const int LegacyChunkVersion = 2;
+    private const int RegionHeaderSize = 32;
+    private const int RegionEntrySize = 16;
+    private const int RegionSlotCount = RegionSize * RegionSize;
     private readonly string _chunkDirectory;
+    private readonly object _gate = new();
 
     public string WorldDirectory { get; }
     public long Seed { get; }
@@ -317,7 +327,9 @@ internal sealed class WorldChunkStore
         var metadataPath = Path.Combine(WorldDirectory, "world.json");
         File.WriteAllText(metadataPath, JsonSerializer.Serialize(new
         {
-            formatVersion = FormatVersion,
+            formatVersion = WorldFormatVersion,
+            regionSize = RegionSize,
+            compression = "brotli",
             seed,
             updatedUtc = DateTime.UtcNow
         }, new JsonSerializerOptions { WriteIndented = true }));
@@ -325,18 +337,216 @@ internal sealed class WorldChunkStore
 
     public WorldChunk LoadOrGenerate(ChunkCoordinate coordinate)
     {
-        var path = ChunkPath(coordinate);
-        if (!File.Exists(path)) return InfiniteWorldGenerator.Generate(Seed, coordinate);
+        lock (_gate)
+        {
+            var payload = ReadRegionPayload(coordinate);
+            if (payload is not null) return DeserializeChunk(payload, coordinate);
+        }
+
+        var legacyPath = LegacyChunkPath(coordinate);
+        var hadLegacyChunk = File.Exists(legacyPath);
+        var migrated = LoadLegacyChunk(coordinate);
+        if (migrated is not null)
+        {
+            Save(migrated);
+            DeleteLegacyChunk(legacyPath);
+            return migrated;
+        }
+        var generated = InfiniteWorldGenerator.Generate(Seed, coordinate);
+        if (hadLegacyChunk)
+        {
+            Save(generated);
+            DeleteLegacyChunk(legacyPath);
+        }
+        return generated;
+    }
+
+    public void Save(WorldChunk chunk)
+    {
+        var uncompressed = SerializeChunk(chunk);
+        var compressed = Compress(uncompressed);
+        lock (_gate)
+        {
+            var region = RegionFor(chunk.Coordinate);
+            var path = RegionPath(region.X, region.Y);
+            using var stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
+            EnsureRegionHeader(stream, region.X, region.Y);
+            var slot = RegionSlot(chunk.Coordinate);
+            var entryPosition = RegionHeaderSize + slot * RegionEntrySize;
+            stream.Position = entryPosition;
+            using var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+            var existingOffset = reader.ReadInt64();
+            var existingLength = reader.ReadInt32();
+            var existingUncompressedLength = reader.ReadInt32();
+            if (existingOffset > 0 && existingLength > 0)
+            {
+                if (existingOffset + existingLength > stream.Length)
+                    throw new InvalidDataException($"Region entry is invalid: {path}");
+                stream.Position = existingOffset;
+                var existingCompressed = new byte[existingLength];
+                stream.ReadExactly(existingCompressed);
+                var existing = Decompress(existingCompressed, existingUncompressedLength);
+                if (existing.AsSpan().SequenceEqual(uncompressed)) return;
+            }
+
+            stream.Position = stream.Length;
+            var payloadOffset = stream.Position;
+            stream.Write(compressed);
+            stream.Flush(flushToDisk: true);
+            stream.Position = entryPosition;
+            using var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+            writer.Write(payloadOffset);
+            writer.Write(compressed.Length);
+            writer.Write(uncompressed.Length);
+            writer.Flush();
+            stream.Flush(flushToDisk: true);
+        }
+    }
+
+    internal string RegionPathFor(ChunkCoordinate coordinate)
+    {
+        var region = RegionFor(coordinate);
+        return RegionPath(region.X, region.Y);
+    }
+
+    private byte[]? ReadRegionPayload(ChunkCoordinate coordinate)
+    {
+        var region = RegionFor(coordinate);
+        var path = RegionPath(region.X, region.Y);
+        if (!File.Exists(path)) return null;
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        ValidateRegionHeader(stream, region.X, region.Y);
+        stream.Position = RegionHeaderSize + RegionSlot(coordinate) * RegionEntrySize;
+        using var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+        var offset = reader.ReadInt64();
+        var compressedLength = reader.ReadInt32();
+        var uncompressedLength = reader.ReadInt32();
+        if (offset == 0 || compressedLength == 0) return null;
+        if (offset < RegionHeaderSize + RegionSlotCount * RegionEntrySize ||
+            compressedLength < 0 || uncompressedLength < 0 ||
+            offset + compressedLength > stream.Length)
+            throw new InvalidDataException($"Region entry is invalid: {path}");
+        stream.Position = offset;
+        var compressed = new byte[compressedLength];
+        stream.ReadExactly(compressed);
+        return Decompress(compressed, uncompressedLength);
+    }
+
+    private void EnsureRegionHeader(FileStream stream, int regionX, int regionY)
+    {
+        if (stream.Length > 0)
+        {
+            ValidateRegionHeader(stream, regionX, regionY);
+            return;
+        }
+        using var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+        writer.Write(RegionMagic);
+        writer.Write(RegionFormatVersion);
+        writer.Write(Seed);
+        writer.Write(regionX);
+        writer.Write(regionY);
+        writer.Write(RegionSlotCount);
+        writer.Write(0);
+        writer.Write(new byte[RegionSlotCount * RegionEntrySize]);
+        writer.Flush();
+        stream.Flush(flushToDisk: true);
+    }
+
+    private void ValidateRegionHeader(Stream stream, int regionX, int regionY)
+    {
+        if (stream.Length < RegionHeaderSize + RegionSlotCount * RegionEntrySize)
+            throw new InvalidDataException("Region file is truncated.");
+        stream.Position = 0;
+        using var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+        if (reader.ReadInt32() != RegionMagic || reader.ReadInt32() != RegionFormatVersion ||
+            reader.ReadInt64() != Seed || reader.ReadInt32() != regionX ||
+            reader.ReadInt32() != regionY || reader.ReadInt32() != RegionSlotCount)
+            throw new InvalidDataException("Region header does not match this world.");
+        _ = reader.ReadInt32();
+    }
+
+    private static byte[] SerializeChunk(WorldChunk chunk)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true))
+        {
+            writer.Write(ChunkPayloadVersion);
+            writer.Write(chunk.Coordinate.X);
+            writer.Write(chunk.Coordinate.Y);
+            writer.Write(chunk.Tiles.Length);
+            foreach (var tile in chunk.Tiles)
+            {
+                writer.Write((byte)tile.Biome);
+                writer.Write(tile.North); writer.Write(tile.East);
+                writer.Write(tile.South); writer.Write(tile.West);
+            }
+            writer.Write(chunk.Trees.Length);
+            foreach (var tree in chunk.Trees)
+            {
+                writer.Write((byte)PositiveMod(tree.X, WorldChunk.Size));
+                writer.Write((byte)PositiveMod(tree.Y, WorldChunk.Size));
+                writer.Write(tree.GraphicName);
+            }
+        }
+        return stream.ToArray();
+    }
+
+    private WorldChunk DeserializeChunk(byte[] payload, ChunkCoordinate coordinate)
+    {
+        try
+        {
+            using var reader = new BinaryReader(new MemoryStream(payload));
+            if (reader.ReadInt32() != ChunkPayloadVersion ||
+                reader.ReadInt32() != coordinate.X || reader.ReadInt32() != coordinate.Y)
+                throw new InvalidDataException($"Chunk payload does not match {coordinate}.");
+            var tileCount = reader.ReadInt32();
+            if (tileCount != WorldChunk.Size * WorldChunk.Size)
+                throw new InvalidDataException($"Chunk tile count is invalid: {tileCount}");
+            var tiles = new IslandTile[tileCount];
+            for (var i = 0; i < tileCount; i++)
+            {
+                var localX = i % WorldChunk.Size;
+                var localY = i / WorldChunk.Size;
+                tiles[i] = new(
+                    coordinate.X * WorldChunk.Size + localX,
+                    coordinate.Y * WorldChunk.Size + localY,
+                    (Biome)reader.ReadByte(),
+                    reader.ReadByte(), reader.ReadByte(), reader.ReadByte(), reader.ReadByte());
+            }
+            var treeCount = reader.ReadInt32();
+            if (treeCount < 0 || treeCount > tileCount)
+                throw new InvalidDataException($"Chunk tree count is invalid: {treeCount}");
+            var trees = new IslandTree[treeCount];
+            for (var i = 0; i < treeCount; i++)
+                trees[i] = new(
+                    coordinate.X * WorldChunk.Size + reader.ReadByte(),
+                    coordinate.Y * WorldChunk.Size + reader.ReadByte(),
+                    reader.ReadString());
+            var weights = InfiniteWorldGenerator.GenerateBiomeWeights(Seed, coordinate);
+            return new()
+            {
+                Coordinate = coordinate, Tiles = tiles, Trees = trees,
+                BiomeWeightsA = weights.A, BiomeWeightsB = weights.B
+            };
+        }
+        catch (EndOfStreamException ex)
+        {
+            throw new InvalidDataException($"Chunk payload is truncated: {coordinate}", ex);
+        }
+    }
+
+    private WorldChunk? LoadLegacyChunk(ChunkCoordinate coordinate)
+    {
+        var path = LegacyChunkPath(coordinate);
+        if (!File.Exists(path)) return null;
         try
         {
             using var reader = new BinaryReader(File.OpenRead(path));
-            var magic = reader.ReadInt32();
-            var version = reader.ReadInt32();
-            if (magic != Magic || version != FormatVersion)
-                return InfiniteWorldGenerator.Generate(Seed, coordinate);
-            if (reader.ReadInt64() != Seed || reader.ReadInt32() != coordinate.X ||
+            if (reader.ReadInt32() != LegacyChunkMagic ||
+                reader.ReadInt32() != LegacyChunkVersion ||
+                reader.ReadInt64() != Seed || reader.ReadInt32() != coordinate.X ||
                 reader.ReadInt32() != coordinate.Y)
-                throw new InvalidDataException($"Chunk header is invalid: {path}");
+                return null;
             var tileCount = reader.ReadInt32();
             var tiles = new IslandTile[tileCount];
             for (var i = 0; i < tileCount; i++)
@@ -346,54 +556,74 @@ internal sealed class WorldChunkStore
             var trees = new IslandTree[treeCount];
             for (var i = 0; i < treeCount; i++)
                 trees[i] = new(reader.ReadInt32(), reader.ReadInt32(), reader.ReadString());
-            var weightsA = reader.ReadBytes(reader.ReadInt32());
-            var weightsB = reader.ReadBytes(reader.ReadInt32());
-            var expectedBytes = WorldChunk.WeightTextureSize * WorldChunk.WeightTextureSize * 4;
-            if (weightsA.Length != expectedBytes || weightsB.Length != expectedBytes)
-                throw new InvalidDataException($"Chunk biome weights are invalid: {path}");
+            var weightsALength = reader.ReadInt32();
+            _ = reader.ReadBytes(weightsALength);
+            var weightsBLength = reader.ReadInt32();
+            _ = reader.ReadBytes(weightsBLength);
+            var weights = InfiniteWorldGenerator.GenerateBiomeWeights(Seed, coordinate);
             return new()
             {
                 Coordinate = coordinate, Tiles = tiles, Trees = trees,
-                BiomeWeightsA = weightsA, BiomeWeightsB = weightsB
+                BiomeWeightsA = weights.A, BiomeWeightsB = weights.B
             };
         }
         catch (EndOfStreamException ex)
         {
-            throw new InvalidDataException($"Chunk file is truncated: {path}", ex);
+            throw new InvalidDataException($"Legacy chunk file is truncated: {path}", ex);
         }
     }
 
-    public void Save(WorldChunk chunk)
+    private static byte[] Compress(byte[] payload)
     {
-        var path = ChunkPath(chunk.Coordinate);
-        var temporary = path + ".tmp";
-        using (var writer = new BinaryWriter(File.Create(temporary)))
-        {
-            writer.Write(Magic);
-            writer.Write(FormatVersion);
-            writer.Write(Seed);
-            writer.Write(chunk.Coordinate.X);
-            writer.Write(chunk.Coordinate.Y);
-            writer.Write(chunk.Tiles.Length);
-            foreach (var tile in chunk.Tiles)
-            {
-                writer.Write(tile.X); writer.Write(tile.Y); writer.Write((byte)tile.Biome);
-                writer.Write(tile.North); writer.Write(tile.East);
-                writer.Write(tile.South); writer.Write(tile.West);
-            }
-            writer.Write(chunk.Trees.Length);
-            foreach (var tree in chunk.Trees)
-            {
-                writer.Write(tree.X); writer.Write(tree.Y); writer.Write(tree.GraphicName);
-            }
-            writer.Write(chunk.BiomeWeightsA.Length);
-            writer.Write(chunk.BiomeWeightsA);
-            writer.Write(chunk.BiomeWeightsB.Length);
-            writer.Write(chunk.BiomeWeightsB);
-        }
-        File.Move(temporary, path, true);
+        using var output = new MemoryStream();
+        using (var brotli = new BrotliStream(output, CompressionLevel.SmallestSize, leaveOpen: true))
+            brotli.Write(payload);
+        return output.ToArray();
     }
 
-    private string ChunkPath(ChunkCoordinate coordinate) =>
+    private static byte[] Decompress(byte[] payload, int expectedLength)
+    {
+        using var input = new MemoryStream(payload);
+        using var brotli = new BrotliStream(input, CompressionMode.Decompress);
+        using var output = new MemoryStream(expectedLength);
+        brotli.CopyTo(output);
+        if (output.Length != expectedLength)
+            throw new InvalidDataException(
+                $"Chunk decompressed to {output.Length} bytes; expected {expectedLength}.");
+        return output.ToArray();
+    }
+
+    private static (int X, int Y) RegionFor(ChunkCoordinate coordinate) =>
+        (FloorDiv(coordinate.X, RegionSize), FloorDiv(coordinate.Y, RegionSize));
+
+    private static int RegionSlot(ChunkCoordinate coordinate) =>
+        PositiveMod(coordinate.Y, RegionSize) * RegionSize +
+        PositiveMod(coordinate.X, RegionSize);
+
+    private string RegionPath(int regionX, int regionY) =>
+        Path.Combine(_chunkDirectory, $"r.{regionX}.{regionY}.irrg");
+
+    private string LegacyChunkPath(ChunkCoordinate coordinate) =>
         Path.Combine(_chunkDirectory, $"c.{coordinate.X}.{coordinate.Y}.bin");
+
+    private void DeleteLegacyChunk(string path)
+    {
+        var resolvedLegacy = Path.GetFullPath(path);
+        var resolvedDirectory = Path.GetFullPath(_chunkDirectory) + Path.DirectorySeparatorChar;
+        if (!resolvedLegacy.StartsWith(resolvedDirectory, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Refusing to remove a legacy chunk outside the world directory.");
+        File.Delete(resolvedLegacy);
+    }
+
+    private static int FloorDiv(int value, int divisor)
+    {
+        var quotient = value / divisor;
+        return value < 0 && value % divisor != 0 ? quotient - 1 : quotient;
+    }
+
+    private static int PositiveMod(int value, int divisor)
+    {
+        var result = value % divisor;
+        return result < 0 ? result + divisor : result;
+    }
 }

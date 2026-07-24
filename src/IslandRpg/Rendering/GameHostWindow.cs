@@ -12,7 +12,16 @@ internal sealed class GameHostWindow : GameWindow
 {
     internal enum PreviewMode { Assets, Island, World }
     private enum ScreenState { LoadingAssets, PreparingGpu, WorldPreview }
-    private sealed record GpuWorldChunk(WorldChunk Chunk, int Vbo, int VertexCount, int WeightsA, int WeightsB);
+    private sealed class GpuWorldChunk(
+        WorldChunk chunk, int vbo, int vertexCount, int weightsA, int weightsB)
+    {
+        public WorldChunk Chunk { get; } = chunk;
+        public int Vbo { get; } = vbo;
+        public int VertexCount { get; } = vertexCount;
+        public int WeightsA { get; } = weightsA;
+        public int WeightsB { get; } = weightsB;
+        public float Opacity { get; set; }
+    }
 
     private readonly string _install;
     private readonly PreviewMode _mode;
@@ -21,6 +30,7 @@ internal sealed class GameHostWindow : GameWindow
     private readonly Dictionary<ChunkCoordinate, GpuWorldChunk> _worldChunks = [];
     private Task<WorldChunk>? _pendingChunkTask;
     private ChunkCoordinate _pendingChunkCoordinate;
+    private Task _saveTail = Task.CompletedTask;
     private IslandMap? _island;
     private Task<AssetCatalog>? _loadTask;
     private AssetCatalog? _catalog;
@@ -170,7 +180,12 @@ internal sealed class GameHostWindow : GameWindow
         if (_screen == ScreenState.WorldPreview)
         {
             UpdateCamera((float)e.Time);
-            if (_mode == PreviewMode.World) StreamWorld();
+            if (_mode == PreviewMode.World)
+            {
+                foreach (var chunk in _worldChunks.Values)
+                    chunk.Opacity = Math.Min(1, chunk.Opacity + (float)e.Time / .38f);
+                StreamWorld();
+            }
         }
     }
 
@@ -312,9 +327,11 @@ internal sealed class GameHostWindow : GameWindow
             .Select((asset, index) => (asset.Definition.Name, index))
             .GroupBy(value => value.Name, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First().index, StringComparer.OrdinalIgnoreCase);
-        foreach (var tree in _worldChunks.Values.SelectMany(value => value.Chunk.Trees)
-                     .OrderBy(tree => tree.X + tree.Y))
+        foreach (var item in _worldChunks.Values
+                     .SelectMany(gpu => gpu.Chunk.Trees.Select(tree => (Tree: tree, Gpu: gpu)))
+                     .OrderBy(item => item.Tree.X + item.Tree.Y))
         {
+            var tree = item.Tree;
             if (!graphicIndex.TryGetValue(tree.GraphicName, out var index)) continue;
             var tile = _worldChunks[new(
                 FloorDiv(tree.X, WorldChunk.Size), FloorDiv(tree.Y, WorldChunk.Size))]
@@ -327,14 +344,19 @@ internal sealed class GameHostWindow : GameWindow
                 (tree.X + tree.Y + 1) * 24 - height * 12);
             var shadowName = tree.GraphicName[..^2] + "N0";
             if (graphicIndex.TryGetValue(shadowName, out var shadowIndex))
-                DrawSprite(_worldAssets[shadowIndex].Sprite.Frames[0], _textures[shadowIndex], world);
-            DrawSprite(_worldAssets[index].Sprite.Frames[0], _textures[index], world);
+                DrawSprite(_worldAssets[shadowIndex].Sprite.Frames[0], _textures[shadowIndex],
+                    world, item.Gpu.Opacity);
+            DrawSprite(_worldAssets[index].Sprite.Frames[0], _textures[index],
+                world, item.Gpu.Opacity);
         }
     }
 
     private void StreamWorld()
     {
         if (_worldStore is null) return;
+        if (_saveTail.IsFaulted)
+            throw _saveTail.Exception?.GetBaseException() ??
+                  new IOException("Background chunk save failed.");
         if (_pendingChunkTask is { IsCompleted: true })
         {
             if (_pendingChunkTask.IsFaulted)
@@ -492,6 +514,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.BindTexture(TextureTarget.Texture2DArray, _waterNormalArray);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "waterNormals"), 3);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "time"), _waterTime);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "opacity"), gpu.Opacity);
         GL.BindBuffer(BufferTarget.ArrayBuffer, gpu.Vbo);
         const int stride = 11 * sizeof(float);
         for (var attribute = 0; attribute < 5; attribute++) GL.EnableVertexAttribArray(attribute);
@@ -506,7 +529,17 @@ internal sealed class GameHostWindow : GameWindow
     private void UnloadWorldChunk(ChunkCoordinate coordinate, bool save)
     {
         if (!_worldChunks.Remove(coordinate, out var gpu)) return;
-        if (save) _worldStore?.Save(gpu.Chunk);
+        if (save && _worldStore is not null)
+        {
+            var store = _worldStore;
+            var chunk = gpu.Chunk;
+            var previous = _saveTail;
+            _saveTail = Task.Run(async () =>
+            {
+                await previous.ConfigureAwait(false);
+                store.Save(chunk);
+            });
+        }
         GL.DeleteBuffer(gpu.Vbo);
         GL.DeleteTexture(gpu.WeightsA);
         GL.DeleteTexture(gpu.WeightsB);
@@ -607,6 +640,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.BindTexture(TextureTarget.Texture2DArray, _waterNormalArray);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "waterNormals"), 3);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "time"), _waterTime);
+        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "opacity"), 1f);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindBuffer(BufferTarget.ArrayBuffer, _islandVbo);
         const int stride = 11 * sizeof(float);
@@ -619,7 +653,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.DrawArrays(PrimitiveType.Triangles, 0, _islandVertexCount);
     }
 
-    private void DrawSprite(SpriteFrame frame, int texture, Vector2 world)
+    private void DrawSprite(SpriteFrame frame, int texture, Vector2 world, float opacity = 1)
     {
         var width = Math.Max(1, Size.X);
         var height = Math.Max(1, Size.Y);
@@ -634,6 +668,7 @@ internal sealed class GameHostWindow : GameWindow
         var y = ((frame.HotspotY - frame.Height / 2f) * _zoom - _camera.Y - world.Y * _zoom) * 2 / height;
         GL.UseProgram(_program);
         GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
+        GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), opacity);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, texture);
         Draw([x-halfW,y+halfH,0,0, x-halfW,y-halfH,0,1, x+halfW,y-halfH,1,1, x+halfW,y+halfH,1,0]);
@@ -920,6 +955,7 @@ internal sealed class GameHostWindow : GameWindow
             uniform sampler2D biomeWeightsB;
             uniform sampler2DArray waterNormals;
             uniform float time;
+            uniform float opacity;
             out vec4 color;
             vec2 hash22(vec2 p) {
                 vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
@@ -1028,6 +1064,7 @@ internal sealed class GameHostWindow : GameWindow
                     vec3 foamColor = vec3(0.84, 0.94, 0.95);
                     color.rgb = mix(color.rgb, foamColor, foam * surfaceEffect * 0.48);
                 }
+                color.a *= opacity;
 
             }
             """;
@@ -1056,7 +1093,8 @@ internal sealed class GameHostWindow : GameWindow
         var vs = Compile(ShaderType.VertexShader,
             "#version 330 core\nlayout(location=0) in vec2 p;layout(location=1) in vec2 u;out vec2 uv;void main(){uv=u;gl_Position=vec4(p,0,1);}");
         var fs = Compile(ShaderType.FragmentShader,
-            "#version 330 core\nin vec2 uv;out vec4 c;uniform sampler2D image;void main(){c=texture(image,uv);}");
+            "#version 330 core\nin vec2 uv;out vec4 c;uniform sampler2D image;uniform float opacity;" +
+            "void main(){c=texture(image,uv);c.a*=opacity;}");
         var program = GL.CreateProgram(); GL.AttachShader(program, vs); GL.AttachShader(program, fs); GL.LinkProgram(program);
         GL.DeleteShader(vs); GL.DeleteShader(fs);
         return program;
@@ -1066,6 +1104,15 @@ internal sealed class GameHostWindow : GameWindow
     {
         foreach (var coordinate in _worldChunks.Keys.ToArray())
             UnloadWorldChunk(coordinate, save: true);
+        Exception? saveFailure = null;
+        try
+        {
+            _saveTail.GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            saveFailure = ex;
+        }
         foreach (var texture in _textures) GL.DeleteTexture(texture);
         foreach (var texture in _terrainTextures) GL.DeleteTexture(texture);
         if (_terrainArray != 0) GL.DeleteTexture(_terrainArray);
@@ -1078,5 +1125,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.DeleteVertexArray(_vao);
         GL.DeleteProgram(_program);
         base.OnUnload();
+        if (saveFailure is not null)
+            throw new IOException("One or more chunks could not be saved during shutdown.", saveFailure);
     }
 }
