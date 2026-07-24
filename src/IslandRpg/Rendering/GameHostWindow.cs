@@ -11,6 +11,8 @@ namespace IslandRpg.Rendering;
 
 internal sealed class GameHostWindow : GameWindow
 {
+    private const int ReferenceWidth = 1280;
+    private const int ReferenceHeight = 720;
     internal enum PreviewMode { Assets, Island, World, Game }
     private enum ScreenState { LoadingAssets, PreparingGpu, WorldPreview }
     private sealed class GpuWorldChunk(
@@ -81,6 +83,8 @@ internal sealed class GameHostWindow : GameWindow
     private int _shoreDistance;
     private int _waterNormalArray;
     private int _streamVbo;
+    private int _sceneFramebuffer;
+    private int _sceneColor;
     private int _treeBatchVbo;
     private int _treeAtlasTexture;
     private int _cliffBatchVbo;
@@ -122,6 +126,7 @@ internal sealed class GameHostWindow : GameWindow
         _vao = GL.GenVertexArray();
         GL.BindVertexArray(_vao);
         _streamVbo = GL.GenBuffer();
+        CreateSceneTarget();
         var progress = new Progress<(int Done, int Total, string Name)>(value =>
         {
             _done = value.Done;
@@ -255,7 +260,7 @@ internal sealed class GameHostWindow : GameWindow
 
     private void UpdateCamera(float elapsed)
     {
-        var mouse = MouseState.Position;
+        var mouse = SceneMousePosition();
         if (MouseState.IsButtonDown(MouseButton.Left))
         {
             if (_dragging) _camera += mouse - _lastMouse;
@@ -273,6 +278,20 @@ internal sealed class GameHostWindow : GameWindow
             _camera += Vector2.Normalize(direction) * 720f * elapsed;
     }
 
+    private Vector2 SceneMousePosition()
+    {
+        var windowWidth = Math.Max(1, Size.X);
+        var windowHeight = Math.Max(1, Size.Y);
+        var scale = Math.Min(
+            windowWidth / (float)ReferenceWidth,
+            windowHeight / (float)ReferenceHeight);
+        var left = (windowWidth - ReferenceWidth * scale) * .5f;
+        var top = (windowHeight - ReferenceHeight * scale) * .5f;
+        return new Vector2(
+            (MouseState.Position.X - left) / Math.Max(scale, .001f),
+            (MouseState.Position.Y - top) / Math.Max(scale, .001f));
+    }
+
     private void UpdateGame(float elapsed)
     {
         if (_player is null) return;
@@ -284,7 +303,7 @@ internal sealed class GameHostWindow : GameWindow
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         if (leftDown && !_gameLeftWasDown)
         {
-            var target = ScreenToTerrain(MouseState.Position);
+            var target = ScreenToTerrain(SceneMousePosition());
             _player.FollowPath(GridPathfinder.Find(_worldSeed, _player.Position, target));
         }
         _gameLeftWasDown = leftDown;
@@ -297,7 +316,7 @@ internal sealed class GameHostWindow : GameWindow
 
     private Vector2 ScreenToTerrain(Vector2 screen)
     {
-        var projected = (screen - new Vector2(Size.X, Size.Y) * .5f - _camera) /
+        var projected = (screen - new Vector2(ReferenceWidth, ReferenceHeight) * .5f - _camera) /
                         Math.Max(_zoom, .001f);
         var map = ScreenWorldToMap(projected);
         for (var iteration = 0; iteration < 3; iteration++)
@@ -366,7 +385,7 @@ internal sealed class GameHostWindow : GameWindow
             _atlasTileTasks.Remove(pair.Key);
         }
 
-        var mouse = MouseState.Position;
+        var mouse = SceneMousePosition();
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         if (leftDown && !_atlasLeftWasDown)
         {
@@ -398,7 +417,8 @@ internal sealed class GameHostWindow : GameWindow
     private void TravelToAtlasPosition(Vector2 mouse)
     {
         var apparent = _atlasCenterIso +
-                       (mouse - new Vector2(Size.X, Size.Y) * .5f) / AtlasPixelsPerTile();
+                       (mouse - new Vector2(ReferenceWidth, ReferenceHeight) * .5f) /
+                       AtlasPixelsPerTile();
         var terrainIsoY = apparent.Y;
         float tileX = 0;
         float tileY = 0;
@@ -418,7 +438,8 @@ internal sealed class GameHostWindow : GameWindow
         StreamWorld();
     }
 
-    private float AtlasDisplaySize() => Math.Max(1f, Math.Max(Size.X, Size.Y));
+    private static float AtlasDisplaySize() =>
+        Math.Max(ReferenceWidth, ReferenceHeight);
     private float AtlasPixelsPerTile() =>
         AtlasDisplaySize() / (_atlasChunksAcross * WorldChunk.Size);
 
@@ -430,7 +451,8 @@ internal sealed class GameHostWindow : GameWindow
             : Math.Min(64, _atlasChunksAcross * 2);
         if (nextChunksAcross == _atlasChunksAcross) return;
 
-        var screenOffset = MouseState.Position - new Vector2(Size.X, Size.Y) * .5f;
+        var screenOffset = SceneMousePosition() -
+                           new Vector2(ReferenceWidth, ReferenceHeight) * .5f;
         var isoUnderCursor = _atlasCenterIso + screenOffset / AtlasPixelsPerTile();
         _atlasChunksAcross = nextChunksAcross;
         _atlasCenterIso = isoUnderCursor - screenOffset / AtlasPixelsPerTile();
@@ -442,8 +464,8 @@ internal sealed class GameHostWindow : GameWindow
         var chunksPerTile = Math.Max(1, _atlasChunksAcross / 4);
         var span = chunksPerTile * WorldChunk.Size;
         var scale = AtlasPixelsPerTile();
-        var halfWidth = Size.X * .5f / scale;
-        var halfHeight = Size.Y * .5f / scale;
+        var halfWidth = ReferenceWidth * .5f / scale;
+        var halfHeight = ReferenceHeight * .5f / scale;
         var firstX = (int)MathF.Floor((_atlasCenterIso.X - halfWidth) / span);
         var lastX = (int)MathF.Floor((_atlasCenterIso.X + halfWidth) / span);
         var firstY = (int)MathF.Floor((_atlasCenterIso.Y - halfHeight) / span);
@@ -489,7 +511,8 @@ internal sealed class GameHostWindow : GameWindow
         }
         var old = _zoom;
         _zoom = Math.Clamp(old * MathF.Pow(1.12f, e.OffsetY), 0.45f, 1.75f);
-        var cursor = MouseState.Position - new Vector2(Size.X / 2f, Size.Y / 2f);
+        var cursor = SceneMousePosition() -
+                     new Vector2(ReferenceWidth / 2f, ReferenceHeight / 2f);
         _camera = cursor - (cursor - _camera) * (_zoom / old);
     }
 
@@ -499,10 +522,76 @@ internal sealed class GameHostWindow : GameWindow
         GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
     }
 
+    private void CreateSceneTarget()
+    {
+        _sceneColor = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture2D, _sceneColor);
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
+            ReferenceWidth, ReferenceHeight, 0, PixelFormat.Rgba,
+            PixelType.UnsignedByte, IntPtr.Zero);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS,
+            (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT,
+            (int)TextureWrapMode.ClampToEdge);
+        _sceneFramebuffer = GL.GenFramebuffer();
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFramebuffer);
+        GL.FramebufferTexture2D(
+            FramebufferTarget.Framebuffer,
+            FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D,
+            _sceneColor,
+            0);
+        var status = GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+        if (status != FramebufferErrorCode.FramebufferComplete)
+            throw new InvalidOperationException($"Scene framebuffer is incomplete: {status}");
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+    }
+
+    private void PresentScene()
+    {
+        var framebufferWidth = Math.Max(1, FramebufferSize.X);
+        var framebufferHeight = Math.Max(1, FramebufferSize.Y);
+        GL.Viewport(0, 0, framebufferWidth, framebufferHeight);
+        GL.ClearColor(0.025f, 0.028f, 0.025f, 1);
+        GL.Clear(ClearBufferMask.ColorBufferBit);
+
+        var scale = Math.Min(
+            framebufferWidth / (float)ReferenceWidth,
+            framebufferHeight / (float)ReferenceHeight);
+        var outputWidth = ReferenceWidth * scale;
+        var outputHeight = ReferenceHeight * scale;
+        var left = (framebufferWidth - outputWidth) * .5f;
+        var top = (framebufferHeight - outputHeight) * .5f;
+        var leftNdc = left * 2 / framebufferWidth - 1;
+        var rightNdc = (left + outputWidth) * 2 / framebufferWidth - 1;
+        var topNdc = 1 - top * 2 / framebufferHeight;
+        var bottomNdc = 1 - (top + outputHeight) * 2 / framebufferHeight;
+        var integerScale = Math.Max(1, (int)MathF.Round(scale));
+        var exactInteger = MathF.Abs(scale - integerScale) < .001f;
+
+        GL.UseProgram(_program);
+        GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
+        GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
+        GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), 0);
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, _sceneColor);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
+            (int)(exactInteger ? TextureMinFilter.Nearest : TextureMinFilter.Linear));
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
+            (int)(exactInteger ? TextureMagFilter.Nearest : TextureMagFilter.Linear));
+        Draw([
+            leftNdc,topNdc,0,1,
+            leftNdc,bottomNdc,0,0,
+            rightNdc,bottomNdc,1,0,
+            rightNdc,topNdc,1,1
+        ]);
+    }
+
     protected override void OnRenderFrame(FrameEventArgs e)
     {
         base.OnRenderFrame(e);
-        GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFramebuffer);
+        GL.Viewport(0, 0, ReferenceWidth, ReferenceHeight);
         GL.ClearColor(0.08f, 0.09f, 0.08f, 1);
         GL.Clear(ClearBufferMask.ColorBufferBit);
         if (_screen == ScreenState.WorldPreview)
@@ -513,16 +602,18 @@ internal sealed class GameHostWindow : GameWindow
             else RenderWorldPreview();
         }
         else RenderLoading();
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        PresentScene();
         SwapBuffers();
     }
 
     private void RenderLoading()
     {
         var margin = 90;
-        var width = Math.Max(0, FramebufferSize.X - margin * 2);
+        var width = Math.Max(0, ReferenceWidth - margin * 2);
         var filled = (int)(width * Math.Clamp(_done / (float)_total, 0, 1));
         GL.Enable(EnableCap.ScissorTest);
-        GL.Scissor(margin, FramebufferSize.Y / 2 - 14, filled, 28);
+        GL.Scissor(margin, ReferenceHeight / 2 - 14, filled, 28);
         GL.ClearColor(0.32f, 0.62f, 0.25f, 1);
         GL.Clear(ClearBufferMask.ColorBufferBit);
         GL.Disable(EnableCap.ScissorTest);
@@ -531,8 +622,8 @@ internal sealed class GameHostWindow : GameWindow
 
     private void RenderAtlas()
     {
-        var width = Math.Max(1, Size.X);
-        var height = Math.Max(1, Size.Y);
+        var width = ReferenceWidth;
+        var height = ReferenceHeight;
         var scale = AtlasPixelsPerTile();
         foreach (var key in _visibleAtlasTiles.OrderBy(key => key.Y).ThenBy(key => key.X))
         {
@@ -567,7 +658,7 @@ internal sealed class GameHostWindow : GameWindow
         {
             const int margin = 90;
             const int barHeight = 18;
-            var barWidth = Math.Max(0, FramebufferSize.X - margin * 2);
+            var barWidth = Math.Max(0, ReferenceWidth - margin * 2);
             var atlasDone = Volatile.Read(ref _atlasDone);
             var atlasTotal = Volatile.Read(ref _atlasTotal);
             var filled = (int)(barWidth * Math.Clamp(
@@ -597,8 +688,10 @@ internal sealed class GameHostWindow : GameWindow
             var world = new Vector2(
                 (i % columns - (columns - 1) / 2f) * cellWidth,
                 (i / columns) * cellHeight);
-            var screen = new Vector2(Size.X / 2f, Size.Y / 2f) + _camera + world * _zoom;
-            if (screen.X < -250 || screen.Y < -250 || screen.X > Size.X + 250 || screen.Y > Size.Y + 250)
+            var screen = new Vector2(ReferenceWidth / 2f, ReferenceHeight / 2f) +
+                         _camera + world * _zoom;
+            if (screen.X < -250 || screen.Y < -250 ||
+                screen.X > ReferenceWidth + 250 || screen.Y > ReferenceHeight + 250)
                 continue;
             DrawSprite(_worldAssets[i].Sprite.Frames[0], _textures[i], world);
         }
@@ -611,8 +704,10 @@ internal sealed class GameHostWindow : GameWindow
             var world = new Vector2(
                 terrainStartX + i % terrainColumns * terrainCell,
                 i / terrainColumns * terrainCell);
-            var screen = new Vector2(Size.X / 2f, Size.Y / 2f) + _camera + world * _zoom;
-            if (screen.X < -150 || screen.Y < -150 || screen.X > Size.X + 150 || screen.Y > Size.Y + 150)
+            var screen = new Vector2(ReferenceWidth / 2f, ReferenceHeight / 2f) +
+                         _camera + world * _zoom;
+            if (screen.X < -150 || screen.Y < -150 ||
+                screen.X > ReferenceWidth + 150 || screen.Y > ReferenceHeight + 150)
                 continue;
             DrawTerrain(_catalog.TerrainTiles[i], _terrainTextures[i], world);
         }
@@ -743,7 +838,7 @@ internal sealed class GameHostWindow : GameWindow
         if (vertices.Count == 0) return;
         GL.UseProgram(_cliffProgram);
         GL.Uniform2(GL.GetUniformLocation(_cliffProgram, "viewport"),
-            (float)Math.Max(1, Size.X), (float)Math.Max(1, Size.Y));
+            (float)ReferenceWidth, (float)ReferenceHeight);
         GL.Uniform2(GL.GetUniformLocation(_cliffProgram, "camera"), _camera.X, _camera.Y);
         GL.Uniform1(GL.GetUniformLocation(_cliffProgram, "zoom"), _zoom);
         GL.Uniform1(GL.GetUniformLocation(_cliffProgram, "cliffTexture"), 0);
@@ -802,35 +897,49 @@ internal sealed class GameHostWindow : GameWindow
     private (float Left, float Top, float Right, float Bottom) SpriteBounds(
         SpriteFrame frame, Vector2 world)
     {
-        var anchor = new Vector2(Size.X, Size.Y) * .5f + _camera + world * _zoom;
-        var left = anchor.X - frame.HotspotX * _zoom;
-        var top = anchor.Y - frame.HotspotY * _zoom;
-        return (left, top, left + frame.Width * _zoom, top + frame.Height * _zoom);
+        var anchor = SpriteAnchor(world);
+        var spriteScale = SpritePixelScale();
+        var left = anchor.X - frame.HotspotX * spriteScale;
+        var top = anchor.Y - frame.HotspotY * spriteScale;
+        return (left, top,
+            left + frame.Width * spriteScale,
+            top + frame.Height * spriteScale);
+    }
+
+    private float SpritePixelScale() => _zoom;
+
+    private Vector2 SpriteAnchor(Vector2 world)
+    {
+        return new Vector2(ReferenceWidth, ReferenceHeight) * .5f +
+               _camera + world * _zoom;
     }
 
     private void AddAtlasQuad(string atlasKey, Vector2 world, float opacity, List<float> vertices)
     {
         if (!_treeAtlas.TryGetValue(atlasKey, out var entry)) return;
         var frame = entry.Frame;
-        var width = Math.Max(1, Size.X);
-        var height = Math.Max(1, Size.Y);
-        var screen = new Vector2(width / 2f, height / 2f) + _camera + world * _zoom;
-        var margin = Math.Max(frame.Width, frame.Height) * _zoom;
+        var width = ReferenceWidth;
+        var height = ReferenceHeight;
+        var screen = SpriteAnchor(world);
+        var spriteScale = SpritePixelScale();
+        var margin = Math.Max(frame.Width, frame.Height) * spriteScale;
         if (screen.X < -margin || screen.Y < -margin ||
             screen.X > width + margin || screen.Y > height + margin)
             return;
-        var halfW = frame.Width * _zoom / width;
-        var halfH = frame.Height * _zoom / height;
-        var centerX = (((frame.Width / 2f - frame.HotspotX) + world.X) * _zoom + _camera.X) *
-                      2 / width;
-        var centerY = ((frame.HotspotY - frame.Height / 2f) * _zoom -
-                       _camera.Y - world.Y * _zoom) * 2 / height;
-        Add(centerX - halfW, centerY + halfH, entry.U0, entry.V0);
-        Add(centerX - halfW, centerY - halfH, entry.U0, entry.V1);
-        Add(centerX + halfW, centerY - halfH, entry.U1, entry.V1);
-        Add(centerX - halfW, centerY + halfH, entry.U0, entry.V0);
-        Add(centerX + halfW, centerY - halfH, entry.U1, entry.V1);
-        Add(centerX + halfW, centerY + halfH, entry.U1, entry.V0);
+        var left = screen.X - frame.HotspotX * spriteScale;
+        var top = screen.Y - frame.HotspotY * spriteScale;
+        var right = left + frame.Width * spriteScale;
+        var bottom = top + frame.Height * spriteScale;
+        var leftNdc = (left - width * .5f) * 2 / width;
+        var rightNdc = (right - width * .5f) * 2 / width;
+        var topNdc = -(top - height * .5f) * 2 / height;
+        var bottomNdc = -(bottom - height * .5f) * 2 / height;
+        Add(leftNdc, topNdc, entry.U0, entry.V0);
+        Add(leftNdc, bottomNdc, entry.U0, entry.V1);
+        Add(rightNdc, bottomNdc, entry.U1, entry.V1);
+        Add(leftNdc, topNdc, entry.U0, entry.V0);
+        Add(rightNdc, bottomNdc, entry.U1, entry.V1);
+        Add(rightNdc, topNdc, entry.U1, entry.V0);
 
         void Add(float px, float py, float u, float v)
         {
@@ -1198,18 +1307,19 @@ internal sealed class GameHostWindow : GameWindow
         var projected = new Vector2(
             (centerX - centerY) * 48,
             (centerX + centerY) * 24 - 4.5f * 12);
-        var screen = new Vector2(Size.X * .5f, Size.Y * .5f) + _camera + projected * _zoom;
+        var screen = new Vector2(ReferenceWidth * .5f, ReferenceHeight * .5f) +
+                     _camera + projected * _zoom;
         var halfWidth = WorldChunk.Size * 48 * _zoom + 96;
         var halfHeight = WorldChunk.Size * 24 * _zoom + 128;
-        return screen.X + halfWidth >= 0 && screen.X - halfWidth <= Size.X &&
-               screen.Y + halfHeight >= 0 && screen.Y - halfHeight <= Size.Y;
+        return screen.X + halfWidth >= 0 && screen.X - halfWidth <= ReferenceWidth &&
+               screen.Y + halfHeight >= 0 && screen.Y - halfHeight <= ReferenceHeight;
     }
 
     private void DrawWorldChunkTerrain(GpuWorldChunk gpu)
     {
         GL.UseProgram(_terrainProgram);
         GL.Uniform2(GL.GetUniformLocation(_terrainProgram, "viewport"),
-            (float)Math.Max(1, Size.X), (float)Math.Max(1, Size.Y));
+            (float)ReferenceWidth, (float)ReferenceHeight);
         GL.Uniform2(GL.GetUniformLocation(_terrainProgram, "camera"), _camera.X, _camera.Y);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "zoom"), _zoom);
         GL.ActiveTexture(TextureUnit.Texture0);
@@ -1358,7 +1468,8 @@ internal sealed class GameHostWindow : GameWindow
     private void DrawIslandTerrainBatch()
     {
         GL.UseProgram(_terrainProgram);
-        GL.Uniform2(GL.GetUniformLocation(_terrainProgram, "viewport"), (float)Math.Max(1, Size.X), (float)Math.Max(1, Size.Y));
+        GL.Uniform2(GL.GetUniformLocation(_terrainProgram, "viewport"),
+            (float)ReferenceWidth, (float)ReferenceHeight);
         GL.Uniform2(GL.GetUniformLocation(_terrainProgram, "camera"), _camera.X, _camera.Y);
         GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "zoom"), _zoom);
         GL.ActiveTexture(TextureUnit.Texture0);
@@ -1406,17 +1517,22 @@ internal sealed class GameHostWindow : GameWindow
         bool mirror = false,
         bool outlineOnly = false)
     {
-        var width = Math.Max(1, Size.X);
-        var height = Math.Max(1, Size.Y);
-        var screen = new Vector2(width / 2f, height / 2f) + _camera + world * _zoom;
-        var margin = Math.Max(frame.Width, frame.Height) * _zoom;
+        var width = ReferenceWidth;
+        var height = ReferenceHeight;
+        var screen = SpriteAnchor(world);
+        var spriteScale = SpritePixelScale();
+        var margin = Math.Max(frame.Width, frame.Height) * spriteScale;
         if (screen.X < -margin || screen.Y < -margin ||
             screen.X > width + margin || screen.Y > height + margin)
             return;
-        var halfW = frame.Width * _zoom / width;
-        var halfH = frame.Height * _zoom / height;
-        var x = (((frame.Width / 2f - frame.HotspotX) + world.X) * _zoom + _camera.X) * 2 / width;
-        var y = ((frame.HotspotY - frame.Height / 2f) * _zoom - _camera.Y - world.Y * _zoom) * 2 / height;
+        var left = screen.X - frame.HotspotX * spriteScale;
+        var top = screen.Y - frame.HotspotY * spriteScale;
+        var right = left + frame.Width * spriteScale;
+        var bottom = top + frame.Height * spriteScale;
+        var leftNdc = (left - width * .5f) * 2 / width;
+        var rightNdc = (right - width * .5f) * 2 / width;
+        var topNdc = -(top - height * .5f) * 2 / height;
+        var bottomNdc = -(bottom - height * .5f) * 2 / height;
         GL.UseProgram(_program);
         GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), opacity);
@@ -1428,18 +1544,18 @@ internal sealed class GameHostWindow : GameWindow
         var leftU = mirror ? 1f : 0f;
         var rightU = mirror ? 0f : 1f;
         Draw([
-            x-halfW,y+halfH,leftU,0,
-            x-halfW,y-halfH,leftU,1,
-            x+halfW,y-halfH,rightU,1,
-            x+halfW,y+halfH,rightU,0
+            leftNdc,topNdc,leftU,0,
+            leftNdc,bottomNdc,leftU,1,
+            rightNdc,bottomNdc,rightU,1,
+            rightNdc,topNdc,rightU,0
         ]);
     }
 
     private void DrawTerrain(TerrainTile tile, int texture, Vector2 world)
     {
         const float previewSize = 128;
-        var width = Math.Max(1, Size.X);
-        var height = Math.Max(1, Size.Y);
+        var width = ReferenceWidth;
+        var height = ReferenceHeight;
         var halfW = previewSize * _zoom / width;
         var halfH = previewSize * _zoom / height;
         var x = (world.X * _zoom + _camera.X) * 2 / width;
@@ -2025,6 +2141,8 @@ internal sealed class GameHostWindow : GameWindow
         foreach (var texture in _atlasTileTextures.Values) GL.DeleteTexture(texture);
         if (_islandVbo != 0) GL.DeleteBuffer(_islandVbo);
         if (_streamVbo != 0) GL.DeleteBuffer(_streamVbo);
+        if (_sceneFramebuffer != 0) GL.DeleteFramebuffer(_sceneFramebuffer);
+        if (_sceneColor != 0) GL.DeleteTexture(_sceneColor);
         if (_treeBatchVbo != 0) GL.DeleteBuffer(_treeBatchVbo);
         if (_treeAtlasTexture != 0) GL.DeleteTexture(_treeAtlasTexture);
         if (_cliffBatchVbo != 0) GL.DeleteBuffer(_cliffBatchVbo);
