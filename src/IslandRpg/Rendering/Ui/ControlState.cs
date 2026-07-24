@@ -42,6 +42,8 @@ internal sealed class TabControlState(GameUiPanel panel) : ControlState
 
 internal sealed class GameUiControlState
 {
+    private const float ButtonSize = 38;
+    private const float ControlGap = 4;
     private readonly ControlState[] _hitOrder;
     private ControlState? _captured;
     private bool _leftWasDown;
@@ -62,18 +64,22 @@ internal sealed class GameUiControlState
     public void Layout(Vector4 viewport)
     {
         InventoryButton.Bounds = new(
-            Math.Max(viewport.X, viewport.X + viewport.Z - 54),
-            Math.Max(viewport.Y, viewport.Y + viewport.W - 54),
-            42,
-            42);
+            Math.Max(viewport.X, viewport.X + viewport.Z - ButtonSize - 12),
+            Math.Max(viewport.Y, viewport.Y + viewport.W - ButtonSize - 12),
+            ButtonSize,
+            ButtonSize);
         SkillsButton.Bounds = new(
-            Math.Max(0, InventoryButton.Bounds.X - 41),
+            Math.Max(
+                viewport.X,
+                InventoryButton.Bounds.X - ButtonSize - ControlGap),
             InventoryButton.Bounds.Y,
-            42,
-            42);
+            ButtonSize,
+            ButtonSize);
         Panel.Bounds = new(
             Math.Max(viewport.X, viewport.X + viewport.Z - 242),
-            Math.Max(viewport.Y, InventoryButton.Bounds.Y - 289),
+            Math.Max(
+                viewport.Y,
+                InventoryButton.Bounds.Y - ControlGap - 290),
             230,
             290);
         Panel.Visible = ActivePanel != GameUiPanel.None;

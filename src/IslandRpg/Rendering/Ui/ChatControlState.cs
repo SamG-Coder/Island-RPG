@@ -22,6 +22,8 @@ internal sealed class ChatInputControlState : ControlState
 internal sealed class ChatUiControlState
 {
     private const int VisibleRows = 8;
+    private const float ChannelButtonWidth = 63;
+    private const float ControlGap = 4;
     private readonly List<string> _messages = [];
     private bool _leftWasDown;
     private bool _draggingThumb;
@@ -46,8 +48,13 @@ internal sealed class ChatUiControlState
         var left = viewport.X + 12;
         var bottom = viewport.Y + viewport.W - 12;
         LogPanel.Bounds = new(left, Math.Max(viewport.Y, bottom - 180), width, 140);
-        ChannelButton.Bounds = new(left, bottom - 38, 42, 38);
-        Input.Bounds = new(left + 42, bottom - 38, width - 42, 38);
+        ChannelButton.Bounds = new(
+            left, bottom - 38, ChannelButtonWidth, 38);
+        Input.Bounds = new(
+            left + ChannelButtonWidth + ControlGap,
+            bottom - 38,
+            width - ChannelButtonWidth - ControlGap,
+            38);
         ScrollTrack.Bounds = new(
             LogPanel.Bounds.X + LogPanel.Bounds.Z - 14,
             LogPanel.Bounds.Y + 5,

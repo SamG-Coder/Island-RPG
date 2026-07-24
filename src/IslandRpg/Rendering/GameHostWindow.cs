@@ -1,4 +1,6 @@
 using IslandRpg.Assets;
+using FontStashSharp;
+using FontStashSharp.Interfaces;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
@@ -136,6 +138,10 @@ internal sealed class GameHostWindow : GameWindow
     private bool _gameRightWasDown;
     private readonly GameUiControlState _gameUi = new();
     private readonly ChatUiControlState _chatUi = new();
+    private FontSystem? _fontSystem;
+    private DynamicSpriteFont? _chatFont;
+    private OpenGlFontRenderer? _fontRenderer;
+    private float _chatLineHeight = 16;
     private int _vao;
     private bool _dragging;
     private Vector2 _lastMouse;
@@ -1124,6 +1130,16 @@ internal sealed class GameHostWindow : GameWindow
 
         DrawAoEUiTile(_gameUi.SkillsButton);
         DrawAoEUiTile(_gameUi.InventoryButton);
+        DrawUiButtonCaption("Skills", _gameUi.SkillsButton.Bounds);
+        DrawUiButtonCaption("Bag", _gameUi.InventoryButton.Bounds);
+    }
+
+    private void DrawUiButtonCaption(string caption, Vector4 bounds)
+    {
+        DrawUiText(
+            caption,
+            CenteredTextPosition(caption, bounds),
+            new FSColor(229, 218, 177, 255));
     }
 
     private void RenderMinimap()
@@ -1355,20 +1371,109 @@ internal sealed class GameHostWindow : GameWindow
         DrawPanelOutline(
             _chatUi.ScrollTrack.Bounds, 0, new(.22f, .19f, .12f, 1));
 
+        if (_chatFont is not null && _fontRenderer is not null)
+        {
+            var textLeft = _chatUi.LogPanel.Bounds.X + 9;
+            var textTop = _chatUi.LogPanel.Bounds.Y + 6;
+            var visible = _chatUi.Messages
+                .Skip(_chatUi.FirstVisibleLine)
+                .Take(8);
+            var row = 0;
+            foreach (var message in visible)
+            {
+                DrawUiText(message, new(textLeft, textTop + row * _chatLineHeight),
+                    new(218, 207, 166, 255));
+                row++;
+            }
+
+            DrawUiText(
+                _chatUi.Channel.ToString(),
+                CenteredTextPosition(
+                    _chatUi.Channel.ToString(), _chatUi.ChannelButton.Bounds),
+                new(229, 218, 177, 255));
+            DrawUiText(
+                _chatUi.InputText,
+                VerticallyCenteredTextPosition(
+                    _chatUi.InputText, _chatUi.Input.Bounds, 9),
+                new(218, 207, 166, 255));
+        }
+
         if (_chatUi.Input.Focused)
         {
             DrawPanelOutline(
                 _chatUi.Input.Bounds, 3, new(.32f, .27f, .16f, 1));
             if ((int)(_clock * 2) % 2 == 0)
             {
+                var textWidth = _chatFont?.MeasureString(_chatUi.InputText).X
+                    ?? _chatUi.InputText.Length * 6;
                 var caretX = Math.Min(
                     _chatUi.Input.Bounds.X + _chatUi.Input.Bounds.Z - 10,
-                    _chatUi.Input.Bounds.X + 9 + _chatUi.InputText.Length * 6);
+                    _chatUi.Input.Bounds.X + 9 + textWidth);
+                var caretHeight = MathF.Min(
+                    18, MathF.Ceiling(_chatFont?.MeasureString("Ag").Y ?? 16));
+                var caretY = MathF.Round(
+                    _chatUi.Input.Bounds.Y +
+                    (_chatUi.Input.Bounds.W - caretHeight) * .5f);
                 DrawUiColor(
-                    new(caretX, _chatUi.Input.Bounds.Y + 10, 1, 18),
+                    new(MathF.Round(caretX), caretY, 1, caretHeight),
                     new(.72f, .68f, .55f, 1));
             }
         }
+    }
+
+    private System.Numerics.Vector2 CenteredTextPosition(
+        string text, Vector4 bounds)
+    {
+        var size = _chatFont?.MeasureString(text) ?? System.Numerics.Vector2.Zero;
+        return new(
+            bounds.X + (bounds.Z - size.X) * .5f,
+            bounds.Y + (bounds.W - size.Y) * .5f);
+    }
+
+    private System.Numerics.Vector2 VerticallyCenteredTextPosition(
+        string text, Vector4 bounds, float leftPadding)
+    {
+        var size = _chatFont?.MeasureString(text) ?? System.Numerics.Vector2.Zero;
+        return new(
+            bounds.X + leftPadding,
+            MathF.Round(bounds.Y + (bounds.W - size.Y) * .5f));
+    }
+
+    private void DrawUiText(
+        string text, System.Numerics.Vector2 position, FSColor color)
+    {
+        if (string.IsNullOrEmpty(text) ||
+            _chatFont is null || _fontRenderer is null) return;
+        _chatFont.DrawText(
+            _fontRenderer, text, position + System.Numerics.Vector2.One,
+            new FSColor(0, 0, 0, 190));
+        _chatFont.DrawText(_fontRenderer, text, position, color);
+    }
+
+    private void DrawFontQuad(
+        int texture,
+        VertexPositionColorTexture topLeft,
+        VertexPositionColorTexture topRight,
+        VertexPositionColorTexture bottomLeft,
+        VertexPositionColorTexture bottomRight)
+    {
+        var left = MathF.Round(topLeft.Position.X);
+        var top = MathF.Round(topLeft.Position.Y);
+        var right = MathF.Round(bottomRight.Position.X);
+        var bottom = MathF.Round(bottomRight.Position.Y);
+        var color = topLeft.Color;
+        DrawUiSprite(
+            SolidUiFrame,
+            texture,
+            new(left, top, right - left, bottom - top),
+            uvRectangle: new(
+                topLeft.TextureCoordinate.X,
+                topLeft.TextureCoordinate.Y,
+                topRight.TextureCoordinate.X - topLeft.TextureCoordinate.X,
+                bottomLeft.TextureCoordinate.Y - topLeft.TextureCoordinate.Y),
+            tint: new(color.R / 255f, color.G / 255f, color.B / 255f),
+            tintAmount: 1,
+            drawOpacity: color.A / 255f);
     }
 
     private void DrawAoEUiTile(TabControlState control)
@@ -2048,6 +2153,21 @@ internal sealed class GameHostWindow : GameWindow
                 TextureParameterName.TextureMagFilter,
                 (int)TextureMagFilter.Linear);
         }
+
+        var fontPath = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Fonts",
+            "Arimo-Variable.ttf");
+        _fontRenderer = new OpenGlFontRenderer(DrawFontQuad);
+        _fontSystem = new FontSystem(new FontSystemSettings
+        {
+            TextureWidth = 512,
+            TextureHeight = 512,
+            FontResolutionFactor = 2
+        });
+        _fontSystem.AddFont(File.ReadAllBytes(fontPath));
+        _chatFont = _fontSystem.GetFont(14);
+        _chatLineHeight = MathF.Ceiling(
+            Math.Max(16, _chatFont.MeasureString("Ag").Y));
     }
 
     private static byte[] CreateTabPixels(bool active)
@@ -3312,6 +3432,8 @@ internal sealed class GameHostWindow : GameWindow
         if (_uiTabTexture != 0) GL.DeleteTexture(_uiTabTexture);
         if (_uiActiveTabTexture != 0) GL.DeleteTexture(_uiActiveTabTexture);
         if (_minimapTexture != 0) GL.DeleteTexture(_minimapTexture);
+        _fontSystem?.Dispose();
+        _fontRenderer?.Dispose();
         if (_terrainArray != 0) GL.DeleteTexture(_terrainArray);
         if (_biomeWeightsA != 0) GL.DeleteTexture(_biomeWeightsA);
         if (_biomeWeightsB != 0) GL.DeleteTexture(_biomeWeightsB);
