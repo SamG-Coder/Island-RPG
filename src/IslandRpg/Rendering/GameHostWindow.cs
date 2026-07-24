@@ -1,12 +1,12 @@
-using AoeRpg.Assets;
+using IslandRpg.Assets;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.GraphicsLibraryFramework;
-using AoeRpg.World;
+using IslandRpg.World;
 
-namespace AoeRpg.Rendering;
+namespace IslandRpg.Rendering;
 
 internal sealed class GameHostWindow : GameWindow
 {
@@ -50,7 +50,7 @@ internal sealed class GameHostWindow : GameWindow
         new NativeWindowSettings
         {
             ClientSize = new Vector2i(1280, 720),
-            Title = "AoE RPG"
+            Title = "Island RPG"
         })
     {
         _install = install;
@@ -122,7 +122,7 @@ internal sealed class GameHostWindow : GameWindow
                     _camera = new Vector2(0, -IslandMap.Size * 24);
                     _zoom = .65f;
                     _screen = ScreenState.WorldPreview;
-                    Title = "AoE RPG - Generated Island";
+                    Title = "Island RPG - Generated Island";
                     return;
                 }
                 var terrainStop = Math.Min(_terrainUploadIndex + 8, _catalog!.TerrainTiles.Count);
@@ -137,7 +137,7 @@ internal sealed class GameHostWindow : GameWindow
                 if (_terrainUploadIndex == _catalog.TerrainTiles.Count)
                 {
                     _screen = ScreenState.WorldPreview;
-                    Title = $"AoE RPG - {_worldAssets.Count} world graphics + {_catalog.TerrainTiles.Count} terrain tiles";
+                    Title = $"Island RPG - {_worldAssets.Count} world graphics + {_catalog.TerrainTiles.Count} terrain tiles";
                 }
             }
         }
@@ -198,7 +198,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.ClearColor(0.32f, 0.62f, 0.25f, 1);
         GL.Clear(ClearBufferMask.ColorBufferBit);
         GL.Disable(EnableCap.ScissorTest);
-        Title = $"AoE RPG - Loading {_done}/{_total}: {_current}";
+        Title = $"Island RPG - Loading {_done}/{_total}: {_current}";
     }
 
     private void RenderWorldPreview()

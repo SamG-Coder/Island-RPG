@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace AoeRpg.Assets;
+namespace IslandRpg.Assets;
 
 internal static class AssetAudit
 {

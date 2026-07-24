@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
 
-namespace AoeRpg.Assets;
+namespace IslandRpg.Assets;
 
 internal sealed record GenieGraphic(
     string Name,
@@ -18,7 +18,7 @@ internal sealed record GenieGraphic(
 
 internal static class GenieDatReader
 {
-    // AoE2 HD graphic records use fixed-length name fields. Reading a named record
+    // Source graphic records use fixed-length name fields. Reading a named record
     // avoids having to deserialize unrelated terrain, sound, unit, and tech tables.
     private const int NameLength = 21;
     private const int FileNameLength = 13;

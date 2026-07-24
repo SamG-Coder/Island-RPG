@@ -1,5 +1,5 @@
-using AoeRpg.Assets;
-using AoeRpg.Rendering;
+using IslandRpg.Assets;
+using IslandRpg.Rendering;
 
 try
 {
@@ -87,7 +87,7 @@ catch (Exception ex)
 {
     Console.Error.WriteLine(ex.Message);
     Console.Error.WriteLine(
-        "Usage: AoeRpg [--age2-path <folder>] [--graphic <SLP id> | --graphic-name <DAT name>]");
+        "Usage: IslandRpg [--age2-path <folder>] [--graphic <SLP id> | --graphic-name <DAT name>]");
     Environment.ExitCode = 1;
 }
 

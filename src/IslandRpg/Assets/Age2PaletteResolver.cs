@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace AoeRpg.Assets;
+namespace IslandRpg.Assets;
 
 internal sealed record ResolvedPalette(string Path, string Description);
 

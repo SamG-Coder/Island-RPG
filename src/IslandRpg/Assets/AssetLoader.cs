@@ -1,4 +1,4 @@
-namespace AoeRpg.Assets;
+namespace IslandRpg.Assets;
 
 using StbImageSharp;
 

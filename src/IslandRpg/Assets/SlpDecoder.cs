@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace AoeRpg.Assets;
+namespace IslandRpg.Assets;
 
 internal static class SlpDecoder
 {

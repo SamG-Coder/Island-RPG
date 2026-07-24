@@ -1,11 +1,11 @@
-using AoeRpg.Assets;
+using IslandRpg.Assets;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.GraphicsLibraryFramework;
 
-namespace AoeRpg.Rendering;
+namespace IslandRpg.Rendering;
 
 internal sealed class DemoWindow : GameWindow
 {
@@ -33,7 +33,7 @@ internal sealed class DemoWindow : GameWindow
         float? secondsPerFrame = null,
         ushort? animationFrameCount = null) : base(
         GameWindowSettings.Default,
-        new NativeWindowSettings { ClientSize = new Vector2i(1280, 720), Title = $"AoE RPG prototype — graphic {graphicId}" })
+        new NativeWindowSettings { ClientSize = new Vector2i(1280, 720), Title = $"Island RPG prototype — graphic {graphicId}" })
     {
         _sprite = sprite;
         _graphicId = graphicId;
@@ -43,7 +43,7 @@ internal sealed class DemoWindow : GameWindow
 
     public DemoWindow(IReadOnlyList<Sprite> sprites) : base(
         GameWindowSettings.Default,
-        new NativeWindowSettings { ClientSize = new Vector2i(1280, 720), Title = "AoE RPG prototype - tree catalogue" })
+        new NativeWindowSettings { ClientSize = new Vector2i(1280, 720), Title = "Island RPG prototype - tree catalogue" })
     {
         if (sprites.Count == 0) throw new ArgumentException("At least one tree is required.", nameof(sprites));
         _catalogSprites = sprites;
@@ -149,7 +149,7 @@ internal sealed class DemoWindow : GameWindow
 
     private void DrawSprite(SpriteFrame frame, int texture, Vector2 worldOffsetPixels)
     {
-        // AoE2 SLP dimensions are authored for 1:1 pixels at the default zoom.
+        // Source SLP dimensions are authored for 1:1 pixels at the default zoom.
         var scale = _zoom;
         var viewportWidth = Math.Max(1, Size.X);
         var viewportHeight = Math.Max(1, Size.Y);

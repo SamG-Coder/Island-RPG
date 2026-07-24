@@ -1,4 +1,4 @@
-namespace AoeRpg.World;
+namespace IslandRpg.World;
 
 internal enum Biome { DeepWater, ShallowWater, Beach, Grassland, Forest, Highland, Rock }
 
@@ -7,7 +7,7 @@ internal sealed record IslandTree(int X, int Y, string GraphicName);
 
 internal sealed class IslandMap
 {
-    public const int Size = 120; // AoE2 "normal" random-map scale.
+    public const int Size = 120; // Classic "normal" random-map scale.
     public required IReadOnlyList<IslandTile> Tiles { get; init; }
     public required IReadOnlyList<IslandTree> Trees { get; init; }
 }

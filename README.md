@@ -1,17 +1,20 @@
-# AoE RPG prototype
+# Island RPG prototype
 
 A minimal OpenTK prototype that reads Age of Empires II HD sprites from the
 player's own installation. No Age of Empires assets are included.
 
+Island RPG is an unofficial, non-commercial project. It is not affiliated with
+or endorsed by Microsoft. Age of Empires is a trademark of Microsoft.
+
 ## Run
 
 ```powershell
-dotnet run --project src/AoeRpg
+dotnet run --project src/IslandRpg
 ```
 
 The program checks common Steam locations and `AGE2HD_PATH`. By default a
 single persistent game window moves through loading, GPU preparation, and a
-pannable generated-island view. The island uses the AoE-style 2:1 projection,
+pannable generated-island view. The island uses a 2:1 isometric projection,
 a 120×120 normal map size, corner-based elevation, coastal/inland biomes, and
 biome-matched trees. Terrain is drawn first, then tree shadows and trees in
 map-depth order. Deep and shallow water use the installed HD normal maps for
@@ -28,25 +31,25 @@ reference several graphics for movement, attacks, death, effects, and shadows.
 Override either the install or graphic:
 
 ```powershell
-dotnet run --project src/AoeRpg -- --age2-path "D:\SteamLibrary\steamapps\common\Age2HD" --graphic 495
+dotnet run --project src/IslandRpg -- --age2-path "D:\SteamLibrary\steamapps\common\Age2HD" --graphic 495
 ```
 
 Look up another graphic by its internal DAT name:
 
 ```powershell
-dotnet run --project src/AoeRpg -- --graphic-name TREEA_NN
+dotnet run --project src/IslandRpg -- --graphic-name TREEA_NN
 ```
 
 Open the complete world-asset preview explicitly:
 
 ```powershell
-dotnet run --project src/AoeRpg -- --catalog
+dotnet run --project src/IslandRpg -- --catalog
 ```
 
 Open the generated island explicitly:
 
 ```powershell
-dotnet run --project src/AoeRpg -- --island
+dotnet run --project src/IslandRpg -- --island
 ```
 
 Press Escape to close. The current prototype supports classic SLP frames,

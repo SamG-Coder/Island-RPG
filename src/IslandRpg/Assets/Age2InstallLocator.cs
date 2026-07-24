@@ -1,6 +1,6 @@
 using Microsoft.Win32;
 
-namespace AoeRpg.Assets;
+namespace IslandRpg.Assets;
 
 internal static class Age2InstallLocator
 {
