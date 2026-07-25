@@ -34,6 +34,7 @@ internal static class ItemIds
     public const string Axe = IronAxe;
     public const string StoneAxe = "stone_axe";
     public const string StoneHammer = "stone_hammer";
+    public const string StonePickaxe = "stone_pickaxe";
     public const string BluntStoneAxe = "blunt_stone_axe";
     public const string BluntStoneHammer = "blunt_stone_hammer";
     public const string Logs = "logs";
@@ -100,6 +101,10 @@ internal static class ItemCatalog
                 1, Tags: ItemTag.Axe | ItemTag.Tool |
                          ItemTag.StoneToolSprite,
                 WoodcuttingPower: 1),
+            [ItemIds.StonePickaxe] = new(
+                ItemIds.StonePickaxe, "stone pickaxe", "Stone pickaxe",
+                "A primitive pickaxe with a pointed stone head lashed to a wooden handle.",
+                2, Tags: ItemTag.Tool | ItemTag.StoneToolSprite),
             [ItemIds.BluntStoneHammer] = new(
                 ItemIds.BluntStoneHammer, "blunt stone hammer", "Blunt hammer",
                 "A stone hammer with worn, blunt working edges.", 0,

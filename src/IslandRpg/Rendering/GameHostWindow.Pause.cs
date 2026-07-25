@@ -12,14 +12,17 @@ internal sealed partial class GameHostWindow
     private void SetPaused(bool paused)
     {
         _paused = paused;
+        if (paused)
+            _modalScreen.Open(ModalScreenKind.Pause);
+        else
+            _modalScreen.Close(ModalScreenKind.Pause);
         _pausePage = PausePage.Main;
         _pauseLeftWasDown = MouseState.IsButtonDown(MouseButton.Left);
         if (paused)
         {
             _chatUi.BlurInput();
             _inventoryContext.Close();
-            Cursor = MouseCursor.Default;
-            _gameCursorKind = GameCursorKind.Default;
+            UseDefaultGameCursor();
         }
         else if (_defaultNativeCursor is not null)
             Cursor = _defaultNativeCursor;

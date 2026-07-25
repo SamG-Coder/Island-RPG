@@ -95,6 +95,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private bool _menuLeftWasDown;
     private string? _frontendError;
     private bool _paused;
+    private readonly ModalScreenState _modalScreen = new();
     private PausePage _pausePage;
     private bool _pauseLeftWasDown;
     private readonly ListControlState _characterList = new();
@@ -188,9 +189,9 @@ internal sealed partial class GameHostWindow : GameWindow
         new SpriteFrame?[12];
     private readonly SpriteFrame?[] _supplementalShadowFrames =
         new SpriteFrame?[12];
-    private readonly int[] _stoneToolTextures = new int[2];
-    private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[2];
-    private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[2];
+    private readonly int[] _stoneToolTextures = new int[3];
+    private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[3];
+    private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[3];
     private static readonly SpriteFrame WoodcuttingItemsFrame =
         new(128, 64, 0, 0, []);
     private readonly MinimapControlState _minimapUi = new();
@@ -222,8 +223,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private WorldEntity? _player;
     private bool _gameLeftWasDown;
     private bool _gameRightWasDown;
-    private bool _inventoryRightWasDown;
-    private bool _inventoryLeftWasDown;
+    private readonly InventoryInteractionController _inventoryInteraction =
+        new();
     private bool _skillsLeftWasDown;
     private int _selectedSkill = -1;
     private readonly GameUiControlState _gameUi = new();
@@ -240,9 +241,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private Vector2 _groundObjectContextWalkTarget;
     private int _inventoryContextSlot = -1;
     private int _activeInventorySlot = -1;
-    private int _inventoryPressedSlot = -1;
-    private int _inventoryDraggingSlot = -1;
-    private Vector2 _inventoryPressPosition;
+    private int _inventoryDraggingSlot => _inventoryInteraction.DraggingSlot;
     private FontSystem? _fontSystem;
     private DynamicSpriteFont? _chatFont;
     private OpenGlFontRenderer? _fontRenderer;
@@ -357,6 +356,8 @@ internal sealed partial class GameHostWindow : GameWindow
             {
                 if (_chatUi.Input.Focused)
                     _chatUi.BlurInput();
+                else if (_craftingWindowOpen)
+                    CloseCraftingWindow();
                 else if (_paused && _pausePage != PausePage.Main)
                     _pausePage = PausePage.Main;
                 else
@@ -465,8 +466,16 @@ internal sealed partial class GameHostWindow : GameWindow
 
         if (_screen == ScreenState.WorldPreview)
         {
-            if (_mode == PreviewMode.Game && _paused)
+            if (_mode == PreviewMode.Game &&
+                _modalScreen.PausesSimulation)
                 UpdatePauseMenu();
+            else if (_mode == PreviewMode.Game && _craftingWindowOpen)
+            {
+                UpdateCraftingWindowInput(
+                    MouseState.Position,
+                    MouseState.IsButtonDown(MouseButton.Left));
+                UpdateGame((float)e.Time);
+            }
             else if (_atlasOpen)
                 UpdateAtlas();
             else
@@ -1184,36 +1193,23 @@ internal sealed partial class GameHostWindow : GameWindow
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
+        UpdateCraftingWindowInput(MouseState.Position, leftDown);
         UpdateSkillsPanelInput(MouseState.Position, leftDown);
-        UpdateInventoryDrag(MouseState.Position, leftDown);
-        _inventoryLeftWasDown = leftDown;
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
-        if (rightDown && !_inventoryRightWasDown &&
-            _gameUi.ActivePanel == GameUiPanel.Inventory)
+        if (_gameUi.ActivePanel == GameUiPanel.Inventory)
+            UpdateInventoryInteraction(
+                new(
+                    _gameUi.Panel.Bounds,
+                    _activePlayer?.Inventory ?? [],
+                    _activeInventorySlot,
+                    _inventoryDraggingSlot,
+                    allowDragOutsideToGame: true),
+                MouseState.Position, leftDown, rightDown);
+        else
         {
-            var inventory = _activePlayer?.Inventory ?? [];
-            for (var slot = 0; slot < PlayerInventory.Capacity; slot++)
-            {
-                if (slot >= inventory.Length ||
-                    inventory[slot] is null)
-                    continue;
-                if (!InventorySlotBounds(_gameUi.Panel.Bounds, slot)
-                        .Contains(MouseState.Position))
-                    continue;
-                _inventoryContextSlot = slot;
-                _treeContext.Close();
-                _groundObjectContext.Close();
-                _inventoryContext.Open(
-                    MouseState.Position,
-                    ItemCatalog.Get(inventory[slot]!)
-                        .HasTag(ItemTag.Seed)
-                        ? ["Plant", "Drop", "Examine"]
-                        : ["Use", "Drop", "Examine"],
-                    scene);
-                break;
-            }
+            _inventoryInteraction.Cancel();
+            _groundDropPreview = null;
         }
-        _inventoryRightWasDown = rightDown;
         if (KeyboardState.IsKeyPressed(Keys.Enter))
         {
             if (_chatUi.Input.Focused)
@@ -1228,6 +1224,11 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void UpdateSkillsPanelInput(Vector2 pointer, bool leftDown)
     {
+        if (_craftingWindowOpen)
+        {
+            _skillsLeftWasDown = leftDown;
+            return;
+        }
         if (_gameUi.ActivePanel != GameUiPanel.Skills)
         {
             _skillsLeftWasDown = leftDown;
@@ -1242,9 +1243,17 @@ internal sealed partial class GameHostWindow : GameWindow
                     _selectedSkill = 0;
                 else if (SkillListItemBounds(panel, 1).Contains(pointer))
                     _selectedSkill = 1;
+                else if (SkillListItemBounds(panel, 2).Contains(pointer))
+                    _selectedSkill = 2;
             }
-            else if (SkillBackBounds(panel).Contains(pointer))
-                _selectedSkill = -1;
+            else
+            {
+                if (SkillBackBounds(panel).Contains(pointer))
+                    _selectedSkill = -1;
+                else if (_selectedSkill == 2 &&
+                         CraftingRecipesButtonBounds(panel).Contains(pointer))
+                    OpenCraftingWindow();
+            }
         }
         _skillsLeftWasDown = leftDown;
     }
@@ -1256,6 +1265,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _treeContext.HitTest(mouse) ||
         _groundObjectContext.HitTest(mouse) ||
         _inventoryDraggingSlot >= 0 ||
+        _modalScreen.CapturesAllInput ||
         _minimapUi.HitTest(mouse);
 
     private PathResult FindActionPath(
@@ -2302,9 +2312,10 @@ internal sealed partial class GameHostWindow : GameWindow
             _mode == PreviewMode.Game && !_atlasOpen)
         {
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
-            if (_paused) BlurComposedFrame();
-            RenderGameUi();
+            if (_modalScreen.BlursBackground) BlurComposedFrame();
+            if (!_modalScreen.HidesGameUi) RenderGameUi();
             if (_paused) RenderPauseMenu();
+            else if (_craftingWindowOpen) RenderCraftingWindow();
         }
         SwapBuffers();
     }
@@ -2999,7 +3010,6 @@ internal sealed partial class GameHostWindow : GameWindow
             RenderSkillsPanel();
         else if (_gameUi.ActivePanel == GameUiPanel.Inventory)
             RenderInventoryPanel();
-
         DrawAoEUiTile(_gameUi.SkillsButton);
         DrawAoEUiTile(_gameUi.InventoryButton);
         DrawUiButtonCaption("Skills", _gameUi.SkillsButton.Bounds);
@@ -3138,28 +3148,41 @@ internal sealed partial class GameHostWindow : GameWindow
                 panel, 1, "Farming",
                 FarmingSkill.LevelForExperience(
                     _activePlayer?.FarmingExperience ?? 0));
+            DrawSkillListItem(
+                panel, 2, "Crafting",
+                CraftingSkill.LevelForExperience(
+                    _activePlayer?.CraftingExperience ?? 0));
             return;
         }
 
         var farming = _selectedSkill == 1;
-        var name = farming ? "Farming" : "Woodcutting";
-        var experience = farming
-            ? _activePlayer?.FarmingExperience ?? 0
-            : _activePlayer?.WoodcuttingExperience ?? 0;
-        var level = farming
-            ? FarmingSkill.LevelForExperience(experience)
-            : WoodcuttingSkill.LevelForExperience(experience);
-        var maximumLevel = farming
-            ? FarmingSkill.MaximumLevel
-            : WoodcuttingSkill.MaximumLevel;
-        var currentFloor = farming
-            ? FarmingSkill.ExperienceForLevel(level)
-            : WoodcuttingSkill.ExperienceForLevel(level);
+        var crafting = _selectedSkill == 2;
+        var name = crafting ? "Crafting" : farming ? "Farming" : "Woodcutting";
+        var experience = crafting
+            ? _activePlayer?.CraftingExperience ?? 0
+            : farming
+                ? _activePlayer?.FarmingExperience ?? 0
+                : _activePlayer?.WoodcuttingExperience ?? 0;
+        var level = crafting
+            ? CraftingSkill.LevelForExperience(experience)
+            : farming
+                ? FarmingSkill.LevelForExperience(experience)
+                : WoodcuttingSkill.LevelForExperience(experience);
+        var maximumLevel = crafting
+            ? CraftingSkill.MaximumLevel
+            : farming ? FarmingSkill.MaximumLevel : WoodcuttingSkill.MaximumLevel;
+        var currentFloor = crafting
+            ? CraftingSkill.ExperienceForLevel(level)
+            : farming
+                ? FarmingSkill.ExperienceForLevel(level)
+                : WoodcuttingSkill.ExperienceForLevel(level);
         var nextFloor = level >= maximumLevel
             ? currentFloor
-            : farming
-                ? FarmingSkill.ExperienceForLevel(level + 1)
-                : WoodcuttingSkill.ExperienceForLevel(level + 1);
+            : crafting
+                ? CraftingSkill.ExperienceForLevel(level + 1)
+                : farming
+                    ? FarmingSkill.ExperienceForLevel(level + 1)
+                    : WoodcuttingSkill.ExperienceForLevel(level + 1);
         var progress = level >= maximumLevel
             ? 1f
             : (experience - currentFloor) /
@@ -3194,15 +3217,29 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawUiText(
             level >= maximumLevel
                 ? $"Total XP: {experience}"
-                : $"{(farming ? FarmingSkill.ExperienceToNextLevel(experience) : WoodcuttingSkill.ExperienceToNextLevel(experience))} XP to next",
+                : $"{(crafting ? CraftingSkill.ExperienceToNextLevel(experience) : farming ? FarmingSkill.ExperienceToNextLevel(experience) : WoodcuttingSkill.ExperienceToNextLevel(experience))} XP to next",
             new System.Numerics.Vector2(panel.X + 18, panel.Y + 173),
             new(190, 181, 150, 255));
         DrawUiText(
-            farming
+            crafting
+                ? "Open recipes below"
+                : farming
                 ? "Plant seeds to gain XP"
                 : $"Hit chance: {WoodcuttingSkill.HitChance(level) * 100:0}%",
             new System.Numerics.Vector2(panel.X + 18, panel.Y + 202),
             new(190, 181, 150, 255));
+        if (crafting)
+        {
+            var recipes = CraftingRecipesButtonBounds(panel);
+            DrawUiColor(
+                recipes,
+                recipes.Contains(MouseState.Position)
+                    ? new(.25f, .19f, .085f, .98f)
+                    : new(.13f, .105f, .055f, .98f));
+            DrawPanelOutline(recipes, 1, new(.45f, .34f, .15f, 1));
+            DrawCenteredUiText(
+                "Recipes", recipes, new(232, 220, 178, 255));
+        }
     }
 
     private void DrawSkillListItem(
@@ -3234,8 +3271,21 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void RenderInventoryPanel()
     {
-        var panel = _gameUi.Panel.Bounds;
-        var inventory = _activePlayer?.Inventory ?? [];
+        RenderInventoryPanel(
+            new(
+                _gameUi.Panel.Bounds,
+                _activePlayer?.Inventory ?? [],
+                _activeInventorySlot,
+                _inventoryDraggingSlot),
+            renderDragPreview: true);
+    }
+
+    private void RenderInventoryPanel(
+        InventoryPanelState inventoryPanel,
+        bool renderDragPreview)
+    {
+        var panel = inventoryPanel.Bounds;
+        var inventory = inventoryPanel.Inventory;
         var count = PlayerInventory.Count(inventory);
         DrawPanelCaption("Bag", panel);
         DrawUiText(
@@ -3247,10 +3297,10 @@ internal sealed partial class GameHostWindow : GameWindow
 
         for (var slot = 0; slot < PlayerInventory.Capacity; slot++)
         {
-            var bounds = InventorySlotBounds(panel, slot);
+            var bounds = inventoryPanel.SlotBounds(slot);
             if (slot >= inventory.Length ||
                 inventory[slot] is not { } itemId ||
-                slot == _inventoryDraggingSlot)
+                slot == inventoryPanel.DraggingSlot)
                 continue;
             var itemUv = InventoryItemUv(itemId);
             var itemTexture = InventoryItemTexture(itemId);
@@ -3262,23 +3312,24 @@ internal sealed partial class GameHostWindow : GameWindow
                     itemTexture,
                     bounds,
                     uvRectangle: itemUv,
-                    spriteOutline: slot == _activeInventorySlot
+                    spriteOutline: slot == inventoryPanel.ActiveSlot
                         ? Vector3.One
                         : Vector3.Zero);
             else
                 DrawCenteredUiText(
                     InventoryItemCaption(itemId),
                     bounds, new(211, 198, 158, 255));
-            if (slot == _activeInventorySlot && !hasSprite)
+            if (slot == inventoryPanel.ActiveSlot && !hasSprite)
             {
                 DrawPanelOutline(bounds, 0, new(.96f, .95f, .88f, 1));
                 DrawPanelOutline(bounds, 1, new(.74f, .72f, .65f, 1));
             }
         }
 
-        if (_gameUi.Panel.Bounds.Contains(MouseState.Position) &&
-            (uint)_inventoryDraggingSlot < (uint)inventory.Length &&
-            inventory[_inventoryDraggingSlot] is { } draggedItemId)
+        if (renderDragPreview &&
+            inventoryPanel.Bounds.Contains(MouseState.Position) &&
+            (uint)inventoryPanel.DraggingSlot < (uint)inventory.Length &&
+            inventory[inventoryPanel.DraggingSlot] is { } draggedItemId)
         {
             var itemUv = InventoryItemUv(draggedItemId);
             var dragBounds = new Vector4(
@@ -3294,7 +3345,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     uvRectangle: itemUv,
                     drawOpacity: .62f,
                     spriteOutline:
-                    _inventoryDraggingSlot == _activeInventorySlot
+                    inventoryPanel.DraggingSlot == inventoryPanel.ActiveSlot
                         ? Vector3.One
                         : Vector3.Zero);
             else
@@ -3308,77 +3359,65 @@ internal sealed partial class GameHostWindow : GameWindow
         }
     }
 
-    private void UpdateInventoryDrag(Vector2 pointer, bool leftDown)
+    private void UpdateInventoryInteraction(
+        InventoryPanelState panel,
+        Vector2 pointer,
+        bool leftDown,
+        bool rightDown)
     {
-        if (_gameUi.ActivePanel != GameUiPanel.Inventory)
-        {
-            _inventoryPressedSlot = -1;
-            _inventoryDraggingSlot = -1;
+        var interaction = _inventoryInteraction.Update(
+            panel, pointer, leftDown, rightDown,
+            interactionBlocked: _inventoryContext.Visible);
+        if (_inventoryDraggingSlot >= 0 &&
+            panel.AllowDragOutsideToGame)
+            UpdateGroundDropPreview(pointer);
+        else if (!panel.AllowDragOutsideToGame)
             _groundDropPreview = null;
-            return;
-        }
 
-        if (leftDown && !_inventoryLeftWasDown)
+        switch (interaction.Type)
         {
-            if (_inventoryContext.Visible) return;
-            _inventoryPressedSlot = InventorySlotAt(
-                pointer, includeEmpty: false);
-            _inventoryPressPosition = pointer;
-            return;
-        }
-
-        if (leftDown)
-        {
-            if (_inventoryPressedSlot >= 0 &&
-                _inventoryDraggingSlot < 0 &&
-                (pointer - _inventoryPressPosition).LengthSquared >= 16)
-                _inventoryDraggingSlot = _inventoryPressedSlot;
-            if (_inventoryDraggingSlot >= 0)
-                UpdateGroundDropPreview(pointer);
-            return;
-        }
-
-        if (_inventoryLeftWasDown)
-        {
-            if (_inventoryDraggingSlot >= 0)
-            {
-                var target = InventorySlotAt(pointer, includeEmpty: true);
-                if (target >= 0)
-                    SwapInventorySlots(_inventoryDraggingSlot, target);
-                else if (_groundDropPreview is
-                         {
-                             Valid: true
-                         } preview &&
-                         preview.InventorySlot == _inventoryDraggingSlot)
+            case InventoryInteractionType.Activate:
+                ActivateInventorySlot(interaction.SourceSlot);
+                break;
+            case InventoryInteractionType.Swap:
+                SwapInventorySlots(
+                    interaction.SourceSlot, interaction.TargetSlot);
+                break;
+            case InventoryInteractionType.DropOutsideToGame:
+                if (_groundDropPreview is
+                    {
+                        Valid: true
+                    } preview &&
+                    preview.InventorySlot == interaction.SourceSlot)
                     QueueGroundObjectDrop(preview);
-            }
-            else if (_inventoryPressedSlot >= 0 &&
-                     InventorySlotAt(pointer, includeEmpty: false) ==
-                     _inventoryPressedSlot)
-                ActivateInventorySlot(_inventoryPressedSlot);
-            else if (_inventoryPressedSlot < 0 &&
-                     _gameUi.Panel.Bounds.Contains(pointer))
+                break;
+            case InventoryInteractionType.OpenContextMenu:
+                OpenInventoryContextMenu(
+                    interaction.SourceSlot, pointer);
+                break;
+            case InventoryInteractionType.ClearSelection:
                 _activeInventorySlot = -1;
+                break;
         }
-
-        _inventoryPressedSlot = -1;
-        _inventoryDraggingSlot = -1;
-        _groundDropPreview = null;
+        if (!leftDown)
+            _groundDropPreview = null;
     }
 
-    private int InventorySlotAt(Vector2 pointer, bool includeEmpty)
+    private void OpenInventoryContextMenu(int slot, Vector2 pointer)
     {
         var inventory = _activePlayer?.Inventory ?? [];
-        for (var slot = 0; slot < PlayerInventory.Capacity; slot++)
-        {
-            if (!includeEmpty &&
-                (slot >= inventory.Length || inventory[slot] is null))
-                continue;
-            if (InventorySlotBounds(_gameUi.Panel.Bounds, slot)
-                    .Contains(pointer))
-                return slot;
-        }
-        return -1;
+        if ((uint)slot >= (uint)inventory.Length ||
+            inventory[slot] is not { } itemId)
+            return;
+        _inventoryContextSlot = slot;
+        _treeContext.Close();
+        _groundObjectContext.Close();
+        _inventoryContext.Open(
+            pointer,
+            ItemCatalog.Get(itemId).HasTag(ItemTag.Seed)
+                ? ["Plant", "Drop", "Examine"]
+                : ["Use", "Drop", "Examine"],
+            SceneClientBounds());
     }
 
     private void SwapInventorySlots(int source, int target)
@@ -3437,6 +3476,7 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         if (source == ItemIds.SharpenedRock &&
             ItemCatalog.Get(target).HasTag(ItemTag.Log) &&
+            CanCraftRecipe("plank") &&
             PlayerInventory.TryCarvePlank(
                 inventory, _activeInventorySlot, slot,
                 Random.Shared.NextSingle(), out var carvedPlank,
@@ -3453,11 +3493,13 @@ internal sealed partial class GameHostWindow : GameWindow
                     ? "You carve the log into a plank, but the sharp rock breaks."
                     : "You carve the log into a plank with the sharp rock.",
                 ChatMessageStyle.Action);
+            AwardCraftingExperience("plank");
             _activeInventorySlot = -1;
             return;
         }
         if (source == ItemIds.SharpenedRock &&
             target == ItemIds.Sticks &&
+            CanCraftRecipe("stone-axe") &&
             PlayerInventory.TryCraftStoneAxe(
                 inventory, _activeInventorySlot, slot, out var craftedAxe))
         {
@@ -3470,11 +3512,13 @@ internal sealed partial class GameHostWindow : GameWindow
             _chatUi.AddMessage(
                 "You fasten the sharp rock to the sticks and create a stone axe.",
                 ChatMessageStyle.Action);
+            AwardCraftingExperience("stone-axe");
             _activeInventorySlot = -1;
             return;
         }
         if (source == ItemIds.MediumRock &&
             target == ItemIds.Sticks &&
+            CanCraftRecipe("stone-hammer") &&
             PlayerInventory.TryCraftStoneHammer(
                 inventory, _activeInventorySlot, slot,
                 out var craftedHammer))
@@ -3488,11 +3532,13 @@ internal sealed partial class GameHostWindow : GameWindow
             _chatUi.AddMessage(
                 "You fasten the medium rock to the sticks and create a stone hammer.",
                 ChatMessageStyle.Action);
+            AwardCraftingExperience("stone-hammer");
             _activeInventorySlot = -1;
             return;
         }
         if (source == ItemIds.MediumRock &&
             target == ItemIds.MediumRock &&
+            CanCraftRecipe("sharpened-rock") &&
             PlayerInventory.TrySharpenRock(
                 inventory, _activeInventorySlot, slot, out var sharpened))
         {
@@ -3505,6 +3551,7 @@ internal sealed partial class GameHostWindow : GameWindow
             _chatUi.AddMessage(
                 "You strike the rocks together and create a sharp rock.",
                 ChatMessageStyle.Action);
+            AwardCraftingExperience("sharpened-rock");
             _activeInventorySlot = -1;
             return;
         }
@@ -3559,27 +3606,6 @@ internal sealed partial class GameHostWindow : GameWindow
             $"My {toolName} has gone blunt. Maybe I should try using some small rocks to sharpen it.";
         _chatUi.AddMessage(thought, ChatMessageStyle.Monologue);
         ShowOverheadSpeech(thought);
-    }
-
-    private static Vector4 InventorySlotBounds(Vector4 panel, int slot)
-    {
-        var gridWidth =
-            GameUiControlState.InventorySlotSize *
-            GameUiControlState.InventoryColumns +
-            GameUiControlState.InventoryColumnGap *
-            (GameUiControlState.InventoryColumns - 1);
-        var left = MathF.Round((panel.Z - gridWidth) / 2);
-        return new(
-            panel.X + left +
-            slot % GameUiControlState.InventoryColumns *
-            (GameUiControlState.InventorySlotSize +
-             GameUiControlState.InventoryColumnGap),
-            panel.Y + GameUiControlState.InventoryGridTop +
-            slot / GameUiControlState.InventoryColumns *
-            (GameUiControlState.InventorySlotSize +
-             GameUiControlState.InventoryRowGap),
-            GameUiControlState.InventorySlotSize,
-            GameUiControlState.InventorySlotSize);
     }
 
     private void RenderInventoryContextMenu()
@@ -5163,7 +5189,7 @@ internal sealed partial class GameHostWindow : GameWindow
             var sheet = ImageResult.FromStream(
                 stream, ColorComponents.RedGreenBlueAlpha);
             const int cellSize = 32;
-            for (var cell = 0; cell < _stoneToolTextures.Length; cell++)
+            for (var cell = 0; cell < 2; cell++)
             {
                 var pixels = new byte[cellSize * cellSize * 4];
                 for (var row = 0; row < cellSize; row++)
@@ -5180,6 +5206,21 @@ internal sealed partial class GameHostWindow : GameWindow
                     ItemShadowGenerator.Create(frame);
                 _stoneToolTextures[cell] = Upload(frame);
             }
+        }
+        var stonePickaxePath = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Images",
+            "stone-pickaxe-item.png");
+        if (File.Exists(stonePickaxePath))
+        {
+            using var stream = File.OpenRead(stonePickaxePath);
+            var image = ImageResult.FromStream(
+                stream, ColorComponents.RedGreenBlueAlpha);
+            var frame = new SpriteFrame(
+                image.Width, image.Height, image.Width / 2, 28, image.Data);
+            _stoneToolFrames[2] = frame;
+            _stoneToolShadowFrames[2] =
+                ItemShadowGenerator.Create(frame);
+            _stoneToolTextures[2] = Upload(frame);
         }
         GL.BindTexture(TextureTarget.Texture2D, _minimapTexture);
         GL.TexParameter(

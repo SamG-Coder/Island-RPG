@@ -49,6 +49,43 @@ Require(noviceHit.Hit && masterHit.Hit && masterHit.Damage > noviceHit.Damage,
     "higher woodcutting levels must deal more damage");
 Require(!WoodcuttingSkill.Roll(0, .9f, 0).Hit,
     "a novice woodcutter must be able to miss");
+Require(CraftingSkill.LevelForExperience(0) == 1 &&
+        CraftingSkill.LevelForExperience(
+            CraftingSkill.ExperienceForLevel(20)) == 20,
+    "crafting must use the complete 20-level progression");
+var pickaxeRecipe = CraftingSkill.Recipes.Single(
+    recipe => recipe.ResultItemId == ItemIds.StonePickaxe);
+Require(pickaxeRecipe.Category == CraftingCategory.Tools &&
+        pickaxeRecipe.RequiredLevel == 6 &&
+        pickaxeRecipe.Ingredients.Count == 3 &&
+        pickaxeRecipe.Steps.Count == 3,
+    "the stone pickaxe recipe must define its level, materials, and ordered steps");
+Require(CraftingSkill.Availability(
+            pickaxeRecipe, 5,
+            [ItemIds.SharpenedRock, ItemIds.MediumRock, ItemIds.Sticks]) ==
+        RecipeAvailability.Locked &&
+        CraftingSkill.Availability(
+            pickaxeRecipe, 6, []) ==
+        RecipeAvailability.MissingResources &&
+        CraftingSkill.Availability(
+            pickaxeRecipe, 6,
+            [ItemIds.SharpenedRock, ItemIds.MediumRock, ItemIds.Sticks]) ==
+        RecipeAvailability.Ready,
+    "recipe state must distinguish locked, missing-resource, and ready recipes");
+var modalScreen = new ModalScreenState();
+modalScreen.Open(ModalScreenKind.Crafting);
+Require(modalScreen.IsOpen &&
+        modalScreen.BlursBackground &&
+        modalScreen.HidesGameUi &&
+        modalScreen.CapturesAllInput &&
+        !modalScreen.PausesSimulation,
+    "crafting must be an exclusive blurred modal without pausing simulation");
+modalScreen.Open(ModalScreenKind.Pause);
+Require(modalScreen.PausesSimulation,
+    "the pause menu must use the same modal standard and pause simulation");
+modalScreen.Close(ModalScreenKind.Pause);
+Require(!modalScreen.IsOpen,
+    "closing a modal must restore the normal game screen");
 
 var startingInventory = PlayerInventory.CreateStartingInventory();
 Require(startingInventory.Length == PlayerInventory.Capacity &&
@@ -70,6 +107,13 @@ Require(ItemCatalog.Get(ItemIds.IronAxe) is var axeDefinition &&
         ItemCatalog.All.Select(item => item.Id).Distinct().Count() ==
         ItemCatalog.All.Count,
     "the item catalogue must own axe/log gameplay and presentation metadata");
+Require(ItemCatalog.Get(ItemIds.StonePickaxe) is var pickaxeDefinition &&
+        pickaxeDefinition.Name == "stone pickaxe" &&
+        pickaxeDefinition.SpriteCell == 2 &&
+        pickaxeDefinition.HasTag(ItemTag.Tool) &&
+        pickaxeDefinition.HasTag(ItemTag.StoneToolSprite) &&
+        !pickaxeDefinition.HasTag(ItemTag.Axe),
+    "the stone pickaxe must use the third stone-tool sprite without acting as an axe");
 Require(PlayerInventory.TrySwap(
             ["axe", "logs", "oak_logs"], 0, 2,
             out var swappedInventory) &&
@@ -92,6 +136,44 @@ var inventoryGridBottom =
     GameUiControlState.InventoryRowGap;
 Require(gameUi.Panel.Bounds.W > inventoryGridBottom,
     "the inventory panel must include padding beneath all seven grid rows");
+var reusableInventory = new InventoryPanelState(
+    gameUi.Panel.Bounds, [ItemIds.Logs],
+    allowDragOutsideToGame: false);
+var inventoryInteraction = new InventoryInteractionController();
+var firstSlotCenter = new Vector2(
+    reusableInventory.SlotBounds(0).X + 16,
+    reusableInventory.SlotBounds(0).Y + 16);
+inventoryInteraction.Update(
+    reusableInventory, firstSlotCenter,
+    leftDown: true, rightDown: false);
+inventoryInteraction.Update(
+    reusableInventory, firstSlotCenter + new Vector2(8, 0),
+    leftDown: true, rightDown: false);
+Require(!inventoryInteraction.AllowsCurrentDragOutsideToGame,
+    "an embedded inventory drag must not enable the world-drop cursor");
+var containedDrag = inventoryInteraction.Update(
+    reusableInventory, Vector2.Zero,
+    leftDown: false, rightDown: false);
+Require(containedDrag.Type == InventoryInteractionType.None,
+    "an embedded inventory must reject dragging items outside to the game");
+var worldDropInventory = new InventoryPanelState(
+    gameUi.Panel.Bounds, [ItemIds.Logs],
+    allowDragOutsideToGame: true);
+inventoryInteraction.Update(
+    worldDropInventory, firstSlotCenter,
+    leftDown: true, rightDown: false);
+inventoryInteraction.Update(
+    worldDropInventory, firstSlotCenter + new Vector2(8, 0),
+    leftDown: true, rightDown: false);
+Require(inventoryInteraction.AllowsCurrentDragOutsideToGame,
+    "an opted-in inventory drag must enable the world-drop cursor");
+var outsideDrag = inventoryInteraction.Update(
+    worldDropInventory, Vector2.Zero,
+    leftDown: false, rightDown: false);
+Require(outsideDrag.Type ==
+        InventoryInteractionType.DropOutsideToGame &&
+        outsideDrag.SourceSlot == 0,
+    "the normal inventory must opt into dragging items into the game world");
 
 string?[] inventory = [];
 for (var slot = 0; slot < PlayerInventory.Capacity; slot++)

@@ -52,7 +52,7 @@ internal sealed class GameUiControlState
     internal const float InventoryRowGap = 4;
     private const float PanelWidth = 172;
     private const float PanelBottomPadding = 8;
-    private const float PanelHeight =
+    internal const float PanelHeight =
         InventoryGridTop +
         InventoryRows * InventorySlotSize +
         (InventoryRows - 1) * InventoryRowGap +
@@ -128,6 +128,14 @@ internal sealed class GameUiControlState
 
     public bool BlocksWorldInput(Vector2 pointer) =>
         _hitOrder.Any(control => control.HitTest(pointer));
+
+    public void Close()
+    {
+        ActivePanel = GameUiPanel.None;
+        SkillsButton.Selected = false;
+        InventoryButton.Selected = false;
+        Panel.Visible = false;
+    }
 
     private void Toggle(TabControlState tab)
     {

@@ -24,7 +24,8 @@ internal sealed record PlayerProfile(
     int WoodcuttingExperience = 0,
     string?[]? Inventory = null,
     bool HasDiscoveredTreeSeed = false,
-    int FarmingExperience = 0);
+    int FarmingExperience = 0,
+    int CraftingExperience = 0);
 
 internal sealed record WorldPlayerState(
     string PlayerId,

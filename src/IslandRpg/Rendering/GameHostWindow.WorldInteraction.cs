@@ -247,6 +247,8 @@ internal sealed partial class GameHostWindow
 
     private bool IsWorldDropDragOutsideInventory()
     {
+        if (!_inventoryInteraction.AllowsCurrentDragOutsideToGame)
+            return false;
         if (_gameUi.Panel.Bounds.Contains(MouseState.Position))
             return false;
         var inventory = _activePlayer?.Inventory ?? [];

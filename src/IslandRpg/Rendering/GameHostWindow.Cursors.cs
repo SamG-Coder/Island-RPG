@@ -28,6 +28,12 @@ internal sealed partial class GameHostWindow
         CursorState = CursorState.Normal;
     }
 
+    private void UseDefaultGameCursor()
+    {
+        _gameCursorKind = GameCursorKind.Default;
+        Cursor = _defaultNativeCursor ?? MouseCursor.Default;
+    }
+
     private static MouseCursor CreateNativeCursor(SpriteFrame frame)
     {
         var pixels = (byte[])frame.Rgba.Clone();
