@@ -52,14 +52,15 @@ Require(!WoodcuttingSkill.Roll(0, .9f, 0).Hit,
 
 var startingInventory = PlayerInventory.CreateStartingInventory();
 Require(startingInventory.Length == PlayerInventory.Capacity &&
-        startingInventory[0] == ItemIds.Axe &&
+        startingInventory[0] == ItemIds.IronAxe &&
         PlayerInventory.Count(startingInventory) == 1 &&
         PlayerInventory.HasAxe(startingInventory),
-    "a new character must start with an axe in a fixed 28-slot inventory");
-Require(PlayerInventory.CanDrop(ItemIds.Axe) &&
+    "a new character must start with an iron axe in a fixed 28-slot inventory");
+Require(PlayerInventory.CanDrop(ItemIds.IronAxe) &&
         PlayerInventory.CanDrop(ItemIds.Logs),
     "all inventory items must be droppable into the world");
-Require(ItemCatalog.Get(ItemIds.Axe) is var axeDefinition &&
+Require(ItemCatalog.Get(ItemIds.IronAxe) is var axeDefinition &&
+        axeDefinition.Name == "iron axe" &&
         axeDefinition.SpriteCell == 5 &&
         axeDefinition.HasTag(ItemTag.Axe) &&
         axeDefinition.Droppable &&
@@ -110,6 +111,12 @@ Require(PlayerInventory.TryBreakRock(
         0, 1, out var splitMedium) &&
         splitMedium.Count(item => item == ItemIds.SmallRocks) == 2,
     "a large rock tool must split a medium rock into two pebble items");
+Require(PlayerInventory.TryBreakRock(
+        [ItemIds.StoneHammer, ItemIds.LargeRock],
+        0, 1, out var hammerSplit) &&
+        hammerSplit[0] == ItemIds.StoneHammer &&
+        hammerSplit.Count(item => item == ItemIds.MediumRock) == 2,
+    "a stone hammer must split rocks without being consumed");
 Require(!PlayerInventory.TryBreakRock(
         Enumerable.Repeat<string?>(ItemIds.LargeRock, PlayerInventory.Capacity)
             .ToArray(),
@@ -126,17 +133,58 @@ Require(!PlayerInventory.TrySharpenRock(
         [ItemIds.MediumRock, ItemIds.LargeRock],
         0, 1, out _),
     "creating a sharp rock must require two medium rocks");
-Require(PlayerInventory.TryCraftAxe(
+Require(PlayerInventory.TryCraftStoneAxe(
         [ItemIds.SharpenedRock, ItemIds.Sticks],
         0, 1, out var craftedAxe) &&
         craftedAxe[0] is null &&
-        craftedAxe[1] == ItemIds.Axe &&
+        craftedAxe[1] == ItemIds.StoneAxe &&
+        ItemCatalog.Get(craftedAxe[1]!).HasTag(ItemTag.Axe) &&
         PlayerInventory.Count(craftedAxe) == 1,
-    "using a sharp rock on sticks must consume both and create an axe");
-Require(!PlayerInventory.TryCraftAxe(
+    "using a sharp rock on sticks must consume both and create a stone axe");
+Require(!PlayerInventory.TryCraftStoneAxe(
         [ItemIds.SharpenedRock, ItemIds.Logs],
         0, 1, out _),
     "crafting an axe must require sticks");
+Require(PlayerInventory.TryCraftStoneHammer(
+        [ItemIds.MediumRock, ItemIds.Sticks],
+        0, 1, out var craftedHammer) &&
+        craftedHammer[0] is null &&
+        craftedHammer[1] == ItemIds.StoneHammer &&
+        ItemCatalog.Get(craftedHammer[1]!).HasTag(ItemTag.Tool) &&
+        !ItemCatalog.Get(craftedHammer[1]!).HasTag(ItemTag.Axe),
+    "using a medium rock on sticks must consume both and create a stone hammer");
+Require(!PlayerInventory.TryCraftStoneHammer(
+        [ItemIds.MediumRock, ItemIds.Logs],
+        0, 1, out _),
+    "crafting a stone hammer must require sticks");
+Require(PlayerInventory.TryBluntStoneTool(
+        [ItemIds.StoneAxe], ItemIds.StoneAxe, .009f,
+        out var bluntAxe) &&
+        bluntAxe[0] == ItemIds.BluntStoneAxe &&
+        !PlayerInventory.HasAxe(bluntAxe),
+    "a stone axe must become unusably blunt on the one-percent roll");
+Require(!PlayerInventory.TryBluntStoneTool(
+        [ItemIds.StoneHammer], ItemIds.StoneHammer, .01f,
+        out var unchangedHammer) &&
+        unchangedHammer[0] == ItemIds.StoneHammer,
+    "the stone-tool blunt chance must be exactly one percent");
+Require(PlayerInventory.TrySharpenStoneTool(
+        [ItemIds.SmallRocks, ItemIds.BluntStoneAxe],
+        0, 1, out var resharpenedAxe) &&
+        resharpenedAxe[0] is null &&
+        resharpenedAxe[1] == ItemIds.StoneAxe &&
+        PlayerInventory.HasAxe(resharpenedAxe),
+    "using small rocks on a blunt stone axe must consume them and restore it");
+Require(PlayerInventory.TrySharpenStoneTool(
+        [ItemIds.SmallRocks, ItemIds.BluntStoneHammer],
+        0, 1, out var resharpenedHammer) &&
+        resharpenedHammer[0] is null &&
+        resharpenedHammer[1] == ItemIds.StoneHammer,
+    "using small rocks on a blunt stone hammer must restore it");
+Require(PlayerInventory.UsesStoneAxe([ItemIds.StoneAxe]) &&
+        !PlayerInventory.UsesStoneAxe(
+            [ItemIds.StoneAxe, ItemIds.IronAxe]),
+    "an iron axe must be preferred over a carried stone axe");
 Require(PlayerInventory.TryCarvePlank(
         [ItemIds.SharpenedRock, ItemIds.Logs],
         0, 1, .25f, out var carvedPlank, out var sharpRockSurvived) &&

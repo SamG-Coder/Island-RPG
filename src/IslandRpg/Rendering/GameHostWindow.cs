@@ -188,6 +188,9 @@ internal sealed partial class GameHostWindow : GameWindow
         new SpriteFrame?[12];
     private readonly SpriteFrame?[] _supplementalShadowFrames =
         new SpriteFrame?[12];
+    private readonly int[] _stoneToolTextures = new int[2];
+    private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[2];
+    private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[2];
     private static readonly SpriteFrame WoodcuttingItemsFrame =
         new(128, 64, 0, 0, []);
     private readonly MinimapControlState _minimapUi = new();
@@ -1714,6 +1717,27 @@ internal sealed partial class GameHostWindow : GameWindow
                 tree => tree.Id == _activeTreeId.Value);
             if (index < 0) continue;
             var instance = gpu.Chunk.TreeInstances[index];
+            if (PlayerInventory.UsesStoneAxe(_activePlayer?.Inventory) &&
+                PlayerInventory.TryBluntStoneTool(
+                    _activePlayer?.Inventory,
+                    ItemIds.StoneAxe,
+                    Random.Shared.NextSingle(),
+                    out var bluntedInventory))
+            {
+                _activePlayer = _activePlayer! with
+                {
+                    Inventory = bluntedInventory,
+                    UpdatedUtc = DateTime.UtcNow
+                };
+                _saves.SavePlayer(_activePlayer);
+                _chatUi.AddMessage(
+                    "Your stone axe becomes blunt. Use small rocks on it to sharpen it.",
+                    ChatMessageStyle.Warning);
+                AddBluntToolMonologue(ItemIds.StoneAxe);
+                _activeTreeId = null;
+                _player.Stop();
+                return;
+            }
             var experience = _activePlayer?.WoodcuttingExperience ?? 0;
             var strikeResult = WoodcuttingSkill.Roll(
                 experience,
@@ -3380,6 +3404,24 @@ internal sealed partial class GameHostWindow : GameWindow
 
         var source = inventory[_activeInventorySlot]!;
         var target = inventory[slot]!;
+        if (source == ItemIds.SmallRocks &&
+            PlayerInventory.TrySharpenStoneTool(
+                inventory, _activeInventorySlot, slot,
+                out var sharpenedTool))
+        {
+            var toolName = ItemCatalog.Get(sharpenedTool[slot]!).Name;
+            _activePlayer = _activePlayer! with
+            {
+                Inventory = sharpenedTool,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            _saves.SavePlayer(_activePlayer);
+            _chatUi.AddMessage(
+                $"You use the small rocks to sharpen the {toolName}.",
+                ChatMessageStyle.Action);
+            _activeInventorySlot = -1;
+            return;
+        }
         if (source == ItemIds.SharpenedRock &&
             ItemCatalog.Get(target).HasTag(ItemTag.Log) &&
             PlayerInventory.TryCarvePlank(
@@ -3403,7 +3445,7 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         if (source == ItemIds.SharpenedRock &&
             target == ItemIds.Sticks &&
-            PlayerInventory.TryCraftAxe(
+            PlayerInventory.TryCraftStoneAxe(
                 inventory, _activeInventorySlot, slot, out var craftedAxe))
         {
             _activePlayer = _activePlayer! with
@@ -3413,7 +3455,25 @@ internal sealed partial class GameHostWindow : GameWindow
             };
             _saves.SavePlayer(_activePlayer);
             _chatUi.AddMessage(
-                "You fasten the sharp rock to the sticks and create an axe.",
+                "You fasten the sharp rock to the sticks and create a stone axe.",
+                ChatMessageStyle.Action);
+            _activeInventorySlot = -1;
+            return;
+        }
+        if (source == ItemIds.MediumRock &&
+            target == ItemIds.Sticks &&
+            PlayerInventory.TryCraftStoneHammer(
+                inventory, _activeInventorySlot, slot,
+                out var craftedHammer))
+        {
+            _activePlayer = _activePlayer! with
+            {
+                Inventory = craftedHammer,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            _saves.SavePlayer(_activePlayer);
+            _chatUi.AddMessage(
+                "You fasten the medium rock to the sticks and create a stone hammer.",
                 ChatMessageStyle.Action);
             _activeInventorySlot = -1;
             return;
@@ -3435,7 +3495,7 @@ internal sealed partial class GameHostWindow : GameWindow
             _activeInventorySlot = -1;
             return;
         }
-        if (source == ItemIds.LargeRock &&
+        if (source is ItemIds.LargeRock or ItemIds.StoneHammer &&
             target is ItemIds.LargeRock or ItemIds.MediumRock)
         {
             if (!PlayerInventory.TryBreakRock(
@@ -3446,9 +3506,14 @@ internal sealed partial class GameHostWindow : GameWindow
                     "You need an empty inventory slot for the broken pieces.");
                 return;
             }
+            var afterUse = broken;
+            var hammerBlunted = source == ItemIds.StoneHammer &&
+                PlayerInventory.TryBluntStoneTool(
+                    broken, ItemIds.StoneHammer,
+                    Random.Shared.NextSingle(), out afterUse);
             _activePlayer = _activePlayer! with
             {
-                Inventory = broken,
+                Inventory = hammerBlunted ? afterUse : broken,
                 UpdatedUtc = DateTime.UtcNow
             };
             _saves.SavePlayer(_activePlayer);
@@ -3457,6 +3522,13 @@ internal sealed partial class GameHostWindow : GameWindow
                     ? "You split the large rock into two medium rocks."
                     : "You break the medium rock into two handfuls of pebbles.",
                 ChatMessageStyle.Action);
+            if (hammerBlunted)
+            {
+                _chatUi.AddMessage(
+                    "Your stone hammer becomes blunt. Use small rocks on it to sharpen it.",
+                    ChatMessageStyle.Warning);
+                AddBluntToolMonologue(ItemIds.StoneHammer);
+            }
             _activeInventorySlot = -1;
             return;
         }
@@ -3465,6 +3537,15 @@ internal sealed partial class GameHostWindow : GameWindow
             $"{ItemCatalog.Get(target).Name}, but nothing happens.",
             ChatMessageStyle.Action);
         _activeInventorySlot = -1;
+    }
+
+    private void AddBluntToolMonologue(string toolId)
+    {
+        var toolName = ItemCatalog.Get(toolId).Name;
+        var thought =
+            $"My {toolName} has gone blunt. Maybe I should try using some small rocks to sharpen it.";
+        _chatUi.AddMessage(thought, ChatMessageStyle.Monologue);
+        ShowOverheadSpeech(thought);
     }
 
     private static Vector4 InventorySlotBounds(Vector4 panel, int slot)
@@ -3758,7 +3839,8 @@ internal sealed partial class GameHostWindow : GameWindow
         var item = ItemCatalog.Get(itemId);
         var cell = item.SpriteCell;
         if (item.HasTag(ItemTag.NaturalMaterial) ||
-            item.HasTag(ItemTag.SupplementalSprite))
+            item.HasTag(ItemTag.SupplementalSprite) ||
+            item.HasTag(ItemTag.StoneToolSprite))
             return cell is null ? null : new Vector4(0, 0, 1, 1);
         return cell is null
             ? null
@@ -3771,6 +3853,11 @@ internal sealed partial class GameHostWindow : GameWindow
     private int InventoryItemTexture(string itemId)
     {
         var item = ItemCatalog.Get(itemId);
+        if (item.HasTag(ItemTag.StoneToolSprite))
+            return item.SpriteCell is { } stoneCell &&
+                   (uint)stoneCell < (uint)_stoneToolTextures.Length
+                ? _stoneToolTextures[stoneCell]
+                : 0;
         if (item.HasTag(ItemTag.SupplementalSprite))
             return item.SpriteCell is { } supplementalCell &&
                    (uint)supplementalCell <
@@ -5034,6 +5121,33 @@ internal sealed partial class GameHostWindow : GameWindow
                 _supplementalItemTextures[cell] = Upload(frame);
             }
         }
+        var stoneToolSheetPath = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Images",
+            "stone-tools-items.png");
+        if (File.Exists(stoneToolSheetPath))
+        {
+            using var stream = File.OpenRead(stoneToolSheetPath);
+            var sheet = ImageResult.FromStream(
+                stream, ColorComponents.RedGreenBlueAlpha);
+            const int cellSize = 32;
+            for (var cell = 0; cell < _stoneToolTextures.Length; cell++)
+            {
+                var pixels = new byte[cellSize * cellSize * 4];
+                for (var row = 0; row < cellSize; row++)
+                    System.Buffer.BlockCopy(
+                        sheet.Data,
+                        (row * sheet.Width + cell * cellSize) * 4,
+                        pixels,
+                        row * cellSize * 4,
+                        cellSize * 4);
+                var frame = new SpriteFrame(
+                    cellSize, cellSize, cellSize / 2, 28, pixels);
+                _stoneToolFrames[cell] = frame;
+                _stoneToolShadowFrames[cell] =
+                    ItemShadowGenerator.Create(frame);
+                _stoneToolTextures[cell] = Upload(frame);
+            }
+        }
         GL.BindTexture(TextureTarget.Texture2D, _minimapTexture);
         GL.TexParameter(
             TextureTarget.Texture2D,
@@ -5272,6 +5386,13 @@ internal sealed partial class GameHostWindow : GameWindow
                     SupplementalAtlasKey(cell, shadow: true),
                     null, shadowFrame);
         }
+        for (var cell = 0; cell < _stoneToolFrames.Length; cell++)
+        {
+            if (_stoneToolFrames[cell] is { } itemFrame)
+                Place(StoneToolAtlasKey(cell, shadow: false), null, itemFrame);
+            if (_stoneToolShadowFrames[cell] is { } shadowFrame)
+                Place(StoneToolAtlasKey(cell, shadow: true), null, shadowFrame);
+        }
         var requiredHeight = y + rowHeight + padding;
         var atlasHeight = 1;
         while (atlasHeight < requiredHeight) atlasHeight *= 2;
@@ -5319,6 +5440,9 @@ internal sealed partial class GameHostWindow : GameWindow
         shadow
             ? $"SUPPLEMENTAL_SHADOW#{cell}"
             : $"SUPPLEMENTAL#{cell}";
+
+    private static string StoneToolAtlasKey(int cell, bool shadow) =>
+        shadow ? $"STONE_TOOL_SHADOW#{cell}" : $"STONE_TOOL#{cell}";
 
     private GpuWorldChunk UploadWorldChunk(WorldChunk chunk)
     {
@@ -6444,6 +6568,8 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var texture in _woodcuttingItemTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _naturalItemTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _stoneToolTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         if (_uiTabTexture != 0) GL.DeleteTexture(_uiTabTexture);
         if (_uiActiveTabTexture != 0) GL.DeleteTexture(_uiActiveTabTexture);

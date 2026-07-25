@@ -11,7 +11,8 @@ internal enum ItemTag
     Tool = 1 << 4,
     Seed = 1 << 5,
     Mineral = 1 << 6,
-    SupplementalSprite = 1 << 7
+    SupplementalSprite = 1 << 7,
+    StoneToolSprite = 1 << 8
 }
 
 internal sealed record ItemDefinition(
@@ -28,7 +29,12 @@ internal sealed record ItemDefinition(
 
 internal static class ItemIds
 {
-    public const string Axe = "axe";
+    public const string IronAxe = "axe";
+    public const string Axe = IronAxe;
+    public const string StoneAxe = "stone_axe";
+    public const string StoneHammer = "stone_hammer";
+    public const string BluntStoneAxe = "blunt_stone_axe";
+    public const string BluntStoneHammer = "blunt_stone_hammer";
     public const string Logs = "logs";
     public const string OakLogs = "oak_logs";
     public const string PineLogs = "pine_logs";
@@ -78,10 +84,27 @@ internal static class ItemCatalog
                 ItemIds.Bamboo, "bamboo", "Bamb",
                 "A strong, lightweight length of bamboo.", 4,
                 Tags: ItemTag.Log | ItemTag.WoodcuttingMaterial),
-            [ItemIds.Axe] = new(
-                ItemIds.Axe, "axe", "Axe",
-                "A sturdy axe for chopping down trees.", 5,
+            [ItemIds.IronAxe] = new(
+                ItemIds.IronAxe, "iron axe", "Iron axe",
+                "A sturdy iron axe for chopping down trees.", 5,
                 Tags: ItemTag.Axe | ItemTag.Tool),
+            [ItemIds.StoneHammer] = new(
+                ItemIds.StoneHammer, "stone hammer", "Stone hammer",
+                "A primitive hammer with a stone head lashed to a wooden handle.",
+                0, Tags: ItemTag.Tool | ItemTag.StoneToolSprite),
+            [ItemIds.StoneAxe] = new(
+                ItemIds.StoneAxe, "stone axe", "Stone axe",
+                "A primitive axe with a sharp stone head lashed to a wooden handle.",
+                1, Tags: ItemTag.Axe | ItemTag.Tool |
+                         ItemTag.StoneToolSprite),
+            [ItemIds.BluntStoneHammer] = new(
+                ItemIds.BluntStoneHammer, "blunt stone hammer", "Blunt hammer",
+                "A stone hammer with worn, blunt working edges.", 0,
+                Tags: ItemTag.Tool | ItemTag.StoneToolSprite),
+            [ItemIds.BluntStoneAxe] = new(
+                ItemIds.BluntStoneAxe, "blunt stone axe", "Blunt axe",
+                "A stone axe too blunt to chop effectively.", 1,
+                Tags: ItemTag.Tool | ItemTag.StoneToolSprite),
             [ItemIds.WoodChips] = new(
                 ItemIds.WoodChips, "wood chips", "Chips",
                 "Small chips left over from worked timber.", 6,

@@ -5,6 +5,10 @@ using System.Windows.Media.Imaging;
 
 return SpriteSheetTool.Run(args);
 
+//Guide: what we need to do now is we need to create stone hammer and stone axe.
+//lookup guide on how to make sprites use reference from woodcutting-items.png and 32x32 aoe2 style.
+//use tools -> islandRpg.SpriteTool
+
 internal static class SpriteSheetTool
 {
     public static int Run(string[] args)

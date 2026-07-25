@@ -7,7 +7,7 @@ internal static class PlayerInventory
     public static string?[] CreateStartingInventory()
     {
         var inventory = new string?[Capacity];
-        inventory[0] = ItemIds.Axe;
+        inventory[0] = ItemIds.IronAxe;
         return inventory;
     }
 
@@ -29,6 +29,10 @@ internal static class PlayerInventory
             item is not null &&
             ItemCatalog.Get(item).HasTag(ItemTag.Axe)) == true;
 
+    public static bool UsesStoneAxe(string?[]? items) =>
+        items?.Any(item => item == ItemIds.IronAxe) != true &&
+        items?.Any(item => item == ItemIds.StoneAxe) == true;
+
     public static bool CanDrop(string itemId) =>
         ItemCatalog.Get(itemId).Droppable;
 
@@ -40,7 +44,8 @@ internal static class PlayerInventory
         if (toolSlot == targetSlot ||
             (uint)toolSlot >= Capacity ||
             (uint)targetSlot >= Capacity ||
-            updated[toolSlot] != ItemIds.LargeRock)
+            updated[toolSlot] is not
+                (ItemIds.LargeRock or ItemIds.StoneHammer))
             return false;
         var result = updated[targetSlot] switch
         {
@@ -72,7 +77,7 @@ internal static class PlayerInventory
         return true;
     }
 
-    public static bool TryCraftAxe(
+    public static bool TryCraftStoneAxe(
         string?[]? items, int toolSlot, int targetSlot,
         out string?[] updated)
     {
@@ -84,7 +89,63 @@ internal static class PlayerInventory
             updated[targetSlot] != ItemIds.Sticks)
             return false;
         updated[toolSlot] = null;
-        updated[targetSlot] = ItemIds.Axe;
+        updated[targetSlot] = ItemIds.StoneAxe;
+        return true;
+    }
+
+    public static bool TryCraftStoneHammer(
+        string?[]? items, int toolSlot, int targetSlot,
+        out string?[] updated)
+    {
+        updated = Normalize(items);
+        if (toolSlot == targetSlot ||
+            (uint)toolSlot >= Capacity ||
+            (uint)targetSlot >= Capacity ||
+            updated[toolSlot] != ItemIds.MediumRock ||
+            updated[targetSlot] != ItemIds.Sticks)
+            return false;
+        updated[toolSlot] = null;
+        updated[targetSlot] = ItemIds.StoneHammer;
+        return true;
+    }
+
+    public static bool TryBluntStoneTool(
+        string?[]? items, string toolId, float roll,
+        out string?[] updated)
+    {
+        updated = Normalize(items);
+        if (roll >= .01f) return false;
+        var slot = Array.FindIndex(
+            updated, item => item == toolId);
+        if (slot < 0) return false;
+        updated[slot] = toolId switch
+        {
+            ItemIds.StoneAxe => ItemIds.BluntStoneAxe,
+            ItemIds.StoneHammer => ItemIds.BluntStoneHammer,
+            _ => updated[slot]
+        };
+        return updated[slot] != toolId;
+    }
+
+    public static bool TrySharpenStoneTool(
+        string?[]? items, int smallRocksSlot, int toolSlot,
+        out string?[] updated)
+    {
+        updated = Normalize(items);
+        if (smallRocksSlot == toolSlot ||
+            (uint)smallRocksSlot >= Capacity ||
+            (uint)toolSlot >= Capacity ||
+            updated[smallRocksSlot] != ItemIds.SmallRocks)
+            return false;
+        var sharpened = updated[toolSlot] switch
+        {
+            ItemIds.BluntStoneAxe => ItemIds.StoneAxe,
+            ItemIds.BluntStoneHammer => ItemIds.StoneHammer,
+            _ => null
+        };
+        if (sharpened is null) return false;
+        updated[smallRocksSlot] = null;
+        updated[toolSlot] = sharpened;
         return true;
     }
 
