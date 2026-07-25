@@ -129,6 +129,11 @@ internal sealed class GameHostWindow : GameWindow
     private int _streamVbo;
     private int _sceneFramebuffer;
     private int _sceneColor;
+    private int _pauseBlurProgram;
+    private int _pauseBlurTexture;
+    private int _pauseBlurIntermediate;
+    private int _pauseBlurFramebuffer;
+    private Vector2i _pauseBlurSize;
     private int _treeBatchVbo;
     private int _treeAtlasTexture;
     private int _cliffBatchVbo;
@@ -188,6 +193,7 @@ internal sealed class GameHostWindow : GameWindow
     private DynamicSpriteFont? _chatFont;
     private OpenGlFontRenderer? _fontRenderer;
     private float _chatLineHeight = 16;
+    private float _uiOpacity = 1;
     private int _vao;
     private bool _dragging;
     private Vector2 _lastMouse;
@@ -217,6 +223,7 @@ internal sealed class GameHostWindow : GameWindow
         GL.Enable(EnableCap.Blend);
         GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
         _program = CreateProgram();
+        _pauseBlurProgram = CreatePauseBlurProgram();
         _vao = GL.GenVertexArray();
         GL.BindVertexArray(_vao);
         _streamVbo = GL.GenBuffer();
@@ -1728,6 +1735,7 @@ internal sealed class GameHostWindow : GameWindow
     {
         base.OnMouseWheel(e);
         if (_screen != ScreenState.WorldPreview || e.OffsetY == 0) return;
+        if (_mode == PreviewMode.Game && _paused) return;
         if (_mode == PreviewMode.Game)
         {
             _chatUi.Layout(SceneClientBounds());
@@ -1860,6 +1868,7 @@ internal sealed class GameHostWindow : GameWindow
             _mode == PreviewMode.Game && !_atlasOpen)
         {
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
+            if (_paused) BlurComposedFrame();
             RenderGameUi();
             if (_paused) RenderPauseMenu();
         }
@@ -2117,9 +2126,6 @@ internal sealed class GameHostWindow : GameWindow
 
     private void RenderPauseMenu()
     {
-        DrawUiColor(
-            new(0, 0, ClientSize.X, ClientSize.Y),
-            new(0, 0, 0, .58f));
         switch (_pausePage)
         {
             case PausePage.Main:
@@ -2145,6 +2151,94 @@ internal sealed class GameHostWindow : GameWindow
         }
         if (_pausePage != PausePage.Main)
             DrawMenuButton(PauseCloseButtonBounds(), "X");
+    }
+
+    private void BlurComposedFrame()
+    {
+        var width = Math.Max(1, FramebufferSize.X);
+        var height = Math.Max(1, FramebufferSize.Y);
+        if (_pauseBlurTexture == 0)
+        {
+            _pauseBlurTexture = GL.GenTexture();
+            _pauseBlurIntermediate = GL.GenTexture();
+            _pauseBlurFramebuffer = GL.GenFramebuffer();
+            ConfigureBlurTexture(_pauseBlurTexture);
+            ConfigureBlurTexture(_pauseBlurIntermediate);
+        }
+
+        if (_pauseBlurSize.X != width || _pauseBlurSize.Y != height)
+        {
+            AllocateBlurTexture(_pauseBlurTexture, width, height);
+            AllocateBlurTexture(_pauseBlurIntermediate, width, height);
+            _pauseBlurSize = new(width, height);
+        }
+
+        GL.BindTexture(TextureTarget.Texture2D, _pauseBlurTexture);
+        GL.CopyTexSubImage2D(
+            TextureTarget.Texture2D, 0, 0, 0, 0, 0, width, height);
+
+        GL.BindFramebuffer(
+            FramebufferTarget.Framebuffer, _pauseBlurFramebuffer);
+        GL.FramebufferTexture2D(
+            FramebufferTarget.Framebuffer,
+            FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D,
+            _pauseBlurIntermediate,
+            0);
+        GL.Viewport(0, 0, width, height);
+        DrawBlurPass(_pauseBlurTexture, new(1f / width, 0));
+
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        GL.Viewport(0, 0, width, height);
+        DrawBlurPass(_pauseBlurIntermediate, new(0, 1f / height));
+
+        static void ConfigureBlurTexture(int texture)
+        {
+            GL.BindTexture(TextureTarget.Texture2D, texture);
+            GL.TexParameter(
+                TextureTarget.Texture2D,
+                TextureParameterName.TextureWrapS,
+                (int)TextureWrapMode.ClampToEdge);
+            GL.TexParameter(
+                TextureTarget.Texture2D,
+                TextureParameterName.TextureWrapT,
+                (int)TextureWrapMode.ClampToEdge);
+            GL.TexParameter(
+                TextureTarget.Texture2D,
+                TextureParameterName.TextureMinFilter,
+                (int)TextureMinFilter.Linear);
+            GL.TexParameter(
+                TextureTarget.Texture2D,
+                TextureParameterName.TextureMagFilter,
+                (int)TextureMagFilter.Linear);
+        }
+
+        static void AllocateBlurTexture(int texture, int width, int height)
+        {
+            GL.BindTexture(TextureTarget.Texture2D, texture);
+            GL.TexImage2D(
+                TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
+                width, height, 0, PixelFormat.Rgba,
+                PixelType.UnsignedByte, IntPtr.Zero);
+        }
+
+        void DrawBlurPass(int texture, Vector2 direction)
+        {
+            GL.UseProgram(_pauseBlurProgram);
+            GL.Uniform1(
+                GL.GetUniformLocation(_pauseBlurProgram, "image"), 0);
+            GL.Uniform2(
+                GL.GetUniformLocation(_pauseBlurProgram, "direction"),
+                direction);
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2D, texture);
+            Draw([
+                -1, 1, 0, 1,
+                -1,-1, 0, 0,
+                 1,-1, 1, 0,
+                 1, 1, 1, 1
+            ]);
+        }
     }
 
     private void RenderPauseSettings()
@@ -2487,6 +2581,7 @@ internal sealed class GameHostWindow : GameWindow
 
     private void RenderGameUi()
     {
+        _uiOpacity = _paused ? .28f : 1f;
         var scene = SceneClientBounds();
         _gameUi.Layout(scene);
         _chatUi.Layout(scene);
@@ -2506,6 +2601,7 @@ internal sealed class GameHostWindow : GameWindow
         DrawUiButtonCaption("Skills", _gameUi.SkillsButton.Bounds);
         DrawUiButtonCaption("Bag", _gameUi.InventoryButton.Bounds);
         RenderInventoryContextMenu();
+        _uiOpacity = 1;
     }
 
     private void RenderSkillsPanel()
@@ -3343,7 +3439,9 @@ internal sealed class GameHostWindow : GameWindow
         var bottom = -(rectangle.Y + rectangle.W - viewportHeight * .5f) * 2 / viewportHeight;
         GL.UseProgram(_program);
         GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
-        GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), drawOpacity);
+        GL.Uniform1(
+            GL.GetUniformLocation(_program, "opacity"),
+            drawOpacity * _uiOpacity);
         GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "wading"), 0);
         GL.Uniform1(
@@ -5248,6 +5346,49 @@ internal sealed class GameHostWindow : GameWindow
         return program;
     }
 
+    private static int CreatePauseBlurProgram()
+    {
+        int Compile(ShaderType type, string source)
+        {
+            var shader = GL.CreateShader(type);
+            GL.ShaderSource(shader, source);
+            GL.CompileShader(shader);
+            GL.GetShader(shader, ShaderParameter.CompileStatus, out var ok);
+            if (ok == 0)
+                throw new InvalidOperationException(GL.GetShaderInfoLog(shader));
+            return shader;
+        }
+
+        var vertex = Compile(
+            ShaderType.VertexShader,
+            "#version 330 core\n" +
+            "layout(location=0) in vec2 p;layout(location=1) in vec2 u;" +
+            "out vec2 uv;void main(){uv=u;gl_Position=vec4(p,0,1);}");
+        var fragment = Compile(
+            ShaderType.FragmentShader,
+            "#version 330 core\n" +
+            "in vec2 uv;out vec4 color;uniform sampler2D image;" +
+            "uniform vec2 direction;" +
+            "void main(){" +
+            "vec3 sum=texture(image,uv).rgb*0.1633;" +
+            "sum+=texture(image,uv+direction*1.5).rgb*0.1531;" +
+            "sum+=texture(image,uv-direction*1.5).rgb*0.1531;" +
+            "sum+=texture(image,uv+direction*3.5).rgb*0.12245;" +
+            "sum+=texture(image,uv-direction*3.5).rgb*0.12245;" +
+            "sum+=texture(image,uv+direction*5.5).rgb*0.0918;" +
+            "sum+=texture(image,uv-direction*5.5).rgb*0.0918;" +
+            "sum+=texture(image,uv+direction*7.5).rgb*0.05102;" +
+            "sum+=texture(image,uv-direction*7.5).rgb*0.05102;" +
+            "color=vec4(sum,1.0);}");
+        var program = GL.CreateProgram();
+        GL.AttachShader(program, vertex);
+        GL.AttachShader(program, fragment);
+        GL.LinkProgram(program);
+        GL.DeleteShader(vertex);
+        GL.DeleteShader(fragment);
+        return program;
+    }
+
     protected override void OnUnload()
     {
         SaveActivePlayerState();
@@ -5296,6 +5437,11 @@ internal sealed class GameHostWindow : GameWindow
         if (_streamVbo != 0) GL.DeleteBuffer(_streamVbo);
         if (_sceneFramebuffer != 0) GL.DeleteFramebuffer(_sceneFramebuffer);
         if (_sceneColor != 0) GL.DeleteTexture(_sceneColor);
+        if (_pauseBlurTexture != 0) GL.DeleteTexture(_pauseBlurTexture);
+        if (_pauseBlurIntermediate != 0)
+            GL.DeleteTexture(_pauseBlurIntermediate);
+        if (_pauseBlurFramebuffer != 0)
+            GL.DeleteFramebuffer(_pauseBlurFramebuffer);
         if (_treeBatchVbo != 0) GL.DeleteBuffer(_treeBatchVbo);
         if (_treeAtlasTexture != 0) GL.DeleteTexture(_treeAtlasTexture);
         if (_cliffBatchVbo != 0) GL.DeleteBuffer(_cliffBatchVbo);
@@ -5303,6 +5449,7 @@ internal sealed class GameHostWindow : GameWindow
         if (_terrainProgram != 0) GL.DeleteProgram(_terrainProgram);
         if (_cliffProgram != 0) GL.DeleteProgram(_cliffProgram);
         GL.DeleteVertexArray(_vao);
+        if (_pauseBlurProgram != 0) GL.DeleteProgram(_pauseBlurProgram);
         GL.DeleteProgram(_program);
         base.OnUnload();
         if (saveFailure is not null)
