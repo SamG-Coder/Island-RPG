@@ -1717,10 +1717,20 @@ internal sealed partial class GameHostWindow : GameWindow
                 tree => tree.Id == _activeTreeId.Value);
             if (index < 0) continue;
             var instance = gpu.Chunk.TreeInstances[index];
-            if (PlayerInventory.UsesStoneAxe(_activePlayer?.Inventory) &&
+            var axe = PlayerInventory.BestAxe(_activePlayer?.Inventory);
+            if (axe is null)
+            {
+                ReportBlockedAction(
+                    "chop-without-axe",
+                    "You need an axe to chop down this tree.");
+                _activeTreeId = null;
+                _player.Stop();
+                return;
+            }
+            if (axe.Id == ItemIds.StoneAxe &&
                 PlayerInventory.TryBluntStoneTool(
                     _activePlayer?.Inventory,
-                    ItemIds.StoneAxe,
+                    axe.Id,
                     Random.Shared.NextSingle(),
                     out var bluntedInventory))
             {
@@ -1742,7 +1752,8 @@ internal sealed partial class GameHostWindow : GameWindow
             var strikeResult = WoodcuttingSkill.Roll(
                 experience,
                 Random.Shared.NextSingle(),
-                Random.Shared.NextSingle());
+                Random.Shared.NextSingle(),
+                axe.WoodcuttingPower);
             if (!strikeResult.Hit)
             {
                 _chatUi.AddMessage(
@@ -3698,7 +3709,10 @@ internal sealed partial class GameHostWindow : GameWindow
         if (option == 2)
         {
             _chatUi.AddMessage(
-                item.Examine,
+                item.WoodcuttingPower > 0
+                    ? $"{item.Examine} Woodcutting power: " +
+                      $"{item.WoodcuttingPower}."
+                    : item.Examine,
                 ChatMessageStyle.Normal);
             return;
         }

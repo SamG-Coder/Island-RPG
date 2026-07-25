@@ -6,9 +6,7 @@ internal static class PlayerInventory
 
     public static string?[] CreateStartingInventory()
     {
-        var inventory = new string?[Capacity];
-        inventory[0] = ItemIds.IronAxe;
-        return inventory;
+        return new string?[Capacity];
     }
 
     public static string?[] Normalize(string?[]? items)
@@ -24,14 +22,18 @@ internal static class PlayerInventory
 
     public static bool IsFull(string?[]? items) => Count(items) >= Capacity;
 
-    public static bool HasAxe(string?[]? items) =>
-        items?.Any(item =>
-            item is not null &&
-            ItemCatalog.Get(item).HasTag(ItemTag.Axe)) == true;
+    public static ItemDefinition? BestAxe(string?[]? items) =>
+        items?
+            .Where(item => item is not null)
+            .Select(item => ItemCatalog.Get(item!))
+            .Where(item =>
+                item.HasTag(ItemTag.Tool) &&
+                item.HasTag(ItemTag.Axe) &&
+                item.WoodcuttingPower > 0)
+            .OrderByDescending(item => item.WoodcuttingPower)
+            .FirstOrDefault();
 
-    public static bool UsesStoneAxe(string?[]? items) =>
-        items?.Any(item => item == ItemIds.IronAxe) != true &&
-        items?.Any(item => item == ItemIds.StoneAxe) == true;
+    public static bool HasAxe(string?[]? items) => BestAxe(items) is not null;
 
     public static bool CanDrop(string itemId) =>
         ItemCatalog.Get(itemId).Droppable;

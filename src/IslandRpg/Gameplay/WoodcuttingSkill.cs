@@ -36,13 +36,15 @@ internal static class WoodcuttingSkill
             .48f, .974f);
 
     public static WoodcuttingStrike Roll(
-        int experience, float hitRoll, float damageRoll)
+        int experience, float hitRoll, float damageRoll,
+        int axePower = 1)
     {
         var level = LevelForExperience(experience);
         if (hitRoll >= HitChance(level))
             return new(false, 0, level, experience);
-        var minimum = 3 + level;
-        var maximum = 7 + level * 2;
+        var toolBonus = Math.Max(0, axePower - 1) * 2;
+        var minimum = 3 + level + toolBonus;
+        var maximum = 7 + level * 2 + toolBonus;
         var damage = minimum + (int)MathF.Floor(
             Math.Clamp(damageRoll, 0, .999999f) * (maximum - minimum + 1));
         return new(true, damage, level, experience);

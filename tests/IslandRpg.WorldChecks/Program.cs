@@ -52,10 +52,9 @@ Require(!WoodcuttingSkill.Roll(0, .9f, 0).Hit,
 
 var startingInventory = PlayerInventory.CreateStartingInventory();
 Require(startingInventory.Length == PlayerInventory.Capacity &&
-        startingInventory[0] == ItemIds.IronAxe &&
-        PlayerInventory.Count(startingInventory) == 1 &&
-        PlayerInventory.HasAxe(startingInventory),
-    "a new character must start with an iron axe in a fixed 28-slot inventory");
+        PlayerInventory.Count(startingInventory) == 0 &&
+        !PlayerInventory.HasAxe(startingInventory),
+    "a new character must start with an empty fixed 28-slot inventory");
 Require(PlayerInventory.CanDrop(ItemIds.IronAxe) &&
         PlayerInventory.CanDrop(ItemIds.Logs),
     "all inventory items must be droppable into the world");
@@ -63,6 +62,9 @@ Require(ItemCatalog.Get(ItemIds.IronAxe) is var axeDefinition &&
         axeDefinition.Name == "iron axe" &&
         axeDefinition.SpriteCell == 5 &&
         axeDefinition.HasTag(ItemTag.Axe) &&
+        axeDefinition.HasTag(ItemTag.Tool) &&
+        axeDefinition.WoodcuttingPower == 2 &&
+        ItemCatalog.Get(ItemIds.StoneAxe).WoodcuttingPower == 1 &&
         axeDefinition.Droppable &&
         ItemCatalog.Get(ItemIds.OakLogs).HasTag(ItemTag.Log) &&
         ItemCatalog.All.Select(item => item.Id).Distinct().Count() ==
@@ -181,10 +183,16 @@ Require(PlayerInventory.TrySharpenStoneTool(
         resharpenedHammer[0] is null &&
         resharpenedHammer[1] == ItemIds.StoneHammer,
     "using small rocks on a blunt stone hammer must restore it");
-Require(PlayerInventory.UsesStoneAxe([ItemIds.StoneAxe]) &&
-        !PlayerInventory.UsesStoneAxe(
-            [ItemIds.StoneAxe, ItemIds.IronAxe]),
-    "an iron axe must be preferred over a carried stone axe");
+Require(PlayerInventory.BestAxe([ItemIds.StoneAxe])?.Id ==
+            ItemIds.StoneAxe &&
+        PlayerInventory.BestAxe(
+            [ItemIds.StoneAxe, ItemIds.IronAxe])?.Id ==
+            ItemIds.IronAxe,
+    "woodcutting must inspect every tool axe and choose the highest-power one");
+var stoneAxeStrike = WoodcuttingSkill.Roll(0, 0, 0, 1);
+var ironAxeStrike = WoodcuttingSkill.Roll(0, 0, 0, 2);
+Require(ironAxeStrike.Damage > stoneAxeStrike.Damage,
+    "an axe's woodcutting power must improve its chopping damage");
 Require(PlayerInventory.TryCarvePlank(
         [ItemIds.SharpenedRock, ItemIds.Logs],
         0, 1, .25f, out var carvedPlank, out var sharpRockSurvived) &&

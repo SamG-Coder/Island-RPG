@@ -22,7 +22,8 @@ internal sealed record ItemDefinition(
     string Examine,
     int? SpriteCell,
     bool Droppable = true,
-    ItemTag Tags = ItemTag.None)
+    ItemTag Tags = ItemTag.None,
+    int WoodcuttingPower = 0)
 {
     public bool HasTag(ItemTag tag) => (Tags & tag) == tag;
 }
@@ -87,7 +88,8 @@ internal static class ItemCatalog
             [ItemIds.IronAxe] = new(
                 ItemIds.IronAxe, "iron axe", "Iron axe",
                 "A sturdy iron axe for chopping down trees.", 5,
-                Tags: ItemTag.Axe | ItemTag.Tool),
+                Tags: ItemTag.Axe | ItemTag.Tool,
+                WoodcuttingPower: 2),
             [ItemIds.StoneHammer] = new(
                 ItemIds.StoneHammer, "stone hammer", "Stone hammer",
                 "A primitive hammer with a stone head lashed to a wooden handle.",
@@ -96,7 +98,8 @@ internal static class ItemCatalog
                 ItemIds.StoneAxe, "stone axe", "Stone axe",
                 "A primitive axe with a sharp stone head lashed to a wooden handle.",
                 1, Tags: ItemTag.Axe | ItemTag.Tool |
-                         ItemTag.StoneToolSprite),
+                         ItemTag.StoneToolSprite,
+                WoodcuttingPower: 1),
             [ItemIds.BluntStoneHammer] = new(
                 ItemIds.BluntStoneHammer, "blunt stone hammer", "Blunt hammer",
                 "A stone hammer with worn, blunt working edges.", 0,
