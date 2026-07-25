@@ -30,6 +30,7 @@ internal sealed class GameHostWindow : GameWindow
         LoadWorld,
         Settings
     }
+    private enum PausePage { Main, Settings, Debug }
     private sealed class GpuWorldChunk(
         WorldChunk chunk, int vbo, int vertexCount,
         int weightsA, int weightsB, int weightsC, int weightsD, int shoreDistance)
@@ -78,6 +79,9 @@ internal sealed class GameHostWindow : GameWindow
     private int _newTeamColor;
     private bool _menuLeftWasDown;
     private string? _frontendError;
+    private bool _paused;
+    private PausePage _pausePage;
+    private bool _pauseLeftWasDown;
     private string? _pendingDeletePlayerId;
     private WorldChunkStore? _worldStore;
     private readonly Dictionary<ChunkCoordinate, GpuWorldChunk> _worldChunks = [];
@@ -281,7 +285,16 @@ internal sealed class GameHostWindow : GameWindow
                 BlurTextBoxes();
                 _frontendError = null;
             }
-            else if (_chatUi.Input.Focused) _chatUi.BlurInput();
+            else if (_screen == ScreenState.WorldPreview &&
+                     _mode == PreviewMode.Game)
+            {
+                if (_chatUi.Input.Focused)
+                    _chatUi.BlurInput();
+                else if (_paused && _pausePage != PausePage.Main)
+                    _pausePage = PausePage.Main;
+                else
+                    SetPaused(!_paused);
+            }
             else Close();
         }
         if (_screen == ScreenState.WorldPreview && _mode == PreviewMode.World &&
@@ -355,18 +368,12 @@ internal sealed class GameHostWindow : GameWindow
                             PrepareEntityAnimations();
                             BeginMenuPreview();
                             _screen = ScreenState.MainMenu;
-                            Title = "Island RPG";
                             return;
                         }
                         _worldStore = new WorldChunkStore(_worldSeed);
                         StreamWorld();
                     }
                     _screen = ScreenState.WorldPreview;
-                    Title = _mode == PreviewMode.Island
-                        ? "Island RPG - Generated Island"
-                        : _mode == PreviewMode.Game
-                            ? $"Island RPG - Game {_worldSeed}"
-                            : $"Island RPG - World {_worldSeed}";
                     return;
                 }
                 var terrainStop = Math.Min(_terrainUploadIndex + 8, _catalog!.TerrainTiles.Count);
@@ -379,10 +386,7 @@ internal sealed class GameHostWindow : GameWindow
                 }
                 _done = _worldAssets.Count + _terrainUploadIndex;
                 if (_terrainUploadIndex == _catalog.TerrainTiles.Count)
-                {
                     _screen = ScreenState.WorldPreview;
-                    Title = $"Island RPG - {_worldAssets.Count} world graphics + {_catalog.TerrainTiles.Count} terrain tiles";
-                }
             }
         }
 
@@ -394,7 +398,9 @@ internal sealed class GameHostWindow : GameWindow
 
         if (_screen == ScreenState.WorldPreview)
         {
-            if (_atlasOpen)
+            if (_mode == PreviewMode.Game && _paused)
+                UpdatePauseMenu();
+            else if (_atlasOpen)
                 UpdateAtlas();
             else
             {
@@ -412,6 +418,69 @@ internal sealed class GameHostWindow : GameWindow
                     StreamWorld();
                 }
             }
+        }
+    }
+
+    private void SetPaused(bool paused)
+    {
+        _paused = paused;
+        _pausePage = PausePage.Main;
+        _pauseLeftWasDown = MouseState.IsButtonDown(MouseButton.Left);
+        if (paused)
+        {
+            _chatUi.BlurInput();
+            _inventoryContext.Close();
+            Cursor = MouseCursor.Default;
+            _usingCutCursor = false;
+        }
+    }
+
+    private void UpdatePauseMenu()
+    {
+        var leftDown = MouseState.IsButtonDown(MouseButton.Left);
+        var clicked = leftDown && !_pauseLeftWasDown;
+        _pauseLeftWasDown = leftDown;
+        if (!clicked) return;
+
+        var pointer = MouseState.Position;
+        if (_pausePage != PausePage.Main &&
+            PauseCloseButtonBounds().Contains(pointer))
+        {
+            _pausePage = PausePage.Main;
+            return;
+        }
+
+        switch (_pausePage)
+        {
+            case PausePage.Main:
+                if (PauseButton(0).Contains(pointer))
+                    SetPaused(false);
+                else if (PauseButton(1).Contains(pointer))
+                    _pausePage = PausePage.Settings;
+                else if (PauseButton(2).Contains(pointer))
+                    _pausePage = PausePage.Debug;
+                else if (PauseButton(3).Contains(pointer))
+                    ReturnToMainMenu();
+                else if (PauseButton(4).Contains(pointer))
+                    Close();
+                break;
+            case PausePage.Settings:
+                if (PauseSettingsToggleBounds().Contains(pointer))
+                {
+                    var settings = _saves.LoadSettings();
+                    var fullscreen = !settings.Fullscreen;
+                    _saves.SaveSettings(settings with { Fullscreen = fullscreen });
+                    WindowState = fullscreen
+                        ? WindowState.Fullscreen
+                        : WindowState.Normal;
+                }
+                else if (PauseBackButtonBounds().Contains(pointer))
+                    _pausePage = PausePage.Main;
+                break;
+            case PausePage.Debug:
+                if (PauseBackButtonBounds().Contains(pointer))
+                    _pausePage = PausePage.Main;
+                break;
         }
     }
 
@@ -738,7 +807,50 @@ internal sealed class GameHostWindow : GameWindow
         StreamWorld();
         BlurTextBoxes();
         _screen = ScreenState.WorldPreview;
-        Title = $"Island RPG - {world.Name}";
+    }
+
+    private void ReturnToMainMenu()
+    {
+        SaveActivePlayerState();
+        _pathCancellation?.Cancel();
+        _pathCancellation?.Dispose();
+        _pathCancellation = null;
+        _pendingPathTask = null;
+        foreach (var coordinate in _worldChunks.Keys.ToArray())
+            UnloadWorldChunk(coordinate, save: true);
+        _saveTail.GetAwaiter().GetResult();
+
+        _activeWorld = null;
+        _activePlayer = null;
+        _player = null;
+        _queuedAction = null;
+        _activeTreeId = null;
+        _moveMarker = null;
+        _atlasOpen = false;
+        SetPaused(false);
+        BeginMenuPreview();
+        _screen = ScreenState.MainMenu;
+    }
+
+    private void SaveActivePlayerState()
+    {
+        if (_activePlayer is null || _player is null) return;
+        _activePlayer = _activePlayer with
+        {
+            Gender = _player.Gender,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        _saves.SavePlayer(_activePlayer);
+        if (_selectedPlayer?.Id == _activePlayer.Id)
+            _selectedPlayer = _activePlayer;
+        if (_activeWorld is not null)
+            _saves.SaveWorldPlayer(
+                _activeWorld.Id,
+                new(
+                    _activePlayer.Id,
+                    _player.Position.X,
+                    _player.Position.Y,
+                    DateTime.UtcNow));
     }
 
     private void FinishPendingMenuChunk()
@@ -988,9 +1100,6 @@ internal sealed class GameHostWindow : GameWindow
                 : null;
         }
         FollowPlayer();
-        Title = $"Island RPG - {_player.Gender} villager - {_player.Action} - " +
-                (_pendingPathTask is null ? "" : "calculating path - ") +
-                "right-click to move, left-click to act, Up/Down changes villager";
     }
 
     private void UpdateGameUi()
@@ -1752,6 +1861,7 @@ internal sealed class GameHostWindow : GameWindow
         {
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
             RenderGameUi();
+            if (_paused) RenderPauseMenu();
         }
         SwapBuffers();
     }
@@ -1760,7 +1870,6 @@ internal sealed class GameHostWindow : GameWindow
     {
         GL.ClearColor(.025f, .027f, .024f, 1);
         GL.Clear(ClearBufferMask.ColorBufferBit);
-        Title = $"Island RPG - Loading {_done}/{_total}: {_current}";
     }
 
     private void RenderLoadingUi()
@@ -2006,6 +2115,79 @@ internal sealed class GameHostWindow : GameWindow
         DrawMenuButton(BackButtonBounds(), "Back");
     }
 
+    private void RenderPauseMenu()
+    {
+        DrawUiColor(
+            new(0, 0, ClientSize.X, ClientSize.Y),
+            new(0, 0, 0, .58f));
+        switch (_pausePage)
+        {
+            case PausePage.Main:
+                var panel = PausePanel();
+                DrawAoEPanelBorder(panel);
+                DrawCenteredUiText(
+                    "GAME PAUSED",
+                    new(panel.X, panel.Y + 28, panel.Z, 42),
+                    new(232, 217, 166, 255));
+                var captions = new[]
+                {
+                    "Resume", "Settings", "Debug Menu", "Main Menu", "Quit"
+                };
+                for (var index = 0; index < captions.Length; index++)
+                    DrawMenuButton(PauseButton(index), captions[index]);
+                break;
+            case PausePage.Settings:
+                RenderPauseSettings();
+                break;
+            case PausePage.Debug:
+                RenderDebugMenu();
+                break;
+        }
+        if (_pausePage != PausePage.Main)
+            DrawMenuButton(PauseCloseButtonBounds(), "X");
+    }
+
+    private void RenderPauseSettings()
+    {
+        var panel = PauseSubmenuPanel();
+        DrawAoEPanelBorder(panel);
+        DrawCenteredUiText(
+            "SETTINGS", new(panel.X, panel.Y + 24, panel.Z, 38),
+            new(232, 217, 166, 255));
+        var fullscreen = _saves.LoadSettings().Fullscreen;
+        DrawMenuButton(
+            PauseSettingsToggleBounds(),
+            $"Fullscreen: {(fullscreen ? "On" : "Off")}");
+        DrawCenteredUiText(
+            "The game remains paused while settings are open.",
+            new(panel.X + 20, panel.Y + 190, panel.Z - 40, 28),
+            new(174, 164, 134, 255));
+        DrawMenuButton(PauseBackButtonBounds(), "Back");
+    }
+
+    private void RenderDebugMenu()
+    {
+        var panel = PauseSubmenuPanel();
+        DrawAoEPanelBorder(panel);
+        DrawCenteredUiText(
+            "DEBUG MENU", new(panel.X, panel.Y + 24, panel.Z, 38),
+            new(232, 217, 166, 255));
+        var position = _player?.Position ?? Vector2.Zero;
+        var lines = new[]
+        {
+            $"World seed: {_worldSeed}",
+            $"Player: {position.X:0.00}, {position.Y:0.00}",
+            $"Loaded chunks: {_worldChunks.Count}",
+            $"Path job: {(_pendingPathTask is null ? "idle" : "active")}"
+        };
+        for (var index = 0; index < lines.Length; index++)
+            DrawUiText(
+                lines[index],
+                new(panel.X + 54, panel.Y + 100 + index * 32),
+                new(204, 190, 150, 255));
+        DrawMenuButton(PauseBackButtonBounds(), "Back");
+    }
+
     private void DrawTextField(TextBoxControlState control)
     {
         var bounds = control.Bounds;
@@ -2093,6 +2275,34 @@ internal sealed class GameHostWindow : GameWindow
     {
         var panel = FrontendPanel(400, 470);
         return new(panel.X + 48, panel.Y + 112 + index * 62, panel.Z - 96, 48);
+    }
+
+    private Vector4 PausePanel() => FrontendPanel(400, 470);
+
+    private Vector4 PauseSubmenuPanel() => FrontendPanel(480, 360);
+
+    private Vector4 PauseButton(int index)
+    {
+        var panel = PausePanel();
+        return new(panel.X + 48, panel.Y + 98 + index * 62, panel.Z - 96, 48);
+    }
+
+    private Vector4 PauseCloseButtonBounds()
+    {
+        var panel = PauseSubmenuPanel();
+        return new(panel.X + panel.Z - 40, panel.Y + 10, 28, 28);
+    }
+
+    private Vector4 PauseSettingsToggleBounds()
+    {
+        var panel = PauseSubmenuPanel();
+        return new(panel.X + 60, panel.Y + 104, panel.Z - 120, 50);
+    }
+
+    private Vector4 PauseBackButtonBounds()
+    {
+        var panel = PauseSubmenuPanel();
+        return new(panel.X + panel.Z - 156, panel.Y + panel.W - 92, 108, 48);
     }
 
     private Vector4 NewWorldFieldBounds(int index)
@@ -3219,11 +3429,7 @@ internal sealed class GameHostWindow : GameWindow
             GL.ClearColor(.35f, .68f, .28f, 1);
             GL.Clear(ClearBufferMask.ColorBufferBit);
             GL.Disable(EnableCap.ScissorTest);
-            Title = $"Island RPG - Mapping visible sections {atlasDone}/{atlasTotal}";
         }
-        else
-            Title = $"Island RPG - Isometric map - {_atlasChunksAcross} chunks across - " +
-                    "drag, zoom, or double-click to travel";
     }
 
     private void RenderWorldPreview()
@@ -3634,13 +3840,6 @@ internal sealed class GameHostWindow : GameWindow
                                      Math.Abs(value.Y - center.Y) > unloadRadius)
                      .ToArray())
             UnloadWorldChunk(coordinate, save: true);
-        Title = _mode == PreviewMode.Game
-            ? $"Island RPG - {_player?.Gender} villager - {_player?.Action} - " +
-              $"{_worldChunks.Count} chunks" +
-              (_pendingPathTask is null ? "" : " - calculating path") +
-              (_pendingChunkTask is null ? "" : " - streaming")
-            : $"Island RPG - World {_worldSeed} - {_worldChunks.Count} chunks" +
-              (_pendingChunkTask is null ? "" : " - streaming");
     }
 
     private void PrepareWorldTerrain()
@@ -5051,23 +5250,7 @@ internal sealed class GameHostWindow : GameWindow
 
     protected override void OnUnload()
     {
-        if (_activePlayer is not null && _player is not null)
-        {
-            _activePlayer = _activePlayer with
-            {
-                Gender = _player.Gender,
-                UpdatedUtc = DateTime.UtcNow
-            };
-            _saves.SavePlayer(_activePlayer);
-            if (_activeWorld is not null)
-                _saves.SaveWorldPlayer(
-                    _activeWorld.Id,
-                    new(
-                        _activePlayer.Id,
-                        _player.Position.X,
-                        _player.Position.Y,
-                        DateTime.UtcNow));
-        }
+        SaveActivePlayerState();
         _pathCancellation?.Cancel();
         _pathCancellation?.Dispose();
         foreach (var coordinate in _worldChunks.Keys.ToArray())
