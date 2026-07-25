@@ -206,6 +206,9 @@ Require(entity.Action == EntityAction.Move && entity.Position.X > 1,
 entity.SetGender(EntityGender.Female);
 Require(entity.Gender == EntityGender.Female,
     "entity gender should switch without replacing the entity");
+entity.GatherAt(new Vector2(0, 2));
+Require(entity.Action == EntityAction.Gather && entity.Facing.Y > 0,
+    "gathering should face the collectible and select the gather animation");
 var rigFrame = VillagerDirectionRig.Resolve(new Vector2(-1, 0), 75, 5, 4);
 Require(rigFrame.Index is >= 0 and < 75,
     "directional rig should resolve a valid authored frame");

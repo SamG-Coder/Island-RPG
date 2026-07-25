@@ -158,6 +158,58 @@ internal sealed partial class GameHostWindow
             ChatMessageStyle.Action);
     }
 
+    private void BeginGroundObjectPickup(Guid groundObjectId, Vector2 target)
+    {
+        if (_player is null || _activePlayer is null) return;
+        if (PlayerInventory.IsFull(_activePlayer.Inventory))
+        {
+            _chatUi.AddMessage(
+                "Your inventory is too full to pick that up.",
+                ChatMessageStyle.Warning);
+            _player.Stop();
+            return;
+        }
+
+        var exists = _worldChunks.Values.Any(gpu =>
+            gpu.Chunk.GroundObjects.Any(item => item.Id == groundObjectId));
+        if (!exists) return;
+
+        _activeTreeId = null;
+        _activeGroundPickupId = groundObjectId;
+        _player.GatherAt(target);
+    }
+
+    private void UpdateGroundObjectPickup()
+    {
+        if (_player is null || _activeGroundPickupId is null) return;
+        if (_player.Action != EntityAction.Gather)
+        {
+            _activeGroundPickupId = null;
+            return;
+        }
+
+        if (!_entityAnimations.TryGetValue(
+                (_player.Gender, EntityAction.Gather), out var animation))
+        {
+            var pickupWithoutAnimation = _activeGroundPickupId.Value;
+            _activeGroundPickupId = null;
+            TryPickUpGroundObject(pickupWithoutAnimation);
+            _player.Stop();
+            return;
+        }
+
+        var framesPerAngle = Math.Max(
+            1, animation.Graphic.Sprite.Frames.Count / 5);
+        var cycleDuration = Math.Max(
+            framesPerAngle * animation.SecondsPerFrame, .1f);
+        if (_player.ActionTime < cycleDuration) return;
+
+        var groundObjectId = _activeGroundPickupId.Value;
+        _activeGroundPickupId = null;
+        TryPickUpGroundObject(groundObjectId);
+        _player.Stop();
+    }
+
     private static string StumpAtlasKey(
         string treeType, bool shadow)
     {

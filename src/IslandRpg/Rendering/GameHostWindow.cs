@@ -185,6 +185,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _pathRequestId;
     private QueuedWorldAction? _queuedAction;
     private Guid? _activeTreeId;
+    private Guid? _activeGroundPickupId;
     private int _lastTreeStrike;
     private readonly List<WaterRipple> _waterRipples = [];
     private int _lastWaterFootfall = -1;
@@ -282,7 +283,8 @@ internal sealed partial class GameHostWindow : GameWindow
             {
                 "VMBAS_WN", "VMBAS_AN", "VMBAS_DN",
                 "VFBAS_WN", "VFBAS_AN", "VFBAS_DN",
-                "VMLUM_AN", "VFLUM_AN", "MOVEX_NN"
+                "VMLUM_AN", "VFLUM_AN",
+                "VMFOR_TN", "VFFOR_TN", "MOVEX_NN"
             })
                 names.Add(name);
         }
@@ -1058,6 +1060,7 @@ internal sealed partial class GameHostWindow : GameWindow
         UpdateNativeCursor();
         CompleteQueuedAction();
         UpdateTreeCutting();
+        UpdateGroundObjectPickup();
         UpdateWaterRipples(wading);
         if (_moveMarker is not null)
         {
@@ -1230,7 +1233,7 @@ internal sealed partial class GameHostWindow : GameWindow
                      Type: WorldActionType.PickUpGroundObject,
                      GroundObjectId: { } groundObjectId
                  })
-            TryPickUpGroundObject(groundObjectId);
+            BeginGroundObjectPickup(groundObjectId, action.Target);
     }
 
     private void BeginTreeCutting(Vector2 target)
@@ -3773,6 +3776,7 @@ internal sealed partial class GameHostWindow : GameWindow
             [EntityAction.Move] = "WN",
             [EntityAction.Attack] = "AN",
             [EntityAction.Work] = "AN",
+            [EntityAction.Gather] = "TN",
             [EntityAction.Die] = "DN"
         };
         var uploaded = new Dictionary<string, EntityAnimation>(
@@ -3780,9 +3784,14 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var gender in Enum.GetValues<EntityGender>())
         foreach (var pair in suffixes)
         {
-            var prefix = pair.Key == EntityAction.Work
-                ? gender == EntityGender.Male ? "VMLUM_" : "VFLUM_"
-                : gender == EntityGender.Male ? "VMBAS_" : "VFBAS_";
+            var prefix = pair.Key switch
+            {
+                EntityAction.Work =>
+                    gender == EntityGender.Male ? "VMLUM_" : "VFLUM_",
+                EntityAction.Gather =>
+                    gender == EntityGender.Male ? "VMFOR_" : "VFFOR_",
+                _ => gender == EntityGender.Male ? "VMBAS_" : "VFBAS_"
+            };
             var name = prefix + pair.Value;
             if (uploaded.TryGetValue(name, out var existing))
             {
@@ -3803,7 +3812,8 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var gender in Enum.GetValues<EntityGender>())
         {
             if (!_entityAnimations.ContainsKey((gender, EntityAction.Idle)) ||
-                !_entityAnimations.ContainsKey((gender, EntityAction.Move)))
+                !_entityAnimations.ContainsKey((gender, EntityAction.Move)) ||
+                !_entityAnimations.ContainsKey((gender, EntityAction.Gather)))
                 throw new InvalidOperationException(
                     $"The installed assets do not contain the complete {gender} villager rig.");
         }

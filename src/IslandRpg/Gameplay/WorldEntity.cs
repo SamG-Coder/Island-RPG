@@ -10,6 +10,7 @@ internal enum EntityAction
     Move,
     Attack,
     Work,
+    Gather,
     Die
 }
 
@@ -64,6 +65,7 @@ internal sealed class WorldEntity
 
     public void Attack() => SetAction(EntityAction.Attack);
     public void Work() => SetAction(EntityAction.Work);
+    public void Gather() => SetAction(EntityAction.Gather);
     public void Die() => SetAction(EntityAction.Die);
 
     public void WorkAt(Vector2 target)
@@ -74,6 +76,16 @@ internal sealed class WorldEntity
         if (direction.LengthSquared > .0001f)
             Facing = direction.Normalized();
         SetAction(EntityAction.Work);
+    }
+
+    public void GatherAt(Vector2 target)
+    {
+        _path.Clear();
+        Target = Position;
+        var direction = target - Position;
+        if (direction.LengthSquared > .0001f)
+            Facing = direction.Normalized();
+        SetAction(EntityAction.Gather);
     }
 
     public void SetGender(EntityGender gender)
