@@ -1,4 +1,5 @@
 using IslandRpg.World;
+using IslandRpg.Assets;
 using IslandRpg.Gameplay;
 using IslandRpg.Persistence;
 using IslandRpg.Rendering;
@@ -153,6 +154,30 @@ Require(skillBack.X + skillBack.Z < skillTitle.X &&
 var reusableInventory = new InventoryPanelState(
     gameUi.Panel.Bounds, [ItemIds.Logs],
     allowDragOutsideToGame: false);
+var offCenterPixels = new byte[4 * 4 * 4];
+offCenterPixels[(0 * 4 + 0) * 4 + 3] = 255;
+var centeredOpaqueSprite = SpritePixelLayout.CenterOpaquePixels(
+    new SpriteFrame(4, 4, 0, 0, offCenterPixels),
+    new(10, 20, 32, 32));
+Require(
+    centeredOpaqueSprite.X > 10 &&
+    centeredOpaqueSprite.Y > 20,
+    "item layout must center visible pixels instead of transparent cell padding");
+var elevatedChunkBounds = WorldChunkProjection.TerrainBounds(
+    [
+        0, 500, 0, 0,
+        100, -300, 0, 0
+    ],
+    stride: 4);
+Require(
+    elevatedChunkBounds.Y == -300 &&
+    elevatedChunkBounds.W == 800 &&
+    WorldChunkProjection.IsVisible(
+        elevatedChunkBounds,
+        new(0, 300),
+        1,
+        new(1280, 720)),
+    "chunk visibility must use the complete elevated vertex bounds instead of a fixed flat height");
 var craftingWindowBounds =
     CraftingWindowState.WindowBounds(new(0, 0, 1280, 720));
 var craftingButton =

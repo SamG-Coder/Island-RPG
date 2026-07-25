@@ -278,10 +278,16 @@ internal sealed partial class GameHostWindow
         var texture = InventoryItemTexture(itemId);
         var uv = InventoryItemUv(itemId);
         if (texture != 0 && uv is not null)
+        {
+            var frame = InventoryItemFrame(itemId);
+            var pixelFrame = InventoryItemPixelFrame(itemId);
             DrawUiSprite(
-                InventoryItemFrame(itemId), texture,
-                new(bounds.X + 9, bounds.Y + 9, 32, 32),
+                frame, texture,
+                SpritePixelLayout.CenterOpaquePixels(
+                    pixelFrame,
+                    new(bounds.X + 9, bounds.Y + 9, 32, 32)),
                 uvRectangle: uv);
+        }
         else
             DrawCenteredUiText(
                 InventoryItemCaption(itemId), bounds,

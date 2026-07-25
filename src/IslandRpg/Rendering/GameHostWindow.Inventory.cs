@@ -43,12 +43,14 @@ internal sealed partial class GameHostWindow
             var itemUv = InventoryItemUv(itemId);
             var itemTexture = InventoryItemTexture(itemId);
             var itemFrame = InventoryItemFrame(itemId);
+            var pixelFrame = InventoryItemPixelFrame(itemId);
             var hasSprite = itemTexture != 0 && itemUv is not null;
             if (hasSprite)
                 DrawUiSprite(
                     itemFrame,
                     itemTexture,
-                    bounds,
+                    SpritePixelLayout.CenterOpaquePixels(
+                        pixelFrame, bounds),
                     uvRectangle: itemUv,
                     spriteOutline: slot == inventoryPanel.ActiveSlot
                         ? Vector3.One
@@ -75,11 +77,13 @@ internal sealed partial class GameHostWindow
                 MouseState.Position.Y - 16, 32, 32);
             var itemTexture = InventoryItemTexture(draggedItemId);
             var itemFrame = InventoryItemFrame(draggedItemId);
+            var pixelFrame = InventoryItemPixelFrame(draggedItemId);
             if (itemTexture != 0 && itemUv is not null)
                 DrawUiSprite(
                     itemFrame,
                     itemTexture,
-                    dragBounds,
+                    SpritePixelLayout.CenterOpaquePixels(
+                        pixelFrame, dragBounds),
                     uvRectangle: itemUv,
                     drawOpacity: .62f,
                     spriteOutline:

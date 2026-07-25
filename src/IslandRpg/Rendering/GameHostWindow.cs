@@ -36,7 +36,8 @@ internal sealed partial class GameHostWindow : GameWindow
     }
     private sealed class GpuWorldChunk(
         WorldChunk chunk, int vbo, int vertexCount,
-        int weightsA, int weightsB, int weightsC, int weightsD, int shoreDistance)
+        int weightsA, int weightsB, int weightsC, int weightsD,
+        int shoreDistance, Vector4 projectedBounds)
     {
         public WorldChunk Chunk { get; } = chunk;
         public int Vbo { get; } = vbo;
@@ -46,6 +47,7 @@ internal sealed partial class GameHostWindow : GameWindow
         public int WeightsC { get; } = weightsC;
         public int WeightsD { get; } = weightsD;
         public int ShoreDistance { get; } = shoreDistance;
+        public Vector4 ProjectedBounds { get; } = projectedBounds;
         public float Opacity { get; set; }
     }
     private sealed record SpriteAtlasEntry(
@@ -181,6 +183,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _woodcuttingItemsTexture;
     private readonly int[] _woodcuttingItemTextures = new int[8];
     private readonly SpriteFrame?[] _woodcuttingItemFrames = new SpriteFrame?[8];
+    private readonly SpriteFrame?[] _woodcuttingInventoryFrames =
+        new SpriteFrame?[8];
     private readonly SpriteFrame?[] _woodcuttingShadowFrames = new SpriteFrame?[8];
     private readonly int[] _naturalItemTextures = new int[4];
     private readonly SpriteFrame?[] _naturalItemFrames = new SpriteFrame?[4];
@@ -1891,7 +1895,8 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void StartAtlasAtCamera()
     {
-        var mapCenter = ScreenWorldToMap(-_camera / Math.Max(_zoom, .001f));
+        var mapCenter = ScreenToTerrain(
+            new(ReferenceWidth * .5f, ReferenceHeight * .5f));
         _atlasCenterIso = new(
             (mapCenter.X - mapCenter.Y) * .5f,
             (mapCenter.X + mapCenter.Y) * .5f);
@@ -3284,6 +3289,19 @@ internal sealed partial class GameHostWindow : GameWindow
         return WoodcuttingItemsFrame;
     }
 
+    private SpriteFrame InventoryItemPixelFrame(string itemId)
+    {
+        var item = ItemCatalog.Get(itemId);
+        if (item.SpriteCell is not { } cell ||
+            item.HasTag(ItemTag.StoneToolSprite) ||
+            item.HasTag(ItemTag.SupplementalSprite) ||
+            item.HasTag(ItemTag.NaturalMaterial))
+            return InventoryItemFrame(itemId);
+        return (uint)cell < (uint)_woodcuttingInventoryFrames.Length
+            ? _woodcuttingInventoryFrames[cell] ?? WoodcuttingItemsFrame
+            : WoodcuttingItemsFrame;
+    }
+
     private void RenderTreeHealthBars(Vector4 scene)
     {
         var scale = scene.Z / ReferenceWidth;
@@ -4311,7 +4329,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 _worldChunks.Add(loaded.Coordinate, UploadWorldChunk(loaded));
             _pendingChunkTask = null;
         }
-        var mapCenter = ScreenWorldToMap(-_camera / Math.Max(_zoom, .001f));
+        var mapCenter = ScreenToTerrain(
+            new(ReferenceWidth * .5f, ReferenceHeight * .5f));
         var center = new ChunkCoordinate(
             FloorDiv((int)MathF.Floor(mapCenter.X), WorldChunk.Size),
             FloorDiv((int)MathF.Floor(mapCenter.Y), WorldChunk.Size));
@@ -4463,6 +4482,7 @@ internal sealed partial class GameHostWindow : GameWindow
                         cellSize * 4);
                 var sourceFrame = new SpriteFrame(
                     cellSize, cellSize, cellSize / 2, 28, pixels);
+                _woodcuttingInventoryFrames[cell] = sourceFrame;
                 var isTool = ItemCatalog.All.Any(item =>
                     item.SpriteCell == cell &&
                     item.HasTag(ItemTag.Tool));
@@ -4923,8 +4943,10 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float),
             vertices.ToArray(), BufferUsageHint.StaticDraw);
         var weights = UploadChunkBiomeWeights(chunk);
-        return new(chunk, vbo, vertices.Count / 12,
-            weights.A, weights.B, weights.C, weights.D, weights.Shore);
+        return new(
+            chunk, vbo, vertices.Count / 12,
+            weights.A, weights.B, weights.C, weights.D, weights.Shore,
+            WorldChunkProjection.TerrainBounds(vertices, 12));
 
         float LayerAt(int x, int y, Biome fallback) =>
             layers[x < 0 || y < 0 || x >= WorldChunk.Size || y >= WorldChunk.Size
@@ -4997,21 +5019,11 @@ internal sealed partial class GameHostWindow : GameWindow
     }
 
     private bool IsChunkVisible(GpuWorldChunk gpu)
-    {
-        var originX = gpu.Chunk.Coordinate.X * WorldChunk.Size;
-        var originY = gpu.Chunk.Coordinate.Y * WorldChunk.Size;
-        var centerX = originX + WorldChunk.Size * .5f;
-        var centerY = originY + WorldChunk.Size * .5f;
-        var projected = new Vector2(
-            (centerX - centerY) * 48,
-            (centerX + centerY) * 24 - 4.5f * 12);
-        var screen = new Vector2(ReferenceWidth * .5f, ReferenceHeight * .5f) +
-                     _camera + projected * _zoom;
-        var halfWidth = WorldChunk.Size * 48 * _zoom + 96;
-        var halfHeight = WorldChunk.Size * 24 * _zoom + 128;
-        return screen.X + halfWidth >= 0 && screen.X - halfWidth <= ReferenceWidth &&
-               screen.Y + halfHeight >= 0 && screen.Y - halfHeight <= ReferenceHeight;
-    }
+        => WorldChunkProjection.IsVisible(
+            gpu.ProjectedBounds,
+            _camera,
+            _zoom,
+            new(ReferenceWidth, ReferenceHeight));
 
     private void DrawWorldChunkTerrain(GpuWorldChunk gpu)
     {
