@@ -104,6 +104,7 @@ internal static class WorldVegetationGenerator
         {
             if (treeTiles.Contains((tile.X, tile.Y)) ||
                 IsWater(tile.Biome) ||
+                IsSand(tile.Biome) ||
                 Relief(tile) > 2)
                 continue;
 
@@ -240,6 +241,9 @@ internal static class WorldVegetationGenerator
     private static bool IsWater(Biome biome) =>
         biome is Biome.DeepWater or Biome.ShallowWater or
             Biome.RiverWater or Biome.MangroveShallows;
+
+    private static bool IsSand(Biome biome) =>
+        biome is Biome.Beach or Biome.DesertSand;
 
     private static int Relief(IslandTile tile) =>
         Math.Max(

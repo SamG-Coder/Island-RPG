@@ -556,11 +556,12 @@ Require(origin.Vegetation.All(item =>
         var tile = origin.Tiles[tileY * WorldChunk.Size + tileX];
         var relief = new[] { tile.North, tile.East, tile.South, tile.West };
         return tile.Biome is not (Biome.DeepWater or Biome.ShallowWater or
-                   Biome.RiverWater or Biome.MangroveShallows) &&
+                   Biome.RiverWater or Biome.MangroveShallows or
+                   Biome.Beach or Biome.DesertSand) &&
                relief.Max() - relief.Min() <= 2 &&
                origin.Trees.All(tree => tree.X != tile.X || tree.Y != tile.Y);
     }),
-    "vegetation must avoid water, steep ground, and occupied tree tiles");
+    "vegetation must avoid water, sand, steep ground, and occupied tree tiles");
 Require(origin.Vegetation
         .Where(item => item.GraphicName == "BUSH2_NN")
         .All(item =>
