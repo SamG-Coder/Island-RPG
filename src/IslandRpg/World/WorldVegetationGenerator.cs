@@ -63,10 +63,9 @@ internal static class WorldVegetationGenerator
             "BUSH3_NN", 9, WorldVegetationKind.FloweringShrub, false, 6f,
             region => region switch
             {
-                WorldBiome.TemperateGrassland => .028f,
-                WorldBiome.TemperateForest => .026f,
-                WorldBiome.Rainforest => .016f,
-                WorldBiome.Coast => .010f,
+                WorldBiome.Tundra => .030f,
+                WorldBiome.Alpine => .022f,
+                WorldBiome.Taiga => .012f,
                 _ => 0
             }),
         new(
@@ -112,6 +111,11 @@ internal static class WorldVegetationGenerator
                 tile.X, tile.Y, treeTiles);
             foreach (var profile in Profiles)
             {
+                if (profile.GraphicName.Equals(
+                        "BUSH3_NN",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    tile.Biome != Biome.Snow)
+                    continue;
                 var chance = profile.HabitatChance(tile.Region);
                 if (chance <= 0) continue;
                 var patch = PatchValue(

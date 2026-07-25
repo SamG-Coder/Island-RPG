@@ -4,6 +4,37 @@ namespace IslandRpg.Rendering;
 
 internal static class SpriteFrameTransforms
 {
+    public static SpriteFrame Resize(SpriteFrame source, float scale)
+    {
+        if (scale <= 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(scale), "Sprite scale must be positive.");
+        var width = Math.Max(1, (int)MathF.Round(source.Width * scale));
+        var height = Math.Max(1, (int)MathF.Round(source.Height * scale));
+        var pixels = new byte[width * height * 4];
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+        {
+            var sourceX = Math.Min(
+                (int)(x / (float)width * source.Width),
+                source.Width - 1);
+            var sourceY = Math.Min(
+                (int)(y / (float)height * source.Height),
+                source.Height - 1);
+            Buffer.BlockCopy(
+                source.Rgba,
+                (sourceY * source.Width + sourceX) * 4,
+                pixels,
+                (y * width + x) * 4,
+                4);
+        }
+        return new(
+            width, height,
+            (int)MathF.Round(source.HotspotX * scale),
+            (int)MathF.Round(source.HotspotY * scale),
+            pixels);
+    }
+
     public static SpriteFrame Rotate(SpriteFrame source, float degreesClockwise)
     {
         var radians = degreesClockwise * MathF.PI / 180f;

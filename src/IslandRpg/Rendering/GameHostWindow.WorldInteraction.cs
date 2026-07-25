@@ -96,8 +96,20 @@ internal sealed partial class GameHostWindow
             if (!TryGroundItemVisual(
                     candidate.ItemId, out var frame, out _, out _, out _))
                 continue;
-            var bounds = SpriteBounds(
+            var visualBounds = SpriteBounds(
                 frame, GroundObjectWorld(candidate));
+            const float minimumHitSize = 24;
+            var centerX = (visualBounds.Left + visualBounds.Right) * .5f;
+            var centerY = (visualBounds.Top + visualBounds.Bottom) * .5f;
+            var bounds = (
+                Left: Math.Min(
+                    visualBounds.Left, centerX - minimumHitSize * .5f),
+                Top: Math.Min(
+                    visualBounds.Top, centerY - minimumHitSize * .5f),
+                Right: Math.Max(
+                    visualBounds.Right, centerX + minimumHitSize * .5f),
+                Bottom: Math.Max(
+                    visualBounds.Bottom, centerY + minimumHitSize * .5f));
             if (mouse.X < bounds.Left || mouse.X >= bounds.Right ||
                 mouse.Y < bounds.Top || mouse.Y >= bounds.Bottom)
                 continue;
@@ -451,6 +463,28 @@ internal sealed partial class GameHostWindow
             shadowKey = _supplementalShadowFrames[cell] is null
                 ? null
                 : SupplementalAtlasKey(cell, shadow: true);
+            return true;
+        }
+
+        if (item.HasTag(ItemTag.CoastalSprite))
+        {
+            if ((uint)cell >= (uint)_coastalSprites.GroundFrames.Length ||
+                _coastalSprites.GroundFrames[cell] is not
+                    { } coastalFrame ||
+                _coastalSprites.GroundTextures[cell] == 0)
+            {
+                frame = null!;
+                texture = 0;
+                atlasKey = "";
+                shadowKey = null;
+                return false;
+            }
+            frame = coastalFrame;
+            texture = _coastalSprites.GroundTextures[cell];
+            atlasKey = CoastalAtlasKey(cell, shadow: false);
+            shadowKey = _coastalSprites.GroundShadows[cell] is null
+                ? null
+                : CoastalAtlasKey(cell, shadow: true);
             return true;
         }
 

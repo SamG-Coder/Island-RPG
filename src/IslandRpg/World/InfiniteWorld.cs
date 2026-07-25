@@ -176,11 +176,15 @@ internal static class InfiniteWorldGenerator
                     StableGroundObjectId(seed, tile.X, tile.Y, itemId),
                     itemId, x, y)));
         }
-        return candidates
+        var objects = candidates
             .OrderBy(candidate => candidate.Score)
             .Take(maximumPerChunk)
             .Select(candidate => candidate.Object)
             .ToList();
+        objects.AddRange(
+            CoastalCollectibleSpawner.GenerateInitial(
+                seed, tiles, trees, objects));
+        return objects;
     }
 
     private static Guid StableGroundObjectId(

@@ -198,6 +198,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly int[] _stoneToolTextures = new int[3];
     private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[3];
     private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[3];
+    private CoastalCollectibleSprites _coastalSprites = new();
+    private readonly CoastalCollectibleRespawnController _coastalRespawns = new();
     private static readonly SpriteFrame WoodcuttingItemsFrame =
         new(128, 64, 0, 0, []);
     private readonly MinimapControlState _minimapUi = new();
@@ -1147,6 +1149,11 @@ internal sealed partial class GameHostWindow : GameWindow
         _worldActions.CompleteQueuedAction();
         _worldActions.Update();
         UpdateWaterRipples(wading);
+        _coastalRespawns.Update(
+            elapsed,
+            _worldChunks.Values.Select(gpu => gpu.Chunk),
+            _player.Position,
+            QueueChunkSave);
         if (_moveMarker is not null)
         {
             var nextTime = _moveMarker.Time + elapsed;
@@ -3265,6 +3272,12 @@ internal sealed partial class GameHostWindow : GameWindow
                    (uint)stoneCell < (uint)_stoneToolTextures.Length
                 ? _stoneToolTextures[stoneCell]
                 : 0;
+        if (item.HasTag(ItemTag.CoastalSprite))
+            return item.SpriteCell is { } coastalCell &&
+                   (uint)coastalCell <
+                   (uint)_coastalSprites.Textures.Length
+                ? _coastalSprites.Textures[coastalCell]
+                : 0;
         if (item.HasTag(ItemTag.SupplementalSprite))
             return item.SpriteCell is { } supplementalCell &&
                    (uint)supplementalCell <
@@ -3287,6 +3300,9 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.HasTag(ItemTag.StoneToolSprite) &&
             (uint)cell < (uint)_stoneToolFrames.Length)
             return _stoneToolFrames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.CoastalSprite) &&
+            (uint)cell < (uint)_coastalSprites.Frames.Length)
+            return _coastalSprites.Frames[cell] ?? WoodcuttingItemsFrame;
         if (item.HasTag(ItemTag.SupplementalSprite) &&
             (uint)cell < (uint)_supplementalItemFrames.Length)
             return _supplementalItemFrames[cell] ?? WoodcuttingItemsFrame;
@@ -4640,6 +4656,11 @@ internal sealed partial class GameHostWindow : GameWindow
                 ItemShadowGenerator.Create(frame);
             _stoneToolTextures[2] = Upload(frame);
         }
+        _coastalSprites = CoastalCollectibleSprites.Load(
+            Path.Combine(
+                AppContext.BaseDirectory, "Resources", "Images",
+                "coastal-collectibles.png"),
+            Upload);
         GL.BindTexture(TextureTarget.Texture2D, _minimapTexture);
         GL.TexParameter(
             TextureTarget.Texture2D,
@@ -4890,6 +4911,15 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_stoneToolShadowFrames[cell] is { } shadowFrame)
                 Place(StoneToolAtlasKey(cell, shadow: true), null, shadowFrame);
         }
+        for (var cell = 0;
+             cell < _coastalSprites.GroundFrames.Length;
+             cell++)
+        {
+            if (_coastalSprites.GroundFrames[cell] is { } itemFrame)
+                Place(CoastalAtlasKey(cell, shadow: false), null, itemFrame);
+            if (_coastalSprites.GroundShadows[cell] is { } shadowFrame)
+                Place(CoastalAtlasKey(cell, shadow: true), null, shadowFrame);
+        }
         var requiredHeight = y + rowHeight + padding;
         var atlasHeight = 1;
         while (atlasHeight < requiredHeight) atlasHeight *= 2;
@@ -4940,6 +4970,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static string StoneToolAtlasKey(int cell, bool shadow) =>
         shadow ? $"STONE_TOOL_SHADOW#{cell}" : $"STONE_TOOL#{cell}";
+
+    private static string CoastalAtlasKey(int cell, bool shadow) =>
+        shadow ? $"COASTAL_SHADOW#{cell}" : $"COASTAL#{cell}";
 
     private GpuWorldChunk UploadWorldChunk(WorldChunk chunk)
     {
@@ -5643,6 +5676,10 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var texture in _naturalItemTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _stoneToolTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _coastalSprites.Textures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _coastalSprites.GroundTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         if (_uiTabTexture != 0) GL.DeleteTexture(_uiTabTexture);
         if (_uiActiveTabTexture != 0) GL.DeleteTexture(_uiActiveTabTexture);

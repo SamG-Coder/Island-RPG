@@ -12,7 +12,8 @@ internal enum ItemTag
     Seed = 1 << 5,
     Mineral = 1 << 6,
     SupplementalSprite = 1 << 7,
-    StoneToolSprite = 1 << 8
+    StoneToolSprite = 1 << 8,
+    CoastalSprite = 1 << 9
 }
 
 internal sealed record ItemDefinition(
@@ -58,6 +59,15 @@ internal static class ItemIds
     public const string CactusSeeds = "cactus_seeds";
     public const string SharpenedRock = "sharpened_rock";
     public const string Coal = "coal";
+    public const string ClamShell = "clam_shell";
+    public const string CockleShell = "cockle_shell";
+    public const string SpiralShell = "spiral_shell";
+    public const string ScallopShell = "scallop_shell";
+    public const string MoonShell = "moon_shell";
+    public const string ConchShell = "conch_shell";
+    public const string CowrieShell = "cowrie_shell";
+    public const string PearlOysterShell = "pearl_oyster_shell";
+    public const string Seaweed = "seaweed";
 }
 
 internal static class ItemCatalog
@@ -179,8 +189,41 @@ internal static class ItemCatalog
                 ItemIds.Coal, "coal", "Coal",
                 "Dense black coal that burns with strong heat.", 9,
                 Tags: ItemTag.Mineral | ItemTag.NaturalMaterial |
-                      ItemTag.SupplementalSprite)
+                      ItemTag.SupplementalSprite),
+            [ItemIds.ClamShell] = Coastal(
+                ItemIds.ClamShell, "clam shell", "Clam",
+                "A common shell washed smooth by the tide.", 0),
+            [ItemIds.CockleShell] = Coastal(
+                ItemIds.CockleShell, "cockle shell", "Cockle",
+                "A strongly ribbed shell found along sandy shores.", 1),
+            [ItemIds.SpiralShell] = Coastal(
+                ItemIds.SpiralShell, "spiral shell", "Spiral",
+                "A tapered shell with a delicate natural spiral.", 2),
+            [ItemIds.ScallopShell] = Coastal(
+                ItemIds.ScallopShell, "scallop shell", "Scallop",
+                "A colourful fan-shaped shell.", 3),
+            [ItemIds.MoonShell] = Coastal(
+                ItemIds.MoonShell, "moon shell", "Moon",
+                "A smooth, luminous shell with a curled centre.", 4),
+            [ItemIds.ConchShell] = Coastal(
+                ItemIds.ConchShell, "conch shell", "Conch",
+                "A large and uncommon spined conch shell.", 5),
+            [ItemIds.CowrieShell] = Coastal(
+                ItemIds.CowrieShell, "cowrie shell", "Cowrie",
+                "A polished shell prized for its unusual shape.", 6),
+            [ItemIds.PearlOysterShell] = Coastal(
+                ItemIds.PearlOysterShell, "pearl oyster shell", "Oyster",
+                "A very rare oyster shell still holding a pearl.", 7),
+            [ItemIds.Seaweed] = Coastal(
+                ItemIds.Seaweed, "seaweed", "Seaweed",
+                "Fresh seaweed cast onto the beach by the tide.", 8)
         };
+
+    private static ItemDefinition Coastal(
+        string id, string name, string caption, string examine, int cell) =>
+        new(
+            id, name, caption, examine, cell,
+            Tags: ItemTag.NaturalMaterial | ItemTag.CoastalSprite);
 
     public static IReadOnlyCollection<ItemDefinition> All =>
         Items.Values;

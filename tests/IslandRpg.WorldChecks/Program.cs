@@ -531,11 +531,68 @@ Require(boundedChat.Messages.Count == 200 &&
 const long seed = 8675309;
 var origin = InfiniteWorldGenerator.Generate(seed, new(0, 0));
 var repeated = InfiniteWorldGenerator.Generate(seed, new(0, 0));
-Require(origin.GroundObjects.Count <= 8 &&
+Require(origin.GroundObjects.Count(item =>
+            !CoastalCollectibleSpawner.IsCoastal(item.ItemId)) <= 8 &&
+        origin.GroundObjects.Count(item =>
+            CoastalCollectibleSpawner.IsCoastal(item.ItemId)) <=
+            CoastalCollectibleSpawner.MaximumPerChunk &&
         origin.GroundObjects.SequenceEqual(repeated.GroundObjects) &&
         origin.GroundObjects.All(item =>
-            item.ItemId is ItemIds.Sticks or ItemIds.LargeRock),
-    "natural ground objects must be deterministic, capped, and limited to collectible types");
+            item.ItemId is ItemIds.Sticks or ItemIds.LargeRock ||
+            CoastalCollectibleSpawner.IsCoastal(item.ItemId)),
+    "natural and coastal ground objects must be deterministic and independently capped");
+var coastalDefinitions = new[]
+{
+    ItemIds.ClamShell, ItemIds.CockleShell, ItemIds.SpiralShell,
+    ItemIds.ScallopShell, ItemIds.MoonShell, ItemIds.ConchShell,
+    ItemIds.CowrieShell, ItemIds.PearlOysterShell, ItemIds.Seaweed
+};
+Require(coastalDefinitions.All(itemId =>
+        ItemCatalog.Get(itemId).HasTag(ItemTag.CoastalSprite)),
+    "all shell and seaweed items must use the coastal sprite sheet");
+var shellGroundFrame = SpriteFrameTransforms.Resize(
+    new SpriteFrame(32, 32, 16, 28, new byte[32 * 32 * 4]), .5f);
+var seaweedGroundFrame = SpriteFrameTransforms.Resize(
+    new SpriteFrame(32, 32, 16, 28, new byte[32 * 32 * 4]), .75f);
+Require(shellGroundFrame is { Width: 16, Height: 16, HotspotX: 8 } &&
+        seaweedGroundFrame is { Width: 24, Height: 24, HotspotX: 12 },
+    "shells must render at half scale and seaweed at three-quarter scale on the ground");
+var beachTiles = origin.Tiles.Select(tile => tile with
+{
+    Biome = Biome.Beach,
+    Region = WorldBiome.Coast,
+    North = 1,
+    East = 1,
+    South = 1,
+    West = 1
+}).ToArray();
+var initialCoastal = CoastalCollectibleSpawner.GenerateInitial(
+    seed, beachTiles, [], []);
+Require(initialCoastal.Count is > 0 and <=
+            CoastalCollectibleSpawner.MaximumPerChunk &&
+        initialCoastal.All(item =>
+            CoastalCollectibleSpawner.IsCoastal(item.ItemId)),
+    "beach generation must create only capped coastal collectibles");
+var respawnChunk = new WorldChunk
+{
+    Coordinate = origin.Coordinate,
+    Tiles = beachTiles,
+    Trees = [],
+    BiomeWeightsA = origin.BiomeWeightsA,
+    BiomeWeightsB = origin.BiomeWeightsB,
+    BiomeWeightsC = origin.BiomeWeightsC,
+    BiomeWeightsD = origin.BiomeWeightsD,
+    ShoreDistance = origin.ShoreDistance,
+    Cliffs = []
+};
+for (var attempt = 0;
+     attempt < CoastalCollectibleSpawner.MaximumPerChunk + 4;
+     attempt++)
+    CoastalCollectibleSpawner.TryRespawn(
+        respawnChunk, new(10000, 10000), out _);
+Require(respawnChunk.GroundObjects.Count ==
+            CoastalCollectibleSpawner.MaximumPerChunk,
+    "coastal respawning must fill but never exceed its per-chunk cap");
 Require(origin.Tiles.SequenceEqual(repeated.Tiles), "same seed and coordinate must reproduce tiles");
 Require(origin.Trees.SequenceEqual(repeated.Trees), "same seed and coordinate must reproduce trees");
 Require(origin.Trees.All(tree =>
@@ -584,6 +641,18 @@ Require(origin.Vegetation
             return (item.FrameIndex >= 12) == (tile.Biome == Biome.Snow);
         }),
     "snow-covered bush frames must only appear on snow material");
+Require(origin.Vegetation
+        .Where(item => item.GraphicName == "BUSH3_NN")
+        .All(item =>
+        {
+            var tileX = (int)MathF.Floor(item.X) -
+                        origin.Coordinate.X * WorldChunk.Size;
+            var tileY = (int)MathF.Floor(item.Y) -
+                        origin.Coordinate.Y * WorldChunk.Size;
+            return origin.Tiles[
+                tileY * WorldChunk.Size + tileX].Biome == Biome.Snow;
+        }),
+    "white flowering shrubs must be treated as snow-covered");
 Require(origin.Cliffs.SequenceEqual(repeated.Cliffs),
     "same seed and coordinate must reproduce cliff faces");
 Require(origin.BiomeWeightsA.SequenceEqual(repeated.BiomeWeightsA),
