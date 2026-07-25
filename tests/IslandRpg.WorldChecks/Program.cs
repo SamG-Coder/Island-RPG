@@ -538,6 +538,16 @@ Require(origin.GroundObjects.Count <= 8 &&
     "natural ground objects must be deterministic, capped, and limited to collectible types");
 Require(origin.Tiles.SequenceEqual(repeated.Tiles), "same seed and coordinate must reproduce tiles");
 Require(origin.Trees.SequenceEqual(repeated.Trees), "same seed and coordinate must reproduce trees");
+Require(origin.Trees.All(tree =>
+        tree.FrameIndex >= 0 &&
+        tree.FrameIndex < WorldTreeCatalog.FrameCount(tree.GraphicName)),
+    "generated trees must select a valid authored visual variant");
+Require(origin.Trees.All(tree =>
+        tree.FrameIndex == WorldTreeCatalog.SelectFrame(
+            seed, tree.X, tree.Y, tree.GraphicName)),
+    "tree visual variants must be deterministic from seed and position");
+Require(origin.Trees.Any(tree => tree.FrameIndex > 0),
+    "generated woodland must use more than the first authored tree frame");
 Require(origin.Vegetation.SequenceEqual(repeated.Vegetation),
     "same seed and coordinate must reproduce vegetation");
 Require(origin.Vegetation.All(item =>

@@ -49,7 +49,7 @@ internal sealed partial class GameHostWindow
                     instance.State == TreeLifecycleState.Stump))
                 continue;
             if (!_treeAtlas.TryGetValue(
-                    tree.GraphicName, out var entry))
+                    WorldTreeCatalog.AtlasKey(tree), out var entry))
                 continue;
             var tileX = PositiveMod(tree.X, WorldChunk.Size);
             var tileY = PositiveMod(tree.Y, WorldChunk.Size);

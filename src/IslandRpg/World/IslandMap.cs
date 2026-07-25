@@ -16,7 +16,8 @@ internal enum WorldBiome
 internal sealed record IslandTile(
     int X, int Y, Biome Biome, byte North, byte East, byte South, byte West,
     WorldBiome Region = WorldBiome.Ocean);
-internal sealed record IslandTree(int X, int Y, string GraphicName);
+internal sealed record IslandTree(
+    int X, int Y, string GraphicName, int FrameIndex = 0);
 
 internal sealed class IslandMap
 {

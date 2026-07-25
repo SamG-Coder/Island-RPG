@@ -95,22 +95,18 @@ internal static class InfiniteWorldGenerator
                 WorldBiome.Savanna => .065f,
                 WorldBiome.Alpine => .045f,
                 WorldBiome.Coast => .012f,
+                WorldBiome.Tundra => .025f,
+                WorldBiome.Desert => .009f,
                 _ => 0
             };
             if (region == WorldBiome.Alpine)
                 chance *= Math.Clamp((12f - average) / 4f, 0, 1);
             if (UnitHash(seed, worldX, worldY, 91) >= chance) continue;
-            var variant = (int)(UnitHash(seed, worldX, worldY, 137) * 12) % 12;
-            var graphic = region switch
-            {
-                WorldBiome.Coast or WorldBiome.Savanna => "FPAL_NN",
-                WorldBiome.Rainforest => "FJUN_NN",
-                WorldBiome.TemperateForest => "FOAK_NN",
-                WorldBiome.Wetland => "FBAM_NN",
-                WorldBiome.Taiga or WorldBiome.Alpine => "FPIN_NN",
-                _ => $"TREE{(char)('A' + variant)}_NN"
-            };
-            trees.Add(new(worldX, worldY, graphic));
+            var tile = tiles[y * WorldChunk.Size + x];
+            var graphic = WorldTreeCatalog.SelectGraphic(seed, tile);
+            var frame = WorldTreeCatalog.SelectFrame(
+                seed, worldX, worldY, graphic);
+            trees.Add(new(worldX, worldY, graphic, frame));
         }
 
         var weights = GenerateBiomeWeights(seed, coordinate);
@@ -682,7 +678,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 4;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 14;
+    private const int ChunkPayloadVersion = 15;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -869,6 +865,7 @@ internal sealed class WorldChunkStore
                 writer.Write((byte)PositiveMod(tree.X, WorldChunk.Size));
                 writer.Write((byte)PositiveMod(tree.Y, WorldChunk.Size));
                 writer.Write(tree.GraphicName);
+                writer.Write((byte)tree.FrameIndex);
             }
             writer.Write(chunk.TreeInstances.Count);
             foreach (var tree in chunk.TreeInstances)
@@ -944,10 +941,20 @@ internal sealed class WorldChunkStore
                 throw new InvalidDataException($"Chunk tree count is invalid: {treeCount}");
             var trees = new IslandTree[treeCount];
             for (var i = 0; i < treeCount; i++)
-                trees[i] = new(
-                    coordinate.X * WorldChunk.Size + reader.ReadByte(),
-                    coordinate.Y * WorldChunk.Size + reader.ReadByte(),
-                    reader.ReadString());
+            {
+                var treeX = coordinate.X * WorldChunk.Size + reader.ReadByte();
+                var treeY = coordinate.Y * WorldChunk.Size + reader.ReadByte();
+                var graphicName = reader.ReadString();
+                var frameIndex = payloadVersion >= 15
+                    ? reader.ReadByte()
+                    : WorldTreeCatalog.SelectFrame(
+                        Seed, treeX, treeY, graphicName);
+                if (frameIndex < 0 ||
+                    frameIndex >= WorldTreeCatalog.FrameCount(graphicName))
+                    throw new InvalidDataException(
+                        $"Chunk tree frame is invalid: {graphicName}#{frameIndex}");
+                trees[i] = new(treeX, treeY, graphicName, frameIndex);
+            }
             var instanceCount = reader.ReadInt32();
             if (instanceCount < 0 || instanceCount > treeCount)
                 throw new InvalidDataException(
@@ -1078,7 +1085,15 @@ internal sealed class WorldChunkStore
             var treeCount = reader.ReadInt32();
             var trees = new IslandTree[treeCount];
             for (var i = 0; i < treeCount; i++)
-                trees[i] = new(reader.ReadInt32(), reader.ReadInt32(), reader.ReadString());
+            {
+                var treeX = reader.ReadInt32();
+                var treeY = reader.ReadInt32();
+                var graphicName = reader.ReadString();
+                trees[i] = new(
+                    treeX, treeY, graphicName,
+                    WorldTreeCatalog.SelectFrame(
+                        Seed, treeX, treeY, graphicName));
+            }
             var weightsALength = reader.ReadInt32();
             _ = reader.ReadBytes(weightsALength);
             var weightsBLength = reader.ReadInt32();

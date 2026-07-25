@@ -3166,10 +3166,12 @@ internal sealed partial class GameHostWindow : GameWindow
             return;
         inventory[slot] = null;
         var (plantX, plantY, targetGpu) = planting.Value;
+        var frameIndex = WorldTreeCatalog.SelectFrame(
+            _worldSeed, plantX, plantY, treeType);
         targetGpu.Chunk.Trees =
         [
             .. targetGpu.Chunk.Trees,
-            new IslandTree(plantX, plantY, treeType)
+            new IslandTree(plantX, plantY, treeType, frameIndex)
         ];
         var maximumHealth = TreeMaximumHealth(treeType);
         targetGpu.Chunk.TreeInstances.Add(new(
@@ -3317,7 +3319,12 @@ internal sealed partial class GameHostWindow : GameWindow
                 instance.Health >= instance.MaxHealth &&
                 instance.Id != _activeTreeId)
                 continue;
-            if (!_treeAtlas.TryGetValue(instance.TreeType, out var entry))
+            var sourceTree = gpu.Chunk.Trees.FirstOrDefault(tree =>
+                tree.X == instance.X && tree.Y == instance.Y);
+            var atlasKey = sourceTree is null
+                ? instance.TreeType
+                : WorldTreeCatalog.AtlasKey(sourceTree);
+            if (!_treeAtlas.TryGetValue(atlasKey, out var entry))
                 continue;
             var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
                 _worldSeed, instance.X + .5f, instance.Y + .5f);
@@ -4042,7 +4049,7 @@ internal sealed partial class GameHostWindow : GameWindow
             var isStump = treeInstance?.State == TreeLifecycleState.Stump;
             var visibleName = isStump
                 ? StumpAtlasKey(tree.GraphicName, shadow: false)
-                : tree.GraphicName;
+                : WorldTreeCatalog.AtlasKey(tree);
             var tile = _worldChunks[new(
                 FloorDiv(tree.X, WorldChunk.Size), FloorDiv(tree.Y, WorldChunk.Size))]
                 .Chunk.Tiles[
@@ -4054,7 +4061,9 @@ internal sealed partial class GameHostWindow : GameWindow
                 (tree.X + tree.Y + 1) * 24 - height * 20);
             var shadowName = isStump
                 ? StumpAtlasKey(tree.GraphicName, shadow: true)
-                : tree.GraphicName[..^2] + "N0";
+                : WorldTreeCatalog.AtlasKey(
+                    tree.GraphicName[..^2] + "N0",
+                    tree.FrameIndex);
             var stableKey = $"tree:{tree.X}:{tree.Y}";
             if (!string.IsNullOrEmpty(shadowName))
                 shadows.Add(new(
@@ -4829,18 +4838,21 @@ internal sealed partial class GameHostWindow : GameWindow
                     "STUMB", StringComparison.OrdinalIgnoreCase);
             var vegetation = WorldVegetationGenerator.IsVegetationGraphic(
                 asset.Definition.Name);
-            var frames = cliff || stump || vegetation
+            var treeVariants = WorldTreeCatalog.HasVariants(
+                asset.Definition.Name);
+            var frames = cliff || stump || vegetation || treeVariants
                 ? asset.Sprite.Frames
                 : [asset.Sprite.Frames[0]];
             for (var frameIndex = 0; frameIndex < frames.Count; frameIndex++)
             {
                 var frame = frames[frameIndex];
-                var key = cliff || stump || vegetation
+                var key = cliff || stump || vegetation || treeVariants
                     ? $"{asset.Definition.Name}#{frameIndex}"
                     : asset.Definition.Name;
                 Place(
                     key,
-                    (cliff || stump || vegetation) && frameIndex == 0
+                    (cliff || stump || vegetation || treeVariants) &&
+                    frameIndex == 0
                         ? asset.Definition.Name
                         : null,
                     frame);
