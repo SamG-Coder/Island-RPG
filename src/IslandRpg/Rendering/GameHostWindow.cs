@@ -54,10 +54,17 @@ internal sealed partial class GameHostWindow : GameWindow
     private sealed record MoveMarker(
         Vector2 Position, double Time, bool Action = false);
     private sealed record WaterRipple(Vector2 Position, double StartedAt);
-    private enum WorldActionType { CutTree, PickUpGroundObject }
+    private enum WorldActionType
+    {
+        CutTree,
+        PickUpGroundObject,
+        DropGroundObject
+    }
     private sealed record QueuedWorldAction(
         WorldActionType Type, Vector2 Target, float Range,
-        Guid? GroundObjectId = null);
+        Guid? GroundObjectId = null,
+        int InventorySlot = -1,
+        string? ItemId = null);
     private sealed record PathResult(
         int RequestId,
         IReadOnlyList<Vector2> Path,
@@ -89,7 +96,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private bool _paused;
     private PausePage _pausePage;
     private bool _pauseLeftWasDown;
-    private string? _pendingDeletePlayerId;
+    private readonly ListControlState _characterList = new();
+    private readonly ListControlState _worldList = new();
     private WorldChunkStore? _worldStore;
     private readonly Dictionary<ChunkCoordinate, GpuWorldChunk> _worldChunks = [];
     private Task<WorldChunk>? _pendingChunkTask;
@@ -153,7 +161,14 @@ internal sealed partial class GameHostWindow : GameWindow
     private MouseCursor? _defaultNativeCursor;
     private MouseCursor? _cutNativeCursor;
     private MouseCursor? _pickupNativeCursor;
-    private enum GameCursorKind { Default, CutTree, PickUpItem }
+    private MouseCursor? _dropNativeCursor;
+    private enum GameCursorKind
+    {
+        Default,
+        CutTree,
+        PickUpItem,
+        DropItem
+    }
     private GameCursorKind _gameCursorKind;
     private int _uiPanelFillTexture;
     private int _uiSolidTexture;
@@ -161,6 +176,9 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _uiTabTexture;
     private int _uiActiveTabTexture;
     private int _woodcuttingItemsTexture;
+    private readonly int[] _woodcuttingItemTextures = new int[8];
+    private readonly SpriteFrame?[] _woodcuttingItemFrames = new SpriteFrame?[8];
+    private readonly SpriteFrame?[] _woodcuttingShadowFrames = new SpriteFrame?[8];
     private readonly int[] _naturalItemTextures = new int[4];
     private readonly SpriteFrame?[] _naturalItemFrames = new SpriteFrame?[4];
     private readonly SpriteFrame?[] _naturalShadowFrames = new SpriteFrame?[4];
@@ -186,6 +204,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private QueuedWorldAction? _queuedAction;
     private Guid? _activeTreeId;
     private Guid? _activeGroundPickupId;
+    private GroundDropPreview? _groundDropPreview;
+    private ActiveGroundDrop? _activeGroundDrop;
     private int _lastTreeStrike;
     private readonly List<WaterRipple> _waterRipples = [];
     private int _lastWaterFootfall = -1;
@@ -500,6 +520,20 @@ internal sealed partial class GameHostWindow : GameWindow
             value => ClipboardString = value);
 
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
+        if (_frontendPage == FrontendPage.CharacterSelect)
+        {
+            var players = _saves.ListPlayers().ToArray();
+            LayoutCharacterList(players);
+            _characterList.UpdatePointer(
+                MouseState.Position, leftDown);
+        }
+        else if (_frontendPage == FrontendPage.LoadWorld)
+        {
+            var worlds = _saves.ListWorlds().ToArray();
+            LayoutWorldList(worlds);
+            _worldList.UpdatePointer(
+                MouseState.Position, leftDown);
+        }
         textBox?.UpdatePointer(
             MouseState.Position, leftDown, MeasureUiText, 14);
         var clicked = leftDown && !_menuLeftWasDown;
@@ -513,7 +547,8 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             _frontendPage = FrontendPage.Main;
             BlurTextBoxes();
-            _pendingDeletePlayerId = null;
+            _characterList.ClearDeleteApproval();
+            _worldList.ClearDeleteApproval();
             return;
         }
         switch (_frontendPage)
@@ -627,23 +662,23 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void UpdateCharacterSelectClick(Vector2 pointer)
     {
-        var players = _saves.ListPlayers();
-        for (var index = 0; index < Math.Min(6, players.Count); index++)
+        var players = _saves.ListPlayers().ToArray();
+        LayoutCharacterList(players);
+        if (_characterList.TryHit(
+                pointer, out var index, out var delete))
         {
-            if (CharacterRowBounds(index).Contains(pointer))
+            var player = players[index];
+            if (!delete)
             {
-                _selectedPlayer = players[index];
+                _selectedPlayer = player;
+                _characterList.SelectedId = player.Id;
+                _characterList.ClearDeleteApproval();
                 return;
             }
-            if (!DeleteCharacterBounds(index).Contains(pointer)) continue;
-            if (_pendingDeletePlayerId != players[index].Id)
-            {
-                _pendingDeletePlayerId = players[index].Id;
+            if (!_characterList.ApproveDelete(player.Id))
                 return;
-            }
-            var deletingSelected = _selectedPlayer?.Id == players[index].Id;
-            _saves.DeletePlayer(players[index].Id);
-            _pendingDeletePlayerId = null;
+            var deletingSelected = _selectedPlayer?.Id == player.Id;
+            _saves.DeletePlayer(player.Id);
             var remaining = _saves.ListPlayers();
             if (deletingSelected) _selectedPlayer = remaining.FirstOrDefault();
             if (remaining.Count == 0)
@@ -669,17 +704,25 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void UpdateLoadWorldClick(Vector2 pointer)
     {
-        var worlds = _saves.ListWorlds();
-        for (var index = 0; index < Math.Min(6, worlds.Count); index++)
+        var worlds = _saves.ListWorlds().ToArray();
+        LayoutWorldList(worlds);
+        if (_worldList.TryHit(pointer, out var index, out var delete))
         {
-            if (!LoadWorldRowBounds(index).Contains(pointer)) continue;
+            var world = worlds[index];
+            if (delete)
+            {
+                if (_worldList.ApproveDelete(world.Id))
+                    _saves.DeleteWorld(world.Id);
+                return;
+            }
+            _worldList.ClearDeleteApproval();
             if (_selectedPlayer is null)
             {
                 _frontendPage = FrontendPage.CharacterCreate;
                 FocusTextBoxAtEnd(_playerNameTextBox);
             }
             else
-                EnterWorld(worlds[index], _selectedPlayer);
+                EnterWorld(world, _selectedPlayer);
             return;
         }
         if (BackButtonBounds().Contains(pointer))
@@ -724,14 +767,6 @@ internal sealed partial class GameHostWindow : GameWindow
         var inventoryMigrated =
             player.Inventory is null ||
             !normalizedInventory.SequenceEqual(player.Inventory);
-        if (!PlayerInventory.HasAxe(normalizedInventory) &&
-            PlayerInventory.TryAdd(
-                normalizedInventory, ItemIds.Axe,
-                out var migratedInventory))
-        {
-            normalizedInventory = migratedInventory;
-            inventoryMigrated = true;
-        }
         if (inventoryMigrated)
         {
             player = player with
@@ -854,7 +889,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     TextureTarget.Texture2D, _newWorldPreviewTexture);
                 GL.TexSubImage2D(
                     TextureTarget.Texture2D, 0, 0, 0,
-                    192, 120, PixelFormat.Rgba,
+                    128, 128, PixelFormat.Rgba,
                     PixelType.UnsignedByte, result.Pixels);
                 _newWorldPreviewSeedText = result.SeedText;
             }
@@ -871,8 +906,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private static NewWorldPreviewResult BuildNewWorldPreview(
         string seedText)
     {
-        const int width = 192;
-        const int height = 120;
+        const int width = 128;
+        const int height = 128;
         const float tilesPerPixel = .75f;
         var seed = SeedFromText(seedText);
         var spawn = FindPlayableSpawn(seed);
@@ -884,8 +919,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 spawn.X + (x - width * .5f) * tilesPerPixel);
             var worldY = (int)MathF.Floor(
                 spawn.Y + (y - height * .5f) * tilesPerPixel);
-            var (red, green, blue) = MinimapColor(
-                InfiniteWorldGenerator.BiomeAt(seed, worldX, worldY));
+            var (red, green, blue) = ReliefMinimapColor(
+                seed, worldX, worldY);
             var index = (y * width + x) * 4;
             pixels[index] = red;
             pixels[index + 1] = green;
@@ -1061,6 +1096,7 @@ internal sealed partial class GameHostWindow : GameWindow
         CompleteQueuedAction();
         UpdateTreeCutting();
         UpdateGroundObjectPickup();
+        UpdateGroundObjectDrop();
         UpdateWaterRipples(wading);
         if (_moveMarker is not null)
         {
@@ -1137,7 +1173,9 @@ internal sealed partial class GameHostWindow : GameWindow
         float standOff,
         WorldActionType actionType,
         CancellationToken cancellationToken,
-        Guid? groundObjectId = null)
+        Guid? groundObjectId = null,
+        int inventorySlot = -1,
+        string? itemId = null)
     {
         var targetCell = new Vector2i(
             (int)MathF.Floor(target.X),
@@ -1192,7 +1230,9 @@ internal sealed partial class GameHostWindow : GameWindow
                 new QueuedWorldAction(
                     actionType, target,
                     Math.Max(standOff, .72f) + .08f,
-                    groundObjectId));
+                    groundObjectId,
+                    inventorySlot,
+                    itemId));
     }
 
     private float TreeInteractionDistance(string graphicName)
@@ -1234,6 +1274,14 @@ internal sealed partial class GameHostWindow : GameWindow
                      GroundObjectId: { } groundObjectId
                  })
             BeginGroundObjectPickup(groundObjectId, action.Target);
+        else if (action is
+                 {
+                     Type: WorldActionType.DropGroundObject,
+                     InventorySlot: >= 0,
+                     ItemId: { } itemId
+                 })
+            BeginGroundObjectDrop(
+                action.InventorySlot, itemId, action.Target);
     }
 
     private void BeginTreeCutting(Vector2 target)
@@ -1709,6 +1757,24 @@ internal sealed partial class GameHostWindow : GameWindow
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         base.OnMouseWheel(e);
+        if (_screen == ScreenState.MainMenu && e.OffsetY != 0)
+        {
+            if (_frontendPage == FrontendPage.CharacterSelect)
+            {
+                LayoutCharacterList(
+                    _saves.ListPlayers().ToArray());
+                _characterList.Scroll(
+                    MouseState.Position, e.OffsetY);
+            }
+            else if (_frontendPage == FrontendPage.LoadWorld)
+            {
+                LayoutWorldList(
+                    _saves.ListWorlds().ToArray());
+                _worldList.Scroll(
+                    MouseState.Position, e.OffsetY);
+            }
+            return;
+        }
         if (_screen != ScreenState.WorldPreview || e.OffsetY == 0) return;
         if (_mode == PreviewMode.Game && _paused) return;
         if (_mode == PreviewMode.Game)
@@ -1936,14 +2002,35 @@ internal sealed partial class GameHostWindow : GameWindow
         var panel = FrontendPanel(760, 640);
         DrawAoEPanelBorder(panel);
         DrawCenteredUiText(
-            "CREATE CHARACTER", new(panel.X, panel.Y + 20, panel.Z, 38),
+            "CREATE CHARACTER", new(panel.X, panel.Y + 16, panel.Z, 38),
             new(232, 217, 166, 255));
+        DrawCenteredUiText(
+            "Choose your adventurer's identity and appearance",
+            new(panel.X + 40, panel.Y + 52, panel.Z - 80, 24),
+            new(169, 159, 130, 255));
 
         var preview = CharacterPreviewBounds();
         DrawUiColor(preview, new(.025f, .027f, .024f, .72f));
         DrawPanelOutline(preview, 0, new(.28f, .23f, .14f, 1));
+        DrawPanelOutline(preview, 1, new(.10f, .085f, .055f, 1));
+        DrawCenteredUiText(
+            "CHARACTER PREVIEW",
+            new(preview.X, preview.Y + 10, preview.Z, 24),
+            new(204, 190, 150, 255));
         DrawCharacterPreview(
             _newPlayerGender, _newTeamColor, preview);
+
+        var form = CharacterFormBounds();
+        DrawUiColor(form, new(.038f, .036f, .030f, .82f));
+        DrawPanelOutline(form, 0, new(.28f, .23f, .14f, 1));
+        DrawPanelOutline(form, 1, new(.10f, .085f, .055f, 1));
+        DrawUiText(
+            "IDENTITY & APPEARANCE",
+            new(form.X + 18, form.Y + 16),
+            new(218, 202, 158, 255));
+        DrawUiColor(
+            new(form.X + 18, form.Y + 45, form.Z - 36, 1),
+            new(.25f, .20f, .11f, 1));
 
         var name = CharacterNameBounds();
         _playerNameTextBox.Bounds = name;
@@ -1969,8 +2056,13 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_frontendError is not null)
             DrawCenteredUiText(
                 _frontendError,
-                new(panel.X + 350, panel.Y + panel.W - 116, 340, 24),
+                new(form.X + 18, form.Y + form.W - 48,
+                    form.Z - 36, 24),
                 new(220, 104, 82, 255));
+        DrawUiColor(
+            new(panel.X + 36, panel.Y + panel.W - 108,
+                panel.Z - 72, 1),
+            new(.25f, .20f, .11f, 1));
         DrawMenuButton(CreateCharacterButtonBounds(), "Create Character");
         if (_saves.ListPlayers().Count > 0)
             DrawMenuButton(BackButtonBounds(), "Back");
@@ -1983,20 +2075,24 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawCenteredUiText(
             "SELECT CHARACTER", new(panel.X, panel.Y + 20, panel.Z, 38),
             new(232, 217, 166, 255));
-        var players = _saves.ListPlayers();
-        for (var index = 0; index < Math.Min(6, players.Count); index++)
+        var players = _saves.ListPlayers().ToArray();
+        LayoutCharacterList(players);
+        foreach (var index in _characterList.VisibleIndices)
         {
             var player = players[index];
-            var row = CharacterRowBounds(index);
+            var row = _characterList.RowBounds(index);
             DrawMenuButton(
                 row, player.Name,
                 TeamColor(player.TeamColor));
             if (_selectedPlayer?.Id == player.Id)
                 DrawPanelOutline(row, 3, new(.62f, .48f, .20f, 1));
             DrawMenuButton(
-                DeleteCharacterBounds(index),
-                _pendingDeletePlayerId == player.Id ? "Confirm?" : "Delete");
+                _characterList.DeleteBounds(index),
+                _characterList.IsDeletePending(player.Id)
+                    ? "Confirm?"
+                    : "Delete");
         }
+        RenderListScrollbar(_characterList);
         DrawMenuButton(NewCharacterButtonBounds(), "New Character");
         if (_selectedPlayer is not null)
             DrawMenuButton(ContinueCharacterButtonBounds(), "Use Character");
@@ -2005,11 +2101,27 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void RenderNewWorldMenu()
     {
-        var panel = FrontendPanel(560, 590);
+        var panel = FrontendPanel(760, 640);
         DrawAoEPanelBorder(panel);
         DrawCenteredUiText(
-            "CREATE NEW WORLD", new(panel.X, panel.Y + 22, panel.Z, 38),
+            "CREATE NEW WORLD", new(panel.X, panel.Y + 16, panel.Z, 38),
             new(232, 217, 166, 255));
+        DrawCenteredUiText(
+            "Configure your world and review the adventurer entering it",
+            new(panel.X + 40, panel.Y + 52, panel.Z - 80, 24),
+            new(169, 159, 130, 255));
+
+        var details = NewWorldDetailsBounds();
+        DrawUiColor(details, new(.038f, .036f, .030f, .82f));
+        DrawPanelOutline(details, 0, new(.28f, .23f, .14f, 1));
+        DrawPanelOutline(details, 1, new(.10f, .085f, .055f, 1));
+        DrawUiText(
+            "WORLD SETTINGS",
+            new(details.X + 18, details.Y + 16),
+            new(218, 202, 158, 255));
+        DrawUiColor(
+            new(details.X + 18, details.Y + 45, details.Z - 36, 1),
+            new(.25f, .20f, .11f, 1));
 
         var labels = new[] { "World Name", "Seed" };
         var controls = new[] { _worldNameTextBox, _seedTextBox };
@@ -2023,11 +2135,42 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         DrawMenuButton(RandomSeedButtonBounds(), "Random");
 
+        var character = NewWorldCharacterBounds();
+        DrawUiColor(character, new(.025f, .027f, .024f, .72f));
+        DrawPanelOutline(character, 0, new(.28f, .23f, .14f, 1));
+        DrawPanelOutline(character, 1, new(.10f, .085f, .055f, 1));
+        DrawCenteredUiText(
+            "PLAYING CHARACTER",
+            new(character.X, character.Y + 10, character.Z, 24),
+            new(204, 190, 150, 255));
         if (_selectedPlayer is not null)
+        {
+            DrawCharacterPreview(
+                _selectedPlayer.Gender,
+                _selectedPlayer.TeamColor,
+                new(
+                    character.X + 16,
+                    character.Y + 48,
+                    character.Z - 32,
+                    character.W - 104));
             DrawCenteredUiText(
-                $"Character: {_selectedPlayer.Name}",
-                new(panel.X + 48, panel.Y + 285, panel.Z - 96, 42),
-                new(204, 190, 150, 255));
+                _selectedPlayer.Name,
+                new(
+                    character.X + 14,
+                    character.Y + character.W - 48,
+                    character.Z - 28,
+                    28),
+                new(232, 217, 166, 255));
+        }
+        else
+            DrawCenteredUiText(
+                "No character selected",
+                new(
+                    character.X + 14,
+                    character.Y + character.W * .5f - 14,
+                    character.Z - 28,
+                    28),
+                new(220, 104, 82, 255));
         DrawUiText(
             "Spawn Preview",
             new(NewWorldPreviewBounds().X, NewWorldPreviewBounds().Y - 22),
@@ -2047,8 +2190,13 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_frontendError is not null)
             DrawCenteredUiText(
                 _frontendError,
-                new(panel.X + 30, panel.Y + panel.W - 112, panel.Z - 60, 24),
+                new(panel.X + 40, panel.Y + panel.W - 132,
+                    panel.Z - 80, 24),
                 new(220, 104, 82, 255));
+        DrawUiColor(
+            new(panel.X + 36, panel.Y + panel.W - 108,
+                panel.Z - 72, 1),
+            new(.25f, .20f, .11f, 1));
         DrawMenuButton(CreateWorldButtonBounds(), "Create World");
         DrawMenuButton(BackButtonBounds(), "Back");
     }
@@ -2060,24 +2208,31 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawCenteredUiText(
             "SELECT WORLD", new(panel.X, panel.Y + 22, panel.Z, 38),
             new(232, 217, 166, 255));
-        var worlds = _saves.ListWorlds();
-        if (worlds.Count == 0)
+        var worlds = _saves.ListWorlds().ToArray();
+        LayoutWorldList(worlds);
+        if (worlds.Length == 0)
         {
             DrawCenteredUiText(
                 "No worlds have been created yet.",
                 new(panel.X + 30, panel.Y + 150, panel.Z - 60, 30),
                 new(204, 190, 150, 255));
         }
-        for (var index = 0; index < Math.Min(6, worlds.Count); index++)
+        foreach (var index in _worldList.VisibleIndices)
         {
             var world = worlds[index];
-            var row = LoadWorldRowBounds(index);
+            var row = _worldList.RowBounds(index);
             DrawMenuButton(row, world.Name);
             DrawUiText(
                 $"Seed {world.Seed}",
                 new(row.X + 16, row.Y + row.W - 17),
                 new(158, 148, 120, 255));
+            DrawMenuButton(
+                _worldList.DeleteBounds(index),
+                _worldList.IsDeletePending(world.Id)
+                    ? "Confirm?"
+                    : "Delete");
         }
+        RenderListScrollbar(_worldList);
         DrawMenuButton(BackButtonBounds(), "Back");
     }
 
@@ -2158,6 +2313,24 @@ internal sealed partial class GameHostWindow : GameWindow
                 : new(224, 211, 170, 255));
     }
 
+    private void RenderListScrollbar(ListControlState list)
+    {
+        if (!list.ScrollTrack.Visible) return;
+        DrawUiColor(
+            list.ScrollTrack.Bounds,
+            new(.035f, .032f, .027f, .95f));
+        DrawUiColor(
+            list.ScrollThumb.Bounds,
+            list.ScrollThumb.Pressed ||
+            list.ScrollThumb.Hovered
+                ? new(.34f, .30f, .20f, 1)
+                : new(.22f, .20f, .15f, 1));
+        DrawPanelOutline(
+            list.ScrollTrack.Bounds,
+            0,
+            new(.22f, .19f, .12f, 1));
+    }
+
     private void DrawCenteredUiText(
         string text, Vector4 bounds, FSColor color) =>
         DrawUiText(text, CenteredTextPosition(text, bounds), color);
@@ -2174,7 +2347,7 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             FrontendPage.CharacterCreate => FrontendPanel(760, 640),
             FrontendPage.CharacterSelect => FrontendPanel(660, 600),
-            FrontendPage.NewWorld => FrontendPanel(560, 590),
+            FrontendPage.NewWorld => FrontendPanel(760, 640),
             FrontendPage.LoadWorld => FrontendPanel(600, 560),
             FrontendPage.Settings => FrontendPanel(480, 360),
             _ => FrontendPanel(400, 470)
@@ -2190,29 +2363,46 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private Vector4 NewWorldFieldBounds(int index)
     {
-        var panel = FrontendPanel(560, 590);
-        return new(
-            panel.X + 48,
-            panel.Y + 98 + index * 82,
-            index == 1 ? 340 : panel.Z - 96,
-            44);
+        var details = NewWorldDetailsBounds();
+        const float groupWidth = 360;
+        const float gap = 12;
+        const float nameWidth = 150;
+        var left = MathF.Round(
+            details.X + (details.Z - groupWidth) * .5f);
+        return index == 0
+            ? new(left, details.Y + 82, nameWidth, 42)
+            : new(
+                left + nameWidth + gap,
+                details.Y + 82,
+                groupWidth - nameWidth - gap,
+                42);
     }
 
     private Vector4 RandomSeedButtonBounds()
     {
         var seed = NewWorldFieldBounds(1);
-        return new(seed.X + seed.Z + 8, seed.Y, 116, seed.W);
+        return new(
+            seed.X + seed.Z - 58,
+            seed.Y - 27,
+            58,
+            20);
     }
 
     private Vector4 NewWorldPreviewBounds()
     {
-        var panel = FrontendPanel(560, 590);
-        return new(panel.X + 48, panel.Y + 350, panel.Z - 96, 136);
+        var details = NewWorldDetailsBounds();
+        const float previewSize = 270;
+        return new(
+            MathF.Round(
+                details.X + (details.Z - previewSize) * .5f),
+            details.Y + 150,
+            previewSize,
+            previewSize);
     }
 
     private Vector4 NewWorldOptionBounds(int index)
     {
-        var panel = FrontendPanel(560, 590);
+        var panel = FrontendPanel(760, 640);
         const float gap = 8;
         var width = (panel.Z - 96 - gap * 2) / 3;
         return new(
@@ -2222,8 +2412,24 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private Vector4 CreateWorldButtonBounds()
     {
-        var panel = FrontendPanel(560, 590);
-        return new(panel.X + 48, panel.Y + panel.W - 92, 290, 48);
+        var panel = FrontendPanel(760, 640);
+        return new(
+            panel.X + 340,
+            panel.Y + panel.W - 92,
+            228,
+            48);
+    }
+
+    private Vector4 NewWorldDetailsBounds()
+    {
+        var panel = FrontendPanel(760, 640);
+        return new(panel.X + 40, panel.Y + 84, 408, 438);
+    }
+
+    private Vector4 NewWorldCharacterBounds()
+    {
+        var panel = FrontendPanel(760, 640);
+        return new(panel.X + 470, panel.Y + 84, 250, 438);
     }
 
     private Vector4 BackButtonBounds()
@@ -2232,17 +2438,21 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             FrontendPage.CharacterCreate => FrontendPanel(760, 640),
             FrontendPage.CharacterSelect => FrontendPanel(660, 600),
-            FrontendPage.NewWorld => FrontendPanel(560, 590),
+            FrontendPage.NewWorld => FrontendPanel(760, 640),
             FrontendPage.LoadWorld => FrontendPanel(600, 560),
             _ => FrontendPanel(480, 360)
         };
         return new(panel.X + panel.Z - 156, panel.Y + panel.W - 92, 108, 48);
     }
 
-    private Vector4 LoadWorldRowBounds(int index)
+    private void LayoutWorldList(IReadOnlyList<WorldProfile> worlds)
     {
         var panel = FrontendPanel(600, 560);
-        return new(panel.X + 48, panel.Y + 88 + index * 62, panel.Z - 96, 54);
+        _worldList.Layout(
+            new(panel.X + 48, panel.Y + 88, panel.Z - 96, 364),
+            worlds.Select(world => world.Id).ToArray(),
+            rowHeight: 54,
+            rowGap: 8);
     }
 
     private Vector4 SettingsToggleBounds()
@@ -2254,58 +2464,68 @@ internal sealed partial class GameHostWindow : GameWindow
     private Vector4 CharacterPreviewBounds()
     {
         var panel = FrontendPanel(760, 640);
-        return new(panel.X + 42, panel.Y + 76, 278, 470);
+        return new(panel.X + 40, panel.Y + 84, 278, 438);
+    }
+
+    private Vector4 CharacterFormBounds()
+    {
+        var panel = FrontendPanel(760, 640);
+        return new(panel.X + 340, panel.Y + 84, 380, 438);
     }
 
     private Vector4 CharacterNameBounds()
     {
-        var panel = FrontendPanel(760, 640);
-        return new(panel.X + 358, panel.Y + 105, 350, 46);
+        var form = CharacterFormBounds();
+        return new(form.X + 22, form.Y + 92, form.Z - 44, 46);
     }
 
     private Vector4 GenderButtonBounds()
     {
-        var panel = FrontendPanel(760, 640);
-        return new(panel.X + 358, panel.Y + 193, 168, 46);
+        var form = CharacterFormBounds();
+        return new(form.X + 22, form.Y + 190, form.Z - 44, 46);
     }
 
     private Vector4 TeamSwatchBounds(int index)
     {
-        var panel = FrontendPanel(760, 640);
+        var form = CharacterFormBounds();
         return new(
-            panel.X + 358 + index % 4 * 56,
-            panel.Y + 306 + index / 4 * 56,
-            44, 44);
+            form.X + 22 + index % 4 * 68,
+            form.Y + 296 + index / 4 * 58,
+            48, 48);
     }
 
     private Vector4 CreateCharacterButtonBounds()
     {
         var panel = FrontendPanel(760, 640);
-        return new(panel.X + 358, panel.Y + panel.W - 78, 210, 48);
+        return new(
+            panel.X + 340,
+            panel.Y + panel.W - 92,
+            228,
+            48);
     }
 
-    private Vector4 CharacterRowBounds(int index)
+    private void LayoutCharacterList(
+        IReadOnlyList<PlayerProfile> players)
     {
         var panel = FrontendPanel(660, 600);
-        return new(panel.X + 48, panel.Y + 82 + index * 66, 430, 54);
-    }
-
-    private Vector4 DeleteCharacterBounds(int index)
-    {
-        var row = CharacterRowBounds(index);
-        return new(row.X + row.Z + 10, row.Y, 124, row.W);
+        _characterList.SelectedId = _selectedPlayer?.Id;
+        _characterList.Layout(
+            new(panel.X + 48, panel.Y + 82, panel.Z - 96, 384),
+            players.Select(player => player.Id).ToArray(),
+            rowHeight: 54,
+            rowGap: 12);
     }
 
     private Vector4 NewCharacterButtonBounds()
     {
         var panel = FrontendPanel(660, 600);
-        return new(panel.X + 48, panel.Y + panel.W - 82, 176, 48);
+        return new(panel.X + 48, panel.Y + panel.W - 92, 176, 48);
     }
 
     private Vector4 ContinueCharacterButtonBounds()
     {
         var panel = FrontendPanel(660, 600);
-        return new(panel.X + 238, panel.Y + panel.W - 82, 190, 48);
+        return new(panel.X + 238, panel.Y + panel.W - 92, 190, 48);
     }
 
     private void DrawColorSwatch(
@@ -2485,7 +2705,8 @@ internal sealed partial class GameHostWindow : GameWindow
             }
         }
 
-        if ((uint)_inventoryDraggingSlot < (uint)inventory.Length &&
+        if (_gameUi.Panel.Bounds.Contains(MouseState.Position) &&
+            (uint)_inventoryDraggingSlot < (uint)inventory.Length &&
             inventory[_inventoryDraggingSlot] is { } draggedItemId)
         {
             var itemUv = InventoryItemUv(draggedItemId);
@@ -2521,6 +2742,7 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             _inventoryPressedSlot = -1;
             _inventoryDraggingSlot = -1;
+            _groundDropPreview = null;
             return;
         }
 
@@ -2539,6 +2761,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 _inventoryDraggingSlot < 0 &&
                 (pointer - _inventoryPressPosition).LengthSquared >= 16)
                 _inventoryDraggingSlot = _inventoryPressedSlot;
+            if (_inventoryDraggingSlot >= 0)
+                UpdateGroundDropPreview(pointer);
             return;
         }
 
@@ -2547,7 +2771,14 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_inventoryDraggingSlot >= 0)
             {
                 var target = InventorySlotAt(pointer, includeEmpty: true);
-                SwapInventorySlots(_inventoryDraggingSlot, target);
+                if (target >= 0)
+                    SwapInventorySlots(_inventoryDraggingSlot, target);
+                else if (_groundDropPreview is
+                         {
+                             Valid: true
+                         } preview &&
+                         preview.InventorySlot == _inventoryDraggingSlot)
+                    QueueGroundObjectDrop(preview);
             }
             else if (_inventoryPressedSlot >= 0 &&
                      InventorySlotAt(pointer, includeEmpty: false) ==
@@ -2560,6 +2791,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
         _inventoryPressedSlot = -1;
         _inventoryDraggingSlot = -1;
+        _groundDropPreview = null;
     }
 
     private int InventorySlotAt(Vector2 pointer, bool includeEmpty)
@@ -2743,23 +2975,11 @@ internal sealed partial class GameHostWindow : GameWindow
         if (!PlayerInventory.CanDrop(itemId))
         {
             _chatUi.AddMessage(
-                "I shouldn't get rid of that. I need it for woodcutting.",
+                "You cannot drop that item.",
                 ChatMessageStyle.Warning);
             return;
         }
-        if (!PlayerInventory.TryRemove(inventory, slot, out var updated))
-            return;
-        _activePlayer = _activePlayer with
-        {
-            Inventory = updated,
-            UpdatedUtc = DateTime.UtcNow
-        };
-        if (_activeInventorySlot == slot)
-            _activeInventorySlot = -1;
-        _saves.SavePlayer(_activePlayer);
-        _chatUi.AddMessage(
-            $"You drop the {item.Name}. It is destroyed.",
-            ChatMessageStyle.Warning);
+        TryDropGroundObject(slot, itemId);
     }
 
     private void DrawPanelCaption(string caption, Vector4 panel)
@@ -2917,11 +3137,10 @@ internal sealed partial class GameHostWindow : GameWindow
                 continue;
             }
 
-            var (red, green, blue) = MinimapColor(
-                InfiniteWorldGenerator.BiomeAt(
-                    _worldSeed,
-                    center.X + x - terrainRadius,
-                    center.Y + y - terrainRadius));
+            var (red, green, blue) = ReliefMinimapColor(
+                _worldSeed,
+                center.X + x - terrainRadius,
+                center.Y + y - terrainRadius);
             terrain[targetIndex] = red;
             terrain[targetIndex + 1] = green;
             terrain[targetIndex + 2] = blue;
@@ -3046,6 +3265,45 @@ internal sealed partial class GameHostWindow : GameWindow
             Biome.Snow => (205, 213, 207),
             _ => (92, 116, 69)
         };
+
+    private static (byte Red, byte Green, byte Blue) ReliefMinimapColor(
+        long seed, int x, int y)
+    {
+        var biome = InfiniteWorldGenerator.BiomeAt(seed, x, y);
+        var (red, green, blue) = MinimapColor(biome);
+        var center = InfiniteWorldGenerator.SampleSurfaceHeight(
+            seed, x, y);
+        var west = InfiniteWorldGenerator.SampleSurfaceHeight(
+            seed, x - 1, y);
+        var east = InfiniteWorldGenerator.SampleSurfaceHeight(
+            seed, x + 1, y);
+        var north = InfiniteWorldGenerator.SampleSurfaceHeight(
+            seed, x, y - 1);
+        var south = InfiniteWorldGenerator.SampleSurfaceHeight(
+            seed, x, y + 1);
+        var slopeX = east - west;
+        var slopeY = south - north;
+        var relief = MathF.Abs(slopeX) + MathF.Abs(slopeY);
+        var lighting = (west - east) * .055f +
+                       (north - south) * .04f;
+        var elevation = biome is Biome.DeepWater or
+            Biome.ShallowWater or Biome.RiverWater or
+            Biome.MangroveShallows
+                ? 0
+                : Math.Min(center, (byte)14) * .012f;
+        var contour = center >= 3 && center % 3 == 0
+            ? -.08f
+            : 0;
+        var cliff = relief >= 5 ? -.13f : 0;
+        var factor = Math.Clamp(
+            1 + lighting + elevation + contour + cliff,
+            .62f,
+            1.28f);
+
+        byte Shade(byte channel) => (byte)Math.Clamp(
+            (int)MathF.Round(channel * factor), 0, 255);
+        return (Shade(red), Shade(green), Shade(blue));
+    }
 
     private void RenderChatUi()
     {
@@ -3490,18 +3748,25 @@ internal sealed partial class GameHostWindow : GameWindow
                      .SelectMany(gpu => gpu.Chunk.GroundObjects.Select(
                          groundObject => (Object: groundObject, Gpu: gpu))))
         {
-            var cell = item.Object.Kind == GroundObjectKind.Sticks ? 0 : 1;
+            if (!TryGroundItemVisual(
+                    item.Object.ItemId,
+                    out _,
+                    out _,
+                    out var itemAtlasKey,
+                    out var shadowAtlasKey))
+                continue;
             var world = GroundObjectWorld(item.Object);
-            shadows.Add(new(
-                world,
-                item.Gpu.Opacity,
-                $"ground-shadow:{item.Object.Id:N}",
-                AtlasKey: NaturalAtlasKey(cell, shadow: true)));
+            if (shadowAtlasKey is not null)
+                shadows.Add(new(
+                    world,
+                    item.Gpu.Opacity,
+                    $"ground-shadow:{item.Object.Id:N}",
+                    AtlasKey: shadowAtlasKey));
             objects.Add(new(
                 world,
                 item.Gpu.Opacity,
                 $"ground:{item.Object.Id:N}",
-                AtlasKey: NaturalAtlasKey(cell, shadow: false)));
+                AtlasKey: itemAtlasKey));
         }
 
         var shadowVertices = new List<float>();
@@ -3541,6 +3806,7 @@ internal sealed partial class GameHostWindow : GameWindow
             DrawSprite(
                 player.Frame, player.Texture, player.World,
                 mirror: player.Mirror, outlineOnly: true, wading: player.Wading);
+        RenderGroundDropPreview();
 
         void FlushAtlas()
         {
@@ -3843,7 +4109,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _minimapFrame = new SpriteFrame(160, 160, 0, 0, new byte[160 * 160 * 4]);
         _minimapTexture = Upload(_minimapFrame);
         _newWorldPreviewFrame = new SpriteFrame(
-            192, 120, 0, 0, new byte[192 * 120 * 4]);
+            128, 128, 0, 0, new byte[128 * 128 * 4]);
         _newWorldPreviewTexture = Upload(_newWorldPreviewFrame);
         var itemSheetPath = Path.Combine(
             AppContext.BaseDirectory, "Resources", "Images",
@@ -3855,6 +4121,32 @@ internal sealed partial class GameHostWindow : GameWindow
                 itemSheetStream, ColorComponents.RedGreenBlueAlpha);
             _woodcuttingItemsTexture = Upload(
                 itemSheet.Width, itemSheet.Height, itemSheet.Data);
+            const int cellSize = 32;
+            for (var cell = 0; cell < _woodcuttingItemFrames.Length; cell++)
+            {
+                var pixels = new byte[cellSize * cellSize * 4];
+                var cellX = cell % 4 * cellSize;
+                var cellY = cell / 4 * cellSize;
+                for (var row = 0; row < cellSize; row++)
+                    System.Buffer.BlockCopy(
+                        itemSheet.Data,
+                        ((cellY + row) * itemSheet.Width + cellX) * 4,
+                        pixels,
+                        row * cellSize * 4,
+                        cellSize * 4);
+                var sourceFrame = new SpriteFrame(
+                    cellSize, cellSize, cellSize / 2, 28, pixels);
+                var isTool = ItemCatalog.All.Any(item =>
+                    item.SpriteCell == cell &&
+                    item.HasTag(ItemTag.Tool));
+                var frame = isTool
+                    ? SpriteFrameTransforms.Rotate(sourceFrame, 45)
+                    : sourceFrame;
+                _woodcuttingItemFrames[cell] = frame;
+                _woodcuttingShadowFrames[cell] =
+                    ItemShadowGenerator.Create(frame);
+                _woodcuttingItemTextures[cell] = Upload(frame);
+            }
         }
         var naturalItemSheetPath = Path.Combine(
             AppContext.BaseDirectory, "Resources", "Images",
@@ -3879,7 +4171,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     cellSize, cellSize, cellSize / 2, 28, pixels);
                 _naturalItemFrames[cell] = frame;
                 _naturalShadowFrames[cell] =
-                    IsometricShadowGenerator.Create(frame);
+                    ItemShadowGenerator.Create(frame);
                 _naturalItemTextures[cell] = Upload(frame);
             }
         }
@@ -4020,6 +4312,24 @@ internal sealed partial class GameHostWindow : GameWindow
         var rawFrame = _player.Action == EntityAction.Idle
             ? 0
             : (int)(_player.ActionTime / animation.SecondsPerFrame);
+        if (_player.Action == EntityAction.Gather &&
+            _activeGroundDrop is not null)
+        {
+            var progress = Math.Clamp(
+                (float)(_player.ActionTime /
+                        GroundItemActionSeconds), 0, 1);
+            rawFrame = (int)MathF.Round(
+                (framesPerAngle - 1) * (1 - progress));
+        }
+        else if (_player.Action == EntityAction.Gather &&
+                 _activeGroundPickupId is not null)
+        {
+            var progress = Math.Clamp(
+                (float)(_player.ActionTime /
+                        GroundItemActionSeconds), 0, 1);
+            rawFrame = (int)MathF.Round(
+                (framesPerAngle - 1) * progress);
+        }
         if (_player.Action == EntityAction.Die)
             rawFrame = Math.Min(rawFrame, framesPerAngle - 1);
         var directional = VillagerDirectionRig.Resolve(
@@ -4078,12 +4388,19 @@ internal sealed partial class GameHostWindow : GameWindow
                     frame);
             }
         }
-        for (var cell = 0; cell < 2; cell++)
+        for (var cell = 0; cell < _naturalItemFrames.Length; cell++)
         {
             if (_naturalItemFrames[cell] is { } itemFrame)
                 Place(NaturalAtlasKey(cell, shadow: false), null, itemFrame);
             if (_naturalShadowFrames[cell] is { } shadowFrame)
                 Place(NaturalAtlasKey(cell, shadow: true), null, shadowFrame);
+        }
+        for (var cell = 0; cell < _woodcuttingItemFrames.Length; cell++)
+        {
+            if (_woodcuttingItemFrames[cell] is { } itemFrame)
+                Place(ItemAtlasKey(cell, shadow: false), null, itemFrame);
+            if (_woodcuttingShadowFrames[cell] is { } shadowFrame)
+                Place(ItemAtlasKey(cell, shadow: true), null, shadowFrame);
         }
         var requiredHeight = y + rowHeight + padding;
         var atlasHeight = 1;
@@ -4124,6 +4441,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static string NaturalAtlasKey(int cell, bool shadow) =>
         shadow ? $"NATURAL_SHADOW#{cell}" : $"NATURAL#{cell}";
+
+    private static string ItemAtlasKey(int cell, bool shadow) =>
+        shadow ? $"ITEM_SHADOW#{cell}" : $"ITEM#{cell}";
 
     private GpuWorldChunk UploadWorldChunk(WorldChunk chunk)
     {
@@ -5241,6 +5561,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_uiSolidTexture != 0) GL.DeleteTexture(_uiSolidTexture);
         if (_woodcuttingItemsTexture != 0)
             GL.DeleteTexture(_woodcuttingItemsTexture);
+        foreach (var texture in _woodcuttingItemTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _naturalItemTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         if (_uiTabTexture != 0) GL.DeleteTexture(_uiTabTexture);

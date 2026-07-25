@@ -7,7 +7,8 @@ internal enum ItemTag
     Axe = 1 << 0,
     Log = 1 << 1,
     WoodcuttingMaterial = 1 << 2,
-    NaturalMaterial = 1 << 3
+    NaturalMaterial = 1 << 3,
+    Tool = 1 << 4
 }
 
 internal sealed record ItemDefinition(
@@ -67,7 +68,7 @@ internal static class ItemCatalog
             [ItemIds.Axe] = new(
                 ItemIds.Axe, "axe", "Axe",
                 "A sturdy axe for chopping down trees.", 5,
-                Droppable: false, Tags: ItemTag.Axe),
+                Tags: ItemTag.Axe | ItemTag.Tool),
             [ItemIds.WoodChips] = new(
                 ItemIds.WoodChips, "wood chips", "Chips",
                 "Small chips left over from worked timber.", 6,

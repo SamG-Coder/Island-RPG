@@ -18,13 +18,13 @@ internal sealed record WorldTreeInstance(
     int Health,
     int MaxHealth,
     TreeLifecycleState State);
-internal enum GroundObjectKind : byte { Sticks, LargeRock }
 internal sealed record WorldGroundObject(
-    Guid Id, GroundObjectKind Kind, float X, float Y);
+    Guid Id, string ItemId, float X, float Y);
 
 internal sealed class WorldChunk
 {
     public const int Size = 32;
+    public const int MaximumStoredGroundObjects = 4096;
     public const int WeightSamplesPerTile = 4;
     public const int WeightHaloTiles = 8;
     public const int WeightTextureSize = (Size + WeightHaloTiles * 2) * WeightSamplesPerTile;
@@ -146,19 +146,19 @@ internal static class InfiniteWorldGenerator
                 _ => 0
             };
             var roll = UnitHash(seed, tile.X, tile.Y, 811);
-            GroundObjectKind? kind = roll < stickChance
-                ? GroundObjectKind.Sticks
+            string? itemId = roll < stickChance
+                ? "sticks"
                 : roll < stickChance + rockChance
-                    ? GroundObjectKind.LargeRock
+                    ? "large_rock"
                     : null;
-            if (kind is null) continue;
+            if (itemId is null) continue;
             var x = tile.X + .18f + UnitHash(seed, tile.X, tile.Y, 823) * .64f;
             var y = tile.Y + .18f + UnitHash(seed, tile.X, tile.Y, 827) * .64f;
             candidates.Add((
                 UnitHash(seed, tile.X, tile.Y, 829),
                 new(
-                    StableGroundObjectId(seed, tile.X, tile.Y, kind.Value),
-                    kind.Value, x, y)));
+                    StableGroundObjectId(seed, tile.X, tile.Y, itemId),
+                    itemId, x, y)));
         }
         return candidates
             .OrderBy(candidate => candidate.Score)
@@ -168,12 +168,14 @@ internal static class InfiniteWorldGenerator
     }
 
     private static Guid StableGroundObjectId(
-        long seed, int x, int y, GroundObjectKind kind)
+        long seed, int x, int y, string itemId)
     {
         Span<byte> bytes = stackalloc byte[16];
         BitConverter.TryWriteBytes(bytes, seed);
         BitConverter.TryWriteBytes(bytes[8..], x);
-        BitConverter.TryWriteBytes(bytes[12..], y ^ ((int)kind << 28));
+        var discriminator = itemId.Equals(
+            "sticks", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
+        BitConverter.TryWriteBytes(bytes[12..], y ^ (discriminator << 28));
         return new Guid(bytes);
     }
 
@@ -660,7 +662,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 4;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 11;
+    private const int ChunkPayloadVersion = 12;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -859,11 +861,15 @@ internal sealed class WorldChunkStore
                 writer.Write(tree.MaxHealth);
                 writer.Write((byte)tree.State);
             }
+            if (chunk.GroundObjects.Count > WorldChunk.MaximumStoredGroundObjects)
+                throw new InvalidDataException(
+                    $"Chunk contains too many ground objects: " +
+                    $"{chunk.GroundObjects.Count}");
             writer.Write(chunk.GroundObjects.Count);
             foreach (var groundObject in chunk.GroundObjects)
             {
                 writer.Write(groundObject.Id.ToByteArray());
-                writer.Write((byte)groundObject.Kind);
+                writer.Write(groundObject.ItemId);
                 writer.Write(
                     groundObject.X -
                     MathF.Floor(groundObject.X / WorldChunk.Size) *
@@ -949,7 +955,8 @@ internal sealed class WorldChunkStore
             if (payloadVersion >= 11)
             {
                 var groundObjectCount = reader.ReadInt32();
-                if (groundObjectCount is < 0 or > 8)
+                if (groundObjectCount is < 0 or
+                    > WorldChunk.MaximumStoredGroundObjects)
                     throw new InvalidDataException(
                         $"Chunk ground-object count is invalid: {groundObjectCount}");
                 groundObjects = new(groundObjectCount);
@@ -958,12 +965,18 @@ internal sealed class WorldChunkStore
                     var idBytes = reader.ReadBytes(16);
                     if (idBytes.Length != 16)
                         throw new EndOfStreamException();
+                    var itemId = payloadVersion >= 12
+                        ? reader.ReadString()
+                        : reader.ReadByte() == 0
+                            ? "sticks"
+                            : "large_rock";
                     var groundObject = new WorldGroundObject(
                         new Guid(idBytes),
-                        (GroundObjectKind)reader.ReadByte(),
+                        itemId,
                         coordinate.X * WorldChunk.Size + reader.ReadSingle(),
                         coordinate.Y * WorldChunk.Size + reader.ReadSingle());
-                    if (!Enum.IsDefined(groundObject.Kind) ||
+                    if (string.IsNullOrWhiteSpace(groundObject.ItemId) ||
+                        groundObject.ItemId.Length > 64 ||
                         FloorDiv((int)MathF.Floor(groundObject.X), WorldChunk.Size) != coordinate.X ||
                         FloorDiv((int)MathF.Floor(groundObject.Y), WorldChunk.Size) != coordinate.Y)
                         throw new InvalidDataException(

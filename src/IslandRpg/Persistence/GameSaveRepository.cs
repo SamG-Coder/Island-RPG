@@ -127,6 +127,19 @@ internal sealed class GameSaveRepository
         }
     }
 
+    public void DeleteWorld(string worldId)
+    {
+        var worldDirectory = Path.GetFullPath(
+            Path.Combine(WorldsRoot, worldId));
+        var worldsRoot = Path.GetFullPath(WorldsRoot) +
+                         Path.DirectorySeparatorChar;
+        if (!worldDirectory.StartsWith(
+                worldsRoot, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Invalid world save path.");
+        if (Directory.Exists(worldDirectory))
+            Directory.Delete(worldDirectory, recursive: true);
+    }
+
     public WorldPlayerState? LoadWorldPlayer(
         string worldId, string playerId) =>
         ReadJson<WorldPlayerState>(Path.Combine(

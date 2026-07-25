@@ -22,6 +22,7 @@ internal sealed partial class GameHostWindow
 
         _defaultNativeCursor = CreateNativeCursor(cursorSheet.Frames[0]);
         _pickupNativeCursor = CreateNativeCursor(cursorSheet.Frames[3]);
+        _dropNativeCursor = CreateNativeCursor(cursorSheet.Frames[7]);
         _cutNativeCursor = CreateNativeCursor(cursorSheet.Frames[8]);
         Cursor = _defaultNativeCursor;
         CursorState = CursorState.Normal;
@@ -54,7 +55,13 @@ internal sealed partial class GameHostWindow
 
         var next = GameCursorKind.Default;
         MouseCursor cursor = _defaultNativeCursor;
-        if (!IsPointerOverGameUi(MouseState.Position))
+        if (IsWorldDropDragOutsideInventory() &&
+            _dropNativeCursor is not null)
+        {
+            next = GameCursorKind.DropItem;
+            cursor = _dropNativeCursor;
+        }
+        else if (!IsPointerOverGameUi(MouseState.Position))
         {
             if (TryGetGroundObjectUnderMouse(
                     SceneMousePosition(), out _, out _) &&

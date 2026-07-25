@@ -33,13 +33,13 @@ Require(startingInventory.Length == PlayerInventory.Capacity &&
         PlayerInventory.Count(startingInventory) == 1 &&
         PlayerInventory.HasAxe(startingInventory),
     "a new character must start with an axe in a fixed 28-slot inventory");
-Require(!PlayerInventory.CanDrop(ItemIds.Axe) &&
+Require(PlayerInventory.CanDrop(ItemIds.Axe) &&
         PlayerInventory.CanDrop(ItemIds.Logs),
-    "the starter axe must be protected while ordinary items remain droppable");
+    "all inventory items must be droppable into the world");
 Require(ItemCatalog.Get(ItemIds.Axe) is var axeDefinition &&
         axeDefinition.SpriteCell == 5 &&
         axeDefinition.HasTag(ItemTag.Axe) &&
-        !axeDefinition.Droppable &&
+        axeDefinition.Droppable &&
         ItemCatalog.Get(ItemIds.OakLogs).HasTag(ItemTag.Log) &&
         ItemCatalog.All.Select(item => item.Id).Distinct().Count() ==
         ItemCatalog.All.Count,
@@ -115,6 +115,38 @@ contextMenu.UpdatePointer(new(0, 0), leftDown: false);
 Require(!contextMenu.Visible,
     "context menu must close when the pointer moves away");
 
+var listControl = new ListControlState();
+listControl.Layout(
+    new(20, 30, 420, 140), ["first", "second"],
+    rowHeight: 48, rowGap: 6, deleteWidth: 100);
+var deleteControl = listControl.DeleteBounds(0);
+Require(listControl.TryHit(
+            new(
+                deleteControl.X + deleteControl.Z / 2,
+                deleteControl.Y + deleteControl.W / 2),
+            out var listIndex,
+            out var hitDelete) &&
+        listIndex == 0 &&
+        hitDelete &&
+        !listControl.ApproveDelete("first") &&
+        listControl.IsDeletePending("first") &&
+        listControl.ApproveDelete("first"),
+    "list deletion must require a separate confirmation click");
+var scrollingList = new ListControlState();
+scrollingList.Layout(
+    new(20, 30, 420, 110),
+    Enumerable.Range(0, 10)
+        .Select(index => $"item-{index}")
+        .ToArray(),
+    rowHeight: 48,
+    rowGap: 6,
+    deleteWidth: 100);
+Require(scrollingList.Scroll(new(30, 40), -1) &&
+        scrollingList.FirstVisibleIndex == 3 &&
+        scrollingList.VisibleIndices.First() == 3 &&
+        scrollingList.ScrollTrack.Visible,
+    "list controls must wheel-scroll their visible row window");
+
 var boundedChat = new ChatUiControlState();
 boundedChat.Layout(new(0, 0, 1280, 720));
 for (var index = 0; index < 225; index++)
@@ -130,7 +162,7 @@ var repeated = InfiniteWorldGenerator.Generate(seed, new(0, 0));
 Require(origin.GroundObjects.Count <= 8 &&
         origin.GroundObjects.SequenceEqual(repeated.GroundObjects) &&
         origin.GroundObjects.All(item =>
-            item.Kind is GroundObjectKind.Sticks or GroundObjectKind.LargeRock),
+            item.ItemId is ItemIds.Sticks or ItemIds.LargeRock),
     "natural ground objects must be deterministic, capped, and limited to collectible types");
 Require(origin.Tiles.SequenceEqual(repeated.Tiles), "same seed and coordinate must reproduce tiles");
 Require(origin.Trees.SequenceEqual(repeated.Trees), "same seed and coordinate must reproduce trees");
@@ -303,6 +335,21 @@ try
         45,
         100,
         TreeLifecycleState.Standing));
+    while (origin.GroundObjects.Count < 12)
+    {
+        var index = origin.GroundObjects.Count;
+        origin.GroundObjects.Add(new(
+            Guid.NewGuid(),
+            index % 2 == 0
+                ? ItemIds.Sticks
+                : ItemIds.LargeRock,
+            index + .25f,
+            index + .65f));
+    }
+    origin.GroundObjects.Add(new(
+        Guid.NewGuid(), ItemIds.Axe, 20.25f, 20.65f));
+    origin.GroundObjects.Add(new(
+        Guid.NewGuid(), ItemIds.OakLogs, 21.25f, 21.65f));
     for (var regionY = 0; regionY < WorldChunkStore.RegionSize; regionY++)
     for (var regionX = 0; regionX < WorldChunkStore.RegionSize; regionX++)
         store.Save(CloneAt(origin, new(regionX, regionY)));
@@ -382,6 +429,9 @@ try
     Require(saves.ListPlayers().Count == 0 &&
             saves.LoadWorldPlayer(world.Id, player.Id) is null,
         "deleting a character must remove its world-specific states");
+    saves.DeleteWorld(world.Id);
+    Require(saves.ListWorlds().Count == 0,
+        "confirmed world deletion must remove its saved world directory");
 }
 finally
 {
