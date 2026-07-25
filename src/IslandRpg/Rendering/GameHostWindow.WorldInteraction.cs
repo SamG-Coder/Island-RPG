@@ -122,6 +122,25 @@ internal sealed partial class GameHostWindow
         return false;
     }
 
+    private bool TryGetFishUnderMouse(
+        Vector2 mouse, out WorldFish hoveredFish)
+    {
+        foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible))
+        foreach (var cached in gpu.FishRenderItems
+                     .OrderByDescending(item => item.World.Y))
+        {
+            if (!WorldFishPresentation.BaseHitTest(
+                    mouse,
+                    SpriteAnchor(cached.World),
+                    SpritePixelScale()))
+                continue;
+            hoveredFish = cached.Fish;
+            return true;
+        }
+        hoveredFish = null!;
+        return false;
+    }
+
     private Vector2 GroundObjectWorld(WorldGroundObject groundObject)
     {
         var elevation = InfiniteWorldGenerator.SampleRenderedHeight(

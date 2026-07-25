@@ -50,6 +50,7 @@ internal sealed partial class GameHostWindow : GameWindow
         public Vector4 ProjectedBounds { get; } = projectedBounds;
         public float Opacity { get; set; }
         public WorldVegetationRenderItem[] VegetationRenderItems { get; set; } = [];
+        public WorldFishRenderItem[] FishRenderItems { get; set; } = [];
     }
     private sealed record SpriteAtlasEntry(
         SpriteFrame Frame, float U0, float V0, float U1, float V1);
@@ -337,6 +338,9 @@ internal sealed partial class GameHostWindow : GameWindow
             foreach (var name in
                      WorldVegetationGenerator.RequiredGraphicNames)
                 names.Add(name);
+            foreach (var name in
+                     WorldFishGenerator.RequiredGraphicNames)
+                names.Add(name);
         }
 
         if (mode == PreviewMode.Game)
@@ -404,6 +408,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     .SelectMany(name => new[] { name, name[..^2] + "N0" })
                     .Concat(["STUMP_NN", "STUMB_NN"])
                     .Concat(WorldVegetationGenerator.RequiredGraphicNames)
+                    .Concat(WorldFishGenerator.RequiredGraphicNames)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase)
                 : _island?.Trees
                     .SelectMany(tree => new[] { tree.GraphicName, tree.GraphicName[..^2] + "N0" })
@@ -4129,6 +4134,22 @@ internal sealed partial class GameHostWindow : GameWindow
                 vegetation.AtlasKey));
         }
 
+        foreach (var gpu in visibleChunks)
+        foreach (var cachedFish in gpu.FishRenderItems)
+        {
+            var fish = cachedFish.Fish;
+            var world = cachedFish.World;
+            var atlasKey = WorldFishAnimation.AtlasKey(
+                fish, _clock);
+            if (!IsAtlasItemVisible(atlasKey, world))
+                continue;
+            shadows.Add(new(
+                world, gpu.Opacity, fish.StableKey,
+                WorldFishPresentation.DepthAtlasKey));
+            objects.Add(new(
+                world, gpu.Opacity, fish.StableKey, atlasKey));
+        }
+
         var shadowVertices = new List<float>();
         foreach (var shadow in shadows
                      .OrderBy(item => item.World.Y)
@@ -4861,18 +4882,20 @@ internal sealed partial class GameHostWindow : GameWindow
                 asset.Definition.Name);
             var treeVariants = WorldTreeCatalog.HasVariants(
                 asset.Definition.Name);
-            var frames = cliff || stump || vegetation || treeVariants
+            var fish = WorldFishGenerator.IsFishGraphic(
+                asset.Definition.Name);
+            var frames = cliff || stump || vegetation || treeVariants || fish
                 ? asset.Sprite.Frames
                 : [asset.Sprite.Frames[0]];
             for (var frameIndex = 0; frameIndex < frames.Count; frameIndex++)
             {
                 var frame = frames[frameIndex];
-                var key = cliff || stump || vegetation || treeVariants
+                var key = cliff || stump || vegetation || treeVariants || fish
                     ? $"{asset.Definition.Name}#{frameIndex}"
                     : asset.Definition.Name;
                 Place(
                     key,
-                    (cliff || stump || vegetation || treeVariants) &&
+                    (cliff || stump || vegetation || treeVariants || fish) &&
                     frameIndex == 0
                         ? asset.Definition.Name
                         : null,
@@ -4920,6 +4943,10 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_coastalSprites.GroundShadows[cell] is { } shadowFrame)
                 Place(CoastalAtlasKey(cell, shadow: true), null, shadowFrame);
         }
+        Place(
+            WorldFishPresentation.DepthAtlasKey,
+            null,
+            WorldFishPresentation.CreateDepthFrame());
         var requiredHeight = y + rowHeight + padding;
         var atlasHeight = 1;
         while (atlasHeight < requiredHeight) atlasHeight *= 2;
@@ -5032,6 +5059,8 @@ internal sealed partial class GameHostWindow : GameWindow
             WorldChunkProjection.TerrainBounds(vertices, 12));
         gpu.VegetationRenderItems = WorldVegetationRenderCache.Build(
             _worldSeed, chunk.Vegetation);
+        gpu.FishRenderItems = WorldFishRenderCache.Build(
+            _worldSeed, chunk.Fish);
         return gpu;
 
         float LayerAt(int x, int y, Biome fallback) =>
@@ -5182,7 +5211,8 @@ internal sealed partial class GameHostWindow : GameWindow
             Cliffs = source.Cliffs,
             TreeInstances = source.TreeInstances.ToList(),
             GroundObjects = source.GroundObjects.ToList(),
-            Vegetation = source.Vegetation
+            Vegetation = source.Vegetation,
+            Fish = source.Fish
         };
         var previous = _saveTail;
         _saveTail = Task.Run(async () =>

@@ -56,6 +56,7 @@ internal sealed class WorldChunk
     public List<WorldTreeInstance> TreeInstances { get; init; } = [];
     public List<WorldGroundObject> GroundObjects { get; init; } = [];
     public WorldVegetation[] Vegetation { get; init; } = [];
+    public WorldFish[] Fish { get; init; } = [];
 }
 
 internal static class InfiniteWorldGenerator
@@ -114,6 +115,7 @@ internal static class InfiniteWorldGenerator
         var groundObjects = GenerateGroundObjects(seed, tiles, trees);
         var vegetation = WorldVegetationGenerator.Generate(
             seed, tiles, trees);
+        var fish = WorldFishGenerator.Generate(seed, tiles);
         return new()
         {
             Coordinate = coordinate,
@@ -126,7 +128,8 @@ internal static class InfiniteWorldGenerator
             ShoreDistance = weights.Shore,
             Cliffs = cliffs,
             GroundObjects = groundObjects,
-            Vegetation = vegetation
+            Vegetation = vegetation,
+            Fish = fish
         };
     }
 
@@ -1039,7 +1042,8 @@ internal sealed class WorldChunkStore
                 TreeInstances = treeInstances,
                 GroundObjects = groundObjects,
                 Vegetation = WorldVegetationGenerator.Generate(
-                    Seed, tiles, trees)
+                    Seed, tiles, trees),
+                Fish = WorldFishGenerator.Generate(Seed, tiles)
             };
         }
         catch (EndOfStreamException ex)
@@ -1111,7 +1115,8 @@ internal sealed class WorldChunkStore
                 BiomeWeightsC = weights.C, BiomeWeightsD = weights.D,
                 ShoreDistance = weights.Shore, Cliffs = cliffs,
                 Vegetation = WorldVegetationGenerator.Generate(
-                    Seed, tiles, trees)
+                    Seed, tiles, trees),
+                Fish = WorldFishGenerator.Generate(Seed, tiles)
             };
         }
         catch (EndOfStreamException ex)

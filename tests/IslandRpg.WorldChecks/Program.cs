@@ -607,6 +607,58 @@ Require(origin.Trees.Any(tree => tree.FrameIndex > 0),
     "generated woodland must use more than the first authored tree frame");
 Require(origin.Vegetation.SequenceEqual(repeated.Vegetation),
     "same seed and coordinate must reproduce vegetation");
+Require(origin.Fish.SequenceEqual(repeated.Fish) &&
+        origin.Fish.Length <= WorldFishGenerator.MaximumPerChunk,
+    "fish generation must be deterministic and capped per chunk");
+Require(WorldFishGenerator.Profiles.Length == 6 &&
+        WorldFishGenerator.RequiredGraphicNames.Distinct().Count() == 6 &&
+        WorldFishGenerator.Profiles.All(profile =>
+            profile.FrameCount > 1 &&
+            !string.IsNullOrWhiteSpace(profile.DisplayName) &&
+            !string.IsNullOrWhiteSpace(profile.Rarity) &&
+            !string.IsNullOrWhiteSpace(profile.Habitat)),
+    "all six authored fish sets must define animation, name, rarity, and habitat");
+Require(origin.Fish.All(fish =>
+    {
+        var tileX = (int)MathF.Floor(fish.X) -
+                    origin.Coordinate.X * WorldChunk.Size;
+        var tileY = (int)MathF.Floor(fish.Y) -
+                    origin.Coordinate.Y * WorldChunk.Size;
+        var tile = origin.Tiles[tileY * WorldChunk.Size + tileX];
+        if (!WorldFishGenerator.IsValidHabitat(fish.Species, tile))
+            return false;
+        for (var offsetY = -2; offsetY <= 2; offsetY++)
+        for (var offsetX = -2; offsetX <= 2; offsetX++)
+            if (InfiniteWorldGenerator.SampleTile(
+                    seed,
+                    (int)MathF.Floor(fish.X) + offsetX,
+                    (int)MathF.Floor(fish.Y) + offsetY).Biome is
+                Biome.Beach or Biome.DesertSand)
+                return false;
+        return true;
+    }),
+    "fish must use suitable water and maintain two tiles of sand clearance");
+var animationFish = new WorldFish(
+    0, 0, WorldFishSpecies.ShoreMinnows,
+    "FISHS_NN", 3, "fish:test");
+Require(WorldFishAnimation.FrameAt(animationFish, 0) == 3 &&
+        WorldFishAnimation.FrameAt(
+            animationFish,
+            WorldFishAnimation.SecondsPerFrame - .001) == 3 &&
+        WorldFishAnimation.FrameAt(
+            animationFish, WorldFishAnimation.SecondsPerFrame) == 4,
+    "fish animations must advance once per real-time frame interval");
+var fishDepth = WorldFishPresentation.CreateDepthFrame();
+Require(fishDepth.Rgba[
+            ((fishDepth.Height / 2 * fishDepth.Width) +
+             fishDepth.Width / 2) * 4 + 3] > 80 &&
+        fishDepth.Rgba[3] == 0,
+    "fish depth effect must have an opaque blue centre and soft transparent edge");
+Require(WorldFishPresentation.BaseHitTest(
+            new(100, 100), new(100, 100), 1) &&
+        !WorldFishPresentation.BaseHitTest(
+            new(130, 100), new(100, 100), 1),
+    "fish hover must use a compact rectangle around the water-level base");
 Require(origin.Vegetation.All(item =>
         item.CanBecomeInstance == (item.Kind == WorldVegetationKind.BerryBush)),
     "only harvestable berry vegetation should be flagged to become an instance");
@@ -846,6 +898,8 @@ try
     var loaded = store.LoadOrGenerate(origin.Coordinate);
     Require(origin.Tiles.SequenceEqual(loaded.Tiles), "saved tiles must round-trip");
     Require(origin.Trees.SequenceEqual(loaded.Trees), "saved trees must round-trip");
+    Require(origin.Fish.SequenceEqual(loaded.Fish),
+        "derived fish schools must regenerate when a chunk is loaded");
     Require(origin.TreeInstances.SequenceEqual(loaded.TreeInstances),
         "instantiated tree IDs, health, and lifecycle state must round-trip");
     Require(origin.GroundObjects.SequenceEqual(loaded.GroundObjects),
@@ -951,5 +1005,6 @@ static WorldChunk CloneAt(WorldChunk source, ChunkCoordinate coordinate) => new(
     Cliffs = source.Cliffs,
     TreeInstances = source.TreeInstances.ToList(),
     GroundObjects = source.GroundObjects.ToList(),
-    Vegetation = source.Vegetation
+    Vegetation = source.Vegetation,
+    Fish = source.Fish
 };

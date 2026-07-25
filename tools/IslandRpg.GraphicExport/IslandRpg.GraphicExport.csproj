@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\src\IslandRpg\Assets\Sprite.cs" Link="Sprite.cs" />
+    <Compile Include="..\..\src\IslandRpg\Assets\SlpDecoder.cs" Link="SlpDecoder.cs" />
+    <Compile Include="..\..\src\IslandRpg\Assets\JascPalette.cs" Link="JascPalette.cs" />
+    <Compile Include="..\..\src\IslandRpg\Assets\Age2PaletteResolver.cs" Link="Age2PaletteResolver.cs" />
+    <Compile Include="..\..\src\IslandRpg\Assets\GenieDatReader.cs" Link="GenieDatReader.cs" />
+  </ItemGroup>
+</Project>
