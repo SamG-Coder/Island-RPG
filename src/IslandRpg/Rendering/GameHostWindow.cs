@@ -51,7 +51,8 @@ internal sealed class GameHostWindow : GameWindow
         LoadedGraphic Graphic, int[] Textures, float SecondsPerFrame);
     private sealed record PlayerVisual(
         SpriteFrame Frame, int Texture, Vector2 World, bool Mirror, bool Wading);
-    private sealed record MoveMarker(Vector2 Position, double Time);
+    private sealed record MoveMarker(
+        Vector2 Position, double Time, bool Action = false);
     private sealed record WaterRipple(Vector2 Position, double StartedAt);
     private enum WorldActionType { CutTree, PickUpGroundObject }
     private sealed record QueuedWorldAction(
@@ -63,6 +64,11 @@ internal sealed class GameHostWindow : GameWindow
         QueuedWorldAction? Action = null);
     private sealed record NewWorldPreviewResult(
         string SeedText, long Seed, Vector2 Spawn, byte[] Pixels);
+    private sealed record WorldRenderItem(
+        Vector2 World,
+        float Opacity,
+        string StableKey,
+        string AtlasKey);
 
     private readonly string _install;
     private readonly PreviewMode _mode;
@@ -157,6 +163,7 @@ internal sealed class GameHostWindow : GameWindow
     private int _woodcuttingItemsTexture;
     private readonly int[] _naturalItemTextures = new int[4];
     private readonly SpriteFrame?[] _naturalItemFrames = new SpriteFrame?[4];
+    private readonly SpriteFrame?[] _naturalShadowFrames = new SpriteFrame?[4];
     private static readonly SpriteFrame WoodcuttingItemsFrame =
         new(128, 64, 0, 0, []);
     private readonly MinimapControlState _minimapUi = new();
@@ -1031,6 +1038,9 @@ internal sealed class GameHostWindow : GameWindow
                 {
                     _queuedAction = result.Action;
                     _player.FollowPath(result.Path);
+                    if (result.Action is not null && result.Path.Count > 0)
+                        _moveMarker = new(
+                            result.Path[^1], 0, Action: true);
                 }
             }
             _pendingPathTask = null;
@@ -3676,23 +3686,22 @@ internal sealed class GameHostWindow : GameWindow
 
         var player = _mode == PreviewMode.Game ? GetPlayerVisual() : null;
         var playerDepth = player?.World.Y ?? float.MaxValue;
-        var behind = new List<float>();
-        var foregroundShadows = new List<float>();
-        var foregroundObjects = new List<float>();
+        var shadows = new List<WorldRenderItem>();
+        var objects = new List<WorldRenderItem>();
         var playerOccluded = false;
         foreach (var item in _worldChunks.Values.Where(IsChunkVisible)
                      .SelectMany(gpu => gpu.Chunk.Cliffs.Select(face => (Face: face, Gpu: gpu)))
                      .OrderBy(item => item.Face.X1 + item.Face.Y1))
         {
             var world = CliffWorld(item.Face);
-            var target = world.Y <= playerDepth ? behind : foregroundObjects;
-            AddCliffSprite(item.Face, item.Gpu.Opacity, target);
-            if (player is not null && world.Y > playerDepth &&
-                AtlasOverlapsPlayer($"CLF01_NN#{(item.Face.X1 == item.Face.X2 ? 6 : 0)}",
-                    world, player))
-                playerOccluded = true;
+            var key = $"CLF01_NN#{(item.Face.X1 == item.Face.X2 ? 6 : 0)}";
+            objects.Add(new(
+                world,
+                item.Gpu.Opacity,
+                $"cliff:{item.Face.X1}:{item.Face.Y1}:{item.Face.X2}:{item.Face.Y2}",
+                AtlasKey: key));
         }
-        foreach (var item in _worldChunks.Values
+        foreach (var item in _worldChunks.Values.Where(IsChunkVisible)
                      .SelectMany(gpu => gpu.Chunk.Trees.Select(tree => (Tree: tree, Gpu: gpu)))
                      .OrderBy(item => item.Tree.X + item.Tree.Y))
         {
@@ -3715,36 +3724,87 @@ internal sealed class GameHostWindow : GameWindow
             var shadowName = isStump
                 ? StumpAtlasKey(tree.GraphicName, shadow: true)
                 : tree.GraphicName[..^2] + "N0";
-            if (world.Y <= playerDepth)
-            {
-                AddTreeQuad(shadowName, world, item.Gpu.Opacity, behind);
-                AddTreeQuad(visibleName, world, item.Gpu.Opacity, behind);
-            }
-            else
-            {
-                // A foreground object's ground shadow stays beneath the entity
-                // and never participates in occlusion outlining.
-                AddTreeQuad(shadowName, world, item.Gpu.Opacity, foregroundShadows);
-                AddTreeQuad(visibleName, world, item.Gpu.Opacity, foregroundObjects);
-                if (player is not null &&
-                    AtlasOverlapsPlayer(visibleName, world, player))
-                    playerOccluded = true;
-            }
+            var stableKey = $"tree:{tree.X}:{tree.Y}";
+            if (!string.IsNullOrEmpty(shadowName))
+                shadows.Add(new(
+                    world, item.Gpu.Opacity, stableKey,
+                    AtlasKey: shadowName));
+            objects.Add(new(
+                world, item.Gpu.Opacity, stableKey,
+                AtlasKey: visibleName));
         }
-        DrawTreeBatch(behind);
-        RenderGroundObjects(foreground: false, playerDepth);
-        DrawTreeBatch(foregroundShadows);
-        if (player is not null)
-            DrawSprite(
-                player.Frame, player.Texture, player.World,
-                mirror: player.Mirror, wading: player.Wading,
-                teamColor: _activePlayer?.TeamColor ?? 0);
-        RenderGroundObjects(foreground: true, playerDepth);
-        DrawTreeBatch(foregroundObjects);
+
+        foreach (var item in _worldChunks.Values.Where(IsChunkVisible)
+                     .SelectMany(gpu => gpu.Chunk.GroundObjects.Select(
+                         groundObject => (Object: groundObject, Gpu: gpu))))
+        {
+            var cell = item.Object.Kind == GroundObjectKind.Sticks ? 0 : 1;
+            var world = GroundObjectWorld(item.Object);
+            shadows.Add(new(
+                world,
+                item.Gpu.Opacity,
+                $"ground-shadow:{item.Object.Id:N}",
+                AtlasKey: NaturalAtlasKey(cell, shadow: true)));
+            objects.Add(new(
+                world,
+                item.Gpu.Opacity,
+                $"ground:{item.Object.Id:N}",
+                AtlasKey: NaturalAtlasKey(cell, shadow: false)));
+        }
+
+        var shadowVertices = new List<float>();
+        foreach (var shadow in shadows
+                     .OrderBy(item => item.World.Y)
+                     .ThenBy(item => item.World.X)
+                     .ThenBy(item => item.StableKey, StringComparer.Ordinal))
+            AddAtlasQuad(
+                shadow.AtlasKey!, shadow.World,
+                shadow.Opacity, shadowVertices);
+        DrawTreeBatch(shadowVertices);
+
+        var atlasVertices = new List<float>();
+        var playerDrawn = player is null;
+        foreach (var item in objects
+                     .OrderBy(item => item.World.Y)
+                     .ThenBy(item => item.World.X)
+                     .ThenBy(item => item.StableKey, StringComparer.Ordinal))
+        {
+            if (!playerDrawn && item.World.Y > playerDepth)
+            {
+                FlushAtlas();
+                DrawPlayer();
+                playerDrawn = true;
+            }
+
+            AddAtlasQuad(
+                item.AtlasKey, item.World,
+                item.Opacity, atlasVertices);
+            if (playerDrawn && player is not null &&
+                AtlasOverlapsPlayer(item.AtlasKey, item.World, player))
+                playerOccluded = true;
+        }
+        FlushAtlas();
+        if (!playerDrawn) DrawPlayer();
         if (player is not null && playerOccluded)
             DrawSprite(
                 player.Frame, player.Texture, player.World,
                 mirror: player.Mirror, outlineOnly: true, wading: player.Wading);
+
+        void FlushAtlas()
+        {
+            if (atlasVertices.Count == 0) return;
+            DrawTreeBatch(atlasVertices);
+            atlasVertices.Clear();
+        }
+
+        void DrawPlayer()
+        {
+            if (player is null) return;
+            DrawSprite(
+                player.Frame, player.Texture, player.World,
+                mirror: player.Mirror, wading: player.Wading,
+                teamColor: _activePlayer?.TeamColor ?? 0);
+        }
     }
 
     private void DrawCliffBatch()
@@ -3799,14 +3859,6 @@ internal sealed class GameHostWindow : GameWindow
 
     private void AddTreeQuad(string graphicName, Vector2 world, float opacity, List<float> vertices)
         => AddAtlasQuad(graphicName, world, opacity, vertices);
-
-    private void AddCliffSprite(CliffFace face, float opacity, List<float> vertices)
-    {
-        var verticalEdge = face.X1 == face.X2;
-        var frame = verticalEdge ? 6 : 0;
-        var name = $"CLF01_NN#{frame}";
-        AddAtlasQuad(name, CliffWorld(face), opacity, vertices);
-    }
 
     private static Vector2 CliffWorld(CliffFace face)
     {
@@ -3867,25 +3919,6 @@ internal sealed class GameHostWindow : GameWindow
         }
         hoveredTree = null!;
         return false;
-    }
-
-    private void RenderGroundObjects(bool foreground, float playerDepth)
-    {
-        foreach (var item in _worldChunks.Values.Where(IsChunkVisible)
-                     .SelectMany(gpu => gpu.Chunk.GroundObjects.Select(
-                         groundObject => (Object: groundObject, Gpu: gpu)))
-                     .OrderBy(item => item.Object.X + item.Object.Y))
-        {
-            var world = GroundObjectWorld(item.Object);
-            if ((world.Y > playerDepth) != foreground) continue;
-            var cell = item.Object.Kind == GroundObjectKind.Sticks ? 0 : 1;
-            if (_naturalItemFrames[cell] is not { } frame ||
-                _naturalItemTextures[cell] == 0)
-                continue;
-            DrawSprite(
-                frame, _naturalItemTextures[cell], world,
-                opacity: item.Gpu.Opacity);
-        }
     }
 
     private bool TryGetGroundObjectUnderMouse(
@@ -4240,6 +4273,8 @@ internal sealed class GameHostWindow : GameWindow
                 var frame = new SpriteFrame(
                     cellSize, cellSize, cellSize / 2, 28, pixels);
                 _naturalItemFrames[cell] = frame;
+                _naturalShadowFrames[cell] =
+                    CreateIsometricGroundShadow(frame);
                 _naturalItemTextures[cell] = Upload(frame);
             }
         }
@@ -4284,6 +4319,63 @@ internal sealed class GameHostWindow : GameWindow
         _chatFont = _fontSystem.GetFont(14);
         _chatLineHeight = MathF.Ceiling(
             Math.Max(16, _chatFont.MeasureString("Ag").Y));
+    }
+
+    private static SpriteFrame CreateIsometricGroundShadow(SpriteFrame source)
+    {
+        const int width = 64;
+        const int height = 40;
+        const int hotspotX = 46;
+        const int hotspotY = 30;
+        var mask = new byte[width * height];
+
+        for (var y = 0; y < source.Height; y++)
+        for (var x = 0; x < source.Width; x++)
+        {
+            var alpha = source.Rgba[
+                (y * source.Width + x) * 4 + 3];
+            if (alpha <= 12) continue;
+            var lateral = x - source.HotspotX;
+            var objectHeight = Math.Max(0, source.HotspotY - y);
+            // Orthographically flatten the sprite onto the ground, then
+            // shear its height along the scene's (-2, -1) light direction.
+            var targetX = (int)MathF.Round(
+                hotspotX + lateral * .70f - objectHeight * .60f);
+            var targetY = (int)MathF.Round(
+                hotspotY + lateral * .10f - objectHeight * .30f);
+            if ((uint)targetX >= width || (uint)targetY >= height)
+                continue;
+            var index = targetY * width + targetX;
+            mask[index] = Math.Max(mask[index], alpha);
+        }
+
+        var closedMask = new byte[mask.Length];
+        for (var y = 1; y < height - 1; y++)
+        for (var x = 1; x < width - 1; x++)
+        {
+            var index = y * width + x;
+            var alpha = mask[index];
+            var neighbour = 0;
+            for (var offsetY = -1; offsetY <= 1; offsetY++)
+            for (var offsetX = -1; offsetX <= 1; offsetX++)
+                neighbour = Math.Max(
+                    neighbour,
+                    mask[(y + offsetY) * width + x + offsetX]);
+            closedMask[index] = Math.Max(
+                alpha, (byte)(neighbour * 55 / 100));
+        }
+
+        var rgba = new byte[width * height * 4];
+        for (var index = 0; index < closedMask.Length; index++)
+        {
+            var alpha = closedMask[index];
+            if (alpha == 0) continue;
+            rgba[index * 4] = 48;
+            rgba[index * 4 + 1] = 48;
+            rgba[index * 4 + 2] = 39;
+            rgba[index * 4 + 3] = (byte)(alpha * 42 / 100);
+        }
+        return new(width, height, hotspotX, hotspotY, rgba);
     }
 
     private static byte[] CreateTabPixels(bool active)
@@ -4428,7 +4520,12 @@ internal sealed class GameHostWindow : GameWindow
         DrawSprite(
             animation.Graphic.Sprite.Frames[frameIndex],
             animation.Textures[frameIndex],
-            world);
+            world,
+            tint: _moveMarker.Action
+                ? new Vector3(.18f, 1f, .24f)
+                : null,
+            tintAmount: _moveMarker.Action ? 1f : 0,
+            preserveDarkTint: _moveMarker.Action);
     }
 
     private PlayerVisual? GetPlayerVisual()
@@ -4473,7 +4570,7 @@ internal sealed class GameHostWindow : GameWindow
         const int atlasWidth = 2048;
         const int padding = 1;
         var placements = new List<(
-            LoadedGraphic Asset, SpriteFrame Frame, int FrameIndex, int X, int Y)>();
+            string Key, string? Alias, SpriteFrame Frame, int X, int Y)>();
         var x = padding;
         var y = padding;
         var rowHeight = 0;
@@ -4490,16 +4587,23 @@ internal sealed class GameHostWindow : GameWindow
             for (var frameIndex = 0; frameIndex < frames.Count; frameIndex++)
             {
                 var frame = frames[frameIndex];
-                if (x + frame.Width + padding > atlasWidth)
-                {
-                    x = padding;
-                    y += rowHeight + padding;
-                    rowHeight = 0;
-                }
-                placements.Add((asset, frame, frameIndex, x, y));
-                x += frame.Width + padding;
-                rowHeight = Math.Max(rowHeight, frame.Height);
+                var key = cliff || stump
+                    ? $"{asset.Definition.Name}#{frameIndex}"
+                    : asset.Definition.Name;
+                Place(
+                    key,
+                    (cliff || stump) && frameIndex == 0
+                        ? asset.Definition.Name
+                        : null,
+                    frame);
             }
+        }
+        for (var cell = 0; cell < 2; cell++)
+        {
+            if (_naturalItemFrames[cell] is { } itemFrame)
+                Place(NaturalAtlasKey(cell, shadow: false), null, itemFrame);
+            if (_naturalShadowFrames[cell] is { } shadowFrame)
+                Place(NaturalAtlasKey(cell, shadow: true), null, shadowFrame);
         }
         var requiredHeight = y + rowHeight + padding;
         var atlasHeight = 1;
@@ -4512,27 +4616,34 @@ internal sealed class GameHostWindow : GameWindow
                     placement.Frame.Rgba, row * placement.Frame.Width * 4,
                     rgba, ((placement.Y + row) * atlasWidth + placement.X) * 4,
                     placement.Frame.Width * 4);
-            var multiFrame = placement.Asset.Definition.Name.StartsWith(
-                                 "CLF", StringComparison.OrdinalIgnoreCase) ||
-                             placement.Asset.Definition.Name.StartsWith(
-                                 "STUMP", StringComparison.OrdinalIgnoreCase) ||
-                             placement.Asset.Definition.Name.StartsWith(
-                                 "STUMB", StringComparison.OrdinalIgnoreCase);
-            var key = multiFrame
-                ? $"{placement.Asset.Definition.Name}#{placement.FrameIndex}"
-                : placement.Asset.Definition.Name;
-            _treeAtlas[key] = new(
+            _treeAtlas[placement.Key] = new(
                 placement.Frame,
                 placement.X / (float)atlasWidth,
                 placement.Y / (float)atlasHeight,
                 (placement.X + placement.Frame.Width) / (float)atlasWidth,
                 (placement.Y + placement.Frame.Height) / (float)atlasHeight);
-            if (multiFrame && placement.FrameIndex == 0)
-                _treeAtlas[placement.Asset.Definition.Name] = _treeAtlas[key];
+            if (placement.Alias is not null)
+                _treeAtlas[placement.Alias] = _treeAtlas[placement.Key];
         }
         _treeAtlasTexture = Upload(atlasWidth, atlasHeight, rgba);
         _treeBatchVbo = GL.GenBuffer();
+
+        void Place(string key, string? alias, SpriteFrame frame)
+        {
+            if (x + frame.Width + padding > atlasWidth)
+            {
+                x = padding;
+                y += rowHeight + padding;
+                rowHeight = 0;
+            }
+            placements.Add((key, alias, frame, x, y));
+            x += frame.Width + padding;
+            rowHeight = Math.Max(rowHeight, frame.Height);
+        }
     }
+
+    private static string NaturalAtlasKey(int cell, bool shadow) =>
+        shadow ? $"NATURAL_SHADOW#{cell}" : $"NATURAL#{cell}";
 
     private GpuWorldChunk UploadWorldChunk(WorldChunk chunk)
     {
@@ -4896,6 +5007,7 @@ internal sealed class GameHostWindow : GameWindow
         bool wading = false,
         Vector3? tint = null,
         float tintAmount = 0,
+        bool preserveDarkTint = false,
         int teamColor = 0)
     {
         var width = ReferenceWidth;
@@ -4927,6 +5039,9 @@ internal sealed class GameHostWindow : GameWindow
         var tintColor = tint ?? Vector3.Zero;
         GL.Uniform3(GL.GetUniformLocation(_program, "colorTint"), tintColor);
         GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), tintAmount);
+        GL.Uniform1(
+            GL.GetUniformLocation(_program, "preserveDarkTint"),
+            preserveDarkTint ? 1 : 0);
         GL.Uniform2(GL.GetUniformLocation(_program, "texelSize"),
             1f / frame.Width, 1f / frame.Height);
         GL.ActiveTexture(TextureUnit.Texture0);
@@ -4941,6 +5056,7 @@ internal sealed class GameHostWindow : GameWindow
             rightNdc,topNdc,rightU,0
         ]);
         GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), 0f);
+        GL.Uniform1(GL.GetUniformLocation(_program, "preserveDarkTint"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "recolorPlayer"), 0);
     }
 
@@ -5527,6 +5643,7 @@ internal sealed class GameHostWindow : GameWindow
             "uniform int recolorPlayer;uniform vec3 playerColor;" +
             "uniform float opacity;uniform float brightness;uniform float tintAmount;" +
             "uniform vec3 colorTint;uniform int outlineOnly;uniform int wading;" +
+            "uniform int preserveDarkTint;" +
             "uniform int spriteOutline;uniform vec3 spriteOutlineColor;" +
             "uniform float waterlineUv;uniform vec2 texelSize;" +
             "void main(){vec4 source=texture(image,uv);" +
@@ -5559,7 +5676,13 @@ internal sealed class GameHostWindow : GameWindow
             "float surface=1.0-smoothstep(waterlineUv,waterlineUv+0.035,uv.y);" +
             "c.rgb=mix(c.rgb,vec3(0.08,0.34,0.53),0.43);" +
             "c.rgb+=vec3(0.16,0.42,0.55)*surface*0.22;c.a*=0.68;}" +
-            "c.rgb*=1.0+brightness;c.rgb=mix(c.rgb,colorTint,tintAmount);" +
+            "c.rgb*=1.0+brightness;" +
+            "if(preserveDarkTint==1){" +
+            "float shade=max(c.r,max(c.g,c.b));" +
+            "float targetPeak=max(colorTint.r,max(colorTint.g,colorTint.b));" +
+            "vec3 colorized=clamp(colorTint*(shade/targetPeak),0.0,1.0);" +
+            "c.rgb=mix(vec3(shade),colorized,tintAmount);" +
+            "}else{c.rgb=mix(c.rgb,colorTint,tintAmount);}" +
             "c.a*=opacity*alpha;}}");
         var program = GL.CreateProgram(); GL.AttachShader(program, vs); GL.AttachShader(program, fs); GL.LinkProgram(program);
         GL.DeleteShader(vs); GL.DeleteShader(fs);
