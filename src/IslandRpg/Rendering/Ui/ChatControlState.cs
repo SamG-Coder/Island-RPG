@@ -53,6 +53,7 @@ internal sealed class ChatUiControlState
     public int FirstVisibleLine { get; private set; }
     public IReadOnlyList<ChatMessage> Messages => _messages;
     public bool IsAtBottom => FirstVisibleLine >= MaximumFirstLine;
+    public event Action<string>? Submitted;
 
     private int MaximumFirstLine => Math.Max(0, _messages.Count - VisibleRows);
 
@@ -151,11 +152,15 @@ internal sealed class ChatUiControlState
     public void Submit()
     {
         if (!Input.Focused || string.IsNullOrWhiteSpace(InputText)) return;
-        AddMessage(InputText);
+        var message = InputText.Trim();
+        AddMessage(message);
         InputText = "";
+        Submitted?.Invoke(message);
     }
 
     public void BlurInput() => Input.Focused = false;
+
+    public void FocusInput() => Input.Focused = true;
 
     public void AddMessage(
         string message, ChatMessageStyle style = ChatMessageStyle.Normal)

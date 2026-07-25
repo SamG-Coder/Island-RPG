@@ -218,6 +218,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private bool _inventoryLeftWasDown;
     private readonly GameUiControlState _gameUi = new();
     private readonly ChatUiControlState _chatUi = new();
+    private string? _overheadSpeech;
+    private double _overheadSpeechExpiresAt;
     private readonly ContextMenuControlState _inventoryContext = new();
     private readonly ContextMenuControlState _treeContext = new();
     private readonly ContextMenuControlState _groundObjectContext = new();
@@ -259,6 +261,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _treeContext.Selected += HandleTreeContextSelection;
         _groundObjectContext.Selected +=
             HandleGroundObjectContextSelection;
+        _chatUi.Submitted += ShowOverheadSpeech;
     }
 
     protected override void OnLoad()
@@ -1183,11 +1186,16 @@ internal sealed partial class GameHostWindow : GameWindow
             }
         }
         _inventoryRightWasDown = rightDown;
-        if (_chatUi.Input.Focused)
+        if (KeyboardState.IsKeyPressed(Keys.Enter))
         {
-            if (KeyboardState.IsKeyPressed(Keys.Backspace)) _chatUi.Backspace();
-            if (KeyboardState.IsKeyPressed(Keys.Enter)) _chatUi.Submit();
+            if (_chatUi.Input.Focused)
+                _chatUi.Submit();
+            else
+                _chatUi.FocusInput();
         }
+        if (_chatUi.Input.Focused &&
+            KeyboardState.IsKeyPressed(Keys.Backspace))
+            _chatUi.Backspace();
     }
 
     private bool IsPointerOverGameUi(Vector2 mouse) =>
@@ -1437,11 +1445,12 @@ internal sealed partial class GameHostWindow : GameWindow
         if (index < 0)
         {
             var maximumHealth = TreeMaximumHealth(source.GraphicName);
+            var stickCount = RollTreeStickCount(maximumHealth);
             instance = new(
                 Guid.NewGuid(), x, y, source.GraphicName,
                 maximumHealth, maximumHealth,
                 TreeLifecycleState.Standing,
-                RollTreeStickCount(maximumHealth));
+                stickCount, stickCount);
             gpu.Chunk.TreeInstances.Add(instance);
             index = gpu.Chunk.TreeInstances.Count - 1;
             QueueChunkSave(gpu.Chunk);
@@ -1458,10 +1467,21 @@ internal sealed partial class GameHostWindow : GameWindow
             }
             if (instance.SticksRemaining < 0)
             {
+                var stickCount =
+                    RollTreeStickCount(instance.MaxHealth);
                 instance = instance with
                 {
-                    SticksRemaining =
-                        RollTreeStickCount(instance.MaxHealth)
+                    SticksRemaining = stickCount,
+                    InitialStickCount = stickCount
+                };
+                gpu.Chunk.TreeInstances[index] = instance;
+                QueueChunkSave(gpu.Chunk);
+            }
+            else if (instance.InitialStickCount < 0)
+            {
+                instance = instance with
+                {
+                    InitialStickCount = instance.SticksRemaining
                 };
                 gpu.Chunk.TreeInstances[index] = instance;
                 QueueChunkSave(gpu.Chunk);
@@ -1472,7 +1492,7 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             _chatUi.AddMessage(
                 "You find no loose sticks beneath the tree.",
-                ChatMessageStyle.Normal);
+                ChatMessageStyle.Warning);
             return;
         }
         if (PlayerInventory.IsFull(_activePlayer.Inventory))
@@ -1541,7 +1561,10 @@ internal sealed partial class GameHostWindow : GameWindow
             _saves.SavePlayer(_activePlayer);
             QueueChunkSave(gpu.Chunk);
             _chatUi.AddMessage(
-                "You gather a stick from beneath the tree.",
+                $"You gather a stick from beneath the tree " +
+                $"({instance.InitialStickCount -
+                    (instance.SticksRemaining - 1)} / " +
+                $"{instance.InitialStickCount} gathered).",
                 ChatMessageStyle.Action);
             break;
         }
@@ -2807,6 +2830,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _chatUi.Layout(scene);
         _minimapUi.Layout(scene);
         RenderTreeHealthBars(scene);
+        RenderOverheadSpeech(scene);
         RenderMinimap();
         RenderChatUi();
         if (_gameUi.Panel.Visible)
@@ -2822,6 +2846,87 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawUiButtonCaption("Bag", _gameUi.InventoryButton.Bounds);
         RenderInventoryContextMenu();
         _uiOpacity = 1;
+    }
+
+    private void ShowOverheadSpeech(string message)
+    {
+        _overheadSpeech = message;
+        _overheadSpeechExpiresAt = _clock + 5;
+    }
+
+    private void RenderOverheadSpeech(Vector4 scene)
+    {
+        if (_player is null ||
+            string.IsNullOrWhiteSpace(_overheadSpeech) ||
+            _clock >= _overheadSpeechExpiresAt ||
+            _chatFont is null)
+        {
+            if (_clock >= _overheadSpeechExpiresAt)
+                _overheadSpeech = null;
+            return;
+        }
+
+        var player = GetPlayerVisual();
+        if (player is null) return;
+        var sprite = SpriteBounds(
+            player.Frame, player.World, player.Mirror);
+        var scale = scene.Z / ReferenceWidth;
+        var centerX = scene.X +
+                      (sprite.Left + sprite.Right) * .5f * scale;
+        const float horizontalPadding = 9;
+        const float verticalPadding = 6;
+        var speech = _overheadSpeech;
+        var maximumTextWidth = Math.Max(
+            40, scene.Z - horizontalPadding * 2 - 12);
+        while (speech.Length > 1 &&
+               _chatFont.MeasureString(speech).X > maximumTextWidth)
+            speech = speech[..^1];
+        if (speech.Length < _overheadSpeech.Length)
+            speech = speech.TrimEnd() + "…";
+        var size = _chatFont.MeasureString(speech);
+        var bubbleWidth = size.X + horizontalPadding * 2;
+        var bubbleHeight = size.Y + verticalPadding * 2;
+        var bubbleX = Math.Clamp(
+            centerX - bubbleWidth * .5f,
+            scene.X + 4,
+            scene.X + scene.Z - bubbleWidth - 4);
+        var bubbleY = Math.Max(
+            scene.Y + 4,
+            scene.Y + sprite.Top * scale - bubbleHeight - 12);
+        var bubble = new Vector4(
+            MathF.Round(bubbleX), MathF.Round(bubbleY),
+            MathF.Ceiling(bubbleWidth), MathF.Ceiling(bubbleHeight));
+        DrawRoundedUiColor(bubble, 6, new(.68f, .68f, .66f, .9f));
+        DrawRoundedUiColor(
+            new(bubble.X + 1, bubble.Y + 1,
+                bubble.Z - 2, bubble.W - 2),
+            5, new(.98f, .98f, .97f, .98f));
+
+        var tailCenter = Math.Clamp(
+            centerX, bubble.X + 10, bubble.X + bubble.Z - 10);
+        DrawUiColor(
+            new(MathF.Round(tailCenter - 4), bubble.Y + bubble.W - 1, 8, 3),
+            new(.68f, .68f, .66f, .9f));
+        DrawUiColor(
+            new(MathF.Round(tailCenter - 3), bubble.Y + bubble.W - 1, 6, 3),
+            new(.98f, .98f, .97f, .98f));
+        DrawUiColor(
+            new(MathF.Round(tailCenter - 3), bubble.Y + bubble.W + 2, 6, 3),
+            new(.68f, .68f, .66f, .9f));
+        DrawUiColor(
+            new(MathF.Round(tailCenter - 2), bubble.Y + bubble.W + 2, 4, 3),
+            new(.98f, .98f, .97f, .98f));
+        DrawUiColor(
+            new(MathF.Round(tailCenter - 1), bubble.Y + bubble.W + 5, 2, 2),
+            new(.68f, .68f, .66f, .9f));
+
+        if (_fontRenderer is null) return;
+        var position = new System.Numerics.Vector2(
+            bubble.X + horizontalPadding,
+            bubble.Y + verticalPadding);
+        _chatFont.DrawText(
+            _fontRenderer, speech, position,
+            new FSColor(20, 20, 18, 255));
     }
 
     private void RenderSkillsPanel()
@@ -3770,6 +3875,35 @@ internal sealed partial class GameHostWindow : GameWindow
             drawOpacity: color.W);
     }
 
+    private void DrawRoundedUiColor(
+        Vector4 rectangle, float radius, Vector4 color)
+    {
+        var height = Math.Max(1, (int)MathF.Ceiling(rectangle.W));
+        var roundedRadius = Math.Clamp(
+            radius, 0, MathF.Min(rectangle.Z, rectangle.W) * .5f);
+        for (var row = 0; row < height; row++)
+        {
+            var edgeDistance = MathF.Min(
+                row + .5f, height - row - .5f);
+            var inset = edgeDistance >= roundedRadius ||
+                        roundedRadius <= 0
+                ? 0
+                : roundedRadius - MathF.Sqrt(
+                    Math.Max(
+                        0,
+                        roundedRadius * roundedRadius -
+                        (roundedRadius - edgeDistance) *
+                        (roundedRadius - edgeDistance)));
+            DrawUiColor(
+                new(
+                    rectangle.X + MathF.Ceiling(inset),
+                    rectangle.Y + row,
+                    rectangle.Z - MathF.Ceiling(inset) * 2,
+                    1),
+                color);
+        }
+    }
+
     private void DrawUiSprite(
         SpriteFrame frame,
         int texture,
@@ -4069,7 +4203,12 @@ internal sealed partial class GameHostWindow : GameWindow
         if (player is not null && playerOccluded)
             DrawSprite(
                 player.Frame, player.Texture, player.World,
-                mirror: player.Mirror, outlineOnly: true, wading: player.Wading);
+                mirror: player.Mirror, outlineOnly: true,
+                wading: player.Wading,
+                outlineColor: TeamColor(_activePlayer?.TeamColor ?? 0));
+        if (KeyboardState.IsKeyDown(Keys.LeftAlt) ||
+            KeyboardState.IsKeyDown(Keys.RightAlt))
+            RenderGroundItemOutlines();
         RenderGroundDropPreview();
 
         void FlushAtlas()
@@ -4086,6 +4225,33 @@ internal sealed partial class GameHostWindow : GameWindow
                 player.Frame, player.Texture, player.World,
                 mirror: player.Mirror, wading: player.Wading,
                 teamColor: _activePlayer?.TeamColor ?? 0);
+        }
+    }
+
+    private void RenderGroundItemOutlines()
+    {
+        var color = TeamColor(_activePlayer?.TeamColor ?? 0);
+        foreach (var item in _worldChunks.Values
+                     .Where(IsChunkVisible)
+                     .SelectMany(gpu =>
+                         gpu.Chunk.GroundObjects.Select(
+                             groundObject => (Object: groundObject, Gpu: gpu)))
+                     .OrderBy(item => item.Object.X + item.Object.Y))
+        {
+            if (!TryGroundItemVisual(
+                    item.Object.ItemId,
+                    out var frame,
+                    out var texture,
+                    out _,
+                    out _))
+                continue;
+            DrawSprite(
+                frame,
+                texture,
+                GroundObjectWorld(item.Object),
+                opacity: item.Gpu.Opacity,
+                outlineOnly: true,
+                outlineColor: color);
         }
     }
 
@@ -5072,7 +5238,8 @@ internal sealed partial class GameHostWindow : GameWindow
         Vector3? tint = null,
         float tintAmount = 0,
         bool preserveDarkTint = false,
-        int teamColor = 0)
+        int teamColor = 0,
+        Vector3? outlineColor = null)
     {
         var width = ReferenceWidth;
         var height = ReferenceHeight;
@@ -5095,6 +5262,9 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), opacity);
         GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), outlineOnly ? 1 : 0);
+        GL.Uniform3(
+            GL.GetUniformLocation(_program, "outlineColor"),
+            outlineColor ?? new Vector3(1f, .82f, .18f));
         GL.Uniform1(GL.GetUniformLocation(_program, "wading"),
             wading && !outlineOnly ? 1 : 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "waterlineUv"),
@@ -5707,6 +5877,7 @@ internal sealed partial class GameHostWindow : GameWindow
             "uniform int recolorPlayer;uniform vec3 playerColor;" +
             "uniform float opacity;uniform float brightness;uniform float tintAmount;" +
             "uniform vec3 colorTint;uniform int outlineOnly;uniform int wading;" +
+            "uniform vec3 outlineColor;" +
             "uniform int preserveDarkTint;" +
             "uniform int spriteOutline;uniform vec3 spriteOutlineColor;" +
             "uniform float waterlineUv;uniform vec2 texelSize;" +
@@ -5717,7 +5888,7 @@ internal sealed partial class GameHostWindow : GameWindow
             "around=max(around,texture(image,uv+vec2(0,texelSize.y)).a);" +
             "around=max(around,texture(image,uv-vec2(0,texelSize.y)).a);" +
             "float ring=around*(1.0-source.a);if(ring<0.05)discard;" +
-            "c=vec4(1.0,0.82,0.18,ring*opacity*alpha);}" +
+            "c=vec4(outlineColor,ring*opacity*alpha);}" +
             "else{c=source;" +
             "if(spriteOutline==1&&source.a<0.05){float around=0.0;" +
             "around=max(around,texture(image,uv+vec2(texelSize.x,0)).a);" +
