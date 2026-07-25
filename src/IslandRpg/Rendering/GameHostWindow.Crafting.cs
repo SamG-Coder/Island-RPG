@@ -81,12 +81,22 @@ internal sealed partial class GameHostWindow
         Vector2 pointer, bool leftDown)
     {
         var wasOpen = _craftingWindow.Visible;
-        _craftingWindow.UpdatePointer(
+        var activatedRecipe = _craftingWindow.UpdatePointer(
             SceneClientBounds(), pointer, leftDown);
         if (!_craftingWindow.Visible)
         {
             if (wasOpen) CloseCraftingWindow();
             return;
+        }
+        if (activatedRecipe is not null)
+        {
+            var craftButtonClicked =
+                CraftingWindowState.CraftButtonBounds(
+                    CraftingWindowBounds()).Contains(pointer);
+            if (!craftButtonClicked ||
+                RecipeAvailabilityFor(activatedRecipe) ==
+                RecipeAvailability.Ready)
+                TryCraftRecipe(activatedRecipe);
         }
         _inventoryContext.UpdatePointer(pointer, leftDown);
         var inventoryPanel = new InventoryPanelState(
@@ -101,6 +111,66 @@ internal sealed partial class GameHostWindow
             MouseState.IsButtonDown(MouseButton.Right));
     }
 
+    private void TryCraftRecipe(CraftingRecipe recipe)
+    {
+        if (_activePlayer is null) return;
+        var level = CraftingSkill.LevelForExperience(
+            _activePlayer.CraftingExperience);
+        var availability = CraftingSkill.Availability(
+            recipe, level, _activePlayer.Inventory);
+        if (availability == RecipeAvailability.Locked)
+        {
+            CanCraftRecipe(recipe.Id);
+            return;
+        }
+        if (availability == RecipeAvailability.MissingResources)
+        {
+            ReportBlockedAction(
+                $"crafting-missing-{recipe.Id}",
+                $"You do not have the materials to make " +
+                $"{ItemCatalog.Get(recipe.ResultItemId).Name}.");
+            return;
+        }
+        if (availability == RecipeAvailability.InventoryFull)
+        {
+            ReportBlockedAction(
+                $"crafting-inventory-full-{recipe.Id}",
+                "You do not have enough inventory space for every crafting step.");
+            return;
+        }
+        var result = CraftingService.TryCraftDetailed(
+            recipe, level, _activePlayer.Inventory,
+            out var inventory);
+        if (result == CraftingService.CraftResult.InventoryFull)
+        {
+            ReportBlockedAction(
+                $"crafting-inventory-full-{recipe.Id}",
+                "You do not have enough inventory space for every crafting step.");
+            return;
+        }
+        if (result != CraftingService.CraftResult.Success)
+            return;
+
+        _activePlayer = _activePlayer with
+        {
+            Inventory = inventory,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        _saves.SavePlayer(_activePlayer);
+        _chatUi.AddMessage(
+            $"You craft {ItemCatalog.Get(recipe.ResultItemId).Name}.",
+            ChatMessageStyle.Action);
+        AwardCraftingExperience(recipe.Id);
+    }
+
+    private RecipeAvailability RecipeAvailabilityFor(
+        CraftingRecipe recipe) =>
+        CraftingSkill.Availability(
+            recipe,
+            CraftingSkill.LevelForExperience(
+                _activePlayer?.CraftingExperience ?? 0),
+            _activePlayer?.Inventory);
+
     private void RenderCraftingWindow()
     {
         var window = CraftingWindowBounds();
@@ -108,9 +178,7 @@ internal sealed partial class GameHostWindow
         DrawPanelCaption("Crafting Recipes", window);
 
         var close = CraftingWindowState.CloseBounds(window);
-        DrawUiColor(close, new(.24f, .09f, .055f, .98f));
-        DrawPanelOutline(close, 1, new(.50f, .27f, .14f, 1));
-        DrawCenteredUiText("X", close, new(238, 220, 180, 255));
+        DrawMenuButton(close, "X");
 
         var categories = Enum.GetValues<CraftingCategory>();
         for (var index = 0; index < categories.Length; index++)
@@ -153,7 +221,9 @@ internal sealed partial class GameHostWindow
             DrawRecipeItem(recipe.ResultItemId, bounds);
             if (availability == RecipeAvailability.Locked)
                 DrawUiColor(bounds, new(0, 0, 0, .72f));
-            else if (availability == RecipeAvailability.MissingResources)
+            else if (availability is
+                     RecipeAvailability.MissingResources or
+                     RecipeAvailability.InventoryFull)
                 DrawUiColor(bounds, new(.55f, .025f, .018f, .46f));
             if (availability == RecipeAvailability.Locked)
                 DrawCenteredUiText(
@@ -162,6 +232,7 @@ internal sealed partial class GameHostWindow
         }
 
         RenderCraftingRecipeDetails(window, level, inventory);
+        RenderCraftButton(window);
         var panel = CraftingWindowState.InventoryBounds(window);
         DrawAoEPanelBorder(panel);
         RenderInventoryPanel(
@@ -171,6 +242,35 @@ internal sealed partial class GameHostWindow
                 draggingSlot: _inventoryDraggingSlot),
             renderDragPreview: true);
         RenderInventoryContextMenu();
+    }
+
+    private void RenderCraftButton(Vector4 window)
+    {
+        var bounds = CraftingWindowState.CraftButtonBounds(window);
+        var recipe = _craftingWindow.SelectedRecipe;
+        var enabled = recipe is not null &&
+                      RecipeAvailabilityFor(recipe) ==
+                      RecipeAvailability.Ready;
+        var hovered = enabled && bounds.Contains(MouseState.Position);
+        DrawUiColor(
+            bounds,
+            enabled
+                ? hovered
+                    ? new(.34f, .26f, .10f, .98f)
+                    : new(.23f, .18f, .075f, .98f)
+                : new(.075f, .069f, .058f, .96f));
+        DrawPanelOutline(
+            bounds,
+            1,
+            enabled
+                ? new(.67f, .49f, .17f, 1)
+                : new(.24f, .22f, .18f, 1));
+        DrawCenteredUiText(
+            "Craft",
+            bounds,
+            enabled
+                ? new(238, 222, 176, 255)
+                : new(120, 116, 105, 255));
     }
 
     private void DrawRecipeItem(string itemId, Vector4 bounds)

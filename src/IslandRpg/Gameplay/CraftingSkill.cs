@@ -11,10 +11,15 @@ internal enum RecipeAvailability
 {
     Locked,
     MissingResources,
+    InventoryFull,
     Ready
 }
 
 internal sealed record CraftingIngredient(string ItemId, int Count);
+
+internal sealed record CraftingInventoryStep(
+    IReadOnlyList<CraftingIngredient> Consumes,
+    IReadOnlyList<CraftingIngredient> Produces);
 
 internal sealed record CraftingRecipe(
     string Id,
@@ -23,14 +28,47 @@ internal sealed record CraftingRecipe(
     int RequiredLevel,
     int Experience,
     IReadOnlyList<CraftingIngredient> Ingredients,
-    IReadOnlyList<string> Steps);
+    IReadOnlyList<string> Steps,
+    IReadOnlyList<CraftingInventoryStep>? InventorySteps = null);
 
 internal static class CraftingSkill
 {
-    public const int MaximumLevel = 20;
+    public const int MaximumLevel = SkillService.MaximumLevel;
 
     public static readonly IReadOnlyList<CraftingRecipe> Recipes =
     [
+        new(
+            "medium-rock", ItemIds.MediumRock,
+            CraftingCategory.Resources, 1, 8,
+            [new(ItemIds.LargeRock, 2)],
+            [
+                "Hold one large rock as the striking stone.",
+                "Break the other large rock into two medium rocks."
+            ],
+            [
+                new(
+                    [new(ItemIds.LargeRock, 2)],
+                    [
+                        new(ItemIds.LargeRock, 1),
+                        new(ItemIds.MediumRock, 2)
+                    ])
+            ]),
+        new(
+            "small-rocks", ItemIds.SmallRocks,
+            CraftingCategory.Resources, 1, 8,
+            [new(ItemIds.MediumRock, 2)],
+            [
+                "Hold one medium rock as the striking stone.",
+                "Break the other medium rock into two piles of small rocks."
+            ],
+            [
+                new(
+                    [new(ItemIds.MediumRock, 2)],
+                    [
+                        new(ItemIds.MediumRock, 1),
+                        new(ItemIds.SmallRocks, 2)
+                    ])
+            ]),
         new(
             "sharpened-rock", ItemIds.SharpenedRock,
             CraftingCategory.Resources, 1, 15,
@@ -75,47 +113,45 @@ internal static class CraftingSkill
                 "Use the sharpened rock to shape the medium rock into a pick head.",
                 "Fit the shaped head across the top of the sticks.",
                 "Lash the head tightly to create a stone pickaxe."
+            ],
+            [
+                new(
+                    [
+                        new(ItemIds.SharpenedRock, 1),
+                        new(ItemIds.MediumRock, 1)
+                    ],
+                    [new("stone_pickaxe_head", 1)]),
+                new(
+                    [
+                        new("stone_pickaxe_head", 1),
+                        new(ItemIds.Sticks, 1)
+                    ],
+                    [new(ItemIds.StonePickaxe, 1)])
             ])
     ];
 
-    public static int LevelForExperience(int experience)
-    {
-        experience = Math.Max(0, experience);
-        for (var level = MaximumLevel; level > 1; level--)
-            if (experience >= ExperienceForLevel(level))
-                return level;
-        return 1;
-    }
+    public static int LevelForExperience(int experience) =>
+        SkillService.LevelForExperience(experience);
 
-    public static int ExperienceForLevel(int level)
-    {
-        level = Math.Clamp(level, 1, MaximumLevel);
-        var rank = level - 1;
-        return 50 * rank * rank + 25 * rank;
-    }
+    public static int ExperienceForLevel(int level) =>
+        SkillService.ExperienceForLevel(level);
 
-    public static int ExperienceToNextLevel(int experience)
-    {
-        var level = LevelForExperience(experience);
-        return level >= MaximumLevel
-            ? 0
-            : ExperienceForLevel(level + 1) - Math.Max(0, experience);
-    }
+    public static int ExperienceToNextLevel(int experience) =>
+        SkillService.ExperienceToNextLevel(experience);
 
     public static RecipeAvailability Availability(
         CraftingRecipe recipe, int level, string?[]? inventory)
     {
-        if (level < recipe.RequiredLevel)
-            return RecipeAvailability.Locked;
-        foreach (var ingredient in recipe.Ingredients)
+        return CraftingService.TryCraftDetailed(
+            recipe, level, inventory, out _) switch
         {
-            var held = inventory?.Count(
-                item => string.Equals(
-                    item, ingredient.ItemId,
-                    StringComparison.OrdinalIgnoreCase)) ?? 0;
-            if (held < ingredient.Count)
-                return RecipeAvailability.MissingResources;
-        }
-        return RecipeAvailability.Ready;
+            CraftingService.CraftResult.Success =>
+                RecipeAvailability.Ready,
+            CraftingService.CraftResult.Locked =>
+                RecipeAvailability.Locked,
+            CraftingService.CraftResult.InventoryFull =>
+                RecipeAvailability.InventoryFull,
+            _ => RecipeAvailability.MissingResources
+        };
     }
 }

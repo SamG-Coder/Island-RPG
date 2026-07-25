@@ -153,6 +153,50 @@ Require(skillBack.X + skillBack.Z < skillTitle.X &&
 var reusableInventory = new InventoryPanelState(
     gameUi.Panel.Bounds, [ItemIds.Logs],
     allowDragOutsideToGame: false);
+var craftingWindowBounds =
+    CraftingWindowState.WindowBounds(new(0, 0, 1280, 720));
+var craftingButton =
+    CraftingWindowState.CraftButtonBounds(craftingWindowBounds);
+var craftingClose =
+    CraftingWindowState.CloseBounds(craftingWindowBounds);
+Require(
+    craftingButton.X + craftingButton.Z <= craftingClose.X,
+    "the reusable crafting action and close buttons must not overlap");
+var craftingDetails =
+    CraftingWindowState.DetailsBounds(craftingWindowBounds);
+Require(
+    craftingDetails.Contains(new Vector2(
+        craftingButton.X, craftingButton.Y)) &&
+    craftingButton.Y > craftingDetails.Y + 40,
+    "the Craft button must live in the recipe details area instead of the window title");
+var settingsMenu = new SettingsMenuState();
+var visibleSettingsTabs = settingsMenu.VisibleTabs;
+Require(
+    visibleSettingsTabs.Contains(SettingsTab.Display) &&
+    visibleSettingsTabs.Contains(SettingsTab.Game) &&
+    visibleSettingsTabs.Contains(SettingsTab.Sound),
+    "the settings menu must expose Display, Game, and Sound tabs");
+if (!System.Diagnostics.Debugger.IsAttached)
+    Require(!visibleSettingsTabs.Contains(SettingsTab.Dev),
+        "the Dev settings tab must stay hidden without an attached debugger");
+var settingsPanel = new Vector4(360, 110, 560, 500);
+Require(
+    DeveloperSettingsController.GrantBounds(
+        settingsPanel, SkillType.Woodcutting).X +
+    DeveloperSettingsController.GrantBounds(
+        settingsPanel, SkillType.Woodcutting).Z <=
+    DeveloperSettingsController.MaxBounds(
+        settingsPanel, SkillType.Woodcutting).X,
+    "developer XP grant and max-level buttons must not overlap");
+var settingsContent = SettingsMenuState.ContentBounds(settingsPanel);
+var settingsBack = SettingsMenuState.BackButtonBounds(settingsPanel);
+Require(
+    settingsContent.Y + settingsContent.W < settingsBack.Y &&
+    settingsBack.X + settingsBack.Z <=
+    settingsPanel.X + settingsPanel.Z - 20 &&
+    settingsBack.Y + settingsBack.W <=
+    settingsPanel.Y + settingsPanel.W - 20,
+    "the settings Back button must sit inside a separate aligned footer without overlapping content");
 var inventoryInteraction = new InventoryInteractionController();
 var firstSlotCenter = new Vector2(
     reusableInventory.SlotBounds(0).X + 16,
@@ -286,10 +330,97 @@ Require(PlayerInventory.BestAxe([ItemIds.StoneAxe])?.Id ==
             [ItemIds.StoneAxe, ItemIds.IronAxe])?.Id ==
             ItemIds.IronAxe,
     "woodcutting must inspect every tool axe and choose the highest-power one");
+var stoneAxeRecipe = CraftingSkill.Recipes.First(
+    recipe => recipe.Id == "stone-axe");
+Require(CraftingService.TryCraft(
+        stoneAxeRecipe,
+        stoneAxeRecipe.RequiredLevel,
+        [ItemIds.SharpenedRock, ItemIds.Sticks],
+        out var menuCraftedAxe) &&
+        menuCraftedAxe.Count(item => item == ItemIds.StoneAxe) == 1 &&
+        !menuCraftedAxe.Contains(ItemIds.SharpenedRock) &&
+        !menuCraftedAxe.Contains(ItemIds.Sticks),
+    "recipe crafting must consume its ingredients and add its result");
+Require(!CraftingService.TryCraft(
+        stoneAxeRecipe,
+        stoneAxeRecipe.RequiredLevel,
+        [ItemIds.SharpenedRock],
+        out _),
+    "recipe crafting must fail when any ingredient is missing");
+var mediumRockRecipe = CraftingSkill.Recipes.First(
+    recipe => recipe.Id == "medium-rock");
+Require(CraftingService.TryCraft(
+        mediumRockRecipe,
+        1,
+        [ItemIds.LargeRock, ItemIds.LargeRock],
+        out var craftedMediumRocks) &&
+        craftedMediumRocks.Count(
+            item => item == ItemIds.LargeRock) == 1 &&
+        craftedMediumRocks.Count(
+            item => item == ItemIds.MediumRock) == 2,
+    "the level-one medium-rock recipe must retain its striking rock and produce two medium rocks");
+var smallRockRecipe = CraftingSkill.Recipes.First(
+    recipe => recipe.Id == "small-rocks");
+Require(CraftingService.TryCraft(
+        smallRockRecipe,
+        1,
+        [ItemIds.MediumRock, ItemIds.MediumRock],
+        out var craftedSmallRocks) &&
+        craftedSmallRocks.Count(
+            item => item == ItemIds.MediumRock) == 1 &&
+        craftedSmallRocks.Count(
+            item => item == ItemIds.SmallRocks) == 2,
+    "the level-one small-rock recipe must retain its striking rock and produce two small-rock items");
+var stonePickaxeRecipe = CraftingSkill.Recipes.First(
+    recipe => recipe.Id == "stone-pickaxe");
+Require(CraftingService.TryCraft(
+        stonePickaxeRecipe,
+        stonePickaxeRecipe.RequiredLevel,
+        [
+            ItemIds.SharpenedRock,
+            ItemIds.MediumRock,
+            ItemIds.Sticks
+        ],
+        out var menuCraftedPickaxe) &&
+        menuCraftedPickaxe.Count(
+            item => item == ItemIds.StonePickaxe) == 1 &&
+        !menuCraftedPickaxe.Contains("stone_pickaxe_head"),
+    "stone pickaxe crafting must consume its temporary head during the next inventory step");
+var overflowingRecipe = new CraftingRecipe(
+    "overflow-test",
+    ItemIds.StonePickaxe,
+    CraftingCategory.Tools,
+    1,
+    0,
+    [new(ItemIds.Sticks, 1)],
+    ["Test inventory capacity."],
+    [
+        new(
+            [new(ItemIds.Sticks, 1)],
+            [new(ItemIds.StonePickaxe, PlayerInventory.Capacity + 1)])
+    ]);
+var inventoryBeforeOverflow = PlayerInventory.Normalize([ItemIds.Sticks]);
+Require(CraftingService.TryCraftDetailed(
+        overflowingRecipe,
+        1,
+        inventoryBeforeOverflow,
+        out var inventoryAfterOverflow) ==
+        CraftingService.CraftResult.InventoryFull &&
+        inventoryAfterOverflow.SequenceEqual(inventoryBeforeOverflow),
+    "crafting must check every step's outputs and leave inventory unchanged when a step has insufficient space");
 var stoneAxeStrike = WoodcuttingSkill.Roll(0, 0, 0, 1);
 var ironAxeStrike = WoodcuttingSkill.Roll(0, 0, 0, 2);
 Require(ironAxeStrike.Damage > stoneAxeStrike.Damage,
     "an axe's woodcutting power must improve its chopping damage");
+Require(
+    Enum.GetValues<SkillType>().Length == 3 &&
+    SkillService.LevelForExperience(
+        SkillService.ExperienceForLevel(10)) == 10 &&
+    WoodcuttingSkill.ExperienceForLevel(10) ==
+    FarmingSkill.ExperienceForLevel(10) &&
+    FarmingSkill.ExperienceForLevel(10) ==
+    CraftingSkill.ExperienceForLevel(10),
+    "all registered skills must reuse the shared level and experience progression service");
 Require(PlayerInventory.TryCarvePlank(
         [ItemIds.SharpenedRock, ItemIds.Logs],
         0, 1, .25f, out var carvedPlank, out var sharpRockSurvived) &&

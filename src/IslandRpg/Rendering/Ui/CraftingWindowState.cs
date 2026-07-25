@@ -5,7 +5,10 @@ namespace IslandRpg.Rendering.Ui;
 
 internal sealed class CraftingWindowState
 {
+    private const double DoubleClickSeconds = .40;
     private bool _leftWasDown;
+    private string? _lastClickedRecipeId;
+    private long _lastRecipeClick;
 
     public bool Visible { get; private set; }
     public CraftingCategory Category { get; private set; } =
@@ -27,19 +30,22 @@ internal sealed class CraftingWindowState
                 recipe.Category == Category)
             .ToArray();
 
-    public void UpdatePointer(
+    public CraftingRecipe? UpdatePointer(
         Vector4 viewport, Vector2 pointer, bool leftDown)
     {
         if (!Visible)
         {
             _leftWasDown = leftDown;
-            return;
+            return null;
         }
+        CraftingRecipe? activatedRecipe = null;
         if (leftDown && !_leftWasDown)
         {
             var window = WindowBounds(viewport);
             if (CloseBounds(window).Contains(pointer))
                 Close();
+            else if (CraftButtonBounds(window).Contains(pointer))
+                activatedRecipe = SelectedRecipe;
             else
             {
                 var categories = Enum.GetValues<CraftingCategory>();
@@ -54,10 +60,31 @@ internal sealed class CraftingWindowState
                 var recipes = VisibleRecipes();
                 for (var index = 0; index < recipes.Count; index++)
                     if (RecipeBounds(window, index).Contains(pointer))
+                    {
                         SelectedRecipe = recipes[index];
+                        if (IsDoubleClick(recipes[index]))
+                            activatedRecipe = recipes[index];
+                        break;
+                    }
             }
         }
         _leftWasDown = leftDown;
+        return activatedRecipe;
+    }
+
+    private bool IsDoubleClick(CraftingRecipe recipe)
+    {
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        var elapsed = (now - _lastRecipeClick) /
+                      (double)System.Diagnostics.Stopwatch.Frequency;
+        var doubleClicked =
+            string.Equals(
+                _lastClickedRecipeId, recipe.Id,
+                StringComparison.Ordinal) &&
+            elapsed <= DoubleClickSeconds;
+        _lastClickedRecipeId = recipe.Id;
+        _lastRecipeClick = now;
+        return doubleClicked;
     }
 
     public static Vector4 WindowBounds(Vector4 viewport)
@@ -72,6 +99,13 @@ internal sealed class CraftingWindowState
 
     public static Vector4 CloseBounds(Vector4 window) =>
         new(window.X + window.Z - 38, window.Y + 10, 26, 24);
+
+    public static Vector4 CraftButtonBounds(Vector4 window) =>
+        new(
+            DetailsBounds(window).X + DetailsBounds(window).Z - 104,
+            DetailsBounds(window).Y + DetailsBounds(window).W - 46,
+            90,
+            32);
 
     public static Vector4 CategoryBounds(Vector4 window, int index) =>
         new(window.X + 14, window.Y + 58 + index * 42, 104, 34);

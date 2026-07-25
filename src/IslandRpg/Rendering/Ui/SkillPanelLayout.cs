@@ -17,10 +17,10 @@ internal static class SkillPanelLayout
         new(panel.X + 12, panel.Y + 84, panel.Z - 24, 38);
 
     public static Vector4 ProgressBounds(Vector4 panel) =>
-        new(panel.X + 12, panel.Y + 132, panel.Z - 24, 18);
+        new(panel.X + 12, panel.Y + 130, panel.Z - 24, 24);
 
     public static Vector4 InformationBounds(Vector4 panel) =>
-        new(panel.X + 12, panel.Y + 160, panel.Z - 24, 58);
+        new(panel.X + 12, panel.Y + 164, panel.Z - 24, 58);
 
     public static Vector4 ActionButtonBounds(Vector4 panel) =>
         new(panel.X + 12, panel.Y + 230, panel.Z - 24, 38);

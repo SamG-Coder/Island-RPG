@@ -1,3 +1,4 @@
+using IslandRpg.Gameplay;
 using IslandRpg.Rendering.Ui;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
@@ -9,77 +10,9 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
-    private void SetPaused(bool paused)
-    {
-        _paused = paused;
-        if (paused)
-            _modalScreen.Open(ModalScreenKind.Pause);
-        else
-            _modalScreen.Close(ModalScreenKind.Pause);
-        _pausePage = PausePage.Main;
-        _pauseLeftWasDown = MouseState.IsButtonDown(MouseButton.Left);
-        if (paused)
-        {
-            _chatUi.BlurInput();
-            _inventoryContext.Close();
-            UseDefaultGameCursor();
-        }
-        else if (_defaultNativeCursor is not null)
-            Cursor = _defaultNativeCursor;
-    }
-
-    private void UpdatePauseMenu()
-    {
-        var leftDown = MouseState.IsButtonDown(MouseButton.Left);
-        var clicked = leftDown && !_pauseLeftWasDown;
-        _pauseLeftWasDown = leftDown;
-        if (!clicked) return;
-
-        var pointer = MouseState.Position;
-        if (_pausePage != PausePage.Main &&
-            PauseCloseButtonBounds().Contains(pointer))
-        {
-            _pausePage = PausePage.Main;
-            return;
-        }
-
-        switch (_pausePage)
-        {
-            case PausePage.Main:
-                if (PauseButton(0).Contains(pointer))
-                    SetPaused(false);
-                else if (PauseButton(1).Contains(pointer))
-                    _pausePage = PausePage.Settings;
-                else if (PauseButton(2).Contains(pointer))
-                    _pausePage = PausePage.Debug;
-                else if (PauseButton(3).Contains(pointer))
-                    ReturnToMainMenu();
-                else if (PauseButton(4).Contains(pointer))
-                    Close();
-                break;
-            case PausePage.Settings:
-                if (PauseSettingsToggleBounds().Contains(pointer))
-                {
-                    var settings = _saves.LoadSettings();
-                    var fullscreen = !settings.Fullscreen;
-                    _saves.SaveSettings(settings with { Fullscreen = fullscreen });
-                    WindowState = fullscreen
-                        ? WindowState.Fullscreen
-                        : WindowState.Normal;
-                }
-                else if (PauseBackButtonBounds().Contains(pointer))
-                    _pausePage = PausePage.Main;
-                break;
-            case PausePage.Debug:
-                if (PauseBackButtonBounds().Contains(pointer))
-                    _pausePage = PausePage.Main;
-                break;
-        }
-    }
-
     private void RenderPauseMenu()
     {
-        switch (_pausePage)
+        switch (_pauseMenu.Page)
         {
             case PausePage.Main:
                 var panel = PausePanel();
@@ -90,7 +23,7 @@ internal sealed partial class GameHostWindow
                     new(232, 217, 166, 255));
                 var captions = new[]
                 {
-                    "Resume", "Settings", "Debug Menu", "Main Menu", "Quit"
+                    "Resume", "Settings", "Main Menu", "Quit"
                 };
                 for (var index = 0; index < captions.Length; index++)
                     DrawMenuButton(PauseButton(index), captions[index]);
@@ -98,11 +31,8 @@ internal sealed partial class GameHostWindow
             case PausePage.Settings:
                 RenderPauseSettings();
                 break;
-            case PausePage.Debug:
-                RenderDebugMenu();
-                break;
         }
-        if (_pausePage != PausePage.Main)
+        if (_pauseMenu.Page != PausePage.Main)
             DrawMenuButton(PauseCloseButtonBounds(), "X");
     }
 
@@ -201,43 +131,95 @@ internal sealed partial class GameHostWindow
         DrawCenteredUiText(
             "SETTINGS", new(panel.X, panel.Y + 24, panel.Z, 38),
             new(232, 217, 166, 255));
-        var fullscreen = _saves.LoadSettings().Fullscreen;
+        RenderSettingsTabs(panel);
+        RenderSelectedSettingsTab(panel);
         DrawMenuButton(
-            PauseSettingsToggleBounds(),
-            $"Fullscreen: {(fullscreen ? "On" : "Off")}");
-        DrawCenteredUiText(
-            "The game remains paused while settings are open.",
-            new(panel.X + 20, panel.Y + 190, panel.Z - 40, 28),
-            new(174, 164, 134, 255));
-        DrawMenuButton(PauseBackButtonBounds(), "Back");
+            SettingsMenuState.BackButtonBounds(panel), "< Back");
     }
 
-    private void RenderDebugMenu()
+    private void RenderSettingsTabs(Vector4 panel)
     {
-        var panel = PauseSubmenuPanel();
-        DrawAoEPanelBorder(panel);
-        DrawCenteredUiText(
-            "DEBUG MENU", new(panel.X, panel.Y + 24, panel.Z, 38),
-            new(232, 217, 166, 255));
-        var position = _player?.Position ?? Vector2.Zero;
-        var lines = new[]
+        var tabs = _settingsMenu.VisibleTabs;
+        for (var index = 0; index < tabs.Count; index++)
         {
-            $"World seed: {_worldSeed}",
-            $"Player: {position.X:0.00}, {position.Y:0.00}",
-            $"Loaded chunks: {_worldChunks.Count}",
-            $"Path job: {(_pendingPathTask is null ? "idle" : "active")}"
-        };
-        for (var index = 0; index < lines.Length; index++)
+            var tab = tabs[index];
+            var bounds = SettingsMenuState.TabBounds(
+                panel, index, tabs.Count);
+            DrawMenuButton(bounds, tab.ToString());
+            if (tab == _settingsMenu.SelectedTab)
+                DrawPanelOutline(bounds, 3, new(.72f, .53f, .19f, 1));
+        }
+    }
+
+    private void RenderSelectedSettingsTab(Vector4 panel)
+    {
+        var content = SettingsMenuState.ContentBounds(panel);
+        DrawAoEPanelBorder(content);
+        switch (_settingsMenu.SelectedTab)
+        {
+            case SettingsTab.Display:
+                var fullscreen = _saves.LoadSettings().Fullscreen;
+                DrawMenuButton(
+                    SettingsMenuState.OptionBounds(panel, 0),
+                    $"Fullscreen: {(fullscreen ? "On" : "Off")}");
+                break;
+            case SettingsTab.Game:
+                DrawCenteredUiText(
+                    "Gameplay settings will appear here.",
+                    content, new(174, 164, 134, 255));
+                break;
+            case SettingsTab.Sound:
+                DrawCenteredUiText(
+                    "Sound settings will appear here.",
+                    content, new(174, 164, 134, 255));
+                break;
+            case SettingsTab.Dev:
+                RenderDeveloperSettings(panel);
+                break;
+        }
+    }
+
+    private void RenderDeveloperSettings(Vector4 panel)
+    {
+        if (!System.Diagnostics.Debugger.IsAttached) return;
+        DrawMenuButton(
+            DeveloperSettingsController.MultiplierBounds(panel),
+            $"XP multiplier: x{_developerSettings.ExperienceMultiplier}");
+        foreach (var skill in Enum.GetValues<SkillType>())
+        {
+            var row = DeveloperSettingsController.SkillRowBounds(
+                panel, skill);
+            DrawUiColor(row, new(.055f, .048f, .034f, .96f));
+            DrawPanelOutline(row, 1, new(.28f, .23f, .13f, 1));
+            var level = DeveloperSettingsController.Level(
+                _activePlayer, skill);
+            var experience = DeveloperSettingsController.Experience(
+                _activePlayer, skill);
+            var toNext =
+                DeveloperSettingsController.ExperienceToNextLevel(
+                    _activePlayer, skill);
             DrawUiText(
-                lines[index],
-                new(panel.X + 54, panel.Y + 100 + index * 32),
-                new(204, 190, 150, 255));
-        DrawMenuButton(PauseBackButtonBounds(), "Back");
+                $"{skill}  Lv {level}/20",
+                new(row.X + 10, row.Y + 10),
+                new(224, 210, 168, 255));
+            DrawUiText(
+                toNext == 0
+                    ? $"{experience} XP  (max level)"
+                    : $"{experience} XP  |  {toNext} to next",
+                new(row.X + 10, row.Y + 34),
+                new(174, 164, 134, 255));
+            DrawMenuButton(
+                DeveloperSettingsController.GrantBounds(panel, skill),
+                $"+{_developerSettings.ExperienceGrant}");
+            DrawMenuButton(
+                DeveloperSettingsController.MaxBounds(panel, skill),
+                "Max");
+        }
     }
 
     private Vector4 PausePanel() => FrontendPanel(400, 470);
 
-    private Vector4 PauseSubmenuPanel() => FrontendPanel(480, 360);
+    private Vector4 PauseSubmenuPanel() => FrontendPanel(560, 500);
 
     private Vector4 PauseButton(int index)
     {
@@ -249,12 +231,6 @@ internal sealed partial class GameHostWindow
     {
         var panel = PauseSubmenuPanel();
         return new(panel.X + panel.Z - 40, panel.Y + 10, 28, 28);
-    }
-
-    private Vector4 PauseSettingsToggleBounds()
-    {
-        var panel = PauseSubmenuPanel();
-        return new(panel.X + 60, panel.Y + 104, panel.Z - 120, 50);
     }
 
     private Vector4 PauseBackButtonBounds()

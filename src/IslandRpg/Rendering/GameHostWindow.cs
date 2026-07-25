@@ -34,7 +34,6 @@ internal sealed partial class GameHostWindow : GameWindow
         LoadWorld,
         Settings
     }
-    private enum PausePage { Main, Settings, Debug }
     private sealed class GpuWorldChunk(
         WorldChunk chunk, int vbo, int vertexCount,
         int weightsA, int weightsB, int weightsC, int weightsD, int shoreDistance)
@@ -98,10 +97,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _newTeamColor;
     private bool _menuLeftWasDown;
     private string? _frontendError;
-    private bool _paused;
     private readonly ModalScreenState _modalScreen = new();
-    private PausePage _pausePage;
-    private bool _pauseLeftWasDown;
+    private readonly PauseMenuController _pauseMenu;
     private readonly ListControlState _characterList = new();
     private readonly ListControlState _worldList = new();
     private WorldChunkStore? _worldStore;
@@ -234,6 +231,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly GameUiControlState _gameUi = new();
     private readonly ChatUiControlState _chatUi = new();
     private readonly RepeatedActionMonologue _repeatedActions = new();
+    private readonly SettingsMenuState _settingsMenu = new();
+    private readonly DeveloperSettingsController _developerSettings = new();
     private readonly WorldActionController _worldActions;
     private string? _overheadSpeech;
     private double _overheadSpeechExpiresAt;
@@ -273,6 +272,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _install = install;
         _mode = mode;
         _worldSeed = worldSeed;
+        _pauseMenu = new(this);
         _worldActions = new(this);
         _inventoryContext.Selected += HandleInventoryContextSelection;
         _treeContext.Selected += HandleTreeContextSelection;
@@ -365,10 +365,8 @@ internal sealed partial class GameHostWindow : GameWindow
                     _chatUi.BlurInput();
                 else if (_craftingWindowOpen)
                     CloseCraftingWindow();
-                else if (_paused && _pausePage != PausePage.Main)
-                    _pausePage = PausePage.Main;
                 else
-                    SetPaused(!_paused);
+                    _pauseMenu.HandleEscapeKey();
             }
             else Close();
         }
@@ -475,7 +473,7 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             if (_mode == PreviewMode.Game &&
                 _modalScreen.PausesSimulation)
-                UpdatePauseMenu();
+                _pauseMenu.Update();
             else if (_mode == PreviewMode.Game && _craftingWindowOpen)
             {
                 UpdateCraftingWindowInput(
@@ -603,7 +601,10 @@ internal sealed partial class GameHostWindow : GameWindow
                 else if (MenuButton(2).Contains(pointer))
                     _frontendPage = FrontendPage.CharacterSelect;
                 else if (MenuButton(3).Contains(pointer))
+                {
                     _frontendPage = FrontendPage.Settings;
+                    _settingsMenu.EnsureVisible();
+                }
                 else if (MenuButton(4).Contains(pointer))
                     Close();
                 break;
@@ -620,7 +621,12 @@ internal sealed partial class GameHostWindow : GameWindow
                 UpdateLoadWorldClick(pointer);
                 break;
             case FrontendPage.Settings:
-                if (SettingsToggleBounds().Contains(pointer))
+                var settingsPanel = FrontendPanel(560, 500);
+                if (_settingsMenu.SelectAt(settingsPanel, pointer))
+                    break;
+                if (_settingsMenu.SelectedTab == SettingsTab.Display &&
+                    SettingsMenuState.OptionBounds(
+                        settingsPanel, 0).Contains(pointer))
                 {
                     var settings = _saves.LoadSettings();
                     var fullscreen = !settings.Fullscreen;
@@ -629,7 +635,11 @@ internal sealed partial class GameHostWindow : GameWindow
                         ? WindowState.Fullscreen
                         : WindowState.Normal;
                 }
-                else if (BackButtonBounds().Contains(pointer))
+                else if (_settingsMenu.SelectedTab == SettingsTab.Dev &&
+                         UpdateDeveloperSettings(pointer, settingsPanel))
+                    break;
+                else if (SettingsMenuState.BackButtonBounds(
+                             settingsPanel).Contains(pointer))
                     _frontendPage = FrontendPage.Main;
                 break;
         }
@@ -864,7 +874,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _activeTreeId = null;
         _moveMarker = null;
         _atlasOpen = false;
-        SetPaused(false);
+        _pauseMenu.SetPaused(false);
         BeginMenuPreview();
         _screen = ScreenState.MainMenu;
     }
@@ -2044,7 +2054,7 @@ internal sealed partial class GameHostWindow : GameWindow
             return;
         }
         if (_screen != ScreenState.WorldPreview || e.OffsetY == 0) return;
-        if (_mode == PreviewMode.Game && _paused) return;
+        if (_mode == PreviewMode.Game && _pauseMenu.IsPaused) return;
         if (_mode == PreviewMode.Game)
         {
             _chatUi.Layout(SceneClientBounds());
@@ -2182,7 +2192,7 @@ internal sealed partial class GameHostWindow : GameWindow
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
             if (_modalScreen.BlursBackground) BlurComposedFrame();
             if (!_modalScreen.HidesGameUi) RenderGameUi();
-            if (_paused) RenderPauseMenu();
+            if (_pauseMenu.IsPaused) RenderPauseMenu();
             else if (_craftingWindowOpen) RenderCraftingWindow();
         }
         SwapBuffers();
@@ -2368,7 +2378,8 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawMenuButton(NewCharacterButtonBounds(), "New Character");
         if (_selectedPlayer is not null)
             DrawMenuButton(ContinueCharacterButtonBounds(), "Use Character");
-        DrawMenuButton(BackButtonBounds(), "Back");
+        DrawMenuButton(
+            SettingsMenuState.BackButtonBounds(panel), "< Back");
     }
 
     private void RenderNewWorldMenu()
@@ -2510,19 +2521,13 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void RenderSettingsMenu()
     {
-        var panel = FrontendPanel(480, 360);
+        var panel = FrontendPanel(560, 500);
         DrawAoEPanelBorder(panel);
         DrawCenteredUiText(
             "SETTINGS", new(panel.X, panel.Y + 24, panel.Z, 38),
             new(232, 217, 166, 255));
-        var fullscreen = _saves.LoadSettings().Fullscreen;
-        DrawMenuButton(
-            SettingsToggleBounds(),
-            $"Fullscreen: {(fullscreen ? "On" : "Off")}");
-        DrawCenteredUiText(
-            "More audio and display settings can be added here.",
-            new(panel.X + 20, panel.Y + 190, panel.Z - 40, 28),
-            new(174, 164, 134, 255));
+        RenderSettingsTabs(panel);
+        RenderSelectedSettingsTab(panel);
         DrawMenuButton(BackButtonBounds(), "Back");
     }
 
@@ -2621,7 +2626,7 @@ internal sealed partial class GameHostWindow : GameWindow
             FrontendPage.CharacterSelect => FrontendPanel(660, 600),
             FrontendPage.NewWorld => FrontendPanel(760, 640),
             FrontendPage.LoadWorld => FrontendPanel(600, 560),
-            FrontendPage.Settings => FrontendPanel(480, 360),
+            FrontendPage.Settings => FrontendPanel(560, 500),
             _ => FrontendPanel(400, 470)
         };
         return new(panel.X + panel.Z - 40, panel.Y + 10, 28, 28);
@@ -2712,6 +2717,7 @@ internal sealed partial class GameHostWindow : GameWindow
             FrontendPage.CharacterSelect => FrontendPanel(660, 600),
             FrontendPage.NewWorld => FrontendPanel(760, 640),
             FrontendPage.LoadWorld => FrontendPanel(600, 560),
+            FrontendPage.Settings => FrontendPanel(560, 500),
             _ => FrontendPanel(480, 360)
         };
         return new(panel.X + panel.Z - 156, panel.Y + panel.W - 92, 108, 48);
@@ -2725,12 +2731,6 @@ internal sealed partial class GameHostWindow : GameWindow
             worlds.Select(world => world.Id).ToArray(),
             rowHeight: 54,
             rowGap: 8);
-    }
-
-    private Vector4 SettingsToggleBounds()
-    {
-        var panel = FrontendPanel(480, 360);
-        return new(panel.X + 60, panel.Y + 104, panel.Z - 120, 50);
     }
 
     private Vector4 CharacterPreviewBounds()
@@ -2862,7 +2862,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void RenderGameUi()
     {
-        _uiOpacity = _paused ? .28f : 1f;
+        _uiOpacity = _pauseMenu.IsPaused ? .28f : 1f;
         var scene = SceneClientBounds();
         _gameUi.Layout(scene);
         _chatUi.Layout(scene);
