@@ -18,6 +18,9 @@ internal sealed record WorldTreeInstance(
     int Health,
     int MaxHealth,
     TreeLifecycleState State);
+internal enum GroundObjectKind : byte { Sticks, LargeRock }
+internal sealed record WorldGroundObject(
+    Guid Id, GroundObjectKind Kind, float X, float Y);
 
 internal sealed class WorldChunk
 {
@@ -35,6 +38,7 @@ internal sealed class WorldChunk
     public required byte[] ShoreDistance { get; init; }
     public required CliffFace[] Cliffs { get; init; }
     public List<WorldTreeInstance> TreeInstances { get; init; } = [];
+    public List<WorldGroundObject> GroundObjects { get; init; } = [];
 }
 
 internal static class InfiniteWorldGenerator
@@ -94,6 +98,7 @@ internal static class InfiniteWorldGenerator
 
         var weights = GenerateBiomeWeights(seed, coordinate);
         var cliffs = GenerateCliffs(seed, tiles);
+        var groundObjects = GenerateGroundObjects(seed, tiles, trees);
         return new()
         {
             Coordinate = coordinate,
@@ -104,8 +109,72 @@ internal static class InfiniteWorldGenerator
             BiomeWeightsC = weights.C,
             BiomeWeightsD = weights.D,
             ShoreDistance = weights.Shore,
-            Cliffs = cliffs
+            Cliffs = cliffs,
+            GroundObjects = groundObjects
         };
+    }
+
+    internal static List<WorldGroundObject> GenerateGroundObjects(
+        long seed, IslandTile[] tiles, IReadOnlyCollection<IslandTree> trees)
+    {
+        const int maximumPerChunk = 8;
+        var occupied = trees.Select(tree => (tree.X, tree.Y)).ToHashSet();
+        var candidates = new List<(float Score, WorldGroundObject Object)>();
+        foreach (var tile in tiles)
+        {
+            if (occupied.Contains((tile.X, tile.Y))) continue;
+            var relief = Math.Max(
+                Math.Max(tile.North, tile.East),
+                Math.Max(tile.South, tile.West)) -
+                Math.Min(
+                    Math.Min(tile.North, tile.East),
+                    Math.Min(tile.South, tile.West));
+            if (relief > 2) continue;
+            var stickChance = tile.Region switch
+            {
+                WorldBiome.TemperateForest or WorldBiome.Rainforest => .035f,
+                WorldBiome.Taiga or WorldBiome.Wetland => .025f,
+                WorldBiome.Savanna => .012f,
+                _ => 0
+            };
+            var rockChance = tile.Region switch
+            {
+                WorldBiome.Alpine => .055f,
+                WorldBiome.Tundra or WorldBiome.Coast => .024f,
+                WorldBiome.Desert => .018f,
+                WorldBiome.TemperateGrassland => .008f,
+                _ => 0
+            };
+            var roll = UnitHash(seed, tile.X, tile.Y, 811);
+            GroundObjectKind? kind = roll < stickChance
+                ? GroundObjectKind.Sticks
+                : roll < stickChance + rockChance
+                    ? GroundObjectKind.LargeRock
+                    : null;
+            if (kind is null) continue;
+            var x = tile.X + .18f + UnitHash(seed, tile.X, tile.Y, 823) * .64f;
+            var y = tile.Y + .18f + UnitHash(seed, tile.X, tile.Y, 827) * .64f;
+            candidates.Add((
+                UnitHash(seed, tile.X, tile.Y, 829),
+                new(
+                    StableGroundObjectId(seed, tile.X, tile.Y, kind.Value),
+                    kind.Value, x, y)));
+        }
+        return candidates
+            .OrderBy(candidate => candidate.Score)
+            .Take(maximumPerChunk)
+            .Select(candidate => candidate.Object)
+            .ToList();
+    }
+
+    private static Guid StableGroundObjectId(
+        long seed, int x, int y, GroundObjectKind kind)
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        BitConverter.TryWriteBytes(bytes, seed);
+        BitConverter.TryWriteBytes(bytes[8..], x);
+        BitConverter.TryWriteBytes(bytes[12..], y ^ ((int)kind << 28));
+        return new Guid(bytes);
     }
 
     internal static CliffFace[] GenerateCliffs(long seed, IslandTile[] tiles)
@@ -591,7 +660,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 4;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 10;
+    private const int ChunkPayloadVersion = 11;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -790,6 +859,20 @@ internal sealed class WorldChunkStore
                 writer.Write(tree.MaxHealth);
                 writer.Write((byte)tree.State);
             }
+            writer.Write(chunk.GroundObjects.Count);
+            foreach (var groundObject in chunk.GroundObjects)
+            {
+                writer.Write(groundObject.Id.ToByteArray());
+                writer.Write((byte)groundObject.Kind);
+                writer.Write(
+                    groundObject.X -
+                    MathF.Floor(groundObject.X / WorldChunk.Size) *
+                    WorldChunk.Size);
+                writer.Write(
+                    groundObject.Y -
+                    MathF.Floor(groundObject.Y / WorldChunk.Size) *
+                    WorldChunk.Size);
+            }
         }
         return stream.ToArray();
     }
@@ -805,7 +888,7 @@ internal sealed class WorldChunkStore
             if (payloadVersion < 1 || payloadVersion > ChunkPayloadVersion ||
                 storedX != coordinate.X || storedY != coordinate.Y)
                 throw new InvalidDataException($"Chunk payload does not match {coordinate}.");
-            if (payloadVersion < ChunkPayloadVersion)
+            if (payloadVersion < 10)
                 return InfiniteWorldGenerator.Generate(Seed, coordinate);
             var tileCount = reader.ReadInt32();
             if (tileCount != WorldChunk.Size * WorldChunk.Size)
@@ -862,6 +945,35 @@ internal sealed class WorldChunkStore
                         $"Chunk tree instance is invalid: {instance.Id}");
                 treeInstances.Add(instance);
             }
+            List<WorldGroundObject> groundObjects;
+            if (payloadVersion >= 11)
+            {
+                var groundObjectCount = reader.ReadInt32();
+                if (groundObjectCount is < 0 or > 8)
+                    throw new InvalidDataException(
+                        $"Chunk ground-object count is invalid: {groundObjectCount}");
+                groundObjects = new(groundObjectCount);
+                for (var i = 0; i < groundObjectCount; i++)
+                {
+                    var idBytes = reader.ReadBytes(16);
+                    if (idBytes.Length != 16)
+                        throw new EndOfStreamException();
+                    var groundObject = new WorldGroundObject(
+                        new Guid(idBytes),
+                        (GroundObjectKind)reader.ReadByte(),
+                        coordinate.X * WorldChunk.Size + reader.ReadSingle(),
+                        coordinate.Y * WorldChunk.Size + reader.ReadSingle());
+                    if (!Enum.IsDefined(groundObject.Kind) ||
+                        FloorDiv((int)MathF.Floor(groundObject.X), WorldChunk.Size) != coordinate.X ||
+                        FloorDiv((int)MathF.Floor(groundObject.Y), WorldChunk.Size) != coordinate.Y)
+                        throw new InvalidDataException(
+                            $"Chunk ground object is invalid: {groundObject.Id}");
+                    groundObjects.Add(groundObject);
+                }
+            }
+            else
+                groundObjects = InfiniteWorldGenerator.GenerateGroundObjects(
+                    Seed, tiles, trees);
             var weights = InfiniteWorldGenerator.GenerateBiomeWeights(Seed, coordinate);
             var cliffs = InfiniteWorldGenerator.GenerateCliffs(Seed, tiles);
             return new()
@@ -870,7 +982,8 @@ internal sealed class WorldChunkStore
                 BiomeWeightsA = weights.A, BiomeWeightsB = weights.B,
                 BiomeWeightsC = weights.C, BiomeWeightsD = weights.D,
                 ShoreDistance = weights.Shore, Cliffs = cliffs,
-                TreeInstances = treeInstances
+                TreeInstances = treeInstances,
+                GroundObjects = groundObjects
             };
         }
         catch (EndOfStreamException ex)

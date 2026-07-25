@@ -53,9 +53,10 @@ internal sealed class GameHostWindow : GameWindow
         SpriteFrame Frame, int Texture, Vector2 World, bool Mirror, bool Wading);
     private sealed record MoveMarker(Vector2 Position, double Time);
     private sealed record WaterRipple(Vector2 Position, double StartedAt);
-    private enum WorldActionType { CutTree }
+    private enum WorldActionType { CutTree, PickUpGroundObject }
     private sealed record QueuedWorldAction(
-        WorldActionType Type, Vector2 Target, float Range);
+        WorldActionType Type, Vector2 Target, float Range,
+        Guid? GroundObjectId = null);
     private sealed record PathResult(
         int RequestId,
         IReadOnlyList<Vector2> Path,
@@ -145,13 +146,17 @@ internal sealed class GameHostWindow : GameWindow
     private EntityAnimation? _moveMarkerAnimation;
     private MouseCursor? _defaultNativeCursor;
     private MouseCursor? _cutNativeCursor;
-    private bool _usingCutCursor;
+    private MouseCursor? _pickupNativeCursor;
+    private enum GameCursorKind { Default, CutTree, PickUpItem }
+    private GameCursorKind _gameCursorKind;
     private int _uiPanelFillTexture;
     private int _uiSolidTexture;
     private SpriteFrame? _uiTabFrame;
     private int _uiTabTexture;
     private int _uiActiveTabTexture;
     private int _woodcuttingItemsTexture;
+    private readonly int[] _naturalItemTextures = new int[4];
+    private readonly SpriteFrame?[] _naturalItemFrames = new SpriteFrame?[4];
     private static readonly SpriteFrame WoodcuttingItemsFrame =
         new(128, 64, 0, 0, []);
     private readonly MinimapControlState _minimapUi = new();
@@ -438,8 +443,10 @@ internal sealed class GameHostWindow : GameWindow
             _chatUi.BlurInput();
             _inventoryContext.Close();
             Cursor = MouseCursor.Default;
-            _usingCutCursor = false;
+            _gameCursorKind = GameCursorKind.Default;
         }
+        else if (_defaultNativeCursor is not null)
+            Cursor = _defaultNativeCursor;
     }
 
     private void UpdatePauseMenu()
@@ -1054,26 +1061,38 @@ internal sealed class GameHostWindow : GameWindow
 
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         if (leftDown && !_gameLeftWasDown &&
-            !IsPointerOverGameUi(MouseState.Position) &&
-            TryGetTreeUnderMouse(SceneMousePosition(), out var actionTree))
+            !IsPointerOverGameUi(MouseState.Position))
         {
-            var actionTarget = new Vector2(actionTree.X + .5f, actionTree.Y + .5f);
-            var standOff = TreeInteractionDistance(actionTree.GraphicName);
-            _activeTreeId = null;
-            _player.Stop();
-            _pathCancellation?.Cancel();
-            _pathCancellation?.Dispose();
-            _pathCancellation = new CancellationTokenSource();
-            var token = _pathCancellation.Token;
-            var requestId = ++_pathRequestId;
-            var start = _player.Position;
-            _queuedAction = null;
-            _pendingPathTask = Task.Run(
-                () => FindActionPath(
-                    requestId, start, actionTarget, standOff,
-                    WorldActionType.CutTree, token),
-                token);
-            _moveMarker = null;
+            if (TryGetGroundObjectUnderMouse(
+                    SceneMousePosition(), out var groundObject, out _))
+            {
+                QueueGroundObjectPickup(groundObject);
+            }
+            else if (!TryGetTreeUnderMouse(SceneMousePosition(), out var actionTree))
+            {
+                _gameLeftWasDown = leftDown;
+                return;
+            }
+            else
+            {
+                var actionTarget = new Vector2(actionTree.X + .5f, actionTree.Y + .5f);
+                var standOff = TreeInteractionDistance(actionTree.GraphicName);
+                _activeTreeId = null;
+                _player.Stop();
+                _pathCancellation?.Cancel();
+                _pathCancellation?.Dispose();
+                _pathCancellation = new CancellationTokenSource();
+                var token = _pathCancellation.Token;
+                var requestId = ++_pathRequestId;
+                var start = _player.Position;
+                _queuedAction = null;
+                _pendingPathTask = Task.Run(
+                    () => FindActionPath(
+                        requestId, start, actionTarget, standOff,
+                        WorldActionType.CutTree, token),
+                    token);
+                _moveMarker = null;
+            }
         }
         _gameLeftWasDown = leftDown;
 
@@ -1169,7 +1188,8 @@ internal sealed class GameHostWindow : GameWindow
         Vector2 target,
         float standOff,
         WorldActionType actionType,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? groundObjectId = null)
     {
         var targetCell = new Vector2i(
             (int)MathF.Floor(target.X),
@@ -1223,7 +1243,8 @@ internal sealed class GameHostWindow : GameWindow
                 bestPath,
                 new QueuedWorldAction(
                     actionType, target,
-                    Math.Max(standOff, .72f) + .08f));
+                    Math.Max(standOff, .72f) + .08f,
+                    groundObjectId));
     }
 
     private float TreeInteractionDistance(string graphicName)
@@ -1259,6 +1280,12 @@ internal sealed class GameHostWindow : GameWindow
 
         if (action.Type == WorldActionType.CutTree)
             BeginTreeCutting(action.Target);
+        else if (action is
+                 {
+                     Type: WorldActionType.PickUpGroundObject,
+                     GroundObjectId: { } groundObjectId
+                 })
+            TryPickUpGroundObject(groundObjectId);
     }
 
     private void BeginTreeCutting(Vector2 target)
@@ -2674,12 +2701,12 @@ internal sealed class GameHostWindow : GameWindow
                 slot == _inventoryDraggingSlot)
                 continue;
             var itemUv = InventoryItemUv(itemId);
-            var hasSprite =
-                _woodcuttingItemsTexture != 0 && itemUv is not null;
+            var itemTexture = InventoryItemTexture(itemId);
+            var hasSprite = itemTexture != 0 && itemUv is not null;
             if (hasSprite)
                 DrawUiSprite(
                     WoodcuttingItemsFrame,
-                    _woodcuttingItemsTexture,
+                    itemTexture,
                     bounds,
                     uvRectangle: itemUv,
                     spriteOutline: slot == _activeInventorySlot
@@ -2703,10 +2730,11 @@ internal sealed class GameHostWindow : GameWindow
             var dragBounds = new Vector4(
                 MouseState.Position.X - 16,
                 MouseState.Position.Y - 16, 32, 32);
-            if (_woodcuttingItemsTexture != 0 && itemUv is not null)
+            var itemTexture = InventoryItemTexture(draggedItemId);
+            if (itemTexture != 0 && itemUv is not null)
                 DrawUiSprite(
                     WoodcuttingItemsFrame,
-                    _woodcuttingItemsTexture,
+                    itemTexture,
                     dragBounds,
                     uvRectangle: itemUv,
                     drawOpacity: .62f,
@@ -2823,6 +2851,31 @@ internal sealed class GameHostWindow : GameWindow
 
         var source = inventory[_activeInventorySlot]!;
         var target = inventory[slot]!;
+        if (source == ItemIds.LargeRock &&
+            target is ItemIds.LargeRock or ItemIds.MediumRock)
+        {
+            if (!PlayerInventory.TryBreakRock(
+                    inventory, _activeInventorySlot, slot, out var broken))
+            {
+                _chatUi.AddMessage(
+                    "You need an empty inventory slot for the broken pieces.",
+                    ChatMessageStyle.Warning);
+                return;
+            }
+            _activePlayer = _activePlayer! with
+            {
+                Inventory = broken,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            _saves.SavePlayer(_activePlayer);
+            _chatUi.AddMessage(
+                target == ItemIds.LargeRock
+                    ? "You split the large rock into two medium rocks."
+                    : "You break the medium rock into two handfuls of pebbles.",
+                ChatMessageStyle.Action);
+            _activeInventorySlot = -1;
+            return;
+        }
         _chatUi.AddMessage(
             $"You try to use {ItemCatalog.Get(source).Name} with " +
             $"{ItemCatalog.Get(target).Name}, but nothing happens.",
@@ -2962,13 +3015,27 @@ internal sealed class GameHostWindow : GameWindow
 
     private static Vector4? InventoryItemUv(string itemId)
     {
-        var cell = ItemCatalog.Get(itemId).SpriteCell;
+        var item = ItemCatalog.Get(itemId);
+        var cell = item.SpriteCell;
+        if (item.HasTag(ItemTag.NaturalMaterial))
+            return cell is null ? null : new Vector4(0, 0, 1, 1);
         return cell is null
             ? null
             : new Vector4(
                 (cell.Value % 4) * .25f,
                 (cell.Value / 4) * .5f,
                 .25f, .5f);
+    }
+
+    private int InventoryItemTexture(string itemId)
+    {
+        var item = ItemCatalog.Get(itemId);
+        if (!item.HasTag(ItemTag.NaturalMaterial))
+            return _woodcuttingItemsTexture;
+        return item.SpriteCell is { } cell &&
+               (uint)cell < (uint)_naturalItemTextures.Length
+            ? _naturalItemTextures[cell]
+            : 0;
     }
 
     private void RenderTreeHealthBars(Vector4 scene)
@@ -3665,12 +3732,14 @@ internal sealed class GameHostWindow : GameWindow
             }
         }
         DrawTreeBatch(behind);
+        RenderGroundObjects(foreground: false, playerDepth);
         DrawTreeBatch(foregroundShadows);
         if (player is not null)
             DrawSprite(
                 player.Frame, player.Texture, player.World,
                 mirror: player.Mirror, wading: player.Wading,
                 teamColor: _activePlayer?.TeamColor ?? 0);
+        RenderGroundObjects(foreground: true, playerDepth);
         DrawTreeBatch(foregroundObjects);
         if (player is not null && playerOccluded)
             DrawSprite(
@@ -3798,6 +3867,114 @@ internal sealed class GameHostWindow : GameWindow
         }
         hoveredTree = null!;
         return false;
+    }
+
+    private void RenderGroundObjects(bool foreground, float playerDepth)
+    {
+        foreach (var item in _worldChunks.Values.Where(IsChunkVisible)
+                     .SelectMany(gpu => gpu.Chunk.GroundObjects.Select(
+                         groundObject => (Object: groundObject, Gpu: gpu)))
+                     .OrderBy(item => item.Object.X + item.Object.Y))
+        {
+            var world = GroundObjectWorld(item.Object);
+            if ((world.Y > playerDepth) != foreground) continue;
+            var cell = item.Object.Kind == GroundObjectKind.Sticks ? 0 : 1;
+            if (_naturalItemFrames[cell] is not { } frame ||
+                _naturalItemTextures[cell] == 0)
+                continue;
+            DrawSprite(
+                frame, _naturalItemTextures[cell], world,
+                opacity: item.Gpu.Opacity);
+        }
+    }
+
+    private bool TryGetGroundObjectUnderMouse(
+        Vector2 mouse,
+        out WorldGroundObject groundObject,
+        out GpuWorldChunk chunk)
+    {
+        foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible)
+                     .OrderByDescending(value =>
+                         value.Chunk.Coordinate.X + value.Chunk.Coordinate.Y))
+        foreach (var candidate in gpu.Chunk.GroundObjects
+                     .OrderByDescending(value => value.X + value.Y))
+        {
+            var cell = candidate.Kind == GroundObjectKind.Sticks ? 0 : 1;
+            if (_naturalItemFrames[cell] is not { } frame) continue;
+            var bounds = SpriteBounds(frame, GroundObjectWorld(candidate));
+            if (mouse.X < bounds.Left || mouse.X >= bounds.Right ||
+                mouse.Y < bounds.Top || mouse.Y >= bounds.Bottom)
+                continue;
+            groundObject = candidate;
+            chunk = gpu;
+            return true;
+        }
+        groundObject = null!;
+        chunk = null!;
+        return false;
+    }
+
+    private Vector2 GroundObjectWorld(WorldGroundObject groundObject)
+    {
+        var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
+            _worldSeed, groundObject.X, groundObject.Y);
+        return new(
+            (groundObject.X - groundObject.Y) * 48,
+            (groundObject.X + groundObject.Y) * 24 - elevation * 20);
+    }
+
+    private void QueueGroundObjectPickup(WorldGroundObject groundObject)
+    {
+        if (_player is null) return;
+        var target = new Vector2(groundObject.X, groundObject.Y);
+        _activeTreeId = null;
+        _player.Stop();
+        _pathCancellation?.Cancel();
+        _pathCancellation?.Dispose();
+        _pathCancellation = new CancellationTokenSource();
+        var token = _pathCancellation.Token;
+        var requestId = ++_pathRequestId;
+        var start = _player.Position;
+        _queuedAction = null;
+        _pendingPathTask = Task.Run(
+            () => FindActionPath(
+                requestId, start, target, .46f,
+                WorldActionType.PickUpGroundObject, token,
+                groundObject.Id),
+            token);
+        _moveMarker = null;
+    }
+
+    private void TryPickUpGroundObject(Guid groundObjectId)
+    {
+        if (_player is null || _activePlayer is null) return;
+        var chunk = _worldChunks.Values.FirstOrDefault(gpu =>
+            gpu.Chunk.GroundObjects.Any(item => item.Id == groundObjectId));
+        var groundObject = chunk?.Chunk.GroundObjects.FirstOrDefault(
+            item => item.Id == groundObjectId);
+        if (chunk is null || groundObject is null) return;
+        var itemId = groundObject.Kind == GroundObjectKind.Sticks
+            ? ItemIds.Sticks
+            : ItemIds.LargeRock;
+        if (!PlayerInventory.TryAdd(
+                _activePlayer.Inventory, itemId, out var inventory))
+        {
+            _chatUi.AddMessage(
+                "Your inventory is too full to pick that up.",
+                ChatMessageStyle.Warning);
+            return;
+        }
+        if (!chunk.Chunk.GroundObjects.Remove(groundObject)) return;
+        _activePlayer = _activePlayer with
+        {
+            Inventory = inventory,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        _saves.SavePlayer(_activePlayer);
+        QueueChunkSave(chunk.Chunk);
+        _chatUi.AddMessage(
+            $"You pick up the {ItemCatalog.Get(itemId).Name}.",
+            ChatMessageStyle.Action);
     }
 
     private static string StumpAtlasKey(string treeType, bool shadow)
@@ -4041,6 +4218,31 @@ internal sealed class GameHostWindow : GameWindow
             _woodcuttingItemsTexture = Upload(
                 itemSheet.Width, itemSheet.Height, itemSheet.Data);
         }
+        var naturalItemSheetPath = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Images",
+            "rocks-sticks-items.png");
+        if (File.Exists(naturalItemSheetPath))
+        {
+            using var stream = File.OpenRead(naturalItemSheetPath);
+            var sheet = ImageResult.FromStream(
+                stream, ColorComponents.RedGreenBlueAlpha);
+            const int cellSize = 32;
+            for (var cell = 0; cell < _naturalItemTextures.Length; cell++)
+            {
+                var pixels = new byte[cellSize * cellSize * 4];
+                for (var row = 0; row < cellSize; row++)
+                    System.Buffer.BlockCopy(
+                        sheet.Data,
+                        (row * sheet.Width + cell * cellSize) * 4,
+                        pixels,
+                        row * cellSize * 4,
+                        cellSize * 4);
+                var frame = new SpriteFrame(
+                    cellSize, cellSize, cellSize / 2, 28, pixels);
+                _naturalItemFrames[cell] = frame;
+                _naturalItemTextures[cell] = Upload(frame);
+            }
+        }
         GL.BindTexture(TextureTarget.Texture2D, _minimapTexture);
         GL.TexParameter(
             TextureTarget.Texture2D,
@@ -4157,8 +4359,10 @@ internal sealed class GameHostWindow : GameWindow
                 "The installed AoE cursor sheet does not contain the tree-cut cursor.");
 
         var defaultFrame = cursorSheet.Frames[0];
+        var pickupFrame = cursorSheet.Frames[3];
         var cutFrame = cursorSheet.Frames[8];
         _defaultNativeCursor = CreateNativeCursor(defaultFrame);
+        _pickupNativeCursor = CreateNativeCursor(pickupFrame);
         _cutNativeCursor = CreateNativeCursor(cutFrame);
         Cursor = _defaultNativeCursor;
         CursorState = CursorState.Normal;
@@ -4187,11 +4391,26 @@ internal sealed class GameHostWindow : GameWindow
     private void UpdateNativeCursor()
     {
         if (_defaultNativeCursor is null || _cutNativeCursor is null) return;
-        var cut = !IsPointerOverGameUi(MouseState.Position) &&
-                  TryGetTreeUnderMouse(SceneMousePosition(), out _);
-        if (cut == _usingCutCursor) return;
-        _usingCutCursor = cut;
-        Cursor = cut ? _cutNativeCursor : _defaultNativeCursor;
+        var next = GameCursorKind.Default;
+        MouseCursor cursor = _defaultNativeCursor;
+        if (!IsPointerOverGameUi(MouseState.Position))
+        {
+            if (TryGetGroundObjectUnderMouse(
+                    SceneMousePosition(), out _, out _) &&
+                _pickupNativeCursor is not null)
+            {
+                next = GameCursorKind.PickUpItem;
+                cursor = _pickupNativeCursor;
+            }
+            else if (TryGetTreeUnderMouse(SceneMousePosition(), out _))
+            {
+                next = GameCursorKind.CutTree;
+                cursor = _cutNativeCursor;
+            }
+        }
+        if (next == _gameCursorKind) return;
+        _gameCursorKind = next;
+        Cursor = cursor;
     }
 
     private void DrawMoveMarker()
@@ -4526,7 +4745,8 @@ internal sealed class GameHostWindow : GameWindow
             BiomeWeightsD = source.BiomeWeightsD,
             ShoreDistance = source.ShoreDistance,
             Cliffs = source.Cliffs,
-            TreeInstances = source.TreeInstances.ToList()
+            TreeInstances = source.TreeInstances.ToList(),
+            GroundObjects = source.GroundObjects.ToList()
         };
         var previous = _saveTail;
         _saveTail = Task.Run(async () =>
@@ -5418,6 +5638,8 @@ internal sealed class GameHostWindow : GameWindow
         if (_uiSolidTexture != 0) GL.DeleteTexture(_uiSolidTexture);
         if (_woodcuttingItemsTexture != 0)
             GL.DeleteTexture(_woodcuttingItemsTexture);
+        foreach (var texture in _naturalItemTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
         if (_uiTabTexture != 0) GL.DeleteTexture(_uiTabTexture);
         if (_uiActiveTabTexture != 0) GL.DeleteTexture(_uiActiveTabTexture);
         if (_minimapTexture != 0) GL.DeleteTexture(_minimapTexture);

@@ -76,6 +76,22 @@ Require(PlayerInventory.Count(inventory) == 28 &&
         !PlayerInventory.TryAdd(inventory, "logs", out var unchanged) &&
         unchanged.Length == 28,
     "inventory must have exactly 28 non-stacking slots");
+Require(PlayerInventory.TryBreakRock(
+        [ItemIds.LargeRock, ItemIds.LargeRock],
+        0, 1, out var splitLarge) &&
+        splitLarge.Count(item => item == ItemIds.MediumRock) == 2 &&
+        splitLarge[0] == ItemIds.LargeRock,
+    "a large rock tool must split another large rock into two medium rocks");
+Require(PlayerInventory.TryBreakRock(
+        [ItemIds.LargeRock, ItemIds.MediumRock],
+        0, 1, out var splitMedium) &&
+        splitMedium.Count(item => item == ItemIds.SmallRocks) == 2,
+    "a large rock tool must split a medium rock into two pebble items");
+Require(!PlayerInventory.TryBreakRock(
+        Enumerable.Repeat<string?>(ItemIds.LargeRock, PlayerInventory.Capacity)
+            .ToArray(),
+        0, 1, out _),
+    "rock splitting must require an empty inventory slot");
 
 var contextMenu = new ContextMenuControlState();
 var selectedContextItem = -1;
@@ -111,6 +127,11 @@ Require(boundedChat.Messages.Count == 200 &&
 const long seed = 8675309;
 var origin = InfiniteWorldGenerator.Generate(seed, new(0, 0));
 var repeated = InfiniteWorldGenerator.Generate(seed, new(0, 0));
+Require(origin.GroundObjects.Count <= 8 &&
+        origin.GroundObjects.SequenceEqual(repeated.GroundObjects) &&
+        origin.GroundObjects.All(item =>
+            item.Kind is GroundObjectKind.Sticks or GroundObjectKind.LargeRock),
+    "natural ground objects must be deterministic, capped, and limited to collectible types");
 Require(origin.Tiles.SequenceEqual(repeated.Tiles), "same seed and coordinate must reproduce tiles");
 Require(origin.Trees.SequenceEqual(repeated.Trees), "same seed and coordinate must reproduce trees");
 Require(origin.Cliffs.SequenceEqual(repeated.Cliffs),
@@ -290,6 +311,8 @@ try
     Require(origin.Trees.SequenceEqual(loaded.Trees), "saved trees must round-trip");
     Require(origin.TreeInstances.SequenceEqual(loaded.TreeInstances),
         "instantiated tree IDs, health, and lifecycle state must round-trip");
+    Require(origin.GroundObjects.SequenceEqual(loaded.GroundObjects),
+        "ground objects and collected-object removals must round-trip");
     Require(origin.Cliffs.SequenceEqual(loaded.Cliffs), "derived cliff faces must round-trip");
     Require(origin.BiomeWeightsA.SequenceEqual(loaded.BiomeWeightsA),
         "primary biome weights must round-trip");
@@ -386,5 +409,6 @@ static WorldChunk CloneAt(WorldChunk source, ChunkCoordinate coordinate) => new(
     BiomeWeightsD = source.BiomeWeightsD,
     ShoreDistance = source.ShoreDistance,
     Cliffs = source.Cliffs,
-    TreeInstances = source.TreeInstances.ToList()
+    TreeInstances = source.TreeInstances.ToList(),
+    GroundObjects = source.GroundObjects.ToList()
 };

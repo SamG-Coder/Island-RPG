@@ -6,7 +6,8 @@ internal enum ItemTag
     None = 0,
     Axe = 1 << 0,
     Log = 1 << 1,
-    WoodcuttingMaterial = 1 << 2
+    WoodcuttingMaterial = 1 << 2,
+    NaturalMaterial = 1 << 3
 }
 
 internal sealed record ItemDefinition(
@@ -31,6 +32,10 @@ internal static class ItemIds
     public const string Bamboo = "bamboo";
     public const string WoodChips = "wood_chips";
     public const string Plank = "plank";
+    public const string Sticks = "sticks";
+    public const string LargeRock = "large_rock";
+    public const string MediumRock = "medium_rock";
+    public const string SmallRocks = "small_rocks";
 }
 
 internal static class ItemCatalog
@@ -70,7 +75,23 @@ internal static class ItemCatalog
             [ItemIds.Plank] = new(
                 ItemIds.Plank, "plank", "Plank",
                 "A prepared wooden plank.", 7,
-                Tags: ItemTag.WoodcuttingMaterial)
+                Tags: ItemTag.WoodcuttingMaterial),
+            [ItemIds.Sticks] = new(
+                ItemIds.Sticks, "sticks", "Sticks",
+                "A pair of dry fallen sticks.", 0,
+                Tags: ItemTag.NaturalMaterial),
+            [ItemIds.LargeRock] = new(
+                ItemIds.LargeRock, "large rock", "Large",
+                "A heavy rock, useful for breaking other rocks.", 1,
+                Tags: ItemTag.NaturalMaterial),
+            [ItemIds.MediumRock] = new(
+                ItemIds.MediumRock, "medium rock", "Medium",
+                "A medium-sized piece of broken rock.", 2,
+                Tags: ItemTag.NaturalMaterial),
+            [ItemIds.SmallRocks] = new(
+                ItemIds.SmallRocks, "small rocks", "Pebbles",
+                "A handful of small rocks and pebbles.", 3,
+                Tags: ItemTag.NaturalMaterial)
         };
 
     public static IReadOnlyCollection<ItemDefinition> All =>

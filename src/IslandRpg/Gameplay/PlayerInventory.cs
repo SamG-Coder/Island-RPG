@@ -32,6 +32,30 @@ internal static class PlayerInventory
     public static bool CanDrop(string itemId) =>
         ItemCatalog.Get(itemId).Droppable;
 
+    public static bool TryBreakRock(
+        string?[]? items, int toolSlot, int targetSlot,
+        out string?[] updated)
+    {
+        updated = Normalize(items);
+        if (toolSlot == targetSlot ||
+            (uint)toolSlot >= Capacity ||
+            (uint)targetSlot >= Capacity ||
+            updated[toolSlot] != ItemIds.LargeRock)
+            return false;
+        var result = updated[targetSlot] switch
+        {
+            ItemIds.LargeRock => ItemIds.MediumRock,
+            ItemIds.MediumRock => ItemIds.SmallRocks,
+            _ => null
+        };
+        if (result is null) return false;
+        var emptySlot = Array.FindIndex(updated, item => item is null);
+        if (emptySlot < 0) return false;
+        updated[targetSlot] = result;
+        updated[emptySlot] = result;
+        return true;
+    }
+
     public static bool TrySwap(
         string?[]? items, int source, int target, out string?[] updated)
     {
