@@ -57,6 +57,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private enum WorldActionType
     {
         CutTree,
+        GatherTreeSticks,
         PickUpGroundObject,
         DropGroundObject
     }
@@ -203,6 +204,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _pathRequestId;
     private QueuedWorldAction? _queuedAction;
     private Guid? _activeTreeId;
+    private Guid? _activeTreeStickGatherId;
     private Guid? _activeGroundPickupId;
     private GroundDropPreview? _groundDropPreview;
     private ActiveGroundDrop? _activeGroundDrop;
@@ -217,6 +219,12 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly GameUiControlState _gameUi = new();
     private readonly ChatUiControlState _chatUi = new();
     private readonly ContextMenuControlState _inventoryContext = new();
+    private readonly ContextMenuControlState _treeContext = new();
+    private readonly ContextMenuControlState _groundObjectContext = new();
+    private IslandTree? _treeContextTarget;
+    private Vector2 _treeContextWalkTarget;
+    private WorldGroundObject? _groundObjectContextTarget;
+    private Vector2 _groundObjectContextWalkTarget;
     private int _inventoryContextSlot = -1;
     private int _activeInventorySlot = -1;
     private int _inventoryPressedSlot = -1;
@@ -248,6 +256,9 @@ internal sealed partial class GameHostWindow : GameWindow
         _mode = mode;
         _worldSeed = worldSeed;
         _inventoryContext.Selected += HandleInventoryContextSelection;
+        _treeContext.Selected += HandleTreeContextSelection;
+        _groundObjectContext.Selected +=
+            HandleGroundObjectContextSelection;
     }
 
     protected override void OnLoad()
@@ -1023,21 +1034,32 @@ internal sealed partial class GameHostWindow : GameWindow
             !IsPointerOverGameUi(MouseState.Position))
         {
             var target = ScreenToTerrain(SceneMousePosition());
-            _queuedAction = null;
-            _activeTreeId = null;
-            _player.Stop();
-            _pathCancellation?.Cancel();
-            _pathCancellation?.Dispose();
-            _pathCancellation = new CancellationTokenSource();
-            var token = _pathCancellation.Token;
-            var requestId = ++_pathRequestId;
-            var start = _player.Position;
-            _pendingPathTask = Task.Run(
-                () => new PathResult(
-                    requestId,
-                    GridPathfinder.Find(_worldSeed, start, target, cancellationToken: token)),
-                token);
-            _moveMarker = new(target, 0);
+            if (TryGetGroundObjectUnderMouse(
+                    SceneMousePosition(), out var contextObject, out _))
+            {
+                _groundObjectContextTarget = contextObject;
+                _groundObjectContextWalkTarget = target;
+                _inventoryContext.Close();
+                _treeContext.Close();
+                _groundObjectContext.Open(
+                    MouseState.Position,
+                    ["Pick up", "Walk Here", "Examine"],
+                    SceneClientBounds(), 142);
+            }
+            else if (TryGetTreeUnderMouse(
+                    SceneMousePosition(), out var contextTree))
+            {
+                _treeContextTarget = contextTree;
+                _treeContextWalkTarget = target;
+                _inventoryContext.Close();
+                _groundObjectContext.Close();
+                _treeContext.Open(
+                    MouseState.Position,
+                    ["Chop tree", "Gather sticks", "Walk Here", "Examine"],
+                    SceneClientBounds(), 142);
+            }
+            else
+                QueueWalk(target);
         }
         _gameRightWasDown = rightDown;
 
@@ -1095,6 +1117,7 @@ internal sealed partial class GameHostWindow : GameWindow
         UpdateNativeCursor();
         CompleteQueuedAction();
         UpdateTreeCutting();
+        UpdateTreeStickGather();
         UpdateGroundObjectPickup();
         UpdateGroundObjectDrop();
         UpdateWaterRipples(wading);
@@ -1127,6 +1150,12 @@ internal sealed partial class GameHostWindow : GameWindow
         _inventoryContext.UpdatePointer(
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
+        _treeContext.UpdatePointer(
+            MouseState.Position,
+            MouseState.IsButtonDown(MouseButton.Left));
+        _groundObjectContext.UpdatePointer(
+            MouseState.Position,
+            MouseState.IsButtonDown(MouseButton.Left));
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         UpdateInventoryDrag(MouseState.Position, leftDown);
         _inventoryLeftWasDown = leftDown;
@@ -1144,6 +1173,8 @@ internal sealed partial class GameHostWindow : GameWindow
                         .Contains(MouseState.Position))
                     continue;
                 _inventoryContextSlot = slot;
+                _treeContext.Close();
+                _groundObjectContext.Close();
                 _inventoryContext.Open(
                     MouseState.Position,
                     ["Use", "Drop", "Examine"],
@@ -1163,6 +1194,8 @@ internal sealed partial class GameHostWindow : GameWindow
         _gameUi.BlocksWorldInput(mouse) ||
         _chatUi.BlocksWorldInput(mouse) ||
         _inventoryContext.HitTest(mouse) ||
+        _treeContext.HitTest(mouse) ||
+        _groundObjectContext.HitTest(mouse) ||
         _inventoryDraggingSlot >= 0 ||
         _minimapUi.HitTest(mouse);
 
@@ -1268,6 +1301,8 @@ internal sealed partial class GameHostWindow : GameWindow
 
         if (action.Type == WorldActionType.CutTree)
             BeginTreeCutting(action.Target);
+        else if (action.Type == WorldActionType.GatherTreeSticks)
+            BeginTreeStickGather(action.Target);
         else if (action is
                  {
                      Type: WorldActionType.PickUpGroundObject,
@@ -1282,6 +1317,53 @@ internal sealed partial class GameHostWindow : GameWindow
                  })
             BeginGroundObjectDrop(
                 action.InventorySlot, itemId, action.Target);
+    }
+
+    private void QueueWalk(Vector2 target)
+    {
+        if (_player is null) return;
+        _queuedAction = null;
+        _activeTreeId = null;
+        _activeTreeStickGatherId = null;
+        _player.Stop();
+        _pathCancellation?.Cancel();
+        _pathCancellation?.Dispose();
+        _pathCancellation = new CancellationTokenSource();
+        var token = _pathCancellation.Token;
+        var requestId = ++_pathRequestId;
+        var start = _player.Position;
+        _pendingPathTask = Task.Run(
+            () => new PathResult(
+                requestId,
+                GridPathfinder.Find(
+                    _worldSeed, start, target,
+                    cancellationToken: token)),
+            token);
+        _moveMarker = new(target, 0);
+    }
+
+    private void QueueTreeAction(
+        IslandTree tree, WorldActionType actionType)
+    {
+        if (_player is null) return;
+        var target = new Vector2(tree.X + .5f, tree.Y + .5f);
+        _activeTreeId = null;
+        _activeTreeStickGatherId = null;
+        _player.Stop();
+        _pathCancellation?.Cancel();
+        _pathCancellation?.Dispose();
+        _pathCancellation = new CancellationTokenSource();
+        var token = _pathCancellation.Token;
+        var requestId = ++_pathRequestId;
+        var start = _player.Position;
+        _queuedAction = null;
+        _pendingPathTask = Task.Run(
+            () => FindActionPath(
+                requestId, start, target,
+                TreeInteractionDistance(tree.GraphicName),
+                actionType, token),
+            token);
+        _moveMarker = null;
     }
 
     private void BeginTreeCutting(Vector2 target)
@@ -1335,6 +1417,135 @@ internal sealed partial class GameHostWindow : GameWindow
         _activeTreeId = instance.Id;
         _lastTreeStrike = 0;
         _player.WorkAt(target);
+    }
+
+    private void BeginTreeStickGather(Vector2 target)
+    {
+        if (_player is null || _activePlayer is null) return;
+        var x = (int)MathF.Floor(target.X);
+        var y = (int)MathF.Floor(target.Y);
+        var coordinate = new ChunkCoordinate(
+            FloorDiv(x, WorldChunk.Size), FloorDiv(y, WorldChunk.Size));
+        if (!_worldChunks.TryGetValue(coordinate, out var gpu)) return;
+        var source = gpu.Chunk.Trees.FirstOrDefault(
+            tree => tree.X == x && tree.Y == y);
+        if (source is null) return;
+
+        var index = gpu.Chunk.TreeInstances.FindIndex(
+            tree => tree.X == x && tree.Y == y);
+        WorldTreeInstance instance;
+        if (index < 0)
+        {
+            var maximumHealth = TreeMaximumHealth(source.GraphicName);
+            instance = new(
+                Guid.NewGuid(), x, y, source.GraphicName,
+                maximumHealth, maximumHealth,
+                TreeLifecycleState.Standing,
+                RollTreeStickCount(maximumHealth));
+            gpu.Chunk.TreeInstances.Add(instance);
+            index = gpu.Chunk.TreeInstances.Count - 1;
+            QueueChunkSave(gpu.Chunk);
+        }
+        else
+        {
+            instance = gpu.Chunk.TreeInstances[index];
+            if (instance.State == TreeLifecycleState.Stump)
+            {
+                _chatUi.AddMessage(
+                    "There are no branches to gather from this stump.",
+                    ChatMessageStyle.Warning);
+                return;
+            }
+            if (instance.SticksRemaining < 0)
+            {
+                instance = instance with
+                {
+                    SticksRemaining =
+                        RollTreeStickCount(instance.MaxHealth)
+                };
+                gpu.Chunk.TreeInstances[index] = instance;
+                QueueChunkSave(gpu.Chunk);
+            }
+        }
+
+        if (instance.SticksRemaining == 0)
+        {
+            _chatUi.AddMessage(
+                "You find no loose sticks beneath the tree.",
+                ChatMessageStyle.Normal);
+            return;
+        }
+        if (PlayerInventory.IsFull(_activePlayer.Inventory))
+        {
+            _chatUi.AddMessage(
+                "Your inventory is too full to gather a stick.",
+                ChatMessageStyle.Warning);
+            return;
+        }
+
+        _activeTreeId = null;
+        _activeTreeStickGatherId = instance.Id;
+        _player.GatherAt(target);
+    }
+
+    private static int RollTreeStickCount(int maximumHealth)
+    {
+        var rolls = maximumHealth >= 90 ? 3 :
+            maximumHealth >= 55 ? 2 : 1;
+        var sticks = 0;
+        for (var roll = 0; roll < rolls; roll++)
+            sticks += Random.Shared.Next(2);
+        return Math.Min(sticks, 3);
+    }
+
+    private void UpdateTreeStickGather()
+    {
+        if (_player is null || _activeTreeStickGatherId is null)
+            return;
+        if (_player.Action != EntityAction.Gather)
+        {
+            _activeTreeStickGatherId = null;
+            return;
+        }
+        if (_player.ActionTime < GroundItemActionSeconds) return;
+
+        var id = _activeTreeStickGatherId.Value;
+        _activeTreeStickGatherId = null;
+        foreach (var gpu in _worldChunks.Values)
+        {
+            var index = gpu.Chunk.TreeInstances.FindIndex(
+                tree => tree.Id == id);
+            if (index < 0) continue;
+            var instance = gpu.Chunk.TreeInstances[index];
+            if (instance.State != TreeLifecycleState.Standing ||
+                instance.SticksRemaining <= 0)
+                break;
+            if (!PlayerInventory.TryAdd(
+                    _activePlayer?.Inventory, ItemIds.Sticks,
+                    out var inventory))
+            {
+                _chatUi.AddMessage(
+                    "Your inventory is too full to gather a stick.",
+                    ChatMessageStyle.Warning);
+                break;
+            }
+            _activePlayer = _activePlayer! with
+            {
+                Inventory = inventory,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            gpu.Chunk.TreeInstances[index] = instance with
+            {
+                SticksRemaining = instance.SticksRemaining - 1
+            };
+            _saves.SavePlayer(_activePlayer);
+            QueueChunkSave(gpu.Chunk);
+            _chatUi.AddMessage(
+                "You gather a stick from beneath the tree.",
+                ChatMessageStyle.Action);
+            break;
+        }
+        _player.Stop();
     }
 
     private void UpdateTreeCutting()
@@ -2900,25 +3111,33 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void RenderInventoryContextMenu()
     {
-        if (!_inventoryContext.Visible) return;
-        var shadow = _inventoryContext.Bounds;
+        RenderContextMenu(_inventoryContext, 1);
+        RenderContextMenu(_treeContext);
+        RenderContextMenu(_groundObjectContext);
+    }
+
+    private void RenderContextMenu(
+        ContextMenuControlState context, int dangerIndex = -1)
+    {
+        if (!context.Visible) return;
+        var shadow = context.Bounds;
         shadow.X += 3;
         shadow.Y += 3;
         DrawUiColor(shadow, new(0, 0, 0, .55f));
         DrawUiColor(
-            _inventoryContext.Bounds,
+            context.Bounds,
             new(.045f, .040f, .031f, .99f));
         DrawPanelOutline(
-            _inventoryContext.Bounds, 0, new(.018f, .016f, .013f, 1));
+            context.Bounds, 0, new(.018f, .016f, .013f, 1));
         DrawPanelOutline(
-            _inventoryContext.Bounds, 1, new(.40f, .31f, .15f, 1));
+            context.Bounds, 1, new(.40f, .31f, .15f, 1));
         DrawPanelOutline(
-            _inventoryContext.Bounds, 2, new(.10f, .085f, .055f, 1));
+            context.Bounds, 2, new(.10f, .085f, .055f, 1));
 
         var header = new Vector4(
-            _inventoryContext.Bounds.X + 3,
-            _inventoryContext.Bounds.Y + 3,
-            _inventoryContext.Bounds.Z - 6,
+            context.Bounds.X + 3,
+            context.Bounds.Y + 3,
+            context.Bounds.Z - 6,
             ContextMenuControlState.HeaderHeight - 3);
         DrawUiColor(header, new(.075f, .064f, .043f, 1));
         DrawUiText(
@@ -2929,23 +3148,68 @@ internal sealed partial class GameHostWindow : GameWindow
             new(header.X, header.Y + header.W - 1, header.Z, 1),
             new(.35f, .27f, .13f, 1));
 
-        for (var index = 0; index < _inventoryContext.Items.Count; index++)
+        for (var index = 0; index < context.Items.Count; index++)
         {
-            var bounds = _inventoryContext.ItemBounds(index);
-            if (_inventoryContext.HoveredIndex == index)
+            var bounds = context.ItemBounds(index);
+            if (context.HoveredIndex == index)
                 DrawUiColor(bounds, new(.27f, .21f, .105f, .92f));
             DrawUiText(
-                _inventoryContext.Items[index],
+                context.Items[index],
                 VerticallyCenteredTextPosition(
-                    _inventoryContext.Items[index], bounds, 9),
-                index == 1
+                    context.Items[index], bounds, 9),
+                index == dangerIndex
                     ? new(224, 151, 124, 255)
                     : new(224, 213, 175, 255));
-            if (index + 1 < _inventoryContext.Items.Count)
+            if (index + 1 < context.Items.Count)
                 DrawUiColor(
                     new(bounds.X + 5, bounds.Y + bounds.W - 1,
                         bounds.Z - 10, 1),
                     new(.12f, .10f, .065f, 1));
+        }
+    }
+
+    private void HandleTreeContextSelection(int option)
+    {
+        var tree = _treeContextTarget;
+        _treeContextTarget = null;
+        if (tree is null) return;
+        switch (option)
+        {
+            case 0:
+                QueueTreeAction(tree, WorldActionType.CutTree);
+                break;
+            case 1:
+                QueueTreeAction(tree, WorldActionType.GatherTreeSticks);
+                break;
+            case 2:
+                QueueWalk(_treeContextWalkTarget);
+                break;
+            case 3:
+                _chatUi.AddMessage(
+                    $"A {TreeDisplayName(tree.GraphicName).ToLowerInvariant()}.",
+                    ChatMessageStyle.Normal);
+                break;
+        }
+    }
+
+    private void HandleGroundObjectContextSelection(int option)
+    {
+        var groundObject = _groundObjectContextTarget;
+        _groundObjectContextTarget = null;
+        if (groundObject is null) return;
+        switch (option)
+        {
+            case 0:
+                QueueGroundObjectPickup(groundObject);
+                break;
+            case 1:
+                QueueWalk(_groundObjectContextWalkTarget);
+                break;
+            case 2:
+                _chatUi.AddMessage(
+                    ItemCatalog.Get(groundObject.ItemId).Examine,
+                    ChatMessageStyle.Normal);
+                break;
         }
     }
 

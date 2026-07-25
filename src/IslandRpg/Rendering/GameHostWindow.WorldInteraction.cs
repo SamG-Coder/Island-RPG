@@ -227,6 +227,8 @@ internal sealed partial class GameHostWindow
             _gameUi.BlocksWorldInput(pointer) ||
             _chatUi.BlocksWorldInput(pointer) ||
             _inventoryContext.HitTest(pointer) ||
+            _treeContext.HitTest(pointer) ||
+            _groundObjectContext.HitTest(pointer) ||
             _minimapUi.HitTest(pointer))
             return;
 

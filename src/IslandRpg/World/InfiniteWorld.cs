@@ -17,7 +17,8 @@ internal sealed record WorldTreeInstance(
     string TreeType,
     int Health,
     int MaxHealth,
-    TreeLifecycleState State);
+    TreeLifecycleState State,
+    int SticksRemaining = -1);
 internal sealed record WorldGroundObject(
     Guid Id, string ItemId, float X, float Y);
 
@@ -662,7 +663,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 4;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 12;
+    private const int ChunkPayloadVersion = 13;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -860,6 +861,7 @@ internal sealed class WorldChunkStore
                 writer.Write(tree.Health);
                 writer.Write(tree.MaxHealth);
                 writer.Write((byte)tree.State);
+                writer.Write((sbyte)tree.SticksRemaining);
             }
             if (chunk.GroundObjects.Count > WorldChunk.MaximumStoredGroundObjects)
                 throw new InvalidDataException(
@@ -943,9 +945,11 @@ internal sealed class WorldChunkStore
                     reader.ReadString(),
                     reader.ReadInt32(),
                     reader.ReadInt32(),
-                    (TreeLifecycleState)reader.ReadByte());
+                    (TreeLifecycleState)reader.ReadByte(),
+                    payloadVersion >= 13 ? reader.ReadSByte() : -1);
                 if (instance.MaxHealth <= 0 || instance.Health < 0 ||
                     instance.Health > instance.MaxHealth ||
+                    instance.SticksRemaining is < -1 or > 3 ||
                     !Enum.IsDefined(instance.State))
                     throw new InvalidDataException(
                         $"Chunk tree instance is invalid: {instance.Id}");
