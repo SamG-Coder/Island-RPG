@@ -183,6 +183,11 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly int[] _naturalItemTextures = new int[4];
     private readonly SpriteFrame?[] _naturalItemFrames = new SpriteFrame?[4];
     private readonly SpriteFrame?[] _naturalShadowFrames = new SpriteFrame?[4];
+    private readonly int[] _supplementalItemTextures = new int[12];
+    private readonly SpriteFrame?[] _supplementalItemFrames =
+        new SpriteFrame?[12];
+    private readonly SpriteFrame?[] _supplementalShadowFrames =
+        new SpriteFrame?[12];
     private static readonly SpriteFrame WoodcuttingItemsFrame =
         new(128, 64, 0, 0, []);
     private readonly MinimapControlState _minimapUi = new();
@@ -1550,26 +1555,99 @@ internal sealed partial class GameHostWindow : GameWindow
                     "Your inventory is too full to gather a stick.");
                 break;
             }
+            var remaining = instance.SticksRemaining - 1;
+            var seedCount = remaining == 0
+                ? RollTreeSeedCount()
+                : 0;
+            var seedItemId = TreeSeedItem(instance.TreeType);
+            var seedsReceived = 0;
+            for (var seed = 0; seed < seedCount; seed++)
+            {
+                if (!PlayerInventory.TryAdd(
+                        inventory, seedItemId, out var withSeed))
+                    break;
+                inventory = withSeed;
+                seedsReceived++;
+            }
+            var firstSeed = seedsReceived > 0 &&
+                            !_activePlayer!.HasDiscoveredTreeSeed;
             _activePlayer = _activePlayer! with
             {
                 Inventory = inventory,
+                HasDiscoveredTreeSeed =
+                    _activePlayer.HasDiscoveredTreeSeed ||
+                    seedsReceived > 0,
                 UpdatedUtc = DateTime.UtcNow
             };
             gpu.Chunk.TreeInstances[index] = instance with
             {
-                SticksRemaining = instance.SticksRemaining - 1
+                SticksRemaining = remaining
             };
             _saves.SavePlayer(_activePlayer);
             QueueChunkSave(gpu.Chunk);
             _chatUi.AddMessage(
                 $"You gather a stick from beneath the tree " +
                 $"({instance.InitialStickCount -
-                    (instance.SticksRemaining - 1)} / " +
+                    remaining} / " +
                 $"{instance.InitialStickCount} gathered).",
                 ChatMessageStyle.Action);
+            if (seedsReceived > 0)
+            {
+                var seedName = ItemCatalog.Get(seedItemId).Name;
+                _chatUi.AddMessage(
+                    seedsReceived == 1
+                        ? $"You find a {seedName[..^1]} with the last stick!"
+                        : $"You find {seedsReceived} {seedName} with the last stick!",
+                    ChatMessageStyle.Reward);
+            }
+            if (seedCount > seedsReceived)
+                _chatUi.AddMessage(
+                    "You do not have enough inventory space for every seed.",
+                    ChatMessageStyle.Warning);
+            if (firstSeed)
+            {
+                const string thought =
+                    "I wonder what I can do with this...";
+                _chatUi.AddMessage(
+                    thought, ChatMessageStyle.Monologue);
+                ShowOverheadSpeech(thought);
+            }
             break;
         }
         _player.Stop();
+    }
+
+    private static int RollTreeSeedCount()
+    {
+        var roll = Random.Shared.NextSingle();
+        if (roll < .10f) return 2;
+        return roll < .35f ? 1 : 0;
+    }
+
+    private static string TreeSeedItem(string treeType)
+    {
+        if (treeType.StartsWith(
+                "FPAL", StringComparison.OrdinalIgnoreCase))
+            return ItemIds.PalmSeeds;
+        if (treeType.StartsWith(
+                "FPIN", StringComparison.OrdinalIgnoreCase))
+            return ItemIds.PineSeeds;
+        if (treeType.StartsWith(
+                "FOAK", StringComparison.OrdinalIgnoreCase))
+            return ItemIds.OakSeeds;
+        if (treeType.StartsWith(
+                "FJUN", StringComparison.OrdinalIgnoreCase))
+            return ItemIds.JungleTreeSeeds;
+        if (treeType.StartsWith(
+                "FSNO", StringComparison.OrdinalIgnoreCase))
+            return ItemIds.SnowTreeSeeds;
+        if (treeType.StartsWith(
+                "FBAM", StringComparison.OrdinalIgnoreCase))
+            return ItemIds.BambooSeeds;
+        if (treeType.StartsWith(
+                "FCAC", StringComparison.OrdinalIgnoreCase))
+            return ItemIds.CactusSeeds;
+        return ItemIds.TreeSeeds;
     }
 
     private void UpdateTreeCutting()
@@ -3378,7 +3456,8 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         var item = ItemCatalog.Get(itemId);
         var cell = item.SpriteCell;
-        if (item.HasTag(ItemTag.NaturalMaterial))
+        if (item.HasTag(ItemTag.NaturalMaterial) ||
+            item.HasTag(ItemTag.SupplementalSprite))
             return cell is null ? null : new Vector4(0, 0, 1, 1);
         return cell is null
             ? null
@@ -3391,6 +3470,12 @@ internal sealed partial class GameHostWindow : GameWindow
     private int InventoryItemTexture(string itemId)
     {
         var item = ItemCatalog.Get(itemId);
+        if (item.HasTag(ItemTag.SupplementalSprite))
+            return item.SpriteCell is { } supplementalCell &&
+                   (uint)supplementalCell <
+                   (uint)_supplementalItemTextures.Length
+                ? _supplementalItemTextures[supplementalCell]
+                : 0;
         if (!item.HasTag(ItemTag.NaturalMaterial))
             return _woodcuttingItemsTexture;
         return item.SpriteCell is { } cell &&
@@ -3735,6 +3820,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     ChatMessageStyle.Miss => new FSColor(176, 179, 169, 255),
                     ChatMessageStyle.Experience => new FSColor(145, 204, 154, 255),
                     ChatMessageStyle.LevelUp => new FSColor(238, 211, 104, 255),
+                    ChatMessageStyle.Reward => new FSColor(130, 224, 142, 255),
                     ChatMessageStyle.Monologue => new FSColor(196, 202, 218, 255),
                     ChatMessageStyle.Warning => new FSColor(236, 145, 112, 255),
                     _ => new FSColor(218, 207, 166, 255)
@@ -4616,6 +4702,37 @@ internal sealed partial class GameHostWindow : GameWindow
                 _naturalItemTextures[cell] = Upload(frame);
             }
         }
+        var supplementalSheetPath = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Images",
+            "seeds-materials-items.png");
+        if (File.Exists(supplementalSheetPath))
+        {
+            using var stream = File.OpenRead(supplementalSheetPath);
+            var sheet = ImageResult.FromStream(
+                stream, ColorComponents.RedGreenBlueAlpha);
+            const int cellSize = 32;
+            for (var cell = 0;
+                 cell < _supplementalItemTextures.Length;
+                 cell++)
+            {
+                var pixels = new byte[cellSize * cellSize * 4];
+                var cellX = cell % 4 * cellSize;
+                var cellY = cell / 4 * cellSize;
+                for (var row = 0; row < cellSize; row++)
+                    System.Buffer.BlockCopy(
+                        sheet.Data,
+                        ((cellY + row) * sheet.Width + cellX) * 4,
+                        pixels,
+                        row * cellSize * 4,
+                        cellSize * 4);
+                var frame = new SpriteFrame(
+                    cellSize, cellSize, cellSize / 2, 28, pixels);
+                _supplementalItemFrames[cell] = frame;
+                _supplementalShadowFrames[cell] =
+                    ItemShadowGenerator.Create(frame);
+                _supplementalItemTextures[cell] = Upload(frame);
+            }
+        }
         GL.BindTexture(TextureTarget.Texture2D, _minimapTexture);
         GL.TexParameter(
             TextureTarget.Texture2D,
@@ -4843,6 +4960,17 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_woodcuttingShadowFrames[cell] is { } shadowFrame)
                 Place(ItemAtlasKey(cell, shadow: true), null, shadowFrame);
         }
+        for (var cell = 0; cell < _supplementalItemFrames.Length; cell++)
+        {
+            if (_supplementalItemFrames[cell] is { } itemFrame)
+                Place(
+                    SupplementalAtlasKey(cell, shadow: false),
+                    null, itemFrame);
+            if (_supplementalShadowFrames[cell] is { } shadowFrame)
+                Place(
+                    SupplementalAtlasKey(cell, shadow: true),
+                    null, shadowFrame);
+        }
         var requiredHeight = y + rowHeight + padding;
         var atlasHeight = 1;
         while (atlasHeight < requiredHeight) atlasHeight *= 2;
@@ -4885,6 +5013,11 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static string ItemAtlasKey(int cell, bool shadow) =>
         shadow ? $"ITEM_SHADOW#{cell}" : $"ITEM#{cell}";
+
+    private static string SupplementalAtlasKey(int cell, bool shadow) =>
+        shadow
+            ? $"SUPPLEMENTAL_SHADOW#{cell}"
+            : $"SUPPLEMENTAL#{cell}";
 
     private GpuWorldChunk UploadWorldChunk(WorldChunk chunk)
     {

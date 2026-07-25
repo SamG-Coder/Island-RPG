@@ -18,6 +18,7 @@ internal enum ChatMessageStyle
     Miss,
     Experience,
     LevelUp,
+    Reward,
     Monologue,
     Warning
 }

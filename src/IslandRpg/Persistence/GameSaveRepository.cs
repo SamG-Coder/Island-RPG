@@ -21,7 +21,8 @@ internal sealed record PlayerProfile(
     DateTime CreatedUtc,
     DateTime UpdatedUtc,
     int WoodcuttingExperience = 0,
-    string?[]? Inventory = null);
+    string?[]? Inventory = null,
+    bool HasDiscoveredTreeSeed = false);
 
 internal sealed record WorldPlayerState(
     string PlayerId,

@@ -15,5 +15,6 @@
     <Content Include="Resources\Fonts\OFL-Arimo.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\woodcutting-items.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\rocks-sticks-items.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\seeds-materials-items.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

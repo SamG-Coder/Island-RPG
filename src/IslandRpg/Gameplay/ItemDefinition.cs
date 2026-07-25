@@ -8,7 +8,10 @@ internal enum ItemTag
     Log = 1 << 1,
     WoodcuttingMaterial = 1 << 2,
     NaturalMaterial = 1 << 3,
-    Tool = 1 << 4
+    Tool = 1 << 4,
+    Seed = 1 << 5,
+    Mineral = 1 << 6,
+    SupplementalSprite = 1 << 7
 }
 
 internal sealed record ItemDefinition(
@@ -37,6 +40,16 @@ internal static class ItemIds
     public const string LargeRock = "large_rock";
     public const string MediumRock = "medium_rock";
     public const string SmallRocks = "small_rocks";
+    public const string TreeSeeds = "tree_seeds";
+    public const string PalmSeeds = "palm_seeds";
+    public const string PineSeeds = "pine_seeds";
+    public const string OakSeeds = "oak_seeds";
+    public const string JungleTreeSeeds = "jungle_tree_seeds";
+    public const string SnowTreeSeeds = "snow_tree_seeds";
+    public const string BambooSeeds = "bamboo_seeds";
+    public const string CactusSeeds = "cactus_seeds";
+    public const string SharpenedRock = "sharpened_rock";
+    public const string Coal = "coal";
 }
 
 internal static class ItemCatalog
@@ -92,7 +105,49 @@ internal static class ItemCatalog
             [ItemIds.SmallRocks] = new(
                 ItemIds.SmallRocks, "small rocks", "Pebbles",
                 "A handful of small rocks and pebbles.", 3,
-                Tags: ItemTag.NaturalMaterial)
+                Tags: ItemTag.NaturalMaterial),
+            [ItemIds.TreeSeeds] = new(
+                ItemIds.TreeSeeds, "tree seeds", "Tree seed",
+                "Seeds from a common deciduous tree.", 0,
+                Tags: ItemTag.Seed | ItemTag.SupplementalSprite),
+            [ItemIds.PalmSeeds] = new(
+                ItemIds.PalmSeeds, "palm seeds", "Palm seed",
+                "Fibrous seeds that can grow into palm trees.", 1,
+                Tags: ItemTag.Seed | ItemTag.SupplementalSprite),
+            [ItemIds.PineSeeds] = new(
+                ItemIds.PineSeeds, "pine seeds", "Pine seed",
+                "Winged seeds released from a pine cone.", 2,
+                Tags: ItemTag.Seed | ItemTag.SupplementalSprite),
+            [ItemIds.OakSeeds] = new(
+                ItemIds.OakSeeds, "oak seeds", "Oak seed",
+                "Healthy acorns suitable for growing oak trees.", 3,
+                Tags: ItemTag.Seed | ItemTag.SupplementalSprite),
+            [ItemIds.JungleTreeSeeds] = new(
+                ItemIds.JungleTreeSeeds, "jungle tree seeds", "Jungle seed",
+                "Richly coloured seeds from a tropical tree.", 4,
+                Tags: ItemTag.Seed | ItemTag.SupplementalSprite),
+            [ItemIds.SnowTreeSeeds] = new(
+                ItemIds.SnowTreeSeeds, "snow tree seeds", "Snow seed",
+                "Hardy seeds from a tree adapted to frozen climates.", 5,
+                Tags: ItemTag.Seed | ItemTag.SupplementalSprite),
+            [ItemIds.BambooSeeds] = new(
+                ItemIds.BambooSeeds, "bamboo seeds", "Bamboo seed",
+                "A tied cluster of grains for growing bamboo.", 6,
+                Tags: ItemTag.Seed | ItemTag.SupplementalSprite),
+            [ItemIds.CactusSeeds] = new(
+                ItemIds.CactusSeeds, "cactus seeds", "Cactus seed",
+                "Tiny dark seeds collected from a cactus pod.", 7,
+                Tags: ItemTag.Seed | ItemTag.SupplementalSprite),
+            [ItemIds.SharpenedRock] = new(
+                ItemIds.SharpenedRock, "sharpened rock", "Sharp rock",
+                "A stone deliberately knapped to form a sharp edge.", 8,
+                Tags: ItemTag.Tool | ItemTag.NaturalMaterial |
+                      ItemTag.SupplementalSprite),
+            [ItemIds.Coal] = new(
+                ItemIds.Coal, "coal", "Coal",
+                "Dense black coal that burns with strong heat.", 9,
+                Tags: ItemTag.Mineral | ItemTag.NaturalMaterial |
+                      ItemTag.SupplementalSprite)
         };
 
     public static IReadOnlyCollection<ItemDefinition> All =>
