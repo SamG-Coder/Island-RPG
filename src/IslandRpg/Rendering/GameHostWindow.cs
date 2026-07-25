@@ -3243,10 +3243,11 @@ internal sealed partial class GameHostWindow : GameWindow
                 continue;
             var itemUv = InventoryItemUv(itemId);
             var itemTexture = InventoryItemTexture(itemId);
+            var itemFrame = InventoryItemFrame(itemId);
             var hasSprite = itemTexture != 0 && itemUv is not null;
             if (hasSprite)
                 DrawUiSprite(
-                    WoodcuttingItemsFrame,
+                    itemFrame,
                     itemTexture,
                     bounds,
                     uvRectangle: itemUv,
@@ -3273,9 +3274,10 @@ internal sealed partial class GameHostWindow : GameWindow
                 MouseState.Position.X - 16,
                 MouseState.Position.Y - 16, 32, 32);
             var itemTexture = InventoryItemTexture(draggedItemId);
+            var itemFrame = InventoryItemFrame(draggedItemId);
             if (itemTexture != 0 && itemUv is not null)
                 DrawUiSprite(
-                    WoodcuttingItemsFrame,
+                    itemFrame,
                     itemTexture,
                     dragBounds,
                     uvRectangle: itemUv,
@@ -3870,6 +3872,23 @@ internal sealed partial class GameHostWindow : GameWindow
                (uint)cell < (uint)_naturalItemTextures.Length
             ? _naturalItemTextures[cell]
             : 0;
+    }
+
+    private SpriteFrame InventoryItemFrame(string itemId)
+    {
+        var item = ItemCatalog.Get(itemId);
+        if (item.SpriteCell is not { } cell)
+            return WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.StoneToolSprite) &&
+            (uint)cell < (uint)_stoneToolFrames.Length)
+            return _stoneToolFrames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.SupplementalSprite) &&
+            (uint)cell < (uint)_supplementalItemFrames.Length)
+            return _supplementalItemFrames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.NaturalMaterial) &&
+            (uint)cell < (uint)_naturalItemFrames.Length)
+            return _naturalItemFrames[cell] ?? WoodcuttingItemsFrame;
+        return WoodcuttingItemsFrame;
     }
 
     private void RenderTreeHealthBars(Vector4 scene)
