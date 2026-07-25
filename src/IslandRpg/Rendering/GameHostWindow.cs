@@ -49,6 +49,7 @@ internal sealed partial class GameHostWindow : GameWindow
         public int ShoreDistance { get; } = shoreDistance;
         public Vector4 ProjectedBounds { get; } = projectedBounds;
         public float Opacity { get; set; }
+        public WorldVegetationRenderItem[] VegetationRenderItems { get; set; } = [];
     }
     private sealed record SpriteAtlasEntry(
         SpriteFrame Frame, float U0, float V0, float U1, float V1);
@@ -77,7 +78,7 @@ internal sealed partial class GameHostWindow : GameWindow
         QueuedWorldAction? Action = null);
     private sealed record NewWorldPreviewResult(
         string SeedText, long Seed, Vector2 Spawn, byte[] Pixels);
-    private sealed record WorldRenderItem(
+    private readonly record struct WorldRenderItem(
         Vector2 World,
         float Opacity,
         string StableKey,
@@ -331,6 +332,9 @@ internal sealed partial class GameHostWindow : GameWindow
             foreach (var name in Enumerable.Range(1, 9)
                          .Select(index => $"CLF{index:00}_NN"))
                 names.Add(name);
+            foreach (var name in
+                     WorldVegetationGenerator.RequiredGraphicNames)
+                names.Add(name);
         }
 
         if (mode == PreviewMode.Game)
@@ -397,6 +401,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     .Concat(Enumerable.Range(1, 9).Select(index => $"CLF{index:00}_NN"))
                     .SelectMany(name => new[] { name, name[..^2] + "N0" })
                     .Concat(["STUMP_NN", "STUMB_NN"])
+                    .Concat(WorldVegetationGenerator.RequiredGraphicNames)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase)
                 : _island?.Trees
                     .SelectMany(tree => new[] { tree.GraphicName, tree.GraphicName[..^2] + "N0" })
@@ -4002,17 +4007,20 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         GL.UseProgram(_terrainProgram);
         UploadWaterRipples();
-        foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible)
+        var visibleChunks = _worldChunks.Values.Where(IsChunkVisible).ToArray();
+        foreach (var gpu in visibleChunks
                      .OrderBy(gpu => gpu.Chunk.Coordinate.X + gpu.Chunk.Coordinate.Y))
             DrawWorldChunkTerrain(gpu);
         if (_mode == PreviewMode.Game) DrawMoveMarker();
 
         var player = _mode == PreviewMode.Game ? GetPlayerVisual() : null;
         var playerDepth = player?.World.Y ?? float.MaxValue;
-        var shadows = new List<WorldRenderItem>();
-        var objects = new List<WorldRenderItem>();
+        var vegetationCapacity = visibleChunks.Sum(
+            gpu => gpu.VegetationRenderItems.Length);
+        var shadows = new List<WorldRenderItem>(vegetationCapacity);
+        var objects = new List<WorldRenderItem>(vegetationCapacity);
         var playerOccluded = false;
-        foreach (var item in _worldChunks.Values.Where(IsChunkVisible)
+        foreach (var item in visibleChunks
                      .SelectMany(gpu => gpu.Chunk.Cliffs.Select(face => (Face: face, Gpu: gpu)))
                      .OrderBy(item => item.Face.X1 + item.Face.Y1))
         {
@@ -4024,7 +4032,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 $"cliff:{item.Face.X1}:{item.Face.Y1}:{item.Face.X2}:{item.Face.Y2}",
                 AtlasKey: key));
         }
-        foreach (var item in _worldChunks.Values.Where(IsChunkVisible)
+        foreach (var item in visibleChunks
                      .SelectMany(gpu => gpu.Chunk.Trees.Select(tree => (Tree: tree, Gpu: gpu)))
                      .OrderBy(item => item.Tree.X + item.Tree.Y))
         {
@@ -4057,7 +4065,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 AtlasKey: visibleName));
         }
 
-        foreach (var item in _worldChunks.Values.Where(IsChunkVisible)
+        foreach (var item in visibleChunks
                      .SelectMany(gpu => gpu.Chunk.GroundObjects.Select(
                          groundObject => (Object: groundObject, Gpu: gpu))))
         {
@@ -4080,6 +4088,20 @@ internal sealed partial class GameHostWindow : GameWindow
                 item.Gpu.Opacity,
                 $"ground:{item.Object.Id:N}",
                 AtlasKey: itemAtlasKey));
+        }
+
+        foreach (var gpu in visibleChunks)
+        foreach (var vegetation in gpu.VegetationRenderItems)
+        {
+            if (!IsAtlasItemVisible(vegetation.AtlasKey, vegetation.World))
+                continue;
+            if (vegetation.ShadowAtlasKey is { } shadowAtlasKey)
+                shadows.Add(new(
+                    vegetation.World, gpu.Opacity, vegetation.StableKey,
+                    shadowAtlasKey));
+            objects.Add(new(
+                vegetation.World, gpu.Opacity, vegetation.StableKey,
+                vegetation.AtlasKey));
         }
 
         var shadowVertices = new List<float>();
@@ -4141,6 +4163,20 @@ internal sealed partial class GameHostWindow : GameWindow
                 mirror: player.Mirror, wading: player.Wading,
                 teamColor: _activePlayer?.TeamColor ?? 0);
         }
+    }
+
+    private bool IsAtlasItemVisible(string atlasKey, Vector2 world)
+    {
+        if (!_treeAtlas.TryGetValue(atlasKey, out var entry))
+            return false;
+        var screen = SpriteAnchor(world);
+        var scale = SpritePixelScale();
+        var left = screen.X - entry.Frame.HotspotX * scale;
+        var top = screen.Y - entry.Frame.HotspotY * scale;
+        return left + entry.Frame.Width * scale >= 0 &&
+               top + entry.Frame.Height * scale >= 0 &&
+               left <= ReferenceWidth &&
+               top <= ReferenceHeight;
     }
 
     private void RenderGroundItemOutlines()
@@ -4791,18 +4827,20 @@ internal sealed partial class GameHostWindow : GameWindow
                 "STUMP", StringComparison.OrdinalIgnoreCase) ||
                 asset.Definition.Name.StartsWith(
                     "STUMB", StringComparison.OrdinalIgnoreCase);
-            var frames = cliff || stump
+            var vegetation = WorldVegetationGenerator.IsVegetationGraphic(
+                asset.Definition.Name);
+            var frames = cliff || stump || vegetation
                 ? asset.Sprite.Frames
                 : [asset.Sprite.Frames[0]];
             for (var frameIndex = 0; frameIndex < frames.Count; frameIndex++)
             {
                 var frame = frames[frameIndex];
-                var key = cliff || stump
+                var key = cliff || stump || vegetation
                     ? $"{asset.Definition.Name}#{frameIndex}"
                     : asset.Definition.Name;
                 Place(
                     key,
-                    (cliff || stump) && frameIndex == 0
+                    (cliff || stump || vegetation) && frameIndex == 0
                         ? asset.Definition.Name
                         : null,
                     frame);
@@ -4943,10 +4981,13 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float),
             vertices.ToArray(), BufferUsageHint.StaticDraw);
         var weights = UploadChunkBiomeWeights(chunk);
-        return new(
+        var gpu = new GpuWorldChunk(
             chunk, vbo, vertices.Count / 12,
             weights.A, weights.B, weights.C, weights.D, weights.Shore,
             WorldChunkProjection.TerrainBounds(vertices, 12));
+        gpu.VegetationRenderItems = WorldVegetationRenderCache.Build(
+            _worldSeed, chunk.Vegetation);
+        return gpu;
 
         float LayerAt(int x, int y, Biome fallback) =>
             layers[x < 0 || y < 0 || x >= WorldChunk.Size || y >= WorldChunk.Size
@@ -5095,7 +5136,8 @@ internal sealed partial class GameHostWindow : GameWindow
             ShoreDistance = source.ShoreDistance,
             Cliffs = source.Cliffs,
             TreeInstances = source.TreeInstances.ToList(),
-            GroundObjects = source.GroundObjects.ToList()
+            GroundObjects = source.GroundObjects.ToList(),
+            Vegetation = source.Vegetation
         };
         var previous = _saveTail;
         _saveTail = Task.Run(async () =>

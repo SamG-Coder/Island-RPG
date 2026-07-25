@@ -538,6 +538,41 @@ Require(origin.GroundObjects.Count <= 8 &&
     "natural ground objects must be deterministic, capped, and limited to collectible types");
 Require(origin.Tiles.SequenceEqual(repeated.Tiles), "same seed and coordinate must reproduce tiles");
 Require(origin.Trees.SequenceEqual(repeated.Trees), "same seed and coordinate must reproduce trees");
+Require(origin.Vegetation.SequenceEqual(repeated.Vegetation),
+    "same seed and coordinate must reproduce vegetation");
+Require(origin.Vegetation.All(item =>
+        item.CanBecomeInstance == (item.Kind == WorldVegetationKind.BerryBush)),
+    "only harvestable berry vegetation should be flagged to become an instance");
+Require(new[]
+    {
+        "PLANTS", "BUSH_NN", "BUSH_N0", "BUSH2_NN", "BUSH2_N0",
+        "BUSH3_NN", "BUSH3_N0", "FORAG_NN", "FORAGM_NN"
+    }.All(WorldVegetationGenerator.RequiredGraphicNames.Contains),
+    "the world graphics whitelist must include every vegetation and shadow asset");
+Require(origin.Vegetation.All(item =>
+    {
+        var tileX = (int)MathF.Floor(item.X) - origin.Coordinate.X * WorldChunk.Size;
+        var tileY = (int)MathF.Floor(item.Y) - origin.Coordinate.Y * WorldChunk.Size;
+        var tile = origin.Tiles[tileY * WorldChunk.Size + tileX];
+        var relief = new[] { tile.North, tile.East, tile.South, tile.West };
+        return tile.Biome is not (Biome.DeepWater or Biome.ShallowWater or
+                   Biome.RiverWater or Biome.MangroveShallows) &&
+               relief.Max() - relief.Min() <= 2 &&
+               origin.Trees.All(tree => tree.X != tile.X || tree.Y != tile.Y);
+    }),
+    "vegetation must avoid water, steep ground, and occupied tree tiles");
+Require(origin.Vegetation
+        .Where(item => item.GraphicName == "BUSH2_NN")
+        .All(item =>
+        {
+            var tileX = (int)MathF.Floor(item.X) -
+                        origin.Coordinate.X * WorldChunk.Size;
+            var tileY = (int)MathF.Floor(item.Y) -
+                        origin.Coordinate.Y * WorldChunk.Size;
+            var tile = origin.Tiles[tileY * WorldChunk.Size + tileX];
+            return (item.FrameIndex >= 12) == (tile.Biome == Biome.Snow);
+        }),
+    "snow-covered bush frames must only appear on snow material");
 Require(origin.Cliffs.SequenceEqual(repeated.Cliffs),
     "same seed and coordinate must reproduce cliff faces");
 Require(origin.BiomeWeightsA.SequenceEqual(repeated.BiomeWeightsA),
@@ -835,5 +870,6 @@ static WorldChunk CloneAt(WorldChunk source, ChunkCoordinate coordinate) => new(
     ShoreDistance = source.ShoreDistance,
     Cliffs = source.Cliffs,
     TreeInstances = source.TreeInstances.ToList(),
-    GroundObjects = source.GroundObjects.ToList()
+    GroundObjects = source.GroundObjects.ToList(),
+    Vegetation = source.Vegetation
 };

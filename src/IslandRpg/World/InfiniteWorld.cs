@@ -22,6 +22,20 @@ internal sealed record WorldTreeInstance(
     int InitialStickCount = -1);
 internal sealed record WorldGroundObject(
     Guid Id, string ItemId, float X, float Y);
+internal enum WorldVegetationKind : byte
+{
+    Plant,
+    Shrub,
+    FloweringShrub,
+    BerryBush
+}
+internal sealed record WorldVegetation(
+    float X,
+    float Y,
+    string GraphicName,
+    int FrameIndex,
+    WorldVegetationKind Kind,
+    bool CanBecomeInstance);
 
 internal sealed class WorldChunk
 {
@@ -41,6 +55,7 @@ internal sealed class WorldChunk
     public required CliffFace[] Cliffs { get; init; }
     public List<WorldTreeInstance> TreeInstances { get; init; } = [];
     public List<WorldGroundObject> GroundObjects { get; init; } = [];
+    public WorldVegetation[] Vegetation { get; init; } = [];
 }
 
 internal static class InfiniteWorldGenerator
@@ -101,6 +116,8 @@ internal static class InfiniteWorldGenerator
         var weights = GenerateBiomeWeights(seed, coordinate);
         var cliffs = GenerateCliffs(seed, tiles);
         var groundObjects = GenerateGroundObjects(seed, tiles, trees);
+        var vegetation = WorldVegetationGenerator.Generate(
+            seed, tiles, trees);
         return new()
         {
             Coordinate = coordinate,
@@ -112,7 +129,8 @@ internal static class InfiniteWorldGenerator
             BiomeWeightsD = weights.D,
             ShoreDistance = weights.Shore,
             Cliffs = cliffs,
-            GroundObjects = groundObjects
+            GroundObjects = groundObjects,
+            Vegetation = vegetation
         };
     }
 
@@ -1008,7 +1026,9 @@ internal sealed class WorldChunkStore
                 BiomeWeightsC = weights.C, BiomeWeightsD = weights.D,
                 ShoreDistance = weights.Shore, Cliffs = cliffs,
                 TreeInstances = treeInstances,
-                GroundObjects = groundObjects
+                GroundObjects = groundObjects,
+                Vegetation = WorldVegetationGenerator.Generate(
+                    Seed, tiles, trees)
             };
         }
         catch (EndOfStreamException ex)
@@ -1070,7 +1090,9 @@ internal sealed class WorldChunkStore
                 Coordinate = coordinate, Tiles = tiles, Trees = trees,
                 BiomeWeightsA = weights.A, BiomeWeightsB = weights.B,
                 BiomeWeightsC = weights.C, BiomeWeightsD = weights.D,
-                ShoreDistance = weights.Shore, Cliffs = cliffs
+                ShoreDistance = weights.Shore, Cliffs = cliffs,
+                Vegetation = WorldVegetationGenerator.Generate(
+                    Seed, tiles, trees)
             };
         }
         catch (EndOfStreamException ex)
