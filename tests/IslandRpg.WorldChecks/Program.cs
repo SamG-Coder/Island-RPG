@@ -1,8 +1,31 @@
 using IslandRpg.World;
 using IslandRpg.Gameplay;
 using IslandRpg.Persistence;
+using IslandRpg.Rendering;
 using IslandRpg.Rendering.Ui;
 using OpenTK.Mathematics;
+
+Require(FarmingSkill.LevelForExperience(0) == 1 &&
+        FarmingSkill.LevelForExperience(
+            FarmingSkill.ExperienceForLevel(20)) == 20,
+    "farming must use the complete 20-level progression");
+Require(FarmingSkill.PlantingExperience > 0,
+    "planting a seed must award farming experience");
+Require(GameHostWindow.SeedTreeType(ItemIds.OakSeeds) == "FOAK_NN" &&
+        GameHostWindow.SeedTreeType(ItemIds.PineSeeds) == "FPIN_NN" &&
+        GameHostWindow.SeedTreeType(ItemIds.CactusSeeds) == "FCAC_NN" &&
+        GameHostWindow.SeedTreeType(ItemIds.Logs) is null,
+    "each seed must map to its matching tree graphic");
+var morning = WorldTime.At(8 * 60 * 60);
+var midnight = WorldTime.At(0);
+var nextDay = WorldTime.At(24 * 60 * 60);
+Require(morning.Day == 1 && morning.Hour == 8 &&
+        midnight.Daylight < morning.Daylight &&
+        nextDay.Day == 2 && nextDay.Hour == 0,
+    "world time must track day number, clock time, and daylight");
+Require(WorldTime.Advance(0, WorldTime.RealSecondsPerGameDay) ==
+        24 * 60 * 60,
+    "one full game day must take 24 real minutes");
 
 Require(WoodcuttingSkill.LevelForExperience(0) == 1,
     "woodcutting must begin at level one");
@@ -92,6 +115,46 @@ Require(!PlayerInventory.TryBreakRock(
             .ToArray(),
         0, 1, out _),
     "rock splitting must require an empty inventory slot");
+Require(PlayerInventory.TrySharpenRock(
+        [ItemIds.MediumRock, ItemIds.MediumRock],
+        0, 1, out var sharpenedRock) &&
+        sharpenedRock[0] is null &&
+        sharpenedRock[1] == ItemIds.SharpenedRock &&
+        PlayerInventory.Count(sharpenedRock) == 1,
+    "using a medium rock on another must consume both and create a sharp rock");
+Require(!PlayerInventory.TrySharpenRock(
+        [ItemIds.MediumRock, ItemIds.LargeRock],
+        0, 1, out _),
+    "creating a sharp rock must require two medium rocks");
+Require(PlayerInventory.TryCraftAxe(
+        [ItemIds.SharpenedRock, ItemIds.Sticks],
+        0, 1, out var craftedAxe) &&
+        craftedAxe[0] is null &&
+        craftedAxe[1] == ItemIds.Axe &&
+        PlayerInventory.Count(craftedAxe) == 1,
+    "using a sharp rock on sticks must consume both and create an axe");
+Require(!PlayerInventory.TryCraftAxe(
+        [ItemIds.SharpenedRock, ItemIds.Logs],
+        0, 1, out _),
+    "crafting an axe must require sticks");
+Require(PlayerInventory.TryCarvePlank(
+        [ItemIds.SharpenedRock, ItemIds.Logs],
+        0, 1, .25f, out var carvedPlank, out var sharpRockSurvived) &&
+        carvedPlank[0] == ItemIds.SharpenedRock &&
+        carvedPlank[1] == ItemIds.Plank &&
+        !sharpRockSurvived,
+    "using a sharp rock on a log must create a plank and usually keep the tool");
+Require(PlayerInventory.TryCarvePlank(
+        [ItemIds.SharpenedRock, ItemIds.OakLogs],
+        0, 1, .249f, out var carvedOakPlank, out var sharpRockDestroyed) &&
+        carvedOakPlank[0] is null &&
+        carvedOakPlank[1] == ItemIds.Plank &&
+        sharpRockDestroyed,
+    "carving a plank must have a twenty-five percent sharp-rock break chance");
+Require(ItemCatalog.Get(ItemIds.Plank) is var plankDefinition &&
+        plankDefinition.SpriteCell == 7 &&
+        plankDefinition.HasTag(ItemTag.WoodcuttingMaterial),
+    "the crafted plank must be registered in the item catalogue");
 
 var contextMenu = new ContextMenuControlState();
 var selectedContextItem = -1;

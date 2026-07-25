@@ -10,7 +10,8 @@ internal sealed record WorldProfile(
     long Seed,
     DateTime CreatedUtc,
     DateTime UpdatedUtc,
-    string? LastPlayerId = null);
+    string? LastPlayerId = null,
+    double ElapsedGameSeconds = 8 * 60 * 60);
 
 internal sealed record PlayerProfile(
     string Id,
@@ -22,7 +23,8 @@ internal sealed record PlayerProfile(
     DateTime UpdatedUtc,
     int WoodcuttingExperience = 0,
     string?[]? Inventory = null,
-    bool HasDiscoveredTreeSeed = false);
+    bool HasDiscoveredTreeSeed = false,
+    int FarmingExperience = 0);
 
 internal sealed record WorldPlayerState(
     string PlayerId,

@@ -32,7 +32,7 @@ internal sealed class WorldChunk
     public const int WeightTextureSize = (Size + WeightHaloTiles * 2) * WeightSamplesPerTile;
     public required ChunkCoordinate Coordinate { get; init; }
     public required IslandTile[] Tiles { get; init; }
-    public required IslandTree[] Trees { get; init; }
+    public required IslandTree[] Trees { get; set; }
     public required byte[] BiomeWeightsA { get; init; }
     public required byte[] BiomeWeightsB { get; init; }
     public required byte[] BiomeWeightsC { get; init; }

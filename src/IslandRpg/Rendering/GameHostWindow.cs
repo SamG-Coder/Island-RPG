@@ -221,6 +221,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private bool _gameRightWasDown;
     private bool _inventoryRightWasDown;
     private bool _inventoryLeftWasDown;
+    private bool _skillsLeftWasDown;
+    private int _selectedSkill = -1;
     private readonly GameUiControlState _gameUi = new();
     private readonly ChatUiControlState _chatUi = new();
     private readonly RepeatedActionMonologue _repeatedActions = new();
@@ -249,6 +251,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private Vector2 _camera;
     private float _zoom = 1;
     private float _waterTime;
+    private double _worldGameSeconds;
 
     public AssetCatalog? Catalog => _catalog;
 
@@ -807,6 +810,8 @@ internal sealed partial class GameHostWindow : GameWindow
             UnloadWorldChunk(coordinate, save: false);
 
         _activeWorld = world with { LastPlayerId = player.Id };
+        _worldGameSeconds = Math.Max(
+            0, _activeWorld.ElapsedGameSeconds);
         _activePlayer = player;
         _saves.SaveWorld(_activeWorld);
         _worldStore = new WorldChunkStore(
@@ -857,6 +862,13 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_selectedPlayer?.Id == _activePlayer.Id)
             _selectedPlayer = _activePlayer;
         if (_activeWorld is not null)
+        {
+            _activeWorld = _activeWorld with
+            {
+                ElapsedGameSeconds = _worldGameSeconds,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            _saves.SaveWorld(_activeWorld);
             _saves.SaveWorldPlayer(
                 _activeWorld.Id,
                 new(
@@ -864,6 +876,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     _player.Position.X,
                     _player.Position.Y,
                     DateTime.UtcNow));
+        }
     }
 
     private void FinishPendingMenuChunk()
@@ -1018,6 +1031,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private void UpdateGame(float elapsed)
     {
         if (_player is null) return;
+        _worldGameSeconds = WorldTime.Advance(
+            _worldGameSeconds, elapsed);
         if (_pendingPathTask is { IsCompleted: true })
         {
             if (_pendingPathTask.IsFaulted)
@@ -1166,6 +1181,7 @@ internal sealed partial class GameHostWindow : GameWindow
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
+        UpdateSkillsPanelInput(MouseState.Position, leftDown);
         UpdateInventoryDrag(MouseState.Position, leftDown);
         _inventoryLeftWasDown = leftDown;
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
@@ -1186,7 +1202,10 @@ internal sealed partial class GameHostWindow : GameWindow
                 _groundObjectContext.Close();
                 _inventoryContext.Open(
                     MouseState.Position,
-                    ["Use", "Drop", "Examine"],
+                    ItemCatalog.Get(inventory[slot]!)
+                        .HasTag(ItemTag.Seed)
+                        ? ["Plant", "Drop", "Examine"]
+                        : ["Use", "Drop", "Examine"],
                     scene);
                 break;
             }
@@ -1202,6 +1221,29 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_chatUi.Input.Focused &&
             KeyboardState.IsKeyPressed(Keys.Backspace))
             _chatUi.Backspace();
+    }
+
+    private void UpdateSkillsPanelInput(Vector2 pointer, bool leftDown)
+    {
+        if (_gameUi.ActivePanel != GameUiPanel.Skills)
+        {
+            _skillsLeftWasDown = leftDown;
+            return;
+        }
+        if (leftDown && !_skillsLeftWasDown)
+        {
+            var panel = _gameUi.Panel.Bounds;
+            if (_selectedSkill < 0)
+            {
+                if (SkillListItemBounds(panel, 0).Contains(pointer))
+                    _selectedSkill = 0;
+                else if (SkillListItemBounds(panel, 1).Contains(pointer))
+                    _selectedSkill = 1;
+            }
+            else if (SkillBackBounds(panel).Contains(pointer))
+                _selectedSkill = -1;
+        }
+        _skillsLeftWasDown = leftDown;
     }
 
     private bool IsPointerOverGameUi(Vector2 mouse) =>
@@ -2208,6 +2250,9 @@ internal sealed partial class GameHostWindow : GameWindow
         else RenderLoading();
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         PresentScene();
+        if (_screen == ScreenState.WorldPreview &&
+            _mode == PreviewMode.Game && !_atlasOpen)
+            RenderDayNightOverlay();
         if (_screen is ScreenState.LoadingAssets or ScreenState.PreparingGpu)
         {
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
@@ -2912,6 +2957,7 @@ internal sealed partial class GameHostWindow : GameWindow
         RenderOverheadSpeech(scene);
         RenderMinimap();
         RenderChatUi();
+        RenderWorldClock(scene);
         if (_gameUi.Panel.Visible)
             DrawAoEPanelBorder(_gameUi.Panel.Bounds);
         if (_gameUi.ActivePanel == GameUiPanel.Skills)
@@ -2925,6 +2971,32 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawUiButtonCaption("Bag", _gameUi.InventoryButton.Bounds);
         RenderInventoryContextMenu();
         _uiOpacity = 1;
+    }
+
+    private void RenderDayNightOverlay()
+    {
+        var time = WorldTime.At(_worldGameSeconds);
+        var darkness = 1 - time.Daylight;
+        if (darkness <= .01f) return;
+        var scene = SceneClientBounds();
+        DrawUiColor(
+            scene,
+            new Vector4(
+                .018f, .035f, .10f,
+                .60f * darkness * darkness));
+    }
+
+    private void RenderWorldClock(Vector4 scene)
+    {
+        var time = WorldTime.At(_worldGameSeconds);
+        var bounds = new Vector4(
+            scene.X + scene.Z * .5f - 88,
+            scene.Y + 10, 176, 29);
+        DrawUiColor(bounds, new(.025f, .023f, .019f, .82f));
+        DrawPanelOutline(bounds, 1, new(.34f, .27f, .14f, .92f));
+        DrawCenteredUiText(
+            $"Day {time.Day}  {time.Hour:00}:{time.Minute:00}",
+            bounds, new(232, 219, 177, 255));
     }
 
     private void ShowOverheadSpeech(string message)
@@ -3020,28 +3092,58 @@ internal sealed partial class GameHostWindow : GameWindow
     private void RenderSkillsPanel()
     {
         var panel = _gameUi.Panel.Bounds;
-        var experience = _activePlayer?.WoodcuttingExperience ?? 0;
-        var level = WoodcuttingSkill.LevelForExperience(experience);
-        var currentFloor = WoodcuttingSkill.ExperienceForLevel(level);
-        var nextFloor = level >= WoodcuttingSkill.MaximumLevel
+        DrawPanelCaption("Skills", panel);
+        if (_selectedSkill < 0)
+        {
+            DrawSkillListItem(
+                panel, 0, "Woodcutting",
+                WoodcuttingSkill.LevelForExperience(
+                    _activePlayer?.WoodcuttingExperience ?? 0));
+            DrawSkillListItem(
+                panel, 1, "Farming",
+                FarmingSkill.LevelForExperience(
+                    _activePlayer?.FarmingExperience ?? 0));
+            return;
+        }
+
+        var farming = _selectedSkill == 1;
+        var name = farming ? "Farming" : "Woodcutting";
+        var experience = farming
+            ? _activePlayer?.FarmingExperience ?? 0
+            : _activePlayer?.WoodcuttingExperience ?? 0;
+        var level = farming
+            ? FarmingSkill.LevelForExperience(experience)
+            : WoodcuttingSkill.LevelForExperience(experience);
+        var maximumLevel = farming
+            ? FarmingSkill.MaximumLevel
+            : WoodcuttingSkill.MaximumLevel;
+        var currentFloor = farming
+            ? FarmingSkill.ExperienceForLevel(level)
+            : WoodcuttingSkill.ExperienceForLevel(level);
+        var nextFloor = level >= maximumLevel
             ? currentFloor
-            : WoodcuttingSkill.ExperienceForLevel(level + 1);
-        var progress = level >= WoodcuttingSkill.MaximumLevel
+            : farming
+                ? FarmingSkill.ExperienceForLevel(level + 1)
+                : WoodcuttingSkill.ExperienceForLevel(level + 1);
+        var progress = level >= maximumLevel
             ? 1f
             : (experience - currentFloor) /
               (float)Math.Max(1, nextFloor - currentFloor);
 
-        DrawPanelCaption("Skills", panel);
+        var back = SkillBackBounds(panel);
+        DrawUiColor(back, new(.11f, .09f, .055f, .95f));
+        DrawPanelOutline(back, 1, new(.40f, .31f, .15f, 1));
+        DrawCenteredUiText("Back", back, new(224, 213, 175, 255));
         DrawUiText(
-            "Woodcutting",
-            new System.Numerics.Vector2(panel.X + 18, panel.Y + 58),
+            name,
+            new System.Numerics.Vector2(panel.X + 18, panel.Y + 86),
             new(229, 218, 177, 255));
         DrawUiText(
-            $"Level {level}/{WoodcuttingSkill.MaximumLevel}",
-            new System.Numerics.Vector2(panel.X + 18, panel.Y + 82),
+            $"Level {level}/{maximumLevel}",
+            new System.Numerics.Vector2(panel.X + 18, panel.Y + 110),
             new(205, 194, 158, 255));
 
-        var track = new Vector4(panel.X + 18, panel.Y + 112, panel.Z - 36, 18);
+        var track = new Vector4(panel.X + 18, panel.Y + 140, panel.Z - 36, 18);
         DrawUiColor(track, new(.035f, .032f, .027f, .98f));
         if (progress > 0)
             DrawUiColor(
@@ -3049,22 +3151,51 @@ internal sealed partial class GameHostWindow : GameWindow
                     MathF.Round((track.Z - 4) * progress), track.W - 4),
                 new(.37f, .50f, .18f, 1));
         DrawPanelOutline(track, 0, new(.25f, .21f, .13f, 1));
-        var progressText = level >= WoodcuttingSkill.MaximumLevel
+        var progressText = level >= maximumLevel
             ? "Maximum level"
             : $"{experience - currentFloor}/{nextFloor - currentFloor} XP";
         DrawCenteredUiText(
             progressText, track, new(234, 224, 186, 255));
         DrawUiText(
-            level >= WoodcuttingSkill.MaximumLevel
+            level >= maximumLevel
                 ? $"Total XP: {experience}"
-                : $"{WoodcuttingSkill.ExperienceToNextLevel(experience)} XP to next level",
-            new System.Numerics.Vector2(panel.X + 18, panel.Y + 145),
+                : $"{(farming ? FarmingSkill.ExperienceToNextLevel(experience) : WoodcuttingSkill.ExperienceToNextLevel(experience))} XP to next",
+            new System.Numerics.Vector2(panel.X + 18, panel.Y + 173),
             new(190, 181, 150, 255));
         DrawUiText(
-            $"Hit chance: {WoodcuttingSkill.HitChance(level) * 100:0}%",
-            new System.Numerics.Vector2(panel.X + 18, panel.Y + 174),
+            farming
+                ? "Plant seeds to gain XP"
+                : $"Hit chance: {WoodcuttingSkill.HitChance(level) * 100:0}%",
+            new System.Numerics.Vector2(panel.X + 18, panel.Y + 202),
             new(190, 181, 150, 255));
     }
+
+    private void DrawSkillListItem(
+        Vector4 panel, int index, string name, int level)
+    {
+        var bounds = SkillListItemBounds(panel, index);
+        var hovered = bounds.Contains(MouseState.Position);
+        DrawUiColor(
+            bounds,
+            hovered
+                ? new(.18f, .145f, .075f, .98f)
+                : new(.075f, .064f, .043f, .96f));
+        DrawPanelOutline(bounds, 1, new(.35f, .27f, .13f, 1));
+        DrawUiText(
+            name,
+            new System.Numerics.Vector2(bounds.X + 10, bounds.Y + 9),
+            new(229, 218, 177, 255));
+        DrawUiText(
+            $"Level {level}",
+            new System.Numerics.Vector2(bounds.X + 10, bounds.Y + 31),
+            new(190, 181, 150, 255));
+    }
+
+    private static Vector4 SkillListItemBounds(Vector4 panel, int index) =>
+        new(panel.X + 12, panel.Y + 48 + index * 64, panel.Z - 24, 54);
+
+    private static Vector4 SkillBackBounds(Vector4 panel) =>
+        new(panel.X + 12, panel.Y + 48, 58, 27);
 
     private void RenderInventoryPanel()
     {
@@ -3249,6 +3380,61 @@ internal sealed partial class GameHostWindow : GameWindow
 
         var source = inventory[_activeInventorySlot]!;
         var target = inventory[slot]!;
+        if (source == ItemIds.SharpenedRock &&
+            ItemCatalog.Get(target).HasTag(ItemTag.Log) &&
+            PlayerInventory.TryCarvePlank(
+                inventory, _activeInventorySlot, slot,
+                Random.Shared.NextSingle(), out var carvedPlank,
+                out var sharpRockDestroyed))
+        {
+            _activePlayer = _activePlayer! with
+            {
+                Inventory = carvedPlank,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            _saves.SavePlayer(_activePlayer);
+            _chatUi.AddMessage(
+                sharpRockDestroyed
+                    ? "You carve the log into a plank, but the sharp rock breaks."
+                    : "You carve the log into a plank with the sharp rock.",
+                ChatMessageStyle.Action);
+            _activeInventorySlot = -1;
+            return;
+        }
+        if (source == ItemIds.SharpenedRock &&
+            target == ItemIds.Sticks &&
+            PlayerInventory.TryCraftAxe(
+                inventory, _activeInventorySlot, slot, out var craftedAxe))
+        {
+            _activePlayer = _activePlayer! with
+            {
+                Inventory = craftedAxe,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            _saves.SavePlayer(_activePlayer);
+            _chatUi.AddMessage(
+                "You fasten the sharp rock to the sticks and create an axe.",
+                ChatMessageStyle.Action);
+            _activeInventorySlot = -1;
+            return;
+        }
+        if (source == ItemIds.MediumRock &&
+            target == ItemIds.MediumRock &&
+            PlayerInventory.TrySharpenRock(
+                inventory, _activeInventorySlot, slot, out var sharpened))
+        {
+            _activePlayer = _activePlayer! with
+            {
+                Inventory = sharpened,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            _saves.SavePlayer(_activePlayer);
+            _chatUi.AddMessage(
+                "You strike the rocks together and create a sharp rock.",
+                ChatMessageStyle.Action);
+            _activeInventorySlot = -1;
+            return;
+        }
         if (source == ItemIds.LargeRock &&
             target is ItemIds.LargeRock or ItemIds.MediumRock)
         {
@@ -3418,6 +3604,11 @@ internal sealed partial class GameHostWindow : GameWindow
         var item = ItemCatalog.Get(itemId);
         if (option == 0)
         {
+            if (item.HasTag(ItemTag.Seed))
+            {
+                TryPlantSeed(slot, itemId);
+                return;
+            }
             ActivateInventorySlot(slot);
             return;
         }
@@ -3438,6 +3629,116 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         TryDropGroundObject(slot, itemId);
     }
+
+    private void TryPlantSeed(int slot, string itemId)
+    {
+        if (_activePlayer is null || _player is null) return;
+        var treeType = SeedTreeType(itemId);
+        if (treeType is null) return;
+
+        var originX = (int)MathF.Floor(_player.Position.X);
+        var originY = (int)MathF.Floor(_player.Position.Y);
+        (int X, int Y, GpuWorldChunk Gpu)? planting = null;
+        (int X, int Y)[] offsets =
+        [
+            (0, 1), (1, 0), (0, -1), (-1, 0),
+            (1, 1), (1, -1), (-1, 1), (-1, -1)
+        ];
+        foreach (var (offsetX, offsetY) in offsets)
+        {
+            var x = originX + offsetX;
+            var y = originY + offsetY;
+            var coordinate = new ChunkCoordinate(
+                FloorDiv(x, WorldChunk.Size),
+                FloorDiv(y, WorldChunk.Size));
+            if (!_worldChunks.TryGetValue(coordinate, out var gpu))
+                continue;
+            var tile = gpu.Chunk.Tiles.FirstOrDefault(
+                candidate => candidate.X == x && candidate.Y == y);
+            if (tile is null ||
+                tile.Biome is Biome.DeepWater or Biome.ShallowWater or
+                    Biome.RiverWater or Biome.MangroveShallows ||
+                gpu.Chunk.Trees.Any(tree => tree.X == x && tree.Y == y) ||
+                gpu.Chunk.GroundObjects.Any(item =>
+                    (int)MathF.Floor(item.X) == x &&
+                    (int)MathF.Floor(item.Y) == y))
+                continue;
+            planting = (x, y, gpu);
+            break;
+        }
+        if (planting is null)
+        {
+            ReportBlockedAction(
+                "seed-no-planting-space",
+                "There is no clear patch of land nearby for that seed.");
+            return;
+        }
+
+        var inventory = PlayerInventory.Normalize(_activePlayer.Inventory);
+        if ((uint)slot >= (uint)inventory.Length ||
+            inventory[slot] != itemId)
+            return;
+        inventory[slot] = null;
+        var (plantX, plantY, targetGpu) = planting.Value;
+        targetGpu.Chunk.Trees =
+        [
+            .. targetGpu.Chunk.Trees,
+            new IslandTree(plantX, plantY, treeType)
+        ];
+        var maximumHealth = TreeMaximumHealth(treeType);
+        targetGpu.Chunk.TreeInstances.Add(new(
+            Guid.NewGuid(), plantX, plantY, treeType,
+            maximumHealth, maximumHealth,
+            TreeLifecycleState.Standing, 0, 0));
+        QueueChunkSave(targetGpu.Chunk);
+        _activePlayer = _activePlayer with
+        {
+            Inventory = inventory,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        AwardFarmingExperience(FarmingSkill.PlantingExperience);
+        _chatUi.AddMessage(
+            $"You plant the {ItemCatalog.Get(itemId).Name}.",
+            ChatMessageStyle.Action);
+    }
+
+    private void AwardFarmingExperience(int amount)
+    {
+        if (_activePlayer is null || amount <= 0) return;
+        var previousLevel = FarmingSkill.LevelForExperience(
+            _activePlayer.FarmingExperience);
+        var maximumExperience = FarmingSkill.ExperienceForLevel(
+            FarmingSkill.MaximumLevel);
+        var experience = Math.Min(
+            maximumExperience,
+            _activePlayer.FarmingExperience + amount);
+        _activePlayer = _activePlayer with
+        {
+            FarmingExperience = experience,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        _saves.SavePlayer(_activePlayer);
+        var level = FarmingSkill.LevelForExperience(experience);
+        _chatUi.AddMessage(
+            $"+{amount} Farming XP.", ChatMessageStyle.Experience);
+        if (level > previousLevel)
+            _chatUi.AddMessage(
+                $"Your Farming level is now {level}.",
+                ChatMessageStyle.LevelUp);
+    }
+
+    internal static string? SeedTreeType(string itemId) => itemId switch
+    {
+        ItemIds.TreeSeeds => "TREEA_NN",
+        ItemIds.PalmSeeds => "FPAL_NN",
+        ItemIds.PineSeeds => "FPIN_NN",
+        ItemIds.OakSeeds => "FOAK_NN",
+        ItemIds.JungleTreeSeeds => "FJUN_NN",
+        ItemIds.SnowTreeSeeds => "FSNO_NN",
+        ItemIds.BambooSeeds => "FBAM_NN",
+        ItemIds.CactusSeeds => "FCAC_NN",
+        _ => null
+    };
 
     private void DrawPanelCaption(string caption, Vector4 panel)
     {

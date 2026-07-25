@@ -56,6 +56,59 @@ internal static class PlayerInventory
         return true;
     }
 
+    public static bool TrySharpenRock(
+        string?[]? items, int toolSlot, int targetSlot,
+        out string?[] updated)
+    {
+        updated = Normalize(items);
+        if (toolSlot == targetSlot ||
+            (uint)toolSlot >= Capacity ||
+            (uint)targetSlot >= Capacity ||
+            updated[toolSlot] != ItemIds.MediumRock ||
+            updated[targetSlot] != ItemIds.MediumRock)
+            return false;
+        updated[toolSlot] = null;
+        updated[targetSlot] = ItemIds.SharpenedRock;
+        return true;
+    }
+
+    public static bool TryCraftAxe(
+        string?[]? items, int toolSlot, int targetSlot,
+        out string?[] updated)
+    {
+        updated = Normalize(items);
+        if (toolSlot == targetSlot ||
+            (uint)toolSlot >= Capacity ||
+            (uint)targetSlot >= Capacity ||
+            updated[toolSlot] != ItemIds.SharpenedRock ||
+            updated[targetSlot] != ItemIds.Sticks)
+            return false;
+        updated[toolSlot] = null;
+        updated[targetSlot] = ItemIds.Axe;
+        return true;
+    }
+
+    public static bool TryCarvePlank(
+        string?[]? items, int toolSlot, int targetSlot,
+        float toolDestructionRoll, out string?[] updated,
+        out bool toolDestroyed)
+    {
+        updated = Normalize(items);
+        toolDestroyed = false;
+        if (toolSlot == targetSlot ||
+            (uint)toolSlot >= Capacity ||
+            (uint)targetSlot >= Capacity ||
+            updated[toolSlot] != ItemIds.SharpenedRock ||
+            !ItemCatalog.Get(updated[targetSlot] ?? string.Empty)
+                .HasTag(ItemTag.Log))
+            return false;
+        updated[targetSlot] = ItemIds.Plank;
+        toolDestroyed = toolDestructionRoll < .25f;
+        if (toolDestroyed)
+            updated[toolSlot] = null;
+        return true;
+    }
+
     public static bool TrySwap(
         string?[]? items, int source, int target, out string?[] updated)
     {
