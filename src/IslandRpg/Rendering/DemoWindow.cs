@@ -59,7 +59,7 @@ internal sealed class DemoWindow : GameWindow
         GL.ClearColor(0.12f, 0.12f, 0.12f, 1);
         GL.Enable(EnableCap.Blend);
         GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-        _program = CreateProgram();
+        _program = GameShaderPrograms.CreateDemoProgram();
         _vao = GL.GenVertexArray();
         GL.BindVertexArray(_vao);
         if (_catalogSprites is null)
@@ -203,24 +203,6 @@ internal sealed class DemoWindow : GameWindow
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
         return texture;
-    }
-
-    private static int CreateProgram()
-    {
-        const string vertex = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uv; out vec2 tex; void main(){tex=uv;gl_Position=vec4(p,0,1);}";
-        const string fragment = "#version 330 core\nin vec2 tex; out vec4 color; uniform sampler2D image; uniform vec4 tint; uniform int useTexture; void main(){color=useTexture==1?texture(image,tex):tint;}";
-        int Compile(ShaderType type, string source)
-        {
-            var shader = GL.CreateShader(type); GL.ShaderSource(shader, source); GL.CompileShader(shader);
-            GL.GetShader(shader, ShaderParameter.CompileStatus, out var ok);
-            if (ok == 0) throw new InvalidOperationException(GL.GetShaderInfoLog(shader));
-            return shader;
-        }
-        var vs = Compile(ShaderType.VertexShader, vertex);
-        var fs = Compile(ShaderType.FragmentShader, fragment);
-        var program = GL.CreateProgram(); GL.AttachShader(program, vs); GL.AttachShader(program, fs); GL.LinkProgram(program);
-        GL.DeleteShader(vs); GL.DeleteShader(fs);
-        return program;
     }
 
     protected override void OnUnload()

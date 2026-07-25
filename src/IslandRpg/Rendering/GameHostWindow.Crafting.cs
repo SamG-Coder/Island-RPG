@@ -83,9 +83,15 @@ internal sealed partial class GameHostWindow
     private void UpdateCraftingWindowInput(
         Vector2 pointer, bool leftDown)
     {
-        _inventoryContext.UpdatePointer(pointer, leftDown);
+        var wasOpen = _craftingWindow.Visible;
         _craftingWindow.UpdatePointer(
             SceneClientBounds(), pointer, leftDown);
+        if (!_craftingWindow.Visible)
+        {
+            if (wasOpen) CloseCraftingWindow();
+            return;
+        }
+        _inventoryContext.UpdatePointer(pointer, leftDown);
         var inventoryPanel = new InventoryPanelState(
             CraftingWindowState.InventoryBounds(
                 CraftingWindowBounds()),
@@ -96,8 +102,6 @@ internal sealed partial class GameHostWindow
         UpdateInventoryInteraction(
             inventoryPanel, pointer, leftDown,
             MouseState.IsButtonDown(MouseButton.Right));
-        if (!_craftingWindow.Visible)
-            CloseCraftingWindow();
     }
 
     private void RenderCraftingWindow()
