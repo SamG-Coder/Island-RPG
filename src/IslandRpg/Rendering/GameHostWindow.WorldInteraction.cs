@@ -154,9 +154,9 @@ internal sealed partial class GameHostWindow
         if (!PlayerInventory.TryAdd(
                 _activePlayer.Inventory, itemId, out var inventory))
         {
-            _chatUi.AddMessage(
-                "Your inventory is too full to pick that up.",
-                ChatMessageStyle.Warning);
+            ReportBlockedAction(
+                "pickup-inventory-full",
+                "Your inventory is too full to pick that up.");
             return;
         }
         if (!chunk.Chunk.GroundObjects.Remove(groundObject)) return;
@@ -177,9 +177,9 @@ internal sealed partial class GameHostWindow
         if (_player is null || _activePlayer is null) return;
         if (PlayerInventory.IsFull(_activePlayer.Inventory))
         {
-            _chatUi.AddMessage(
-                "Your inventory is too full to pick that up.",
-                ChatMessageStyle.Warning);
+            ReportBlockedAction(
+                "pickup-inventory-full",
+                "Your inventory is too full to pick that up.");
             _player.Stop();
             return;
         }
@@ -339,14 +339,14 @@ internal sealed partial class GameHostWindow
             !InventoryContainsAt(inventorySlot, itemId) ||
             !PlayerInventory.CanDrop(itemId))
         {
-            _chatUi.AddMessage(
-                "That item is no longer available to drop.",
-                ChatMessageStyle.Warning);
+            ReportBlockedAction(
+                "drop-item-unavailable",
+                "That item is no longer available to drop.");
             return;
         }
         if (!CanPlaceGroundObjectAt(target, out _, out var reason))
         {
-            _chatUi.AddMessage(reason, ChatMessageStyle.Warning);
+            ReportBlockedAction("drop-location-blocked", reason);
             return;
         }
 
@@ -370,16 +370,16 @@ internal sealed partial class GameHostWindow
         _activeGroundDrop = null;
         if (!InventoryContainsAt(drop.InventorySlot, drop.ItemId))
         {
-            _chatUi.AddMessage(
-                "That item is no longer available to drop.",
-                ChatMessageStyle.Warning);
+            ReportBlockedAction(
+                "drop-item-unavailable",
+                "That item is no longer available to drop.");
             _player.Stop();
             return;
         }
         if (!CanPlaceGroundObjectAt(
                 drop.Target, out var gpu, out var reason))
         {
-            _chatUi.AddMessage(reason, ChatMessageStyle.Warning);
+            ReportBlockedAction("drop-location-blocked", reason);
             _player.Stop();
             return;
         }
@@ -489,9 +489,7 @@ internal sealed partial class GameHostWindow
                 _player.Position, out _, out var dropPosition,
                 out var reason))
         {
-            _chatUi.AddMessage(
-                reason,
-                ChatMessageStyle.Warning);
+            ReportBlockedAction("drop-location-blocked", reason);
             return;
         }
 

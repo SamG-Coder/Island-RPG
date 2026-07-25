@@ -218,6 +218,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private bool _inventoryLeftWasDown;
     private readonly GameUiControlState _gameUi = new();
     private readonly ChatUiControlState _chatUi = new();
+    private readonly RepeatedActionMonologue _repeatedActions = new();
     private string? _overheadSpeech;
     private double _overheadSpeechExpiresAt;
     private readonly ContextMenuControlState _inventoryContext = new();
@@ -1386,17 +1387,17 @@ internal sealed partial class GameHostWindow : GameWindow
         if (source is null) return;
         if (!PlayerInventory.HasAxe(_activePlayer?.Inventory))
         {
-            _chatUi.AddMessage(
-                "You need an axe to chop down this tree.",
-                ChatMessageStyle.Warning);
+            ReportBlockedAction(
+                "chop-without-axe",
+                "You need an axe to chop down this tree.");
             _player.Stop();
             return;
         }
         if (PlayerInventory.IsFull(_activePlayer?.Inventory))
         {
-            _chatUi.AddMessage(
-                "Your inventory is full. You cannot begin woodcutting.",
-                ChatMessageStyle.Warning);
+            ReportBlockedAction(
+                "chop-inventory-full",
+                "Your inventory is full. You cannot begin woodcutting.");
             _player.Stop();
             return;
         }
@@ -1460,9 +1461,9 @@ internal sealed partial class GameHostWindow : GameWindow
             instance = gpu.Chunk.TreeInstances[index];
             if (instance.State == TreeLifecycleState.Stump)
             {
-                _chatUi.AddMessage(
-                    "There are no branches to gather from this stump.",
-                    ChatMessageStyle.Warning);
+                ReportBlockedAction(
+                    "gather-from-stump",
+                    "There are no branches to gather from this stump.");
                 return;
             }
             if (instance.SticksRemaining < 0)
@@ -1490,16 +1491,16 @@ internal sealed partial class GameHostWindow : GameWindow
 
         if (instance.SticksRemaining == 0)
         {
-            _chatUi.AddMessage(
-                "You find no loose sticks beneath the tree.",
-                ChatMessageStyle.Warning);
+            ReportBlockedAction(
+                "gather-empty-tree",
+                "You find no loose sticks beneath the tree.");
             return;
         }
         if (PlayerInventory.IsFull(_activePlayer.Inventory))
         {
-            _chatUi.AddMessage(
-                "Your inventory is too full to gather a stick.",
-                ChatMessageStyle.Warning);
+            ReportBlockedAction(
+                "gather-inventory-full",
+                "Your inventory is too full to gather a stick.");
             return;
         }
 
@@ -1544,9 +1545,9 @@ internal sealed partial class GameHostWindow : GameWindow
                     _activePlayer?.Inventory, ItemIds.Sticks,
                     out var inventory))
             {
-                _chatUi.AddMessage(
-                    "Your inventory is too full to gather a stick.",
-                    ChatMessageStyle.Warning);
+                ReportBlockedAction(
+                    "gather-inventory-full",
+                    "Your inventory is too full to gather a stick.");
                 break;
             }
             _activePlayer = _activePlayer! with
@@ -2854,6 +2855,15 @@ internal sealed partial class GameHostWindow : GameWindow
         _overheadSpeechExpiresAt = _clock + 5;
     }
 
+    private void ReportBlockedAction(string action, string message)
+    {
+        _chatUi.AddMessage(message, ChatMessageStyle.Warning);
+        var thought = _repeatedActions.RecordFailure(action, _clock);
+        if (thought is null) return;
+        _chatUi.AddMessage(thought, ChatMessageStyle.Monologue);
+        ShowOverheadSpeech(thought);
+    }
+
     private void RenderOverheadSpeech(Vector4 scene)
     {
         if (_player is null ||
@@ -3167,9 +3177,9 @@ internal sealed partial class GameHostWindow : GameWindow
             if (!PlayerInventory.TryBreakRock(
                     inventory, _activeInventorySlot, slot, out var broken))
             {
-                _chatUi.AddMessage(
-                    "You need an empty inventory slot for the broken pieces.",
-                    ChatMessageStyle.Warning);
+                ReportBlockedAction(
+                    "break-rock-inventory-full",
+                    "You need an empty inventory slot for the broken pieces.");
                 return;
             }
             _activePlayer = _activePlayer! with
@@ -3343,9 +3353,9 @@ internal sealed partial class GameHostWindow : GameWindow
         if (option != 1) return;
         if (!PlayerInventory.CanDrop(itemId))
         {
-            _chatUi.AddMessage(
-                "You cannot drop that item.",
-                ChatMessageStyle.Warning);
+            ReportBlockedAction(
+                "item-cannot-be-dropped",
+                "You cannot drop that item.");
             return;
         }
         TryDropGroundObject(slot, itemId);
@@ -3725,6 +3735,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     ChatMessageStyle.Miss => new FSColor(176, 179, 169, 255),
                     ChatMessageStyle.Experience => new FSColor(145, 204, 154, 255),
                     ChatMessageStyle.LevelUp => new FSColor(238, 211, 104, 255),
+                    ChatMessageStyle.Monologue => new FSColor(196, 202, 218, 255),
                     ChatMessageStyle.Warning => new FSColor(236, 145, 112, 255),
                     _ => new FSColor(218, 207, 166, 255)
                 };
