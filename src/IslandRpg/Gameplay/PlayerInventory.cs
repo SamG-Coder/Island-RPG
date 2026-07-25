@@ -35,6 +35,14 @@ internal static class PlayerInventory
 
     public static bool HasAxe(string?[]? items) => BestAxe(items) is not null;
 
+    public static bool HasAnyAxe(string?[]? items) =>
+        items?
+            .Where(item => item is not null)
+            .Select(item => ItemCatalog.Get(item!))
+            .Any(item =>
+                item.HasTag(ItemTag.Tool) &&
+                item.HasTag(ItemTag.Axe)) ?? false;
+
     public static bool CanDrop(string itemId) =>
         ItemCatalog.Get(itemId).Droppable;
 

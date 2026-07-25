@@ -259,7 +259,8 @@ Require(PlayerInventory.TryBluntStoneTool(
         [ItemIds.StoneAxe], ItemIds.StoneAxe, .009f,
         out var bluntAxe) &&
         bluntAxe[0] == ItemIds.BluntStoneAxe &&
-        !PlayerInventory.HasAxe(bluntAxe),
+        !PlayerInventory.HasAxe(bluntAxe) &&
+        PlayerInventory.HasAnyAxe(bluntAxe),
     "a stone axe must become unusably blunt on the one-percent roll");
 Require(!PlayerInventory.TryBluntStoneTool(
         [ItemIds.StoneHammer], ItemIds.StoneHammer, .01f,

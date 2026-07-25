@@ -15,6 +15,10 @@ using StbImageSharp;
 
 namespace IslandRpg.Rendering;
 
+// MAINTENANCE RULE:
+// GameHostWindow is the application coordinator, not a feature container.
+// New features must put most rendering, input, state, and gameplay logic in a
+// dedicated file and class. Only minimal wiring and lifecycle calls belong here.
 internal sealed partial class GameHostWindow : GameWindow
 {
     private const int ReferenceWidth = 1280;
@@ -230,6 +234,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly GameUiControlState _gameUi = new();
     private readonly ChatUiControlState _chatUi = new();
     private readonly RepeatedActionMonologue _repeatedActions = new();
+    private readonly WorldActionController _worldActions;
     private string? _overheadSpeech;
     private double _overheadSpeechExpiresAt;
     private readonly ContextMenuControlState _inventoryContext = new();
@@ -268,6 +273,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _install = install;
         _mode = mode;
         _worldSeed = worldSeed;
+        _worldActions = new(this);
         _inventoryContext.Selected += HandleInventoryContextSelection;
         _treeContext.Selected += HandleTreeContextSelection;
         _groundObjectContext.Selected +=
@@ -1046,25 +1052,7 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_player is null) return;
         _worldGameSeconds = WorldTime.Advance(
             _worldGameSeconds, elapsed);
-        if (_pendingPathTask is { IsCompleted: true })
-        {
-            if (_pendingPathTask.IsFaulted)
-                throw _pendingPathTask.Exception?.GetBaseException() ??
-                      new InvalidOperationException("Path calculation failed.");
-            if (_pendingPathTask.IsCompletedSuccessfully)
-            {
-                var result = _pendingPathTask.Result;
-                if (result.RequestId == _pathRequestId)
-                {
-                    _queuedAction = result.Action;
-                    _player.FollowPath(result.Path);
-                    if (result.Action is not null && result.Path.Count > 0)
-                        _moveMarker = new(
-                            result.Path[^1], 0, Action: true);
-                }
-            }
-            _pendingPathTask = null;
-        }
+        _worldActions.ProcessPendingPath();
 
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
         if (rightDown && !_gameRightWasDown &&
@@ -1116,23 +1104,8 @@ internal sealed partial class GameHostWindow : GameWindow
             }
             else
             {
-                var actionTarget = new Vector2(actionTree.X + .5f, actionTree.Y + .5f);
-                var standOff = TreeInteractionDistance(actionTree.GraphicName);
-                _activeTreeId = null;
-                _player.Stop();
-                _pathCancellation?.Cancel();
-                _pathCancellation?.Dispose();
-                _pathCancellation = new CancellationTokenSource();
-                var token = _pathCancellation.Token;
-                var requestId = ++_pathRequestId;
-                var start = _player.Position;
-                _queuedAction = null;
-                _pendingPathTask = Task.Run(
-                    () => FindActionPath(
-                        requestId, start, actionTarget, standOff,
-                        WorldActionType.CutTree, token),
-                    token);
-                _moveMarker = null;
+                _worldActions.QueueTree(
+                    actionTree, WorldActionType.CutTree);
             }
         }
         _gameLeftWasDown = leftDown;
@@ -1152,11 +1125,8 @@ internal sealed partial class GameHostWindow : GameWindow
             (wading ? .62f : 1f) / (1f + uphill * .18f);
         _player.Update(elapsed);
         UpdateNativeCursor();
-        CompleteQueuedAction();
-        UpdateTreeCutting();
-        UpdateTreeStickGather();
-        UpdateGroundObjectPickup();
-        UpdateGroundObjectDrop();
+        _worldActions.CompleteQueuedAction();
+        _worldActions.Update();
         UpdateWaterRipples(wading);
         if (_moveMarker is not null)
         {
@@ -1322,85 +1292,14 @@ internal sealed partial class GameHostWindow : GameWindow
         return Math.Clamp(.50f + trunkRadiusPixels / 120f, .54f, .78f);
     }
 
-    private void CompleteQueuedAction()
-    {
-        if (_player is null || _queuedAction is null ||
-            _player.Action == EntityAction.Move)
-            return;
-
-        var action = _queuedAction;
-        _queuedAction = null;
-        if ((_player.Position - action.Target).Length > action.Range)
-            return;
-
-        if (action.Type == WorldActionType.CutTree)
-            BeginTreeCutting(action.Target);
-        else if (action.Type == WorldActionType.GatherTreeSticks)
-            BeginTreeStickGather(action.Target);
-        else if (action is
-                 {
-                     Type: WorldActionType.PickUpGroundObject,
-                     GroundObjectId: { } groundObjectId
-                 })
-            BeginGroundObjectPickup(groundObjectId, action.Target);
-        else if (action is
-                 {
-                     Type: WorldActionType.DropGroundObject,
-                     InventorySlot: >= 0,
-                     ItemId: { } itemId
-                 })
-            BeginGroundObjectDrop(
-                action.InventorySlot, itemId, action.Target);
-    }
-
     private void QueueWalk(Vector2 target)
-    {
-        if (_player is null) return;
-        _queuedAction = null;
-        _activeTreeId = null;
-        _activeTreeStickGatherId = null;
-        _player.Stop();
-        _pathCancellation?.Cancel();
-        _pathCancellation?.Dispose();
-        _pathCancellation = new CancellationTokenSource();
-        var token = _pathCancellation.Token;
-        var requestId = ++_pathRequestId;
-        var start = _player.Position;
-        _pendingPathTask = Task.Run(
-            () => new PathResult(
-                requestId,
-                GridPathfinder.Find(
-                    _worldSeed, start, target,
-                    cancellationToken: token)),
-            token);
-        _moveMarker = new(target, 0);
-    }
+        => _worldActions.QueueWalk(target);
 
     private void QueueTreeAction(
         IslandTree tree, WorldActionType actionType)
-    {
-        if (_player is null) return;
-        var target = new Vector2(tree.X + .5f, tree.Y + .5f);
-        _activeTreeId = null;
-        _activeTreeStickGatherId = null;
-        _player.Stop();
-        _pathCancellation?.Cancel();
-        _pathCancellation?.Dispose();
-        _pathCancellation = new CancellationTokenSource();
-        var token = _pathCancellation.Token;
-        var requestId = ++_pathRequestId;
-        var start = _player.Position;
-        _queuedAction = null;
-        _pendingPathTask = Task.Run(
-            () => FindActionPath(
-                requestId, start, target,
-                TreeInteractionDistance(tree.GraphicName),
-                actionType, token),
-            token);
-        _moveMarker = null;
-    }
+        => _worldActions.QueueTree(tree, actionType);
 
-    private void BeginTreeCutting(Vector2 target)
+    internal void TryStartTreeCutting(Vector2 target)
     {
         if (_player is null) return;
         var x = (int)MathF.Floor(target.X);
@@ -1412,9 +1311,13 @@ internal sealed partial class GameHostWindow : GameWindow
         if (source is null) return;
         if (!PlayerInventory.HasAxe(_activePlayer?.Inventory))
         {
+            var hasBluntAxe =
+                PlayerInventory.HasAnyAxe(_activePlayer?.Inventory);
             ReportBlockedAction(
-                "chop-without-axe",
-                "You need an axe to chop down this tree.");
+                hasBluntAxe ? "chop-with-blunt-axe" : "chop-without-axe",
+                hasBluntAxe
+                    ? "Your axe is too blunt. Use small rocks on it to sharpen it."
+                    : "You need an axe to chop down this tree.");
             _player.Stop();
             return;
         }
@@ -1453,7 +1356,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _player.WorkAt(target);
     }
 
-    private void BeginTreeStickGather(Vector2 target)
+    internal void TryStartTreeStickGather(Vector2 target)
     {
         if (_player is null || _activePlayer is null) return;
         var x = (int)MathF.Floor(target.X);
@@ -1544,7 +1447,7 @@ internal sealed partial class GameHostWindow : GameWindow
         return Math.Min(sticks, 3);
     }
 
-    private void UpdateTreeStickGather()
+    internal void UpdateActiveTreeStickGather()
     {
         if (_player is null || _activeTreeStickGatherId is null)
             return;
@@ -1670,7 +1573,7 @@ internal sealed partial class GameHostWindow : GameWindow
         return ItemIds.TreeSeeds;
     }
 
-    private void UpdateTreeCutting()
+    internal void UpdateActiveTreeCutting()
     {
         if (_player is null || _activeTreeId is null ||
             _player.Action != EntityAction.Work ||

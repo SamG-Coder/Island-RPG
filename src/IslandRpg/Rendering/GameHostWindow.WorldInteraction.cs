@@ -120,26 +120,7 @@ internal sealed partial class GameHostWindow
     }
 
     private void QueueGroundObjectPickup(WorldGroundObject groundObject)
-    {
-        if (_player is null) return;
-        var target = new Vector2(groundObject.X, groundObject.Y);
-        _activeTreeId = null;
-        _player.Stop();
-        _pathCancellation?.Cancel();
-        _pathCancellation?.Dispose();
-        _pathCancellation = new CancellationTokenSource();
-        var token = _pathCancellation.Token;
-        var requestId = ++_pathRequestId;
-        var start = _player.Position;
-        _queuedAction = null;
-        _pendingPathTask = Task.Run(
-            () => FindActionPath(
-                requestId, start, target, .46f,
-                WorldActionType.PickUpGroundObject, token,
-                groundObject.Id),
-            token);
-        _moveMarker = null;
-    }
+        => _worldActions.QueueGroundObjectPickup(groundObject);
 
     private void TryPickUpGroundObject(Guid groundObjectId)
     {
@@ -172,7 +153,7 @@ internal sealed partial class GameHostWindow
             ChatMessageStyle.Action);
     }
 
-    private void BeginGroundObjectPickup(Guid groundObjectId, Vector2 target)
+    internal void BeginGroundObjectPickup(Guid groundObjectId, Vector2 target)
     {
         if (_player is null || _activePlayer is null) return;
         if (PlayerInventory.IsFull(_activePlayer.Inventory))
@@ -193,7 +174,7 @@ internal sealed partial class GameHostWindow
         _player.GatherAt(target);
     }
 
-    private void UpdateGroundObjectPickup()
+    internal void UpdateGroundObjectPickup()
     {
         if (_player is null || _activeGroundPickupId is null) return;
         if (_player.Action != EntityAction.Gather)
@@ -316,25 +297,15 @@ internal sealed partial class GameHostWindow
                 preview.InventorySlot, preview.ItemId, preview.Target);
             return;
         }
-        _pathCancellation = new CancellationTokenSource();
-        var token = _pathCancellation.Token;
-        var requestId = ++_pathRequestId;
-        var start = _player.Position;
-        _pendingPathTask = Task.Run(
-            () => FindActionPath(
-                requestId,
-                start,
-                preview.Target,
-                .46f,
-                WorldActionType.DropGroundObject,
-                token,
-                inventorySlot: preview.InventorySlot,
-                itemId: preview.ItemId),
-            token);
-        _moveMarker = null;
+        _worldActions.QueuePath(
+            preview.Target,
+            .46f,
+            WorldActionType.DropGroundObject,
+            inventorySlot: preview.InventorySlot,
+            itemId: preview.ItemId);
     }
 
-    private void BeginGroundObjectDrop(
+    internal void BeginGroundObjectDrop(
         int inventorySlot, string itemId, Vector2 target)
     {
         if (_player is null ||
@@ -359,7 +330,7 @@ internal sealed partial class GameHostWindow
         _player.GatherAt(target);
     }
 
-    private void UpdateGroundObjectDrop()
+    internal void UpdateGroundObjectDrop()
     {
         if (_player is null || _activeGroundDrop is not { } drop) return;
         if (_player.Action != EntityAction.Gather)

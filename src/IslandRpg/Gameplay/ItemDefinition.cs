@@ -112,7 +112,8 @@ internal static class ItemCatalog
             [ItemIds.BluntStoneAxe] = new(
                 ItemIds.BluntStoneAxe, "blunt stone axe", "Blunt axe",
                 "A stone axe too blunt to chop effectively.", 1,
-                Tags: ItemTag.Tool | ItemTag.StoneToolSprite),
+                Tags: ItemTag.Axe | ItemTag.Tool |
+                      ItemTag.StoneToolSprite),
             [ItemIds.WoodChips] = new(
                 ItemIds.WoodChips, "wood chips", "Chips",
                 "Small chips left over from worked timber.", 6,
