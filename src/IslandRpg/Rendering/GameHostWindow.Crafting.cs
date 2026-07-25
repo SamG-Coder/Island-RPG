@@ -77,9 +77,6 @@ internal sealed partial class GameHostWindow
     private Vector4 CraftingWindowBounds() =>
         CraftingWindowState.WindowBounds(SceneClientBounds());
 
-    private static Vector4 CraftingRecipesButtonBounds(Vector4 panel) =>
-        new(panel.X + 18, panel.Y + 232, panel.Z - 36, 34);
-
     private void UpdateCraftingWindowInput(
         Vector2 pointer, bool leftDown)
     {

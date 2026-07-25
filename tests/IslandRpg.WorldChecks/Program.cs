@@ -136,6 +136,20 @@ var inventoryGridBottom =
     GameUiControlState.InventoryRowGap;
 Require(gameUi.Panel.Bounds.W > inventoryGridBottom,
     "the inventory panel must include padding beneath all seven grid rows");
+var skillBack = SkillPanelLayout.BackButtonBounds(gameUi.Panel.Bounds);
+var skillTitle = SkillPanelLayout.TitleBounds(gameUi.Panel.Bounds);
+var skillLevel = SkillPanelLayout.LevelCardBounds(gameUi.Panel.Bounds);
+var skillProgress = SkillPanelLayout.ProgressBounds(gameUi.Panel.Bounds);
+var skillInfo = SkillPanelLayout.InformationBounds(gameUi.Panel.Bounds);
+var skillAction = SkillPanelLayout.ActionButtonBounds(gameUi.Panel.Bounds);
+Require(skillBack.X + skillBack.Z < skillTitle.X &&
+        skillLevel.Y > skillBack.Y + skillBack.W &&
+        skillProgress.Y > skillLevel.Y + skillLevel.W &&
+        skillInfo.Y > skillProgress.Y + skillProgress.W &&
+        skillAction.Y > skillInfo.Y + skillInfo.W &&
+        skillAction.Y + skillAction.W <
+        gameUi.Panel.Bounds.Y + gameUi.Panel.Bounds.W,
+    "the reusable skill detail layout must keep navigation, progress, information, and actions aligned without overlap");
 var reusableInventory = new InventoryPanelState(
     gameUi.Panel.Bounds, [ItemIds.Logs],
     allowDragOutsideToGame: false);
