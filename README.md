@@ -1,23 +1,214 @@
-# Island RPG prototype
+# Island RPG
 
-A minimal OpenTK prototype that reads Age of Empires II HD sprites from the
-player's own installation. No Age of Empires assets are included.
+Island RPG is an experimental isometric survival and skilling RPG built with
+C#, .NET and OpenTK. It combines a persistent procedurally generated world with
+classic point-and-click interactions, gathering, crafting, fishing, cooking and
+placeable objects.
 
-Island RPG is an unofficial, non-commercial project. It is not affiliated with
-or endorsed by Microsoft. Age of Empires is a trademark of Microsoft.
+The project is currently at **v0.1.0**. It is playable, but it remains an early
+prototype and its systems, balance and save format may continue to evolve.
 
-## Run
+See [the v0.1.0 release notes](RELEASE_NOTES_0.1.md) for the complete feature
+summary.
+
+## Important asset requirement
+
+Island RPG reads compatible terrain, unit and environment graphics from the
+player's own legally obtained **Age of Empires II HD** installation at runtime.
+
+- No Age of Empires game assets are included in this repository.
+- The game does not download those assets.
+- You must supply a valid local Age of Empires II HD installation.
+- Island RPG is unofficial, non-commercial and not affiliated with or endorsed
+  by Microsoft.
+- Age of Empires is a trademark of Microsoft.
+
+The MIT license in this repository applies to Island RPG's original software
+and documentation. It does not grant rights to Age of Empires or any other
+third-party content.
+
+## Current features
+
+- Deterministic, persistent worlds generated from a numeric seed.
+- Streamed 32×32 terrain chunks and compressed region-based saves.
+- Mountains, elevation, cliffs, rivers, coasts, oceans and varied biomes.
+- Biome-aware trees, vegetation, coastal collectibles and animated fish.
+- Character creation, pathfinding and eight-direction character animation.
+- Inventory use, dragging, dropping and context-sensitive interactions.
+- Day and night, shadows, animated water and campfire lighting.
+- Woodcutting, Farming, Crafting, Fishing, Cooking and Firemaking skills.
+- Level-based recipes, primitive tools, workbenches and campfires.
+- Reusable skill guides, crafting screens, pause menus and settings.
+- Optional performance metrics and developer world tools.
+
+## Requirements
+
+The currently supported development and release target is Windows.
+
+- Windows 10 or later
+- A legally obtained Age of Empires II HD installation
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
+- An OpenGL 3.3-compatible graphics driver
+
+Age of Empires II: Definitive Edition is not currently a substitute for the HD
+installation because its data and asset layout differs.
+
+## Quick start
+
+Clone the repository, restore dependencies and run the Release configuration:
 
 ```powershell
-dotnet run --project src/IslandRpg
+git clone https://github.com/samuelGrahame/AoeRpg.git
+cd AoeRpg
+dotnet restore IslandRpg.slnx
+dotnet run --project src/IslandRpg -c Release
 ```
 
-## Sprite-sheet tool
+The game checks common Steam installation locations automatically. For a custom
+Steam library, pass the installation folder:
 
-Generated bitmap art can be converted into an exact transparent sprite sheet
-with the repository tool. It centre-crops to the sheet aspect ratio, removes a
-configurable chroma-key colour, and uses nearest-neighbour resizing so pixel art
-stays sharp:
+```powershell
+dotnet run --project src/IslandRpg -c Release -- `
+  --age2-path "D:\SteamLibrary\steamapps\common\Age2HD"
+```
+
+Alternatively, set `AGE2HD_PATH`:
+
+```powershell
+$env:AGE2HD_PATH = "D:\SteamLibrary\steamapps\common\Age2HD"
+dotnet run --project src/IslandRpg -c Release
+```
+
+The path must contain `AoK HD.exe` and the expected
+`resources\_common` data directories.
+
+## Playing
+
+The default command opens the playable game and its character/world menus.
+
+| Input | Action |
+|---|---|
+| Left click | Move or perform the default interaction |
+| Right click | Open an object's context menu |
+| Mouse wheel | Zoom around the pointer |
+| Drag an inventory item | Reorder, drop, fuel, cook or place where supported |
+| `Alt` | Highlight collectible ground items |
+| `Enter` | Focus or submit chat |
+| `Escape` | Close the active screen or open the pause menu |
+
+Use the on-screen **Skills** and **Bag** buttons for progression and inventory.
+Click the name of a supported skill inside its detail panel to open its level
+guide.
+
+Developer mode is intended for testing. Enter `/imahacker` in chat, then open
+**Pause → Settings → Dev** to access XP controls, time advancement and the
+teleportable world map. In that map, `T` toggles tree-density visualization.
+
+## Saves and generated data
+
+Player profiles, worlds and settings are stored outside the repository:
+
+```text
+%LOCALAPPDATA%\IslandRpg\
+├── Players\
+├── Worlds\
+└── settings.json
+```
+
+World chunks are grouped into indexed region files and compressed
+independently. Copy the entire `%LOCALAPPDATA%\IslandRpg` directory to back up
+all local progress.
+
+The asset validator writes its report to `AssetCache/`, which is ignored by
+Git. Temporary graphic exports belong in `TestExport/`, which is also ignored.
+
+## Command-line modes
+
+Arguments after `--` are passed to Island RPG:
+
+```text
+--game
+--world
+--island
+--catalog
+--seed <number>
+--age2-path <folder>
+--graphic <SLP id>
+--graphic-name <DAT graphic name>
+--validate
+```
+
+Examples:
+
+```powershell
+# Play using a deterministic seed
+dotnet run --project src/IslandRpg -c Release -- --game --seed 2187
+
+# Open the standalone streamed-world preview
+dotnet run --project src/IslandRpg -c Release -- --world --seed 2187
+
+# Open the finite island preview
+dotnet run --project src/IslandRpg -c Release -- --island
+
+# Open the decoded asset catalogue
+dotnet run --project src/IslandRpg -c Release -- --catalog
+
+# Validate discoverable assets without opening a window
+dotnet run --project src/IslandRpg -c Release -- --catalog --validate
+
+# Preview one loose SLP graphic
+dotnet run --project src/IslandRpg -c Release -- --graphic 495
+
+# Resolve a graphic by its DAT name
+dotnet run --project src/IslandRpg -c Release -- `
+  --graphic-name TREEA_NN
+```
+
+Asset validation records unavailable DAT references in
+`AssetCache/asset-report.json`. Age of Empires data can contain legacy,
+superseded or unused references, so a missing loose SLP is not automatically
+evidence of a damaged installation.
+
+## Building and testing
+
+Build the full solution:
+
+```powershell
+dotnet build IslandRpg.slnx -c Release
+```
+
+Run the deterministic world and gameplay checks:
+
+```powershell
+dotnet run --project tests/IslandRpg.WorldChecks -c Release
+```
+
+Create a self-contained Windows x64 build with the checked-in publish profile:
+
+```powershell
+dotnet publish src/IslandRpg/IslandRpg.csproj `
+  -p:PublishProfile=FolderProfile
+```
+
+Published builds still require the user to provide their own Age of Empires II
+HD installation. Do not redistribute Age of Empires assets with a release.
+
+## Repository layout
+
+```text
+src/IslandRpg/                  Game, rendering, gameplay and world generation
+tests/IslandRpg.WorldChecks/    Deterministic integration and regression checks
+tools/IslandRpg.SpriteTool/     32×32 inventory sprite-sheet conversion
+tools/IslandRpg.ObjectSpriteTool/ Isometric object conversion and sizing
+tools/IslandRpg.GraphicExport/  Local AoE graphic search and export utility
+artifacts/                      Source and preview material for authored assets
+```
+
+## Asset tools
+
+### Inventory sprite sheets
+
+Convert generated artwork to a chroma-keyed 32×32 grid:
 
 ```powershell
 dotnet run --project tools/IslandRpg.SpriteTool -- `
@@ -26,131 +217,66 @@ dotnet run --project tools/IslandRpg.SpriteTool -- `
   --chroma "#FF00FF" --tolerance 32
 ```
 
-The example creates a transparent 128×64 PNG containing eight 32×32 cells.
+### Isometric objects
 
-The program checks common Steam locations and `AGE2HD_PATH`. By default it
-opens the playable villager window. Use `--world` to open the pannable
-infinite-world renderer without a player. The world streams deterministic 32×32
-chunks around the camera, saves them under the current user's local application
-data directory, culls off-screen terrain batches, and unloads distant chunks to
-keep memory and GPU use bounded. Chunk halos preserve Gaussian biome blending
-and shoreline effects across chunk borders. Generation, region reads,
-decompression, and unload saves run away from the render thread; newly uploaded
-terrain and trees fade in briefly instead of appearing in a single frame.
-
-World saves group each 8×8 range into one indexed region file. Its fixed
-64-entry directory provides direct chunk seeks while each logical chunk payload
-is compressed independently with Brotli. Deterministic GPU biome-weight textures
-are regenerated from the seed instead of being stored on disk.
-It uses a 2:1 isometric projection, corner-based elevation, coastal/inland biomes, and
-biome-matched trees. Terrain is drawn first, then tree shadows and trees in
-map-depth order. Deep and shallow water use the installed HD normal maps for
-two-scale animated waves, refraction, and restrained specular highlights.
-Buildings are intentionally excluded.
-
-Startup first shows an asset-loading screen in that same window. Every discoverable DAT graphic is
-classified, and every available loose SLP is validated and decoded into memory.
-Legacy, superseded, unused, or otherwise unavailable DAT references are recorded
-separately in `AssetCache/asset-report.json`; they are not automatically treated
-as a damaged installation. Render
-graphics remain separate from future gameplay entities, because one unit can
-reference several graphics for movement, attacks, death, effects, and shadows.
-Override either the install or graphic:
+The object tool applies documented gameplay footprints, visual scale and ground
+hotspots:
 
 ```powershell
-dotnet run --project src/IslandRpg -- --age2-path "D:\SteamLibrary\steamapps\common\Age2HD" --graphic 495
+dotnet run --project tools/IslandRpg.ObjectSpriteTool -- `
+  --input artifacts/object-sprites/workbench/workbench-source.png `
+  --output artifacts/object-sprites/workbench/workbench.png `
+  --preset workbench `
+  --preview artifacts/object-sprites/workbench/workbench-preview.png
 ```
 
-Look up another graphic by its internal DAT name:
+See the [Object Sprite Tool guide](tools/IslandRpg.ObjectSpriteTool/README.md)
+for the size standard, prompt template and animation-overlay workflow.
+
+### Local Age of Empires graphic research
+
+Search the local DAT catalogue and export matching decoded frames:
 
 ```powershell
-dotnet run --project src/IslandRpg -- --graphic-name TREEA_NN
+dotnet run --project tools/IslandRpg.GraphicExport -- `
+  --install "C:\Program Files (x86)\Steam\steamapps\common\Age2HD" `
+  --query FISH `
+  --output TestExport\Fish
 ```
 
-Open the complete world-asset preview explicitly:
+See the [Graphic Export guide](tools/IslandRpg.GraphicExport/README.md) for
+exact-name searches and additional arguments. Exported third-party graphics are
+for local research and must not be committed or redistributed.
 
-```powershell
-dotnet run --project src/IslandRpg -- --catalog
-```
+## Contributing
 
-Open the generated island explicitly:
+Issues and focused pull requests are welcome.
 
-```powershell
-dotnet run --project src/IslandRpg -- --island
-```
+Before submitting a change:
 
-Open or create an infinite world with a specific seed:
+1. Keep new feature logic out of `GameHostWindow.cs` wherever practical; use a
+   dedicated service, controller or partial-class file.
+2. Preserve compatibility with existing worlds and player profiles.
+3. Add or update checks for progression, persistence and deterministic world
+   behavior.
+4. Run the Release build and `IslandRpg.WorldChecks`.
+5. Do not commit extracted Age of Empires graphics, local saves, generated
+   exports, IDE user settings or publish history.
 
-```powershell
-dotnet run --project src/IslandRpg -- --world --seed 2187
-```
+## Status and limitations
 
-Open the playable villager window:
+This is an early playable prototype. Combat, health, hunger, NPC simulation,
+building construction and audio are not implemented. Farming currently focuses
+on trees, Cooking currently uses the available fish, and placeable furniture is
+limited. See the [v0.1.0 release notes](RELEASE_NOTES_0.1.md) for more detail.
 
-```powershell
-dotnet run --project src/IslandRpg -- --game --seed 2187
-```
+## License and acknowledgements
 
-Click terrain to move the villager. Press Up for the male rig or Down for the
-female rig. Each entity owns its current action, target, facing, movement speed,
-and animation time. The base villager standing, walking, attacking, working,
-and dying sheets are rigged across eight gameplay directions from the five
-authored directions, including mirrored views.
+Island RPG's original software and documentation are licensed under the
+[MIT License](LICENSE).
 
-The same seed produces the same island chains, elevation, ocean depth, drainage,
-biomes, and trees. A cached macro layer fills depressions, routes rainfall
-downhill, accumulates tributary flow, and carves connected rivers and inland
-water before detailed chunks are produced. Deep ocean basins transition through
-shallow continental shelves into warped coastlines. Temperature, rainfall,
-prevailing wind, rain shadows, elevation, and drainage produce ocean, coast,
-river, wetland, grassland, temperate forest, rainforest, savanna, desert, taiga,
-tundra, and alpine regions. These fields remain continuous across chunk
-boundaries while the macro cache stays bounded during long-distance travel.
-Use WASD, the arrow keys, or left-mouse dragging to move the camera.
-The original finite island renderer remains available through `--island`.
+Third-party libraries and the bundled Arimo font retain their own licenses.
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-Natural terrain uses a curated 16-layer AoE2 HD material array: deep and
-shallow water, azure rivers, mangrove shallows, beach, temperate grass,
-savanna ground, mud, forest underbrush, jungle underbrush, highland grass,
-rock, tundra, snow, desert sand, and cracked earth. Four RGBA blend maps keep
-transitions smooth in one terrain draw call per chunk. CPU blending processes
-only materials present inside each chunk halo instead of all 16 layers.
-
-Mountain ranges grow around oriented regional uplift spines, with long foothill
-ramps, steep inner cores, rolling hill fields, river-cut valleys, and eroded
-passes. Major mountain cores receive directional installed `CLF` sprite
-contours; ordinary hills remain smoothly deformed and directionally shaded.
-
-Press `M` in the infinite world to open the isometric relief map. It is divided
-into deterministic 256×256 map sections and generates only sections visible in
-the viewport, with up to three generation jobs running asynchronously. Visible
-sections provide roughly 1024 horizontal source pixels at the standard viewport,
-twice the previous whole-atlas resolution, while a bounded 48-section GPU cache
-avoids regenerating nearby areas. Drag to pan, use the mouse wheel to zoom around
-the location beneath the cursor, or double-click elevated terrain to close the
-map and move the detailed world camera there. Zoom levels cover between 4×4 and
-64×64 chunks. Detailed gameplay chunks stream normally only after travel.
-
-Visible world trees and their shadows are packed into one texture atlas and
-submitted as one depth-ordered GPU batch, so repeated tree types across many
-chunks do not create a draw call per sprite.
-
-Press Escape to close. The current prototype supports classic SLP frames,
-palette colors, player-color pixels, shadows, hotspots, animation, and
-nearest-neighbor scaling.
-
-Hold the left mouse button and drag to pan the camera. Sprites render at native
-1:1 pixels and keep the same physical pixel dimensions when the window is
-resized or maximized.
-
-Use the mouse wheel to zoom around the cursor position. Zoom is intentionally
-limited to 0.65×–1.75×, with 1× as the native-pixel default.
-
-The current DAT reader extracts graphic names, SLP IDs, frames per angle,
-angle counts, frame timing, replay delay, mirroring mode, and graphic IDs.
-Palette selection follows the SLP frame `properties` field. A value of `0x10`
-selects Age2HD's standard game palette, `50500.bina`; the catalogue tree SLPs
-all declare this value. Variant files such as `pal_2` are not assigned merely
-from a graphic filename prefix.
-
-Use `--validate` to test asset detection and decoding without opening a window.
+Age of Empires assets and trademarks are not covered by the Island RPG license
+and are not distributed by this repository.
