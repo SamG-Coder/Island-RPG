@@ -25,6 +25,7 @@ Initial definitions:
 | Object | Footprint | Height | Intended scale |
 |---|---:|---:|---|
 | Workbench | 2 x 1 | 1 | 0.62; waist-high and about two character spaces long |
+| Campfire | 1 x 1 | 0.3 | 0.78; low stone ring with separate fuel and flame overlays |
 | Chair | 0.5 x 0.5 | 1 | 0.70; one seated character |
 | Door | 0.5 x 1 | 2 | 0.75; full character clearance |
 
@@ -64,3 +65,33 @@ The command creates:
 - `workbench.object.json`: footprint, pixel size, and hotspot.
 - `workbench-preview.png`: 4x checkerboard inspection image; red cross is the
   ground hotspot.
+
+## Animation overlays
+
+Generated animation grids can be chroma-keyed, normalized to one consistent
+scale, anchored, and composited over a finished object for inspection:
+
+```powershell
+dotnet run --project tools/IslandRpg.ObjectSpriteTool -- `
+  --animation-sheet `
+  --input <4x4-source.png> `
+  --base <finished-object.png> `
+  --output <runtime-horizontal-sheet.png> `
+  --preview <composite-4x4-preview.png> `
+  --columns 4 --rows 4 `
+  --canvas-width 58 --canvas-height 58 `
+  --target-width 24 --target-height 30 `
+  --anchor-x 29 --anchor-y 38
+```
+
+The runtime output is a transparent horizontal strip. Every frame uses the
+same scale and bottom-centre anchor, preventing animation jitter.
+
+For layout checks, `--fuel <sheet.png>` can insert an existing item beneath
+the fire. Select its source cell with `--fuel-x`, `--fuel-y`, `--fuel-width`,
+and `--fuel-height`; size and position it with `--fuel-target-width`,
+`--fuel-target-height`, `--fuel-anchor-x`, and `--fuel-anchor-y`.
+Pass `--hide-animation true` to preview the base and fuel without the
+animation overlay.
+Pass `--hide-base true` to export a transparent animation-only strip for
+runtime composition.

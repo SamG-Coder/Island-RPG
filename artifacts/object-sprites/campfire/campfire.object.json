@@ -1,0 +1,12 @@
+{
+  "Preset": "campfire",
+  "FootprintWidth": 1,
+  "FootprintDepth": 1,
+  "Height": 0.3,
+  "PixelWidth": 58,
+  "PixelHeight": 58,
+  "HotspotX": 29,
+  "HotspotY": 54,
+  "TileWidthPixels": 96,
+  "TileHeightPixels": 48
+}

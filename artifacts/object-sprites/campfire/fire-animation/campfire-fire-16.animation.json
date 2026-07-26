@@ -1,0 +1,19 @@
+{
+  "source": "campfire-fire-16-source.png",
+  "processedSheet": "campfire-lit-16.png",
+  "compositePreview": "campfire-lit-preview.png",
+  "columns": 4,
+  "rows": 4,
+  "frameCount": 16,
+  "sourceFrameWidth": 313,
+  "sourceFrameHeight": 313,
+  "processedFrameWidth": 58,
+  "processedFrameHeight": 58,
+  "order": "left-to-right, top-to-bottom",
+  "framesPerSecond": 10,
+  "loop": true,
+  "chromaKey": "#FF00FF",
+  "fireAnchorX": 29,
+  "fireAnchorY": 34,
+  "usage": "Processed test sheet composites the fire over the stone ring."
+}

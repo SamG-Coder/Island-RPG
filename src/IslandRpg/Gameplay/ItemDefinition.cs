@@ -98,6 +98,7 @@ internal static class ItemIds
     public const string PlantFibres = "plant_fibres";
     public const string PrimitiveFishingNet = "primitive_fishing_net";
     public const string Workbench = "workbench";
+    public const string Campfire = "campfire";
 }
 
 internal static class ItemCatalog
@@ -323,6 +324,12 @@ internal static class ItemCatalog
                 ItemIds.Workbench,
                 "workbench", "Workbench",
                 "A sturdy woodworking bench. Place it on clear, level ground.",
+                0, Droppable: false,
+                Tags: ItemTag.PlaceableObject),
+            [ItemIds.Campfire] = new(
+                ItemIds.Campfire,
+                "campfire", "Campfire",
+                "An unlit stone fire ring. Add a log before lighting it.",
                 0, Droppable: false,
                 Tags: ItemTag.PlaceableObject)
         };

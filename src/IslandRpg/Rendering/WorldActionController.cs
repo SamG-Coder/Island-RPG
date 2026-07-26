@@ -181,10 +181,27 @@ internal sealed partial class GameHostWindow
             {
                 Type: GameHostWindow.WorldActionType.DropGroundObject,
                 InventorySlot: >= 0,
-                ItemId: { } itemId
+                ItemId: { } itemId,
+                GroundObjectId: var targetObjectId
             }:
                 window.BeginGroundObjectDrop(
-                    action.InventorySlot, itemId, action.Target);
+                    action.InventorySlot, itemId, action.Target,
+                    targetObjectId);
+                break;
+            case
+            {
+                Type: GameHostWindow.WorldActionType.LightCampfire,
+                GroundObjectId: { } campfireId
+            }:
+                window.TryLightCampfire(campfireId);
+                break;
+            case
+            {
+                Type: GameHostWindow.WorldActionType.TakeCampfireFuel,
+                GroundObjectId: { } campfireId
+            }:
+                window.BeginCampfireFuelPickup(
+                    campfireId, action.Target);
                 break;
             case
             {
@@ -209,6 +226,7 @@ internal sealed partial class GameHostWindow
         window.UpdateActiveTreeStickGather();
         window.UpdateGroundObjectPickup();
         window.UpdateGroundObjectDrop();
+        window.UpdateCampfireFuelPickup();
         window.UpdateFishing();
         window.UpdateFibreGathering();
     }

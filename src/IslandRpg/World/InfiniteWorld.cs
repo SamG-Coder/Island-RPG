@@ -21,7 +21,12 @@ internal sealed record WorldTreeInstance(
     int SticksRemaining = -1,
     int InitialStickCount = -1);
 internal sealed record WorldGroundObject(
-    Guid Id, string ItemId, float X, float Y);
+    Guid Id,
+    string ItemId,
+    float X,
+    float Y,
+    string? FuelItemId = null,
+    double LitUntilGameSeconds = 0);
 internal enum WorldVegetationKind : byte
 {
     Plant,
@@ -678,7 +683,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 4;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 17;
+    private const int ChunkPayloadVersion = 18;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -897,6 +902,8 @@ internal sealed class WorldChunkStore
                     groundObject.Y -
                     MathF.Floor(groundObject.Y / WorldChunk.Size) *
                     WorldChunk.Size);
+                writer.Write(groundObject.FuelItemId ?? "");
+                writer.Write(groundObject.LitUntilGameSeconds);
             }
             writer.Write(chunk.FishRemaining.Count);
             foreach (var school in chunk.FishRemaining)
@@ -1023,9 +1030,19 @@ internal sealed class WorldChunkStore
                         new Guid(idBytes),
                         itemId,
                         coordinate.X * WorldChunk.Size + reader.ReadSingle(),
-                        coordinate.Y * WorldChunk.Size + reader.ReadSingle());
+                        coordinate.Y * WorldChunk.Size + reader.ReadSingle(),
+                        payloadVersion >= 18
+                            ? NullIfEmpty(reader.ReadString())
+                            : null,
+                        payloadVersion >= 18
+                            ? reader.ReadDouble()
+                            : 0);
                     if (string.IsNullOrWhiteSpace(groundObject.ItemId) ||
                         groundObject.ItemId.Length > 64 ||
+                        groundObject.FuelItemId?.Length > 64 ||
+                        !double.IsFinite(
+                            groundObject.LitUntilGameSeconds) ||
+                        groundObject.LitUntilGameSeconds < 0 ||
                         FloorDiv((int)MathF.Floor(groundObject.X), WorldChunk.Size) != coordinate.X ||
                         FloorDiv((int)MathF.Floor(groundObject.Y), WorldChunk.Size) != coordinate.Y)
                         throw new InvalidDataException(
@@ -1096,6 +1113,9 @@ internal sealed class WorldChunkStore
             throw new InvalidDataException($"Chunk payload is truncated: {coordinate}", ex);
         }
     }
+
+    private static string? NullIfEmpty(string value) =>
+        string.IsNullOrEmpty(value) ? null : value;
 
     private static WorldBiome InferWorldBiome(Biome material) => material switch
     {

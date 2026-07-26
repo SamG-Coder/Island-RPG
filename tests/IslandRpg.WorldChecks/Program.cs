@@ -372,6 +372,57 @@ Require(CraftingSkill.Availability(
                 ItemIds.BluntStoneHammer
             ]) == RecipeAvailability.Ready,
     "the workbench must accept any item registered as a hammer");
+var campfireRecipe = CraftingSkill.Recipes.Single(
+    recipe => recipe.ResultItemId == ItemIds.Campfire);
+Require(campfireRecipe.Category == CraftingCategory.Furniture &&
+        campfireRecipe.RequiredLevel == 1 &&
+        campfireRecipe.Experience == 25 &&
+        campfireRecipe.Ingredients.SequenceEqual(
+            [new CraftingIngredient(ItemIds.SmallRocks, 3)]) &&
+        CraftingSkill.Availability(
+            campfireRecipe, 1,
+            [
+                ItemIds.SmallRocks,
+                ItemIds.SmallRocks,
+                ItemIds.SmallRocks
+            ]) == RecipeAvailability.Ready,
+    "the campfire must be a level-one Furniture recipe made from small rocks");
+var emptyCampfire = new WorldGroundObject(
+    Guid.NewGuid(), ItemIds.Campfire, 4.5f, 7.5f);
+Require(CampfireService.State(emptyCampfire, 100) ==
+            CampfireState.Empty &&
+        CampfireService.CanAddFuel(
+            emptyCampfire, ItemIds.OakLogs, 100) &&
+        !CampfireService.CanAddFuel(
+            emptyCampfire, ItemIds.Sticks, 100),
+    "an empty campfire must accept any log-tagged item but reject sticks");
+var fueledCampfire = CampfireService.AddFuel(
+    emptyCampfire, ItemIds.OakLogs, 100);
+Require(fueledCampfire.FuelItemId == ItemIds.OakLogs &&
+        CampfireService.State(fueledCampfire, 100) ==
+            CampfireState.Fueled &&
+        CampfireService.CanLight(
+            fueledCampfire,
+            [ItemIds.SmallRocks, ItemIds.StoneKnife],
+            100) &&
+        !CampfireService.CanLight(
+            fueledCampfire, [ItemIds.SmallRocks], 100),
+    "campfire fuel must preserve its exact log type and lighting must require small rocks and a knife");
+var litCampfire = CampfireService.Light(fueledCampfire, 100);
+Require(CampfireService.State(litCampfire, 100) ==
+            CampfireState.Lit &&
+        litCampfire.LitUntilGameSeconds ==
+            100 + WorldTime.GameSecondsPerDay &&
+        CampfireService.Expire(
+            litCampfire,
+            100 + WorldTime.GameSecondsPerDay).FuelItemId is null,
+    "a lit campfire must burn for exactly one full game-day and then consume its fuel");
+var returnedFuelCampfire = CampfireService.RemoveFuel(
+    fueledCampfire, 100);
+Require(returnedFuelCampfire.FuelItemId is null &&
+        CampfireService.State(returnedFuelCampfire, 100) ==
+            CampfireState.Empty,
+    "taking fuel must return an unlit campfire to its empty state");
 Require(PlaceableObjectCatalog.TryGet(
             ItemIds.Workbench, out var workbenchDefinition) &&
         workbenchDefinition.FootprintWidth == 2 &&
@@ -390,6 +441,13 @@ Require(PlaceableObjectCatalog.TryGet(
             new OpenTK.Mathematics.Vector2(4, 7.5f),
             new OpenTK.Mathematics.Vector2(5.1f, 7.7f)),
     "placeable objects must use deterministic grid snapping and their full footprint");
+Require(PlaceableObjectCatalog.TryGet(
+            ItemIds.Campfire, out var campfireDefinition) &&
+        campfireDefinition.FootprintWidth == 1 &&
+        campfireDefinition.FootprintDepth == 1 &&
+        campfireDefinition.HotspotX == 29 &&
+        campfireDefinition.HotspotY == 54,
+    "the campfire must be registered as a compact one-tile placeable");
 var modalScreen = new ModalScreenState();
 modalScreen.Open(ModalScreenKind.Crafting);
 Require(modalScreen.IsOpen &&

@@ -23,7 +23,15 @@ internal static class PlaceableObjectCatalog
                 FootprintDepth: 1,
                 Height: 1,
                 HotspotX: 51,
-                HotspotY: 70)
+                HotspotY: 70),
+            [ItemIds.Campfire] = new(
+                ItemIds.Campfire,
+                "campfire.png",
+                FootprintWidth: 1,
+                FootprintDepth: 1,
+                Height: .3f,
+                HotspotX: 29,
+                HotspotY: 54)
         };
 
     public static IReadOnlyCollection<PlaceableObjectDefinition> All =>

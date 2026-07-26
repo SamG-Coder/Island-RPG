@@ -13,6 +13,14 @@
       "padding": 6,
       "description": "Waist-high crafting bench for one standing character."
     },
+    "campfire": {
+      "footprintWidth": 1.0,
+      "footprintDepth": 1.0,
+      "height": 0.3,
+      "visualScale": 0.78,
+      "padding": 4,
+      "description": "Low circular stone fire ring; fuel and flame are separate overlays."
+    },
     "chair": {
       "footprintWidth": 0.5,
       "footprintDepth": 0.5,

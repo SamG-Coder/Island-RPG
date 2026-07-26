@@ -4,6 +4,10 @@ using System.Text.Json;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
+if (args.Contains("--animation-sheet"))
+    return AnimationSpriteProcessor.Run(
+        args.Where(argument => argument != "--animation-sheet").ToArray());
+
 return ObjectSpriteTool.Run(args);
 
 internal static class ObjectSpriteTool

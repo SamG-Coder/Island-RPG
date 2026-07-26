@@ -73,6 +73,8 @@ internal sealed partial class GameHostWindow : GameWindow
         GatherTreeSticks,
         PickUpGroundObject,
         DropGroundObject,
+        LightCampfire,
+        TakeCampfireFuel,
         Fish,
         GatherFibres
     }
@@ -1113,6 +1115,7 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_player is null) return;
         _worldGameSeconds = WorldTime.Advance(
             _worldGameSeconds, elapsed);
+        UpdateExpiredCampfires();
         _worldActions.ProcessPendingPath();
 
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
@@ -1135,9 +1138,15 @@ internal sealed partial class GameHostWindow : GameWindow
                 var fixedObject =
                     PlaceableObjectCatalog.IsPlaceable(
                         contextObject.ItemId);
+                var campfireState = CampfireService.IsCampfire(contextObject)
+                    ? CampfireService.State(
+                        contextObject, _worldGameSeconds)
+                    : (CampfireState?)null;
                 _groundObjectContext.Open(
                     MouseState.Position,
-                    fixedObject
+                    campfireState == CampfireState.Fueled
+                        ? ["Light", "Take log", "Walk Here", "Examine"]
+                        : fixedObject
                         ? ["Walk Here", "Examine"]
                         : ["Pick up", "Walk Here", "Examine"],
                     SceneClientBounds(), 142);
@@ -3257,12 +3266,32 @@ internal sealed partial class GameHostWindow : GameWindow
         if (PlaceableObjectCatalog.IsPlaceable(
                 groundObject.ItemId))
         {
+            if (CampfireService.IsCampfire(groundObject) &&
+                CampfireService.State(
+                    groundObject, _worldGameSeconds) ==
+                CampfireState.Fueled)
+            {
+                if (option == 0)
+                    QueueCampfireLight(groundObject);
+                else if (option == 1)
+                    QueueCampfireFuelPickup(groundObject);
+                else if (option == 2)
+                    QueueWalk(_groundObjectContextWalkTarget);
+                else if (option == 3)
+                    ExamineCampfire(groundObject);
+                return;
+            }
             if (option == 0)
                 QueueWalk(_groundObjectContextWalkTarget);
             else if (option == 1)
-                _chatUi.AddMessage(
-                    ItemCatalog.Get(groundObject.ItemId).Examine,
-                    ChatMessageStyle.Normal);
+            {
+                if (CampfireService.IsCampfire(groundObject))
+                    ExamineCampfire(groundObject);
+                else
+                    _chatUi.AddMessage(
+                        ItemCatalog.Get(groundObject.ItemId).Examine,
+                        ChatMessageStyle.Normal);
+            }
             return;
         }
         switch (option)
@@ -4307,6 +4336,9 @@ internal sealed partial class GameHostWindow : GameWindow
                     out var itemAtlasKey,
                     out var shadowAtlasKey))
                 continue;
+            if (CampfireService.IsCampfire(item.Object))
+                itemAtlasKey = CampfirePresentation.AtlasKey(
+                    item.Object, _worldGameSeconds, _clock);
             var world = GroundObjectWorld(item.Object);
             if (!IsAtlasItemVisible(itemAtlasKey, world) &&
                 (shadowAtlasKey is null ||
@@ -4444,6 +4476,9 @@ internal sealed partial class GameHostWindow : GameWindow
                     out var atlasKey,
                     out _))
                 continue;
+            if (CampfireService.IsCampfire(item.Object))
+                atlasKey = CampfirePresentation.AtlasKey(
+                    item.Object, _worldGameSeconds, _clock);
             var world = GroundObjectWorld(item.Object);
             if (!IsAtlasItemVisible(atlasKey, world))
                 continue;
@@ -5119,7 +5154,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 (framesPerAngle - 1) * (1 - progress));
         }
         else if (_player.Action == EntityAction.Gather &&
-                 _activeGroundPickupId is not null)
+                 (_activeGroundPickupId is not null ||
+                  _activeCampfireFuelPickupId is not null))
         {
             var progress = Math.Clamp(
                 (float)(_player.ActionTime /
@@ -5275,6 +5311,9 @@ internal sealed partial class GameHostWindow : GameWindow
                     placeable.Key, shadow: true),
                 null, placeable.Value.Shadow);
         }
+        foreach (var campfire in
+                 _placeableObjectSprites.CampfireAtlasFrames)
+            Place(campfire.Key, null, campfire.Frame);
         Place(
             WorldFishPresentation.DepthAtlasKey,
             null,

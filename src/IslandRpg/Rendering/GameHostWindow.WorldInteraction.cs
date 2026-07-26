@@ -15,12 +15,14 @@ internal sealed partial class GameHostWindow
         int InventorySlot,
         string ItemId,
         Vector2 Target,
-        bool Valid);
+        bool Valid,
+        Guid? TargetObjectId = null);
 
     private sealed record ActiveGroundDrop(
         int InventorySlot,
         string ItemId,
-        Vector2 Target);
+        Vector2 Target,
+        Guid? TargetObjectId = null);
 
     private bool AtlasOverlapsPlayer(
         string atlasKey, Vector2 world, PlayerVisual player)
@@ -267,6 +269,21 @@ internal sealed partial class GameHostWindow
             !TryGroundItemVisual(itemId, out _, out _, out _, out _))
             return;
 
+        if (ItemCatalog.Get(itemId).HasTag(ItemTag.Log) &&
+            TryGetGroundObjectUnderMouse(
+                SceneMousePosition(), out var campfire, out _) &&
+            CampfireService.IsCampfire(campfire))
+        {
+            _groundDropPreview = new(
+                _inventoryDraggingSlot,
+                itemId,
+                new(campfire.X, campfire.Y),
+                CampfireService.CanAddFuel(
+                    campfire, itemId, _worldGameSeconds),
+                campfire.Id);
+            return;
+        }
+
         var target = PlaceableObjectCatalog.SnapToGrid(
             itemId, ScreenToTerrain(SceneMousePosition()));
         var valid = CanPlaceInventoryItemAt(
@@ -291,6 +308,23 @@ internal sealed partial class GameHostWindow
     private void RenderGroundDropPreview()
     {
         if (_groundDropPreview is not { } preview) return;
+        if (preview.TargetObjectId is { } campfireId &&
+            FindGroundObject(campfireId) is { } campfire &&
+            _placeableObjectSprites.TryGetCampfireFueled(
+                preview.ItemId, out var fueled))
+        {
+            DrawSprite(
+                fueled.Frame,
+                fueled.Texture,
+                GroundObjectWorld(campfire),
+                opacity: .68f,
+                tint: preview.Valid
+                    ? new Vector3(.28f, 1f, .34f)
+                    : new Vector3(1f, .22f, .18f),
+                tintAmount: .62f,
+                preserveDarkTint: true);
+            return;
+        }
         if (!TryGroundItemVisual(
                 preview.ItemId,
                 out var frame,
@@ -350,7 +384,8 @@ internal sealed partial class GameHostWindow
             Math.Max(interactionRange, .80f))
         {
             BeginGroundObjectDrop(
-                preview.InventorySlot, preview.ItemId, preview.Target);
+                preview.InventorySlot, preview.ItemId, preview.Target,
+                preview.TargetObjectId);
             return;
         }
         _worldActions.QueuePath(
@@ -358,11 +393,15 @@ internal sealed partial class GameHostWindow
             interactionRange,
             WorldActionType.DropGroundObject,
             inventorySlot: preview.InventorySlot,
-            itemId: preview.ItemId);
+            itemId: preview.ItemId,
+            groundObjectId: preview.TargetObjectId);
     }
 
     internal void BeginGroundObjectDrop(
-        int inventorySlot, string itemId, Vector2 target)
+        int inventorySlot,
+        string itemId,
+        Vector2 target,
+        Guid? targetObjectId = null)
     {
         if (_player is null ||
             !InventoryContainsAt(inventorySlot, itemId) ||
@@ -373,8 +412,21 @@ internal sealed partial class GameHostWindow
                 "That item is no longer available to drop.");
             return;
         }
-        if (!CanPlaceInventoryItemAt(
-                itemId, target, out _, out var reason))
+        if (targetObjectId is { } campfireId)
+        {
+            var targetCampfire = FindGroundObject(campfireId);
+            if (targetCampfire is null ||
+                !CampfireService.CanAddFuel(
+                    targetCampfire, itemId, _worldGameSeconds))
+            {
+                ReportBlockedAction(
+                    "campfire-fuel-blocked",
+                    "That campfire cannot accept this log.");
+                return;
+            }
+        }
+        else if (!CanPlaceInventoryItemAt(
+                     itemId, target, out _, out var reason))
         {
             ReportBlockedAction("drop-location-blocked", reason);
             return;
@@ -383,7 +435,7 @@ internal sealed partial class GameHostWindow
         _activeTreeId = null;
         _activeGroundPickupId = null;
         _activeGroundDrop = new(
-            inventorySlot, itemId, target);
+            inventorySlot, itemId, target, targetObjectId);
         _player.GatherAt(target);
     }
 
@@ -403,6 +455,18 @@ internal sealed partial class GameHostWindow
             ReportBlockedAction(
                 "drop-item-unavailable",
                 "That item is no longer available to drop.");
+            _player.Stop();
+            return;
+        }
+        if (drop.TargetObjectId is { } campfireId)
+        {
+            if (!TryAddCampfireFuel(
+                    campfireId, drop.InventorySlot, drop.ItemId))
+            {
+                ReportBlockedAction(
+                    "campfire-fuel-blocked",
+                    "That campfire cannot accept this log.");
+            }
             _player.Stop();
             return;
         }
@@ -443,6 +507,11 @@ internal sealed partial class GameHostWindow
             ChatMessageStyle.Action);
         _player.Stop();
     }
+
+    private WorldGroundObject? FindGroundObject(Guid id) =>
+        _worldChunks.Values
+            .SelectMany(gpu => gpu.Chunk.GroundObjects)
+            .FirstOrDefault(item => item.Id == id);
 
     private bool InventoryContainsAt(int slot, string itemId)
     {

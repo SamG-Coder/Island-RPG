@@ -157,6 +157,15 @@ internal static class CraftingSkill
                     [new(ItemIds.StonePickaxe, 1)])
             ]),
         new(
+            "campfire", ItemIds.Campfire,
+            CraftingCategory.Furniture, 1, 25,
+            [new(ItemIds.SmallRocks, 3)],
+            [
+                "Select several handfuls of small stones.",
+                "Arrange the stones into a stable circular fire ring.",
+                "Leave the centre clear for fuel."
+            ]),
+        new(
             "workbench", ItemIds.Workbench,
             CraftingCategory.Furniture, 5, 75,
             [
