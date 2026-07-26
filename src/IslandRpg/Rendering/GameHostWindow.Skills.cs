@@ -19,7 +19,7 @@ internal sealed partial class GameHostWindow
             var panel = _gameUi.Panel.Bounds;
             if (_selectedSkill < 0)
             {
-                for (var index = 0; index < 3; index++)
+                for (var index = 0; index < 4; index++)
                     if (SkillPanelLayout.ListItemBounds(panel, index)
                         .Contains(pointer))
                     {
@@ -56,36 +56,51 @@ internal sealed partial class GameHostWindow
                 panel, 2, "Crafting",
                 CraftingSkill.LevelForExperience(
                     _activePlayer?.CraftingExperience ?? 0));
+            DrawSkillListItem(
+                panel, 3, "Fishing",
+                FishingSkill.LevelForExperience(
+                    _activePlayer?.FishingExperience ?? 0));
             return;
         }
 
         var farming = _selectedSkill == 1;
         var crafting = _selectedSkill == 2;
-        var name = crafting ? "Crafting" :
+        var fishing = _selectedSkill == 3;
+        var name = fishing ? "Fishing" : crafting ? "Crafting" :
             farming ? "Farming" : "Woodcutting";
-        var experience = crafting
+        var experience = fishing
+            ? _activePlayer?.FishingExperience ?? 0
+            : crafting
             ? _activePlayer?.CraftingExperience ?? 0
             : farming
                 ? _activePlayer?.FarmingExperience ?? 0
                 : _activePlayer?.WoodcuttingExperience ?? 0;
-        var level = crafting
+        var level = fishing
+            ? FishingSkill.LevelForExperience(experience)
+            : crafting
             ? CraftingSkill.LevelForExperience(experience)
             : farming
                 ? FarmingSkill.LevelForExperience(experience)
                 : WoodcuttingSkill.LevelForExperience(experience);
-        var maximumLevel = crafting
+        var maximumLevel = fishing
+            ? FishingSkill.MaximumLevel
+            : crafting
             ? CraftingSkill.MaximumLevel
             : farming
                 ? FarmingSkill.MaximumLevel
                 : WoodcuttingSkill.MaximumLevel;
-        var currentFloor = crafting
+        var currentFloor = fishing
+            ? FishingSkill.ExperienceForLevel(level)
+            : crafting
             ? CraftingSkill.ExperienceForLevel(level)
             : farming
                 ? FarmingSkill.ExperienceForLevel(level)
                 : WoodcuttingSkill.ExperienceForLevel(level);
         var nextFloor = level >= maximumLevel
             ? currentFloor
-            : crafting
+            : fishing
+                ? FishingSkill.ExperienceForLevel(level + 1)
+                : crafting
                 ? CraftingSkill.ExperienceForLevel(level + 1)
                 : farming
                     ? FarmingSkill.ExperienceForLevel(level + 1)
@@ -101,7 +116,7 @@ internal sealed partial class GameHostWindow
             panel, experience, level, maximumLevel,
             currentFloor, nextFloor, progress);
         RenderSkillInformation(
-            panel, farming, crafting, level, experience);
+            panel, farming, crafting, fishing, level, experience);
         if (crafting) RenderSkillAction(panel);
     }
 
@@ -164,13 +179,16 @@ internal sealed partial class GameHostWindow
         Vector4 panel,
         bool farming,
         bool crafting,
+        bool fishing,
         int level,
         int experience)
     {
         var info = SkillPanelLayout.InformationBounds(panel);
         DrawUiColor(info, new(.052f, .047f, .035f, .96f));
         DrawPanelOutline(info, 1, new(.25f, .205f, .115f, 1));
-        var remaining = crafting
+        var remaining = fishing
+            ? FishingSkill.ExperienceToNextLevel(experience)
+            : crafting
             ? CraftingSkill.ExperienceToNextLevel(experience)
             : farming
                 ? FarmingSkill.ExperienceToNextLevel(experience)
@@ -181,6 +199,7 @@ internal sealed partial class GameHostWindow
             new(info.X + 9, info.Y + 9),
             new(194, 184, 151, 255));
         DrawUiText(
+            fishing ? "Levels unlock more difficult fish" :
             crafting ? "Browse learned recipes" :
             farming ? "Plant seeds to gain XP" :
             $"Hit chance: {WoodcuttingSkill.HitChance(level) * 100:0}%",

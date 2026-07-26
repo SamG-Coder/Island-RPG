@@ -11,6 +11,7 @@ internal enum EntityAction
     Attack,
     Work,
     Gather,
+    Fish,
     Die
 }
 
@@ -86,6 +87,16 @@ internal sealed class WorldEntity
         if (direction.LengthSquared > .0001f)
             Facing = direction.Normalized();
         SetAction(EntityAction.Gather);
+    }
+
+    public void FishAt(Vector2 target)
+    {
+        _path.Clear();
+        Target = Position;
+        var direction = target - Position;
+        if (direction.LengthSquared > .0001f)
+            Facing = direction.Normalized();
+        SetAction(EntityAction.Fish);
     }
 
     public void SetGender(EntityGender gender)

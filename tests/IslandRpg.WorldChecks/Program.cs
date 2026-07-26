@@ -438,14 +438,49 @@ var ironAxeStrike = WoodcuttingSkill.Roll(0, 0, 0, 2);
 Require(ironAxeStrike.Damage > stoneAxeStrike.Damage,
     "an axe's woodcutting power must improve its chopping damage");
 Require(
-    Enum.GetValues<SkillType>().Length == 3 &&
+    Enum.GetValues<SkillType>().Length == 4 &&
     SkillService.LevelForExperience(
         SkillService.ExperienceForLevel(10)) == 10 &&
     WoodcuttingSkill.ExperienceForLevel(10) ==
     FarmingSkill.ExperienceForLevel(10) &&
     FarmingSkill.ExperienceForLevel(10) ==
-    CraftingSkill.ExperienceForLevel(10),
+    CraftingSkill.ExperienceForLevel(10) &&
+    CraftingSkill.ExperienceForLevel(10) ==
+    FishingSkill.ExperienceForLevel(10),
     "all registered skills must reuse the shared level and experience progression service");
+Require(
+    FishingSkill.CanCatch(WorldFishSpecies.ShoreMinnows, 1) &&
+    FishingSkill.CanCatch(WorldFishSpecies.RiverPerch, 1) &&
+    !FishingSkill.CanCatch(WorldFishSpecies.BluefinTuna, 16) &&
+    FishingSkill.CanCatch(WorldFishSpecies.BluefinTuna, 17),
+    "fishing progression must unlock difficult catches without changing the authored net action");
+var fishingAward = FishingSkill.AwardExperience(
+    0, WorldFishSpecies.RiverPerch);
+Require(
+    fishingAward.Experience ==
+    FishingSkill.Profile(WorldFishSpecies.RiverPerch).Experience &&
+    fishingAward.Gained > 0 &&
+    FishingSkill.AnimationFrameSeconds(.1f) < .1f,
+    "fishing XP and animation pacing must be owned by the fishing skill service");
+var sharedAward = SkillService.AwardExperience(0, 25);
+Require(
+    WoodcuttingSkill.AwardExperience(0, 25) == sharedAward &&
+    FarmingSkill.AwardExperience(0, 25) == sharedAward &&
+    CraftingSkill.AwardExperience(
+        0,
+        new CraftingRecipe(
+            "shared-xp-test", ItemIds.Sticks,
+            CraftingCategory.Resources, 1, 25, [], [])) == sharedAward,
+    "every skill award path must delegate shared XP arithmetic to SkillService");
+Require(
+    ItemCatalog.Get(ItemIds.RawRedSnapper).SpriteCell == 6 &&
+    ItemCatalog.Get(ItemIds.CookedRedSnapper).SpriteCell == 7 &&
+    ItemCatalog.Get(ItemIds.CookedRedSnapper)
+        .HasTag(ItemTag.CookedFish) &&
+    ItemCatalog.Get(ItemIds.BurntRedSnapper).SpriteCell == 7 &&
+    ItemCatalog.Get(ItemIds.BurntRedSnapper)
+        .HasTag(ItemTag.BurntFish),
+    "fish states must use authored raw/cooked pairs and reuse the cooked icon for shader-derived burnt fish");
 Require(PlayerInventory.TryCarvePlank(
         [ItemIds.SharpenedRock, ItemIds.Logs],
         0, 1, .25f, out var carvedPlank, out var sharpRockSurvived) &&

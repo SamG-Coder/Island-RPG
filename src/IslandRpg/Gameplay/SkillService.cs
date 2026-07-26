@@ -4,11 +4,18 @@ internal enum SkillType
 {
     Woodcutting,
     Farming,
-    Crafting
+    Crafting,
+    Fishing
 }
 
 internal static class SkillService
 {
+    // Extension contract for every current and future skill:
+    // - Skill levels, XP thresholds, maximum level, next-level progress, XP
+    //   clamping, and level transitions must come from this service.
+    // - A skill may define reward amounts and gameplay unlocks, but its
+    //   AwardExperience method must delegate to SkillService.AwardExperience.
+    // - UI, action, and developer code must not reproduce XP arithmetic.
     public const int MaximumLevel = 20;
 
     public static int LevelForExperience(int experience)
@@ -34,4 +41,28 @@ internal static class SkillService
             ? 0
             : ExperienceForLevel(level + 1) - Math.Max(0, experience);
     }
+
+    public static SkillExperienceChange AwardExperience(
+        int currentExperience, int requestedAmount)
+    {
+        var previousLevel = LevelForExperience(currentExperience);
+        var experience = Math.Min(
+            ExperienceForLevel(MaximumLevel),
+            Math.Max(0, currentExperience) +
+            Math.Max(0, requestedAmount));
+        return new(
+            experience,
+            experience - Math.Max(0, currentExperience),
+            previousLevel,
+            LevelForExperience(experience));
+    }
+}
+
+internal readonly record struct SkillExperienceChange(
+    int Experience,
+    int Gained,
+    int PreviousLevel,
+    int Level)
+{
+    public bool LevelledUp => Level > PreviousLevel;
 }

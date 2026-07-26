@@ -351,6 +351,7 @@ internal static class GameShaderPrograms
             "#version 330 core\nin vec2 uv;in float alpha;out vec4 c;uniform sampler2D image;" +
             "uniform int recolorPlayer;uniform vec3 playerColor;" +
             "uniform float opacity;uniform float brightness;uniform float tintAmount;" +
+            "uniform float grayscaleAmount;" +
             "uniform vec3 colorTint;uniform int outlineOnly;uniform int wading;" +
             "uniform vec3 outlineColor;" +
             "uniform int preserveDarkTint;" +
@@ -387,6 +388,8 @@ internal static class GameShaderPrograms
             "c.rgb=mix(c.rgb,vec3(0.08,0.34,0.53),0.43);" +
             "c.rgb+=vec3(0.16,0.42,0.55)*surface*0.22;c.a*=0.68;}" +
             "c.rgb*=1.0+brightness;" +
+            "float gray=dot(c.rgb,vec3(0.2126,0.7152,0.0722));" +
+            "c.rgb=mix(c.rgb,vec3(gray),grayscaleAmount);" +
             "if(preserveDarkTint==1){" +
             "float shade=max(c.r,max(c.g,c.b));" +
             "float targetPeak=max(colorTint.r,max(colorTint.g,colorTint.b));" +

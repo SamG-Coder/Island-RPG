@@ -51,26 +51,20 @@ internal sealed partial class GameHostWindow
         if (_activePlayer is null) return;
         var recipe = CraftingSkill.Recipes.First(
             candidate => candidate.Id == recipeId);
-        var previousLevel = CraftingSkill.LevelForExperience(
-            _activePlayer.CraftingExperience);
-        var maximumExperience = CraftingSkill.ExperienceForLevel(
-            CraftingSkill.MaximumLevel);
-        var experience = Math.Min(
-            maximumExperience,
-            _activePlayer.CraftingExperience + recipe.Experience);
+        var award = CraftingSkill.AwardExperience(
+            _activePlayer.CraftingExperience, recipe);
         _activePlayer = _activePlayer with
         {
-            CraftingExperience = experience,
+            CraftingExperience = award.Experience,
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
         _chatUi.AddMessage(
-            $"+{recipe.Experience} Crafting XP.",
+            $"+{award.Gained} Crafting XP.",
             ChatMessageStyle.Experience);
-        var level = CraftingSkill.LevelForExperience(experience);
-        if (level > previousLevel)
+        if (award.LevelledUp)
             _chatUi.AddMessage(
-                $"Your Crafting level is now {level}.",
+                $"Your Crafting level is now {award.Level}.",
                 ChatMessageStyle.LevelUp);
     }
 
@@ -286,7 +280,9 @@ internal sealed partial class GameHostWindow
                 SpritePixelLayout.CenterOpaquePixels(
                     pixelFrame,
                     new(bounds.X + 9, bounds.Y + 9, 32, 32)),
-                uvRectangle: uv);
+                brightness: InventoryItemBrightness(itemId),
+                uvRectangle: uv,
+                grayscaleAmount: InventoryItemGrayscale(itemId));
         }
         else
             DrawCenteredUiText(

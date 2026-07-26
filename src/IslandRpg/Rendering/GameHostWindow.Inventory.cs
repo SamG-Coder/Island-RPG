@@ -51,7 +51,9 @@ internal sealed partial class GameHostWindow
                     itemTexture,
                     SpritePixelLayout.CenterOpaquePixels(
                         pixelFrame, bounds),
+                    brightness: InventoryItemBrightness(itemId),
                     uvRectangle: itemUv,
+                    grayscaleAmount: InventoryItemGrayscale(itemId),
                     spriteOutline: slot == inventoryPanel.ActiveSlot
                         ? Vector3.One
                         : Vector3.Zero);
@@ -84,7 +86,9 @@ internal sealed partial class GameHostWindow
                     itemTexture,
                     SpritePixelLayout.CenterOpaquePixels(
                         pixelFrame, dragBounds),
+                    brightness: InventoryItemBrightness(draggedItemId),
                     uvRectangle: itemUv,
+                    grayscaleAmount: InventoryItemGrayscale(draggedItemId),
                     drawOpacity: .62f,
                     spriteOutline:
                     inventoryPanel.DraggingSlot == inventoryPanel.ActiveSlot

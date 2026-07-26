@@ -58,6 +58,10 @@ internal sealed partial class GameHostWindow : GameWindow
         LoadedGraphic Graphic, int[] Textures, float SecondsPerFrame);
     private sealed record PlayerVisual(
         SpriteFrame Frame, int Texture, Vector2 World, bool Mirror, bool Wading);
+    private sealed record GroundToolSprite(
+        SpriteFrame Frame,
+        int Texture,
+        SpriteFrame Shadow);
     private sealed record MoveMarker(
         Vector2 Position, double Time, bool Action = false);
     private sealed record WaterRipple(Vector2 Position, double StartedAt);
@@ -66,13 +70,15 @@ internal sealed partial class GameHostWindow : GameWindow
         CutTree,
         GatherTreeSticks,
         PickUpGroundObject,
-        DropGroundObject
+        DropGroundObject,
+        Fish
     }
     private sealed record QueuedWorldAction(
         WorldActionType Type, Vector2 Target, float Range,
         Guid? GroundObjectId = null,
         int InventorySlot = -1,
-        string? ItemId = null);
+        string? ItemId = null,
+        string? FishKey = null);
     private sealed record PathResult(
         int RequestId,
         IReadOnlyList<Vector2> Path,
@@ -199,6 +205,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly int[] _stoneToolTextures = new int[3];
     private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[3];
     private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[3];
+    private readonly Dictionary<string, GroundToolSprite> _groundToolSprites =
+        new(StringComparer.OrdinalIgnoreCase);
     private CoastalCollectibleSprites _coastalSprites = new();
     private readonly CoastalCollectibleRespawnController _coastalRespawns = new();
     private static readonly SpriteFrame WoodcuttingItemsFrame =
@@ -350,7 +358,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 "VMBAS_WN", "VMBAS_AN", "VMBAS_DN",
                 "VFBAS_WN", "VFBAS_AN", "VFBAS_DN",
                 "VMLUM_AN", "VFLUM_AN",
-                "VMFOR_TN", "VFFOR_TN", "MOVEX_NN"
+                "VMFOR_TN", "VFFOR_TN",
+                "VMFIS_TN", "VFFIS_TN", "MOVEX_NN"
             })
                 names.Add(name);
         }
@@ -1097,6 +1106,14 @@ internal sealed partial class GameHostWindow : GameWindow
                     ["Pick up", "Walk Here", "Examine"],
                     SceneClientBounds(), 142);
             }
+            else if (TryGetFishUnderMouse(
+                         SceneMousePosition(), out var contextFish))
+            {
+                _inventoryContext.Close();
+                _treeContext.Close();
+                _groundObjectContext.Close();
+                QueueFishing(contextFish);
+            }
             else if (TryGetTreeUnderMouse(
                     SceneMousePosition(), out var contextTree))
             {
@@ -1122,6 +1139,11 @@ internal sealed partial class GameHostWindow : GameWindow
                     SceneMousePosition(), out var groundObject, out _))
             {
                 QueueGroundObjectPickup(groundObject);
+            }
+            else if (TryGetFishUnderMouse(
+                         SceneMousePosition(), out var fish))
+            {
+                QueueFishing(fish);
             }
             else if (!TryGetTreeUnderMouse(SceneMousePosition(), out var actionTree))
             {
@@ -1243,19 +1265,30 @@ internal sealed partial class GameHostWindow : GameWindow
         CancellationToken cancellationToken,
         Guid? groundObjectId = null,
         int inventorySlot = -1,
-        string? itemId = null)
+        string? itemId = null,
+        string? fishKey = null)
     {
         var targetCell = new Vector2i(
             (int)MathF.Floor(target.X),
             (int)MathF.Floor(target.Y));
-        var candidates = new List<Vector2>(8);
-        for (var y = -1; y <= 1; y++)
-        for (var x = -1; x <= 1; x++)
+        var searchRadius = actionType == WorldActionType.Fish
+            ? (int)MathF.Ceiling(standOff)
+            : 1;
+        var candidates = new List<Vector2>(
+            (searchRadius * 2 + 1) * (searchRadius * 2 + 1));
+        var canStandInTargetCell = actionType is
+            WorldActionType.PickUpGroundObject or
+            WorldActionType.DropGroundObject;
+        for (var y = -searchRadius; y <= searchRadius; y++)
+        for (var x = -searchRadius; x <= searchRadius; x++)
         {
-            if (x == 0 && y == 0) continue;
-            candidates.Add(new Vector2(
+            if (x == 0 && y == 0 && !canStandInTargetCell)
+                continue;
+            var candidate = new Vector2(
                 targetCell.X + x + .5f,
-                targetCell.Y + y + .5f));
+                targetCell.Y + y + .5f);
+            if ((candidate - target).Length <= standOff + .25f)
+                candidates.Add(candidate);
         }
 
         List<Vector2>? bestPath = null;
@@ -1278,7 +1311,9 @@ internal sealed partial class GameHostWindow : GameWindow
             var finalDistance = diagonal
                 ? Math.Max(standOff, .72f)
                 : standOff;
-            var standPosition = target + approach.Normalized() * finalDistance;
+            var standPosition = actionType == WorldActionType.Fish
+                ? candidate
+                : target + approach.Normalized() * finalDistance;
             var score = path.Count + (diagonal ? .35f : 0f);
             if (score >= bestScore) continue;
 
@@ -1300,7 +1335,8 @@ internal sealed partial class GameHostWindow : GameWindow
                     Math.Max(standOff, .72f) + .08f,
                     groundObjectId,
                     inventorySlot,
-                    itemId));
+                    itemId,
+                    fishKey));
     }
 
     private float TreeInteractionDistance(string graphicName)
@@ -1737,25 +1773,20 @@ internal sealed partial class GameHostWindow : GameWindow
     private void AwardWoodcuttingExperience(int amount)
     {
         if (_activePlayer is null || amount <= 0) return;
-        var previousLevel = WoodcuttingSkill.LevelForExperience(
-            _activePlayer.WoodcuttingExperience);
-        var maximumExperience = WoodcuttingSkill.ExperienceForLevel(
-            WoodcuttingSkill.MaximumLevel);
-        var experience = Math.Min(
-            maximumExperience,
-            _activePlayer.WoodcuttingExperience + amount);
+        var award = WoodcuttingSkill.AwardExperience(
+            _activePlayer.WoodcuttingExperience, amount);
         _activePlayer = _activePlayer with
         {
-            WoodcuttingExperience = experience,
+            WoodcuttingExperience = award.Experience,
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
-        var level = WoodcuttingSkill.LevelForExperience(experience);
         _chatUi.AddMessage(
-            $"+{amount} Woodcutting XP.", ChatMessageStyle.Experience);
-        if (level > previousLevel)
+            $"+{award.Gained} Woodcutting XP.",
+            ChatMessageStyle.Experience);
+        if (award.LevelledUp)
             _chatUi.AddMessage(
-                $"Your Woodcutting level is now {level}.",
+                $"Your Woodcutting level is now {award.Level}.",
                 ChatMessageStyle.LevelUp);
     }
 
@@ -3205,25 +3236,20 @@ internal sealed partial class GameHostWindow : GameWindow
     private void AwardFarmingExperience(int amount)
     {
         if (_activePlayer is null || amount <= 0) return;
-        var previousLevel = FarmingSkill.LevelForExperience(
-            _activePlayer.FarmingExperience);
-        var maximumExperience = FarmingSkill.ExperienceForLevel(
-            FarmingSkill.MaximumLevel);
-        var experience = Math.Min(
-            maximumExperience,
-            _activePlayer.FarmingExperience + amount);
+        var award = FarmingSkill.AwardExperience(
+            _activePlayer.FarmingExperience, amount);
         _activePlayer = _activePlayer with
         {
-            FarmingExperience = experience,
+            FarmingExperience = award.Experience,
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
-        var level = FarmingSkill.LevelForExperience(experience);
         _chatUi.AddMessage(
-            $"+{amount} Farming XP.", ChatMessageStyle.Experience);
-        if (level > previousLevel)
+            $"+{award.Gained} Farming XP.",
+            ChatMessageStyle.Experience);
+        if (award.LevelledUp)
             _chatUi.AddMessage(
-                $"Your Farming level is now {level}.",
+                $"Your Farming level is now {award.Level}.",
                 ChatMessageStyle.LevelUp);
     }
 
@@ -3259,7 +3285,8 @@ internal sealed partial class GameHostWindow : GameWindow
         var cell = item.SpriteCell;
         if (item.HasTag(ItemTag.NaturalMaterial) ||
             item.HasTag(ItemTag.SupplementalSprite) ||
-            item.HasTag(ItemTag.StoneToolSprite))
+            item.HasTag(ItemTag.StoneToolSprite) ||
+            item.HasTag(ItemTag.Fish))
             return cell is null ? null : new Vector4(0, 0, 1, 1);
         return cell is null
             ? null
@@ -3282,6 +3309,11 @@ internal sealed partial class GameHostWindow : GameWindow
                    (uint)coastalCell <
                    (uint)_coastalSprites.Textures.Length
                 ? _coastalSprites.Textures[coastalCell]
+                : 0;
+        if (item.HasTag(ItemTag.Fish))
+            return item.SpriteCell is { } fishCell &&
+                   (uint)fishCell < (uint)_fishItemTextures.Length
+                ? _fishItemTextures[fishCell]
                 : 0;
         if (item.HasTag(ItemTag.SupplementalSprite))
             return item.SpriteCell is { } supplementalCell &&
@@ -3308,6 +3340,9 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.HasTag(ItemTag.CoastalSprite) &&
             (uint)cell < (uint)_coastalSprites.Frames.Length)
             return _coastalSprites.Frames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.Fish) &&
+            (uint)cell < (uint)_fishItemFrames.Length)
+            return _fishItemFrames[cell] ?? WoodcuttingItemsFrame;
         if (item.HasTag(ItemTag.SupplementalSprite) &&
             (uint)cell < (uint)_supplementalItemFrames.Length)
             return _supplementalItemFrames[cell] ?? WoodcuttingItemsFrame;
@@ -3323,12 +3358,19 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.SpriteCell is not { } cell ||
             item.HasTag(ItemTag.StoneToolSprite) ||
             item.HasTag(ItemTag.SupplementalSprite) ||
-            item.HasTag(ItemTag.NaturalMaterial))
+            item.HasTag(ItemTag.NaturalMaterial) ||
+            item.HasTag(ItemTag.Fish))
             return InventoryItemFrame(itemId);
         return (uint)cell < (uint)_woodcuttingInventoryFrames.Length
             ? _woodcuttingInventoryFrames[cell] ?? WoodcuttingItemsFrame
             : WoodcuttingItemsFrame;
     }
+
+    private static float InventoryItemBrightness(string itemId) =>
+        ItemCatalog.Get(itemId).HasTag(ItemTag.BurntFish) ? -.48f : 0f;
+
+    private static float InventoryItemGrayscale(string itemId) =>
+        ItemCatalog.Get(itemId).HasTag(ItemTag.BurntFish) ? .92f : 0f;
 
     private void RenderTreeHealthBars(Vector4 scene)
     {
@@ -3860,6 +3902,7 @@ internal sealed partial class GameHostWindow : GameWindow
         Vector4? uvRectangle = null,
         Vector3? tint = null,
         float tintAmount = 0,
+        float grayscaleAmount = 0,
         float drawOpacity = 1,
         int teamColor = 0,
         Vector3? spriteOutline = null)
@@ -3887,6 +3930,9 @@ internal sealed partial class GameHostWindow : GameWindow
         var tintColor = tint ?? Vector3.Zero;
         GL.Uniform3(GL.GetUniformLocation(_program, "colorTint"), tintColor);
         GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), tintAmount);
+        GL.Uniform1(
+            GL.GetUniformLocation(_program, "grayscaleAmount"),
+            grayscaleAmount);
         GL.Uniform2(GL.GetUniformLocation(_program, "texelSize"),
             1f / frame.Width, 1f / frame.Height);
         GL.ActiveTexture(TextureUnit.Texture0);
@@ -3903,6 +3949,7 @@ internal sealed partial class GameHostWindow : GameWindow
         ]);
         GL.Uniform1(GL.GetUniformLocation(_program, "brightness"), 0f);
         GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), 0f);
+        GL.Uniform1(GL.GetUniformLocation(_program, "grayscaleAmount"), 0f);
         GL.Uniform1(GL.GetUniformLocation(_program, "recolorPlayer"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
         GL.Uniform1(GL.GetUniformLocation(_program, "spriteOutline"), 0);
@@ -4138,6 +4185,7 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var cachedFish in gpu.FishRenderItems)
         {
             var fish = cachedFish.Fish;
+            if (IsFishDepleted(fish)) continue;
             var world = cachedFish.World;
             var atlasKey = WorldFishAnimation.AtlasKey(
                 fish, _clock);
@@ -4471,6 +4519,7 @@ internal sealed partial class GameHostWindow : GameWindow
             [EntityAction.Attack] = "AN",
             [EntityAction.Work] = "AN",
             [EntityAction.Gather] = "TN",
+            [EntityAction.Fish] = "TN",
             [EntityAction.Die] = "DN"
         };
         var uploaded = new Dictionary<string, EntityAnimation>(
@@ -4484,6 +4533,8 @@ internal sealed partial class GameHostWindow : GameWindow
                     gender == EntityGender.Male ? "VMLUM_" : "VFLUM_",
                 EntityAction.Gather =>
                     gender == EntityGender.Male ? "VMFOR_" : "VFFOR_",
+                EntityAction.Fish =>
+                    gender == EntityGender.Male ? "VMFIS_" : "VFFIS_",
                 _ => gender == EntityGender.Male ? "VMBAS_" : "VFBAS_"
             };
             var name = prefix + pair.Value;
@@ -4499,6 +4550,8 @@ internal sealed partial class GameHostWindow : GameWindow
             var rate = graphic.Definition.FrameRate is > .015f and < 2f
                 ? graphic.Definition.FrameRate
                 : .09f;
+            if (pair.Key == EntityAction.Fish)
+                rate = FishingSkill.AnimationFrameSeconds(rate);
             var animation = new EntityAnimation(graphic, textures, rate);
             uploaded[name] = animation;
             _entityAnimations[(gender, pair.Key)] = animation;
@@ -4527,6 +4580,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void PrepareGameUi()
     {
+        PrepareFishingItemSprites();
         _uiPanelFillTexture = Upload(1, 1, [20, 20, 19, 148]);
         _uiSolidTexture = Upload(1, 1, [255, 255, 255, 255]);
         _uiTabFrame = new SpriteFrame(
@@ -4565,12 +4619,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 var sourceFrame = new SpriteFrame(
                     cellSize, cellSize, cellSize / 2, 28, pixels);
                 _woodcuttingInventoryFrames[cell] = sourceFrame;
-                var isTool = ItemCatalog.All.Any(item =>
-                    item.SpriteCell == cell &&
-                    item.HasTag(ItemTag.Tool));
-                var frame = isTool
-                    ? SpriteFrameTransforms.Rotate(sourceFrame, 45)
-                    : sourceFrame;
+                var frame = sourceFrame;
                 _woodcuttingItemFrames[cell] = frame;
                 _woodcuttingShadowFrames[cell] =
                     ItemShadowGenerator.Create(frame);
@@ -4682,6 +4731,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 AppContext.BaseDirectory, "Resources", "Images",
                 "coastal-collectibles.png"),
             Upload);
+        PrepareGroundToolSprites();
         GL.BindTexture(TextureTarget.Texture2D, _minimapTexture);
         GL.TexParameter(
             TextureTarget.Texture2D,
@@ -4723,6 +4773,21 @@ internal sealed partial class GameHostWindow : GameWindow
         _chatFont = _fontSystem.GetFont(14);
         _chatLineHeight = MathF.Ceiling(
             Math.Max(16, _chatFont.MeasureString("Ag").Y));
+    }
+
+    private void PrepareGroundToolSprites()
+    {
+        foreach (var item in ItemCatalog.All.Where(item =>
+                     item.HasTag(ItemTag.Tool) &&
+                     item.SpriteCell is not null))
+        {
+            var source = InventoryItemPixelFrame(item.Id);
+            var frame = SpriteFrameTransforms.Rotate(source, 45);
+            _groundToolSprites[item.Id] = new(
+                frame,
+                Upload(frame),
+                ItemShadowGenerator.Create(frame));
+        }
     }
 
     private static byte[] CreateTabPixels(bool active)
@@ -4943,6 +5008,26 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_coastalSprites.GroundShadows[cell] is { } shadowFrame)
                 Place(CoastalAtlasKey(cell, shadow: true), null, shadowFrame);
         }
+        for (var cell = 0; cell < _fishItemFrames.Length; cell++)
+        {
+            if (_fishItemFrames[cell] is { } itemFrame)
+                Place(
+                    FishItemAtlasKey(cell, shadow: false),
+                    null, itemFrame);
+            if (_fishItemShadowFrames[cell] is { } shadowFrame)
+                Place(
+                    FishItemAtlasKey(cell, shadow: true),
+                    null, shadowFrame);
+        }
+        foreach (var tool in _groundToolSprites)
+        {
+            Place(
+                GroundToolAtlasKey(tool.Key, shadow: false),
+                null, tool.Value.Frame);
+            Place(
+                GroundToolAtlasKey(tool.Key, shadow: true),
+                null, tool.Value.Shadow);
+        }
         Place(
             WorldFishPresentation.DepthAtlasKey,
             null,
@@ -5000,6 +5085,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static string CoastalAtlasKey(int cell, bool shadow) =>
         shadow ? $"COASTAL_SHADOW#{cell}" : $"COASTAL#{cell}";
+
+    private static string GroundToolAtlasKey(string itemId, bool shadow) =>
+        shadow ? $"GROUND_TOOL_SHADOW#{itemId}" : $"GROUND_TOOL#{itemId}";
 
     private GpuWorldChunk UploadWorldChunk(WorldChunk chunk)
     {
@@ -5711,6 +5799,10 @@ internal sealed partial class GameHostWindow : GameWindow
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _coastalSprites.GroundTextures)
             if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _fishItemTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var tool in _groundToolSprites.Values)
+            if (tool.Texture != 0) GL.DeleteTexture(tool.Texture);
         if (_uiTabTexture != 0) GL.DeleteTexture(_uiTabTexture);
         if (_uiActiveTabTexture != 0) GL.DeleteTexture(_uiActiveTabTexture);
         if (_minimapTexture != 0) GL.DeleteTexture(_minimapTexture);

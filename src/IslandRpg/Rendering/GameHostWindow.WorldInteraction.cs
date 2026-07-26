@@ -129,6 +129,7 @@ internal sealed partial class GameHostWindow
         foreach (var cached in gpu.FishRenderItems
                      .OrderByDescending(item => item.World.Y))
         {
+            if (IsFishDepleted(cached.Fish)) continue;
             if (!WorldFishPresentation.BaseHitTest(
                     mouse,
                     SpriteAnchor(cached.World),
@@ -442,6 +443,24 @@ internal sealed partial class GameHostWindow
             return false;
         }
 
+        if (item.HasTag(ItemTag.Tool))
+        {
+            if (!_groundToolSprites.TryGetValue(
+                    item.Id, out var toolSprite))
+            {
+                frame = null!;
+                texture = 0;
+                atlasKey = "";
+                shadowKey = null;
+                return false;
+            }
+            frame = toolSprite.Frame;
+            texture = toolSprite.Texture;
+            atlasKey = GroundToolAtlasKey(item.Id, shadow: false);
+            shadowKey = GroundToolAtlasKey(item.Id, shadow: true);
+            return true;
+        }
+
         if (item.HasTag(ItemTag.StoneToolSprite))
         {
             if ((uint)cell >= (uint)_stoneToolFrames.Length ||
@@ -504,6 +523,27 @@ internal sealed partial class GameHostWindow
             shadowKey = _coastalSprites.GroundShadows[cell] is null
                 ? null
                 : CoastalAtlasKey(cell, shadow: true);
+            return true;
+        }
+
+        if (item.HasTag(ItemTag.Fish))
+        {
+            if ((uint)cell >= (uint)_fishItemFrames.Length ||
+                _fishItemFrames[cell] is not { } fishFrame ||
+                _fishItemTextures[cell] == 0)
+            {
+                frame = null!;
+                texture = 0;
+                atlasKey = "";
+                shadowKey = null;
+                return false;
+            }
+            frame = fishFrame;
+            texture = _fishItemTextures[cell];
+            atlasKey = FishItemAtlasKey(cell, shadow: false);
+            shadowKey = _fishItemShadowFrames[cell] is null
+                ? null
+                : FishItemAtlasKey(cell, shadow: true);
             return true;
         }
 

@@ -57,6 +57,8 @@ internal sealed class WorldChunk
     public List<WorldGroundObject> GroundObjects { get; init; } = [];
     public WorldVegetation[] Vegetation { get; init; } = [];
     public WorldFish[] Fish { get; init; } = [];
+    public Dictionary<string, int> FishRemaining { get; init; } =
+        new(StringComparer.Ordinal);
 }
 
 internal static class InfiniteWorldGenerator
@@ -685,7 +687,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 4;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 15;
+    private const int ChunkPayloadVersion = 16;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -905,6 +907,12 @@ internal sealed class WorldChunkStore
                     MathF.Floor(groundObject.Y / WorldChunk.Size) *
                     WorldChunk.Size);
             }
+            writer.Write(chunk.FishRemaining.Count);
+            foreach (var school in chunk.FishRemaining)
+            {
+                writer.Write(school.Key);
+                writer.Write(school.Value);
+            }
         }
         return stream.ToArray();
     }
@@ -1031,6 +1039,25 @@ internal sealed class WorldChunkStore
             else
                 groundObjects = InfiniteWorldGenerator.GenerateGroundObjects(
                     Seed, tiles, trees);
+            var fishRemaining = new Dictionary<string, int>(
+                StringComparer.Ordinal);
+            if (payloadVersion >= 16)
+            {
+                var fishSchoolCount = reader.ReadInt32();
+                if (fishSchoolCount is < 0 or > WorldFishGenerator.MaximumPerChunk)
+                    throw new InvalidDataException(
+                        $"Chunk fish-school count is invalid: {fishSchoolCount}");
+                for (var i = 0; i < fishSchoolCount; i++)
+                {
+                    var stableKey = reader.ReadString();
+                    var remaining = reader.ReadInt32();
+                    if (string.IsNullOrWhiteSpace(stableKey) ||
+                        stableKey.Length > 96 || remaining < 0)
+                        throw new InvalidDataException(
+                            $"Chunk fish-school state is invalid: {stableKey}");
+                    fishRemaining[stableKey] = remaining;
+                }
+            }
             var weights = InfiniteWorldGenerator.GenerateBiomeWeights(Seed, coordinate);
             var cliffs = InfiniteWorldGenerator.GenerateCliffs(Seed, tiles);
             return new()
@@ -1043,7 +1070,8 @@ internal sealed class WorldChunkStore
                 GroundObjects = groundObjects,
                 Vegetation = WorldVegetationGenerator.Generate(
                     Seed, tiles, trees),
-                Fish = WorldFishGenerator.Generate(Seed, tiles)
+                Fish = WorldFishGenerator.Generate(Seed, tiles),
+                FishRemaining = fishRemaining
             };
         }
         catch (EndOfStreamException ex)

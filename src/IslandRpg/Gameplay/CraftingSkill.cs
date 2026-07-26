@@ -139,6 +139,11 @@ internal static class CraftingSkill
     public static int ExperienceToNextLevel(int experience) =>
         SkillService.ExperienceToNextLevel(experience);
 
+    public static SkillExperienceChange AwardExperience(
+        int currentExperience, CraftingRecipe recipe) =>
+        SkillService.AwardExperience(
+            currentExperience, recipe.Experience);
+
     public static RecipeAvailability Availability(
         CraftingRecipe recipe, int level, string?[]? inventory)
     {

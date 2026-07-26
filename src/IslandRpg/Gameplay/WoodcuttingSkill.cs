@@ -16,6 +16,10 @@ internal static class WoodcuttingSkill
     public static int ExperienceToNextLevel(int experience) =>
         SkillService.ExperienceToNextLevel(experience);
 
+    public static SkillExperienceChange AwardExperience(
+        int currentExperience, int amount) =>
+        SkillService.AwardExperience(currentExperience, amount);
+
     public static float HitChance(int level) =>
         Math.Clamp(.48f + (Math.Clamp(level, 1, MaximumLevel) - 1) * .026f,
             .48f, .974f);

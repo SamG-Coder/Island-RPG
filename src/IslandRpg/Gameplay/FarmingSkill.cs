@@ -13,4 +13,8 @@ internal static class FarmingSkill
 
     public static int ExperienceToNextLevel(int experience) =>
         SkillService.ExperienceToNextLevel(experience);
+
+    public static SkillExperienceChange AwardExperience(
+        int currentExperience, int amount) =>
+        SkillService.AwardExperience(currentExperience, amount);
 }

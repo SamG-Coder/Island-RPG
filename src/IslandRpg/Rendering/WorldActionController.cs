@@ -56,6 +56,17 @@ internal sealed partial class GameHostWindow
             clearTreeActions: true);
     }
 
+    public void QueueFish(WorldFish fish)
+    {
+        var target = new Vector2(fish.X, fish.Y);
+        QueuePath(
+            target,
+            window.FishingNetReach(),
+            GameHostWindow.WorldActionType.Fish,
+            fishKey: fish.StableKey,
+            clearTreeActions: true);
+    }
+
     public void QueueWalk(Vector2 target)
     {
         if (window._player is null) return;
@@ -87,6 +98,7 @@ internal sealed partial class GameHostWindow
         Guid? groundObjectId = null,
         int inventorySlot = -1,
         string? itemId = null,
+        string? fishKey = null,
         bool clearTreeActions = false)
     {
         if (window._player is null) return;
@@ -113,7 +125,8 @@ internal sealed partial class GameHostWindow
                 token,
                 groundObjectId,
                 inventorySlot,
-                itemId),
+                itemId,
+                fishKey),
             token);
         window._moveMarker = null;
     }
@@ -146,6 +159,13 @@ internal sealed partial class GameHostWindow
                 break;
             case
             {
+                Type: GameHostWindow.WorldActionType.Fish,
+                FishKey: { } fishKey
+            }:
+                window.BeginFishing(fishKey, action.Target);
+                break;
+            case
+            {
                 Type: GameHostWindow.WorldActionType.DropGroundObject,
                 InventorySlot: >= 0,
                 ItemId: { } itemId
@@ -168,6 +188,7 @@ internal sealed partial class GameHostWindow
         window.UpdateActiveTreeStickGather();
         window.UpdateGroundObjectPickup();
         window.UpdateGroundObjectDrop();
+        window.UpdateFishing();
     }
 
     public void CancelPath()

@@ -13,7 +13,10 @@ internal enum ItemTag
     Mineral = 1 << 6,
     SupplementalSprite = 1 << 7,
     StoneToolSprite = 1 << 8,
-    CoastalSprite = 1 << 9
+    CoastalSprite = 1 << 9,
+    Fish = 1 << 10,
+    CookedFish = 1 << 11,
+    BurntFish = 1 << 12
 }
 
 internal sealed record ItemDefinition(
@@ -68,6 +71,24 @@ internal static class ItemIds
     public const string CowrieShell = "cowrie_shell";
     public const string PearlOysterShell = "pearl_oyster_shell";
     public const string Seaweed = "seaweed";
+    public const string RawMinnows = "raw_minnows";
+    public const string RawRiverPerch = "raw_river_perch";
+    public const string RawSilverHerring = "raw_silver_herring";
+    public const string RawRedSnapper = "raw_red_snapper";
+    public const string RawOceanMackerel = "raw_ocean_mackerel";
+    public const string RawBluefinTuna = "raw_bluefin_tuna";
+    public const string CookedMinnows = "cooked_minnows";
+    public const string CookedRiverPerch = "cooked_river_perch";
+    public const string CookedSilverHerring = "cooked_silver_herring";
+    public const string CookedRedSnapper = "cooked_red_snapper";
+    public const string CookedOceanMackerel = "cooked_ocean_mackerel";
+    public const string CookedBluefinTuna = "cooked_bluefin_tuna";
+    public const string BurntMinnows = "burnt_minnows";
+    public const string BurntRiverPerch = "burnt_river_perch";
+    public const string BurntSilverHerring = "burnt_silver_herring";
+    public const string BurntRedSnapper = "burnt_red_snapper";
+    public const string BurntOceanMackerel = "burnt_ocean_mackerel";
+    public const string BurntBluefinTuna = "burnt_bluefin_tuna";
 }
 
 internal static class ItemCatalog
@@ -216,7 +237,61 @@ internal static class ItemCatalog
                 "A very rare oyster shell still holding a pearl.", 7),
             [ItemIds.Seaweed] = Coastal(
                 ItemIds.Seaweed, "seaweed", "Seaweed",
-                "Fresh seaweed cast onto the beach by the tide.", 8)
+                "Fresh seaweed cast onto the beach by the tide.", 8),
+            [ItemIds.RawMinnows] = Fish(
+                ItemIds.RawMinnows, "raw minnows", "Minnows",
+                "A small netful of fresh shore minnows.", 0),
+            [ItemIds.RawRiverPerch] = Fish(
+                ItemIds.RawRiverPerch, "raw river perch", "Perch",
+                "A fresh perch caught in inland water.", 2),
+            [ItemIds.RawSilverHerring] = Fish(
+                ItemIds.RawSilverHerring, "raw silver herring", "Herring",
+                "A bright silver herring from coastal water.", 4),
+            [ItemIds.RawRedSnapper] = Fish(
+                ItemIds.RawRedSnapper, "raw red snapper", "Snapper",
+                "A colourful red snapper caught in warm shallows.", 6),
+            [ItemIds.RawOceanMackerel] = Fish(
+                ItemIds.RawOceanMackerel, "raw ocean mackerel", "Mackerel",
+                "A strong ocean mackerel caught in a casting net.", 8),
+            [ItemIds.RawBluefinTuna] = Fish(
+                ItemIds.RawBluefinTuna, "raw bluefin tuna", "Tuna",
+                "A rare bluefin tuna from deep open water.", 10),
+            [ItemIds.CookedMinnows] = CookedFish(
+                ItemIds.CookedMinnows, "cooked minnows", "Minnows",
+                "A small netful of cooked shore minnows.", 1),
+            [ItemIds.CookedRiverPerch] = CookedFish(
+                ItemIds.CookedRiverPerch, "cooked river perch", "Perch",
+                "A river perch cooked to a golden brown.", 3),
+            [ItemIds.CookedSilverHerring] = CookedFish(
+                ItemIds.CookedSilverHerring, "cooked silver herring", "Herring",
+                "A silver herring with crisp, cooked skin.", 5),
+            [ItemIds.CookedRedSnapper] = CookedFish(
+                ItemIds.CookedRedSnapper, "cooked red snapper", "Snapper",
+                "A red snapper roasted until golden.", 7),
+            [ItemIds.CookedOceanMackerel] = CookedFish(
+                ItemIds.CookedOceanMackerel, "cooked ocean mackerel", "Mackerel",
+                "A richly browned ocean mackerel.", 9),
+            [ItemIds.CookedBluefinTuna] = CookedFish(
+                ItemIds.CookedBluefinTuna, "cooked bluefin tuna", "Tuna",
+                "A substantial bluefin tuna cooked through.", 11),
+            [ItemIds.BurntMinnows] = BurntFish(
+                ItemIds.BurntMinnows, "burnt minnows", "Burnt",
+                "A blackened netful of minnows.", 1),
+            [ItemIds.BurntRiverPerch] = BurntFish(
+                ItemIds.BurntRiverPerch, "burnt river perch", "Burnt",
+                "A river perch ruined by too much heat.", 3),
+            [ItemIds.BurntSilverHerring] = BurntFish(
+                ItemIds.BurntSilverHerring, "burnt silver herring", "Burnt",
+                "A badly burnt silver herring.", 5),
+            [ItemIds.BurntRedSnapper] = BurntFish(
+                ItemIds.BurntRedSnapper, "burnt red snapper", "Burnt",
+                "A red snapper cooked far beyond saving.", 7),
+            [ItemIds.BurntOceanMackerel] = BurntFish(
+                ItemIds.BurntOceanMackerel, "burnt ocean mackerel", "Burnt",
+                "A charred ocean mackerel.", 9),
+            [ItemIds.BurntBluefinTuna] = BurntFish(
+                ItemIds.BurntBluefinTuna, "burnt bluefin tuna", "Burnt",
+                "A rare tuna reduced to a burnt meal.", 11)
         };
 
     private static ItemDefinition Coastal(
@@ -224,6 +299,22 @@ internal static class ItemCatalog
         new(
             id, name, caption, examine, cell,
             Tags: ItemTag.NaturalMaterial | ItemTag.CoastalSprite);
+
+    private static ItemDefinition Fish(
+        string id, string name, string caption, string examine, int cell) =>
+        new(id, name, caption, examine, cell, Tags: ItemTag.Fish);
+
+    private static ItemDefinition CookedFish(
+        string id, string name, string caption, string examine, int cell) =>
+        new(
+            id, name, caption, examine, cell,
+            Tags: ItemTag.Fish | ItemTag.CookedFish);
+
+    private static ItemDefinition BurntFish(
+        string id, string name, string caption, string examine, int cell) =>
+        new(
+            id, name, caption, examine, cell,
+            Tags: ItemTag.Fish | ItemTag.CookedFish | ItemTag.BurntFish);
 
     public static IReadOnlyCollection<ItemDefinition> All =>
         Items.Values;

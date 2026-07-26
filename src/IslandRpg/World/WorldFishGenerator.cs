@@ -72,6 +72,9 @@ internal static class WorldFishGenerator
                 graphicName, StringComparison.OrdinalIgnoreCase))
             ?.FrameCount ?? 1;
 
+    public static WorldFishProfile Profile(WorldFishSpecies species) =>
+        Profiles.First(profile => profile.Species == species);
+
     public static bool IsValidHabitat(
         WorldFishSpecies species, IslandTile tile) =>
         Chance(species, tile) > 0;

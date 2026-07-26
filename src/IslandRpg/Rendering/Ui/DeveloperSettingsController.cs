@@ -34,9 +34,9 @@ internal sealed class DeveloperSettingsController
                 updated = SetExperience(
                     player,
                     skill,
-                    Math.Min(
-                        MaximumExperience(),
-                        Experience(player, skill) + ExperienceGrant));
+                    SkillService.AwardExperience(
+                        Experience(player, skill),
+                        ExperienceGrant).Experience);
                 return true;
             }
             if (MaxBounds(panel, skill).Contains(pointer))
@@ -60,7 +60,9 @@ internal sealed class DeveloperSettingsController
                 player?.WoodcuttingExperience ?? 0,
             SkillType.Farming =>
                 player?.FarmingExperience ?? 0,
-            _ => player?.CraftingExperience ?? 0
+            SkillType.Crafting =>
+                player?.CraftingExperience ?? 0,
+            _ => player?.FishingExperience ?? 0
         };
 
     public static int ExperienceToNextLevel(
@@ -114,9 +116,13 @@ internal sealed class DeveloperSettingsController
             {
                 FarmingExperience = experience
             },
-            _ => player with
+            SkillType.Crafting => player with
             {
                 CraftingExperience = experience
+            },
+            _ => player with
+            {
+                FishingExperience = experience
             }
         };
         return updated with { UpdatedUtc = DateTime.UtcNow };
