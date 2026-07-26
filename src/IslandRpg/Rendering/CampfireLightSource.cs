@@ -1,11 +1,13 @@
 using IslandRpg.Assets;
+using IslandRpg.Gameplay;
 
 namespace IslandRpg.Rendering;
 
 internal static class CampfireLightSource
 {
     public const int TextureSize = 128;
-    public const float RadiusPixels = 142;
+    public const float RadiusPixels =
+        FiremakingSkill.BaseLightRadiusPixels;
 
     public static SpriteFrame CreateFrame()
     {

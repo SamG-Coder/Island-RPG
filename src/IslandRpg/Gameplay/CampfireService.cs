@@ -45,7 +45,8 @@ internal static class CampfireService
         return value with
         {
             FuelItemId = itemId,
-            LitUntilGameSeconds = 0
+            LitUntilGameSeconds = 0,
+            FiremakingLevel = 1
         };
     }
 
@@ -73,12 +74,15 @@ internal static class CampfireService
         return value with
         {
             FuelItemId = null,
-            LitUntilGameSeconds = 0
+            LitUntilGameSeconds = 0,
+            FiremakingLevel = 1
         };
     }
 
     public static WorldGroundObject Light(
-        WorldGroundObject value, double gameSeconds)
+        WorldGroundObject value,
+        double gameSeconds,
+        int firemakingLevel = 1)
     {
         if (State(value, gameSeconds) != CampfireState.Fueled)
             throw new InvalidOperationException(
@@ -86,7 +90,10 @@ internal static class CampfireService
         return value with
         {
             LitUntilGameSeconds =
-                gameSeconds + WorldTime.GameSecondsPerDay
+                gameSeconds +
+                FiremakingSkill.DurationGameSeconds(firemakingLevel),
+            FiremakingLevel = Math.Clamp(
+                firemakingLevel, 1, FiremakingSkill.MaximumLevel)
         };
     }
 
@@ -97,7 +104,8 @@ internal static class CampfireService
             ? value with
             {
                 FuelItemId = null,
-                LitUntilGameSeconds = 0
+                LitUntilGameSeconds = 0,
+                FiremakingLevel = 1
             }
             : value;
 

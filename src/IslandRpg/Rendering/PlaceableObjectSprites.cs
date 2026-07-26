@@ -15,7 +15,7 @@ internal sealed class PlaceableObjectSprites
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, PlaceableObjectSprite>
         _campfireFueled = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<(string FuelItemId, int Frame),
+    private readonly Dictionary<(string FuelItemId, int FlameTier, int Frame),
         PlaceableObjectSprite> _campfireLit = [];
 
     public IEnumerable<KeyValuePair<string, PlaceableObjectSprite>> All =>
@@ -32,7 +32,9 @@ internal sealed class PlaceableObjectSprites
             foreach (var lit in _campfireLit)
                 yield return (
                     CampfirePresentation.LitAtlasKey(
-                        lit.Key.FuelItemId, lit.Key.Frame),
+                        lit.Key.FuelItemId,
+                        lit.Key.Frame,
+                        lit.Key.FlameTier),
                     lit.Value.Frame);
         }
     }
@@ -116,21 +118,70 @@ internal sealed class PlaceableObjectSprites
                 fuelCell);
             _campfireFueled[fuel.Id] =
                 CreateSprite(fueledPixels, frameWidth, fireSheet.Height, upload);
+            for (var flameTier = 0;
+                 flameTier < FiremakingSkill.FlameTierCount;
+                 flameTier++)
             for (var frameIndex = 0;
                  frameIndex < frameCount;
                  frameIndex++)
             {
                 var litPixels =
                     (byte[])campfireBase.Frame.Rgba.Clone();
-                BlendCell(
-                    fireSheet, frameIndex * frameWidth, 0,
-                    frameWidth, fireSheet.Height,
-                    litPixels, frameWidth);
-                _campfireLit[(fuel.Id, frameIndex)] =
+                BlendFire(
+                    fireSheet,
+                    frameIndex * frameWidth,
+                    frameWidth,
+                    fireSheet.Height,
+                    litPixels,
+                    flameTier);
+                _campfireLit[(fuel.Id, flameTier, frameIndex)] =
                     CreateSprite(
                         litPixels, frameWidth, fireSheet.Height, upload);
             }
         }
+    }
+
+    private static void BlendFire(
+        ImageResult source,
+        int sourceX,
+        int width,
+        int height,
+        byte[] destination,
+        int flameTier)
+    {
+        if (flameTier == 0)
+        {
+            BlendCell(
+                source, sourceX, 0, width, height,
+                destination, width);
+            return;
+        }
+
+        var framePixels = new byte[width * height * 4];
+        for (var row = 0; row < height; row++)
+            Buffer.BlockCopy(
+                source.Data,
+                (row * source.Width + sourceX) * 4,
+                framePixels,
+                row * width * 4,
+                width * 4);
+        var bounds = OpaqueBounds(framePixels, width, height);
+        var scale = FiremakingSkill.FlameScaleForTier(flameTier);
+        var targetWidth = Math.Max(
+            1, (int)MathF.Round(bounds.Width * scale));
+        var targetHeight = Math.Max(
+            1, (int)MathF.Round(bounds.Height * scale));
+        DrawNearest(
+            framePixels,
+            width,
+            bounds,
+            destination,
+            width,
+            height,
+            CampfirePresentation.FireAnchorX - targetWidth / 2,
+            CampfirePresentation.FireAnchorY - targetHeight,
+            targetWidth,
+            targetHeight);
     }
 
     private static byte[] ComposeFuel(

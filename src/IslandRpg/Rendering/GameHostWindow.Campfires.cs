@@ -166,13 +166,31 @@ internal sealed partial class GameHostWindow
                 "You need a fueled campfire, small rocks, and a knife.");
             return;
         }
+        var level = FiremakingSkill.LevelForExperience(
+            _activePlayer.FiremakingExperience);
         location.Value.Chunk.GroundObjects[location.Value.Index] =
             CampfireService.Light(
-                location.Value.Object, _worldGameSeconds);
+                location.Value.Object, _worldGameSeconds, level);
+        var award = FiremakingSkill.AwardExperience(
+            _activePlayer.FiremakingExperience);
+        _activePlayer = _activePlayer with
+        {
+            FiremakingExperience = award.Experience,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        _saves.SavePlayer(_activePlayer);
         QueueChunkSave(location.Value.Chunk);
         _chatUi.AddMessage(
             "You strike the small rocks against the knife and light the campfire.",
             ChatMessageStyle.Action);
+        if (award.Gained > 0)
+            _chatUi.AddMessage(
+                FiremakingSkill.ExperienceMessage(award.Gained),
+                ChatMessageStyle.Experience);
+        if (award.LevelledUp)
+            _chatUi.AddMessage(
+                FiremakingSkill.LevelUpMessage(award.Level),
+                ChatMessageStyle.LevelUp);
     }
 
     private void ExamineCampfire(WorldGroundObject campfire)
@@ -182,7 +200,10 @@ internal sealed partial class GameHostWindow
         {
             CampfireState.Lit =>
                 $"A burning campfire fueled with " +
-                $"{ItemCatalog.Get(campfire.FuelItemId!).Name}.",
+                $"{ItemCatalog.Get(campfire.FuelItemId!).Name}. " +
+                $"It has about {Math.Max(0,
+                    campfire.LitUntilGameSeconds - _worldGameSeconds) /
+                    3600:0.0} hours remaining.",
             CampfireState.Fueled =>
                 $"An unlit campfire containing " +
                 $"{ItemCatalog.Get(campfire.FuelItemId!).Name}.",

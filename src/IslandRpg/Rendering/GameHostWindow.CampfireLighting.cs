@@ -24,9 +24,8 @@ internal sealed partial class GameHostWindow
         if (darkness <= .04f) return;
         var scene = SceneClientBounds();
         var sceneScale = scene.Z / ReferenceWidth;
-        var diameter =
-            CampfireLightSource.RadiusPixels * 2 * _zoom * sceneScale;
-        var opacity = CampfireLightSource.Opacity(_clock, darkness);
+        var baseOpacity =
+            CampfireLightSource.Opacity(_clock, darkness);
         foreach (var campfire in _worldChunks.Values
                      .Where(IsChunkVisible)
                      .SelectMany(gpu => gpu.Chunk.GroundObjects)
@@ -35,6 +34,16 @@ internal sealed partial class GameHostWindow
                              item, _worldGameSeconds) ==
                          CampfireState.Lit))
         {
+            var diameter =
+                FiremakingSkill.LightRadiusPixels(
+                    campfire.FiremakingLevel) *
+                2 * _zoom * sceneScale;
+            var opacity = Math.Clamp(
+                baseOpacity *
+                FiremakingSkill.LightIntensity(
+                    campfire.FiremakingLevel),
+                0,
+                1);
             var referenceAnchor = SpriteAnchor(
                 GroundObjectWorld(campfire));
             var anchor = new Vector2(

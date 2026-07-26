@@ -14,7 +14,8 @@ internal static class SkillGuideService
     public static bool IsSupported(SkillType skill) =>
         skill is SkillType.Woodcutting or
             SkillType.Fishing or
-            SkillType.Cooking;
+            SkillType.Cooking or
+            SkillType.Firemaking;
 
     public static SkillGuideDefinition Definition(SkillType skill) =>
         skill switch
@@ -22,9 +23,34 @@ internal static class SkillGuideService
             SkillType.Woodcutting => Woodcutting(),
             SkillType.Fishing => Fishing(),
             SkillType.Cooking => Cooking(),
+            SkillType.Firemaking => Firemaking(),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(skill), skill, "This skill has no level guide.")
         };
+
+    private static SkillGuideDefinition Firemaking() =>
+        new(
+            SkillType.Firemaking,
+            "Firemaking",
+            Enumerable.Range(1, FiremakingSkill.MaximumLevel)
+                .Select(level =>
+                {
+                    var hours =
+                        FiremakingSkill.DurationGameSeconds(level) /
+                        3600;
+                    var radius =
+                        FiremakingSkill.LightRadiusPixels(level);
+                    var tier = FiremakingSkill.FlameTier(level);
+                    var flameNote =
+                        level == 1 || FiremakingSkill.FlameTier(level - 1) != tier
+                            ? $" • Flame size {tier + 1}"
+                            : "";
+                    return new SkillGuideEntry(
+                        level,
+                        $"Fire lasts {hours:0.0} hours • " +
+                        $"Light radius {radius:0} px{flameNote}");
+                })
+                .ToArray());
 
     private static SkillGuideDefinition Cooking()
     {

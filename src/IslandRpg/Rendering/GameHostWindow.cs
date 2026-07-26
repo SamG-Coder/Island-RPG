@@ -2790,7 +2790,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private Vector4 SettingsPanel() =>
         FrontendPanel(
             560,
-            _settingsMenu.DeveloperModeEnabled ? 620 : 500);
+            _settingsMenu.DeveloperModeEnabled ? 690 : 500);
 
     private Vector4 FrontendCloseButtonBounds()
     {

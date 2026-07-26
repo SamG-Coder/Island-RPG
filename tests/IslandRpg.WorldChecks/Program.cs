@@ -423,6 +423,36 @@ Require(CampfireService.State(litCampfire, 100) ==
             litCampfire,
             100 + WorldTime.GameSecondsPerDay).FuelItemId is null,
     "a lit campfire must burn for exactly one full game-day and then consume its fuel");
+var masterFire = CampfireService.Light(
+    fueledCampfire, 100, FiremakingSkill.MaximumLevel);
+Require(
+    masterFire.FiremakingLevel == FiremakingSkill.MaximumLevel &&
+    masterFire.LitUntilGameSeconds ==
+        100 + FiremakingSkill.DurationGameSeconds(20) &&
+    masterFire.LitUntilGameSeconds >
+        litCampfire.LitUntilGameSeconds &&
+    FiremakingSkill.LightRadiusPixels(20) >
+        FiremakingSkill.LightRadiusPixels(1) &&
+    FiremakingSkill.LightIntensity(20) >
+        FiremakingSkill.LightIntensity(1) &&
+    FiremakingSkill.FlameTier(1) == 0 &&
+    FiremakingSkill.FlameTier(6) == 1 &&
+    FiremakingSkill.FlameTier(11) == 2 &&
+    FiremakingSkill.FlameTier(16) == 3,
+    "a fire must persist its lighting level and scale duration, light, and flame presentation through level 20");
+var placeableUploadCount = 0;
+var placeableSprites = PlaceableObjectSprites.Load(
+    Path.Combine(AppContext.BaseDirectory, "Resources", "Images"),
+    _ => ++placeableUploadCount);
+var logTypeCount = ItemCatalog.All.Count(item =>
+    item.HasTag(ItemTag.Log) && item.SpriteCell is not null);
+Require(
+    placeableSprites.CampfireAtlasFrames.Count() ==
+    logTypeCount *
+    (1 + FiremakingSkill.FlameTierCount *
+        CampfireService.AnimationFrameCount) &&
+    placeableUploadCount > 0,
+    "campfire sprite composition must generate every fuel, animation frame, and Firemaking flame tier");
 var returnedFuelCampfire = CampfireService.RemoveFuel(
     fueledCampfire, 100);
 Require(returnedFuelCampfire.FuelItemId is null &&
@@ -939,7 +969,7 @@ var ironAxeStrike = WoodcuttingSkill.Roll(0, 0, 0, 2);
 Require(ironAxeStrike.Damage > stoneAxeStrike.Damage,
     "an axe's woodcutting power must improve its chopping damage");
 Require(
-    Enum.GetValues<SkillType>().Length == 5 &&
+    Enum.GetValues<SkillType>().Length == 6 &&
     SkillService.LevelForExperience(
         SkillService.ExperienceForLevel(10)) == 10 &&
     WoodcuttingSkill.ExperienceForLevel(10) ==
@@ -949,7 +979,9 @@ Require(
     CraftingSkill.ExperienceForLevel(10) ==
     FishingSkill.ExperienceForLevel(10) &&
     FishingSkill.ExperienceForLevel(10) ==
-    CookingSkill.ExperienceForLevel(10),
+    CookingSkill.ExperienceForLevel(10) &&
+    CookingSkill.ExperienceForLevel(10) ==
+    FiremakingSkill.ExperienceForLevel(10),
     "all registered skills must reuse the shared level and experience progression service");
 Require(
     FishingSkill.CanCatch(WorldFishSpecies.ShoreMinnows, 1) &&
@@ -977,6 +1009,18 @@ Require(
     cookingGuide.Entries.Single(entry => entry.Level == 17)
         .Description.Contains("raw bluefin tuna"),
     "cooking unlocks must follow the fish progression and omit levels without a new recipe");
+var firemakingGuide =
+    SkillGuideService.Definition(SkillType.Firemaking);
+Require(
+    firemakingGuide.Entries.Count == SkillService.MaximumLevel &&
+    firemakingGuide.Entries[0].Description.Contains("24.0 hours") &&
+    firemakingGuide.Entries[^1].Description.Contains("48.0 hours") &&
+    firemakingGuide.Entries.Single(entry => entry.Level == 16)
+        .Description.Contains("Flame size 4") &&
+    CampfirePresentation.LitAtlasKey(
+        ItemIds.Logs, 3, FiremakingSkill.FlameTier(16)) !=
+    CampfirePresentation.LitAtlasKey(ItemIds.Logs, 3, 0),
+    "the Firemaking guide and atlas keys must expose every duration level and four distinct flame tiers");
 Require(
     CookingSkill.CanCook(ItemIds.RawMinnows, 1) &&
     !CookingSkill.CanCook(ItemIds.RawBluefinTuna, 16) &&
@@ -1036,6 +1080,11 @@ Require(
             CraftingCategory.Resources, 1, 25, [], [])) == sharedAward &&
     CookingSkill.AwardExperience(0, 25) == sharedAward,
     "every skill award path must delegate shared XP arithmetic to SkillService");
+Require(
+    FiremakingSkill.AwardExperience(0) ==
+    SkillService.AwardExperience(
+        0, FiremakingSkill.ExperiencePerFire),
+    "Firemaking XP must delegate its level transition arithmetic to SkillService");
 Require(
     PlayerInventory.TryAddAtPreferredSlot(
         [ItemIds.Sticks, null, ItemIds.Logs],

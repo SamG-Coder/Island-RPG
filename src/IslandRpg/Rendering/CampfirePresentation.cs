@@ -17,8 +17,11 @@ internal static class CampfirePresentation
     public static string FueledAtlasKey(string fuelItemId) =>
         $"PLACEABLE_OBJECT#campfire:fueled:{fuelItemId}";
 
-    public static string LitAtlasKey(string fuelItemId, int frame) =>
-        $"PLACEABLE_OBJECT#campfire:lit:{fuelItemId}:{Math.Clamp(
+    public static string LitAtlasKey(
+        string fuelItemId, int frame, int flameTier = 0) =>
+        $"PLACEABLE_OBJECT#campfire:lit:{fuelItemId}:" +
+        $"{Math.Clamp(flameTier, 0, FiremakingSkill.FlameTierCount - 1)}:" +
+        $"{Math.Clamp(
             frame, 0, CampfireService.AnimationFrameCount - 1)}";
 
     public static string AtlasKey(
@@ -31,7 +34,8 @@ internal static class CampfirePresentation
                 campfire.FuelItemId!),
             CampfireState.Lit => LitAtlasKey(
                 campfire.FuelItemId!,
-                CampfireService.AnimationFrame(realSeconds)),
+                CampfireService.AnimationFrame(realSeconds),
+                FiremakingSkill.FlameTier(campfire.FiremakingLevel)),
             _ => $"PLACEABLE_OBJECT#{ItemIds.Campfire}"
         };
 }

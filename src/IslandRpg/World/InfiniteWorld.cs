@@ -26,7 +26,8 @@ internal sealed record WorldGroundObject(
     float X,
     float Y,
     string? FuelItemId = null,
-    double LitUntilGameSeconds = 0);
+    double LitUntilGameSeconds = 0,
+    int FiremakingLevel = 1);
 internal enum WorldVegetationKind : byte
 {
     Plant,
