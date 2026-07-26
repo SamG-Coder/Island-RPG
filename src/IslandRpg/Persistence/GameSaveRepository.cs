@@ -37,7 +37,8 @@ internal sealed record WorldPlayerState(
 internal sealed record GameSettings(
     float UiScale = 1,
     float MasterVolume = 1,
-    bool Fullscreen = false);
+    bool Fullscreen = false,
+    bool PerformanceMetrics = false);
 
 internal sealed class GameSaveRepository
 {

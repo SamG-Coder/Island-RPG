@@ -1,4 +1,5 @@
 using IslandRpg.Assets;
+using IslandRpg.Rendering.Ui;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Common.Input;
 
@@ -6,6 +7,8 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
+    private readonly WorldHoverProbeGate _worldHoverProbeGate = new();
+
     private void PrepareGameCursors()
     {
         var path = Path.Combine(
@@ -59,6 +62,14 @@ internal sealed partial class GameHostWindow
     {
         if (_defaultNativeCursor is null || _cutNativeCursor is null) return;
 
+        var pointerBlocked = IsPointerOverGameUi(MouseState.Position);
+        if (!_worldHoverProbeGate.ShouldProbe(
+                SceneMousePosition(),
+                _camera,
+                _zoom,
+                pointerBlocked,
+                _clock))
+            return;
         var next = GameCursorKind.Default;
         MouseCursor cursor = _defaultNativeCursor;
         if (IsWorldDropDragOutsideInventory() &&
@@ -67,7 +78,7 @@ internal sealed partial class GameHostWindow
             next = GameCursorKind.DropItem;
             cursor = _dropNativeCursor;
         }
-        else if (!IsPointerOverGameUi(MouseState.Position))
+        else if (!pointerBlocked)
         {
             if (TryGetGroundObjectUnderMouse(
                     SceneMousePosition(), out _, out _) &&

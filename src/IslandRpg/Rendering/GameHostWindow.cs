@@ -37,7 +37,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private sealed class GpuWorldChunk(
         WorldChunk chunk, int vbo, int vertexCount,
         int weightsA, int weightsB, int weightsC, int weightsD,
-        int shoreDistance, Vector4 projectedBounds)
+        int shoreDistance, Vector4 projectedBounds,
+        float[] renderedHeights)
     {
         public WorldChunk Chunk { get; } = chunk;
         public int Vbo { get; } = vbo;
@@ -48,6 +49,7 @@ internal sealed partial class GameHostWindow : GameWindow
         public int WeightsD { get; } = weightsD;
         public int ShoreDistance { get; } = shoreDistance;
         public Vector4 ProjectedBounds { get; } = projectedBounds;
+        public float[] RenderedHeights { get; } = renderedHeights;
         public float Opacity { get; set; }
         public WorldVegetationRenderItem[] VegetationRenderItems { get; set; } = [];
         public WorldFishRenderItem[] FishRenderItems { get; set; } = [];
@@ -87,13 +89,9 @@ internal sealed partial class GameHostWindow : GameWindow
         QueuedWorldAction? Action = null);
     private sealed record NewWorldPreviewResult(
         string SeedText, long Seed, Vector2 Spawn, byte[] Pixels);
-    private readonly record struct WorldRenderItem(
-        Vector2 World,
-        float Opacity,
-        string StableKey,
-        string AtlasKey);
-
     private readonly string _install;
+    private readonly WorldRenderQueue _worldRenderQueue = new();
+    private readonly ShaderUniformCache _shaderUniforms = new();
     private readonly PreviewMode _mode;
     private long _worldSeed;
     private readonly GameSaveRepository _saves = new();
@@ -166,6 +164,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private Vector2i _pauseBlurSize;
     private int _treeBatchVbo;
     private int _treeAtlasTexture;
+    private int _treeAtlasWidth;
+    private int _treeAtlasHeight;
     private int _cliffBatchVbo;
     private int _cliffTexture;
     private readonly Dictionary<string, SpriteAtlasEntry> _treeAtlas =
@@ -316,6 +316,7 @@ internal sealed partial class GameHostWindow : GameWindow
         CreateSceneTarget();
         PrepareGameUi();
         var settings = _saves.LoadSettings();
+        _performanceMetricsEnabled = settings.PerformanceMetrics;
         if (settings.Fullscreen) WindowState = WindowState.Fullscreen;
         var progress = new Progress<(int Done, int Total, string Name)>(value =>
         {
@@ -664,6 +665,12 @@ internal sealed partial class GameHostWindow : GameWindow
                     WindowState = fullscreen
                         ? WindowState.Fullscreen
                         : WindowState.Normal;
+                }
+                else if (_settingsMenu.SelectedTab == SettingsTab.Display &&
+                         SettingsMenuState.OptionBounds(
+                             settingsPanel, 1).Contains(pointer))
+                {
+                    TogglePerformanceMetrics();
                 }
                 else if (_settingsMenu.SelectedTab == SettingsTab.Dev &&
                          UpdateDeveloperSettings(pointer, settingsPanel))
@@ -1177,15 +1184,13 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         _gameLeftWasDown = leftDown;
 
-        var currentHeight = InfiniteWorldGenerator.SampleRenderedHeight(
-            _worldSeed, _player.Position.X, _player.Position.Y);
-        var nextHeight = InfiniteWorldGenerator.SampleRenderedHeight(
-            _worldSeed, _player.Target.X, _player.Target.Y);
-        var uphill = Math.Max(0, nextHeight - currentHeight);
-        var playerBiome = InfiniteWorldGenerator.BiomeAt(
-            _worldSeed,
-            (int)MathF.Floor(_player.Position.X),
-            (int)MathF.Floor(_player.Position.Y));
+        var currentTerrain = SamplePlayerTerrain(
+            _player.Position.X, _player.Position.Y);
+        var nextTerrain = SamplePlayerTerrain(
+            _player.Target.X, _player.Target.Y);
+        var uphill = Math.Max(
+            0, nextTerrain.Height - currentTerrain.Height);
+        var playerBiome = currentTerrain.Biome;
         var wading = playerBiome is Biome.ShallowWater or
             Biome.RiverWater or Biome.MangroveShallows;
         _player.TerrainSpeedMultiplier =
@@ -1938,16 +1943,19 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         const int maximumRipples = 4;
         var count = Math.Min(maximumRipples, _waterRipples.Count);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "rippleCount"), count);
+        GL.Uniform1(
+            _shaderUniforms.Get(_terrainProgram, "rippleCount"), count);
         for (var index = 0; index < count; index++)
         {
             var ripple = _waterRipples[_waterRipples.Count - count + index];
             GL.Uniform2(
-                GL.GetUniformLocation(_terrainProgram, $"ripplePositions[{index}]"),
+                _shaderUniforms.Get(
+                    _terrainProgram, $"ripplePositions[{index}]"),
                 ripple.Position.X / 8f,
                 ripple.Position.Y / 8f);
             GL.Uniform1(
-                GL.GetUniformLocation(_terrainProgram, $"rippleAges[{index}]"),
+                _shaderUniforms.Get(
+                    _terrainProgram, $"rippleAges[{index}]"),
                 (float)(_clock - ripple.StartedAt));
         }
     }
@@ -2218,10 +2226,10 @@ internal sealed partial class GameHostWindow : GameWindow
         var exactInteger = MathF.Abs(scale - integerScale) < .001f;
 
         GL.UseProgram(_program);
-        GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
-        GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
-        GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), 0);
-        GL.Uniform1(GL.GetUniformLocation(_program, "wading"), 0);
+        GL.Uniform1(_shaderUniforms.Get(_program, "image"), 0);
+        GL.Uniform1(_shaderUniforms.Get(_program, "opacity"), 1f);
+        GL.Uniform1(_shaderUniforms.Get(_program, "outlineOnly"), 0);
+        GL.Uniform1(_shaderUniforms.Get(_program, "wading"), 0);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, _sceneColor);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
@@ -2239,6 +2247,7 @@ internal sealed partial class GameHostWindow : GameWindow
     protected override void OnRenderFrame(FrameEventArgs e)
     {
         base.OnRenderFrame(e);
+        _performanceMetrics.RecordFrame(e.Time);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFramebuffer);
         GL.Viewport(0, 0, ReferenceWidth, ReferenceHeight);
         GL.ClearColor(0.08f, 0.09f, 0.08f, 1);
@@ -2278,6 +2287,7 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_pauseMenu.IsPaused) RenderPauseMenu();
             else if (_craftingWindowOpen) RenderCraftingWindow();
         }
+        RenderPerformanceMetrics();
         SwapBuffers();
     }
 
@@ -4126,8 +4136,10 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         GL.UseProgram(_terrainProgram);
         UploadWaterRipples();
+        BeginWorldTerrainBatch();
         var visibleChunks = _worldChunks.Values.Where(IsChunkVisible).ToArray();
         foreach (var gpu in visibleChunks
+                     .Where(gpu => IsChunkVisibleWithPadding(gpu, 0))
                      .OrderBy(gpu => gpu.Chunk.Coordinate.X + gpu.Chunk.Coordinate.Y))
             DrawWorldChunkTerrain(gpu);
         if (_mode == PreviewMode.Game) DrawMoveMarker();
@@ -4136,8 +4148,9 @@ internal sealed partial class GameHostWindow : GameWindow
         var playerDepth = player?.World.Y ?? float.MaxValue;
         var vegetationCapacity = visibleChunks.Sum(
             gpu => gpu.VegetationRenderItems.Length);
-        var shadows = new List<WorldRenderItem>(vegetationCapacity);
-        var objects = new List<WorldRenderItem>(vegetationCapacity);
+        _worldRenderQueue.Reset(vegetationCapacity);
+        var shadows = _worldRenderQueue.Shadows;
+        var objects = _worldRenderQueue.Objects;
         var playerOccluded = false;
         foreach (var item in visibleChunks
                      .SelectMany(gpu => gpu.Chunk.Cliffs.Select(face => (Face: face, Gpu: gpu)))
@@ -4145,11 +4158,13 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             var world = CliffWorld(item.Face);
             var key = $"CLF01_NN#{(item.Face.X1 == item.Face.X2 ? 6 : 0)}";
-            objects.Add(new(
+            if (!IsAtlasItemVisible(key, world))
+                continue;
+            _worldRenderQueue.AddObject(
                 world,
                 item.Gpu.Opacity,
                 $"cliff:{item.Face.X1}:{item.Face.Y1}:{item.Face.X2}:{item.Face.Y2}",
-                AtlasKey: key));
+                key);
         }
         foreach (var item in visibleChunks
                      .SelectMany(gpu => gpu.Chunk.Trees.Select(tree => (Tree: tree, Gpu: gpu)))
@@ -4176,14 +4191,18 @@ internal sealed partial class GameHostWindow : GameWindow
                 : WorldTreeCatalog.AtlasKey(
                     tree.GraphicName[..^2] + "N0",
                     tree.FrameIndex);
+            if (!IsAtlasItemVisible(visibleName, world) &&
+                (string.IsNullOrEmpty(shadowName) ||
+                 !IsAtlasItemVisible(shadowName, world)))
+                continue;
             var stableKey = $"tree:{tree.X}:{tree.Y}";
             if (!string.IsNullOrEmpty(shadowName))
-                shadows.Add(new(
+                _worldRenderQueue.AddShadow(
                     world, item.Gpu.Opacity, stableKey,
-                    AtlasKey: shadowName));
-            objects.Add(new(
+                    shadowName);
+            _worldRenderQueue.AddObject(
                 world, item.Gpu.Opacity, stableKey,
-                AtlasKey: visibleName));
+                visibleName);
         }
 
         foreach (var item in visibleChunks
@@ -4198,17 +4217,21 @@ internal sealed partial class GameHostWindow : GameWindow
                     out var shadowAtlasKey))
                 continue;
             var world = GroundObjectWorld(item.Object);
+            if (!IsAtlasItemVisible(itemAtlasKey, world) &&
+                (shadowAtlasKey is null ||
+                 !IsAtlasItemVisible(shadowAtlasKey, world)))
+                continue;
             if (shadowAtlasKey is not null)
-                shadows.Add(new(
+                _worldRenderQueue.AddShadow(
                     world,
                     item.Gpu.Opacity,
                     $"ground-shadow:{item.Object.Id:N}",
-                    AtlasKey: shadowAtlasKey));
-            objects.Add(new(
+                    shadowAtlasKey);
+            _worldRenderQueue.AddObject(
                 world,
                 item.Gpu.Opacity,
                 $"ground:{item.Object.Id:N}",
-                AtlasKey: itemAtlasKey));
+                itemAtlasKey);
         }
 
         foreach (var gpu in visibleChunks)
@@ -4217,12 +4240,12 @@ internal sealed partial class GameHostWindow : GameWindow
             if (!IsAtlasItemVisible(vegetation.AtlasKey, vegetation.World))
                 continue;
             if (vegetation.ShadowAtlasKey is { } shadowAtlasKey)
-                shadows.Add(new(
+                _worldRenderQueue.AddShadow(
                     vegetation.World, gpu.Opacity, vegetation.StableKey,
-                    shadowAtlasKey));
-            objects.Add(new(
+                    shadowAtlasKey);
+            _worldRenderQueue.AddObject(
                 vegetation.World, gpu.Opacity, vegetation.StableKey,
-                vegetation.AtlasKey));
+                vegetation.AtlasKey);
         }
 
         foreach (var gpu in visibleChunks)
@@ -4235,29 +4258,24 @@ internal sealed partial class GameHostWindow : GameWindow
                 fish, _clock);
             if (!IsAtlasItemVisible(atlasKey, world))
                 continue;
-            shadows.Add(new(
+            _worldRenderQueue.AddShadow(
                 world, gpu.Opacity, fish.StableKey,
-                WorldFishPresentation.DepthAtlasKey));
-            objects.Add(new(
-                world, gpu.Opacity, fish.StableKey, atlasKey));
+                WorldFishPresentation.DepthAtlasKey);
+            _worldRenderQueue.AddObject(
+                world, gpu.Opacity, fish.StableKey, atlasKey);
         }
 
-        var shadowVertices = new List<float>();
-        foreach (var shadow in shadows
-                     .OrderBy(item => item.World.Y)
-                     .ThenBy(item => item.World.X)
-                     .ThenBy(item => item.StableKey, StringComparer.Ordinal))
+        _worldRenderQueue.Sort();
+        var shadowVertices = _worldRenderQueue.ShadowVertices;
+        foreach (var shadow in shadows)
             AddAtlasQuad(
                 shadow.AtlasKey!, shadow.World,
                 shadow.Opacity, shadowVertices);
         DrawTreeBatch(shadowVertices);
 
-        var atlasVertices = new List<float>();
+        var atlasVertices = _worldRenderQueue.AtlasVertices;
         var playerDrawn = player is null;
-        foreach (var item in objects
-                     .OrderBy(item => item.World.Y)
-                     .ThenBy(item => item.World.X)
-                     .ThenBy(item => item.StableKey, StringComparer.Ordinal))
+        foreach (var item in objects)
         {
             if (!playerDrawn && item.World.Y > playerDepth)
             {
@@ -4320,6 +4338,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private void RenderGroundItemOutlines()
     {
         var color = TeamColor(_activePlayer?.TeamColor ?? 0);
+        var vertices = new List<float>();
         foreach (var item in _worldChunks.Values
                      .Where(IsChunkVisible)
                      .SelectMany(gpu =>
@@ -4329,19 +4348,18 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             if (!TryGroundItemVisual(
                     item.Object.ItemId,
-                    out var frame,
-                    out var texture,
                     out _,
+                    out _,
+                    out var atlasKey,
                     out _))
                 continue;
-            DrawSprite(
-                frame,
-                texture,
-                GroundObjectWorld(item.Object),
-                opacity: item.Gpu.Opacity,
-                outlineOnly: true,
-                outlineColor: color);
+            var world = GroundObjectWorld(item.Object);
+            if (!IsAtlasItemVisible(atlasKey, world))
+                continue;
+            AddAtlasQuad(
+                atlasKey, world, item.Gpu.Opacity, vertices);
         }
+        DrawTreeOutlineBatch(vertices, color);
     }
 
     private void DrawCliffBatch()
@@ -4474,7 +4492,8 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.BindTexture(TextureTarget.Texture2D, _treeAtlasTexture);
         GL.BindBuffer(BufferTarget.ArrayBuffer, _treeBatchVbo);
         GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float),
-            vertices.ToArray(), BufferUsageHint.StreamDraw);
+            _worldRenderQueue.CopyVertices(vertices),
+            BufferUsageHint.StreamDraw);
         const int stride = 5 * sizeof(float);
         GL.EnableVertexAttribArray(0);
         GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, stride, 0);
@@ -4485,6 +4504,52 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.DisableVertexAttribArray(3);
         GL.DisableVertexAttribArray(4);
         GL.DrawArrays(PrimitiveType.Triangles, 0, vertices.Count / 5);
+    }
+
+    private void DrawTreeOutlineBatch(
+        List<float> vertices, Vector3 color)
+    {
+        if (vertices.Count == 0 ||
+            _treeAtlasTexture == 0 ||
+            _treeAtlasWidth <= 0 ||
+            _treeAtlasHeight <= 0)
+            return;
+        GL.UseProgram(_program);
+        GL.Uniform1(_shaderUniforms.Get(_program, "image"), 0);
+        GL.Uniform1(_shaderUniforms.Get(_program, "opacity"), 1f);
+        GL.Uniform1(_shaderUniforms.Get(_program, "outlineOnly"), 1);
+        GL.Uniform3(
+            _shaderUniforms.Get(_program, "outlineColor"), color);
+        GL.Uniform2(
+            _shaderUniforms.Get(_program, "texelSize"),
+            1f / _treeAtlasWidth,
+            1f / _treeAtlasHeight);
+        GL.Uniform1(_shaderUniforms.Get(_program, "wading"), 0);
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, _treeAtlasTexture);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _treeBatchVbo);
+        GL.BufferData(
+            BufferTarget.ArrayBuffer,
+            vertices.Count * sizeof(float),
+            _worldRenderQueue.CopyVertices(vertices),
+            BufferUsageHint.StreamDraw);
+        const int stride = 5 * sizeof(float);
+        GL.EnableVertexAttribArray(0);
+        GL.VertexAttribPointer(
+            0, 2, VertexAttribPointerType.Float, false, stride, 0);
+        GL.EnableVertexAttribArray(1);
+        GL.VertexAttribPointer(
+            1, 2, VertexAttribPointerType.Float, false, stride,
+            2 * sizeof(float));
+        GL.EnableVertexAttribArray(2);
+        GL.VertexAttribPointer(
+            2, 1, VertexAttribPointerType.Float, false, stride,
+            4 * sizeof(float));
+        GL.DisableVertexAttribArray(3);
+        GL.DisableVertexAttribArray(4);
+        GL.DrawArrays(
+            PrimitiveType.Triangles, 0, vertices.Count / 5);
+        GL.Uniform1(_shaderUniforms.Get(_program, "outlineOnly"), 0);
     }
 
     private void StreamWorld()
@@ -4905,8 +4970,9 @@ internal sealed partial class GameHostWindow : GameWindow
         var frameIndex = Math.Min(
             animation.Textures.Length - 1,
             (int)(_moveMarker.Time / animation.SecondsPerFrame));
-        var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
-            _worldSeed, _moveMarker.Position.X, _moveMarker.Position.Y);
+        var elevation = SamplePlayerTerrain(
+            _moveMarker.Position.X,
+            _moveMarker.Position.Y).Height;
         var world = new Vector2(
             (_moveMarker.Position.X - _moveMarker.Position.Y) * 48,
             (_moveMarker.Position.X + _moveMarker.Position.Y) * 24 - elevation * 20);
@@ -4958,15 +5024,13 @@ internal sealed partial class GameHostWindow : GameWindow
             graphic.Sprite.Frames.Count,
             storedVillagerAngles,
             rawFrame);
-        var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
-            _worldSeed, _player.Position.X, _player.Position.Y);
+        var terrain = SamplePlayerTerrain(
+            _player.Position.X, _player.Position.Y);
+        var elevation = terrain.Height;
         var world = new Vector2(
             (_player.Position.X - _player.Position.Y) * 48,
             (_player.Position.X + _player.Position.Y) * 24 - elevation * 20);
-        var biome = InfiniteWorldGenerator.BiomeAt(
-            _worldSeed,
-            (int)MathF.Floor(_player.Position.X),
-            (int)MathF.Floor(_player.Position.Y));
+        var biome = terrain.Biome;
         return new(
             graphic.Sprite.Frames[directional.Index],
             animation.Textures[directional.Index],
@@ -5115,6 +5179,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 _treeAtlas[placement.Alias] = _treeAtlas[placement.Key];
         }
         _treeAtlasTexture = Upload(atlasWidth, atlasHeight, rgba);
+        _treeAtlasWidth = atlasWidth;
+        _treeAtlasHeight = atlasHeight;
         _treeBatchVbo = GL.GenBuffer();
 
         void Place(string key, string? alias, SpriteFrame frame)
@@ -5206,10 +5272,20 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float),
             vertices.ToArray(), BufferUsageHint.StaticDraw);
         var weights = UploadChunkBiomeWeights(chunk);
+        var renderedHeights = new float[
+            (WorldChunk.Size + 1) * (WorldChunk.Size + 1)];
+        for (var vertexY = 0; vertexY <= WorldChunk.Size; vertexY++)
+        for (var vertexX = 0; vertexX <= WorldChunk.Size; vertexX++)
+            renderedHeights[
+                vertexY * (WorldChunk.Size + 1) + vertexX] =
+                SmoothedHeightAt(
+                    chunk.Coordinate.X * WorldChunk.Size + vertexX,
+                    chunk.Coordinate.Y * WorldChunk.Size + vertexY);
         var gpu = new GpuWorldChunk(
             chunk, vbo, vertices.Count / 12,
             weights.A, weights.B, weights.C, weights.D, weights.Shore,
-            WorldChunkProjection.TerrainBounds(vertices, 12));
+            WorldChunkProjection.TerrainBounds(vertices, 12),
+            renderedHeights);
         gpu.VegetationRenderItems = WorldVegetationRenderCache.Build(
             _worldSeed, chunk.Vegetation);
         gpu.FishRenderItems = WorldFishRenderCache.Build(
@@ -5286,43 +5362,32 @@ internal sealed partial class GameHostWindow : GameWindow
         }
     }
 
-    private bool IsChunkVisible(GpuWorldChunk gpu)
+    private bool IsChunkVisible(GpuWorldChunk gpu) =>
+        IsChunkVisibleWithPadding(gpu, 96);
+
+    private bool IsChunkVisibleWithPadding(
+        GpuWorldChunk gpu, float padding)
         => WorldChunkProjection.IsVisible(
             gpu.ProjectedBounds,
             _camera,
             _zoom,
-            new(ReferenceWidth, ReferenceHeight));
+            new(ReferenceWidth, ReferenceHeight),
+            padding);
 
     private void DrawWorldChunkTerrain(GpuWorldChunk gpu)
     {
-        GL.UseProgram(_terrainProgram);
-        GL.Uniform2(GL.GetUniformLocation(_terrainProgram, "viewport"),
-            (float)ReferenceWidth, (float)ReferenceHeight);
-        GL.Uniform2(GL.GetUniformLocation(_terrainProgram, "camera"), _camera.X, _camera.Y);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "zoom"), _zoom);
-        GL.ActiveTexture(TextureUnit.Texture0);
-        GL.BindTexture(TextureTarget.Texture2DArray, _terrainArray);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "terrain"), 0);
         GL.ActiveTexture(TextureUnit.Texture1);
         GL.BindTexture(TextureTarget.Texture2D, gpu.WeightsA);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "biomeWeightsA"), 1);
         GL.ActiveTexture(TextureUnit.Texture2);
         GL.BindTexture(TextureTarget.Texture2D, gpu.WeightsB);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "biomeWeightsB"), 2);
         GL.ActiveTexture(TextureUnit.Texture3);
         GL.BindTexture(TextureTarget.Texture2D, gpu.WeightsC);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "biomeWeightsC"), 3);
         GL.ActiveTexture(TextureUnit.Texture4);
         GL.BindTexture(TextureTarget.Texture2D, gpu.WeightsD);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "biomeWeightsD"), 4);
-        GL.ActiveTexture(TextureUnit.Texture5);
-        GL.BindTexture(TextureTarget.Texture2DArray, _waterNormalArray);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "waterNormals"), 5);
         GL.ActiveTexture(TextureUnit.Texture6);
         GL.BindTexture(TextureTarget.Texture2D, gpu.ShoreDistance);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "shoreDistance"), 6);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "time"), _waterTime);
-        GL.Uniform1(GL.GetUniformLocation(_terrainProgram, "opacity"), gpu.Opacity);
+        GL.Uniform1(
+            _shaderUniforms.Get(_terrainProgram, "opacity"), gpu.Opacity);
         GL.BindBuffer(BufferTarget.ArrayBuffer, gpu.Vbo);
         const int stride = 12 * sizeof(float);
         for (var attribute = 0; attribute < 6; attribute++) GL.EnableVertexAttribArray(attribute);
@@ -5333,6 +5398,40 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, stride, 9 * sizeof(float));
         GL.VertexAttribPointer(5, 1, VertexAttribPointerType.Float, false, stride, 11 * sizeof(float));
         GL.DrawArrays(PrimitiveType.Triangles, 0, gpu.VertexCount);
+    }
+
+    private void BeginWorldTerrainBatch()
+    {
+        GL.UseProgram(_terrainProgram);
+        GL.Uniform2(
+            _shaderUniforms.Get(_terrainProgram, "viewport"),
+            (float)ReferenceWidth, (float)ReferenceHeight);
+        GL.Uniform2(
+            _shaderUniforms.Get(_terrainProgram, "camera"),
+            _camera.X, _camera.Y);
+        GL.Uniform1(
+            _shaderUniforms.Get(_terrainProgram, "zoom"), _zoom);
+        GL.Uniform1(
+            _shaderUniforms.Get(_terrainProgram, "time"), _waterTime);
+        GL.Uniform1(
+            _shaderUniforms.Get(_terrainProgram, "terrain"), 0);
+        GL.Uniform1(
+            _shaderUniforms.Get(_terrainProgram, "biomeWeightsA"), 1);
+        GL.Uniform1(
+            _shaderUniforms.Get(_terrainProgram, "biomeWeightsB"), 2);
+        GL.Uniform1(
+            _shaderUniforms.Get(_terrainProgram, "biomeWeightsC"), 3);
+        GL.Uniform1(
+            _shaderUniforms.Get(_terrainProgram, "biomeWeightsD"), 4);
+        GL.Uniform1(
+            _shaderUniforms.Get(_terrainProgram, "waterNormals"), 5);
+        GL.Uniform1(
+            _shaderUniforms.Get(_terrainProgram, "shoreDistance"), 6);
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2DArray, _terrainArray);
+        GL.ActiveTexture(TextureUnit.Texture5);
+        GL.BindTexture(
+            TextureTarget.Texture2DArray, _waterNormalArray);
     }
 
     private void UnloadWorldChunk(ChunkCoordinate coordinate, bool save)

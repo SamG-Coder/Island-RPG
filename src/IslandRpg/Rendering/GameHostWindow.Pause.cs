@@ -158,10 +158,14 @@ internal sealed partial class GameHostWindow
         switch (_settingsMenu.SelectedTab)
         {
             case SettingsTab.Display:
-                var fullscreen = _saves.LoadSettings().Fullscreen;
+                var settings = _saves.LoadSettings();
                 DrawMenuButton(
                     SettingsMenuState.OptionBounds(panel, 0),
-                    $"Fullscreen: {(fullscreen ? "On" : "Off")}");
+                    $"Fullscreen: {(settings.Fullscreen ? "On" : "Off")}");
+                DrawMenuButton(
+                    SettingsMenuState.OptionBounds(panel, 1),
+                    "Performance metrics: " +
+                    $"{(settings.PerformanceMetrics ? "On" : "Off")}");
                 break;
             case SettingsTab.Game:
                 DrawCenteredUiText(

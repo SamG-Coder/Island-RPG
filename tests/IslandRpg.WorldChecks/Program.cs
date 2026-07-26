@@ -6,6 +6,192 @@ using IslandRpg.Rendering;
 using IslandRpg.Rendering.Ui;
 using OpenTK.Mathematics;
 
+var metrics = new PerformanceMetricsOverlay();
+metrics.RecordFrame(1d / 60);
+metrics.RecordFrame(1d / 30);
+var metricSnapshot = metrics.Snapshot();
+Require(metricSnapshot.FrameMilliseconds.Count == 2 &&
+        Math.Abs(metricSnapshot.CurrentFrameMilliseconds -
+                 (1000d / 30)) < .01 &&
+        Math.Abs(metricSnapshot.AverageFrameMilliseconds - 25) < .01 &&
+        Math.Abs(metricSnapshot.FramesPerSecond - 40) < .01,
+    "performance metrics must report ordered FPS and frame-time history");
+
+var hoverGate = new WorldHoverProbeGate();
+var hoverProbeCount = 0;
+for (var frame = 0; frame < 1_000; frame++)
+    if (hoverGate.ShouldProbe(
+            new(320, 180), new(20, -10), .8f,
+            blocked: false, nowSeconds: 0))
+        hoverProbeCount++;
+Require(hoverProbeCount == 1 &&
+        hoverGate.ShouldProbe(
+            new(321, 180), new(20, -10), .8f,
+            blocked: false, nowSeconds: .01) &&
+        hoverGate.ShouldProbe(
+            new(321, 180), new(20, -10), .8f,
+            blocked: false, nowSeconds: .12),
+    "stationary cursor probing must be skipped until input changes or expires");
+Console.WriteLine(
+    "World-hover probe benchmark (1,000 stationary updates): " +
+    $"legacy 1,000 scans, gated {hoverProbeCount} scan.");
+
+const long terrainBenchmarkSeed = 974_321;
+const int terrainBenchmarkTiles = 8;
+const int terrainBenchmarkStride = terrainBenchmarkTiles + 1;
+var terrainHeightGrid = new float[
+    terrainBenchmarkStride * terrainBenchmarkStride];
+for (var y = 0; y <= terrainBenchmarkTiles; y++)
+for (var x = 0; x <= terrainBenchmarkTiles; x++)
+    terrainHeightGrid[y * terrainBenchmarkStride + x] =
+        InfiniteWorldGenerator.SampleRenderedHeight(
+            terrainBenchmarkSeed, x, y);
+var terrainSamples = Enumerable.Range(0, 1_024)
+    .Select(index => new Vector2(
+        ((index * 37) % 790) / 100f,
+        ((index * 61) % 790) / 100f))
+    .ToArray();
+var directTerrainTimer = System.Diagnostics.Stopwatch.StartNew();
+var directTerrainTotal = 0f;
+foreach (var sample in terrainSamples)
+    directTerrainTotal += InfiniteWorldGenerator.SampleRenderedHeight(
+        terrainBenchmarkSeed, sample.X, sample.Y);
+directTerrainTimer.Stop();
+var loadedTerrainTimer = System.Diagnostics.Stopwatch.StartNew();
+var loadedTerrainTotal = 0f;
+foreach (var sample in terrainSamples)
+{
+    var tileX = (int)MathF.Floor(sample.X);
+    var tileY = (int)MathF.Floor(sample.Y);
+    loadedTerrainTotal += LoadedTerrainSampler.Interpolate(
+        terrainHeightGrid,
+        terrainBenchmarkStride,
+        tileX,
+        tileY,
+        sample.X - tileX,
+        sample.Y - tileY);
+}
+loadedTerrainTimer.Stop();
+Require(MathF.Abs(directTerrainTotal - loadedTerrainTotal) < .01f &&
+        loadedTerrainTimer.ElapsedTicks <
+        directTerrainTimer.ElapsedTicks,
+    "loaded terrain sampling must match procedural heights and run faster");
+Console.WriteLine(
+    $"Terrain sampling benchmark ({terrainSamples.Length:N0} positions): " +
+    $"procedural {directTerrainTimer.Elapsed.TotalMilliseconds:N1} ms, " +
+    $"loaded {loadedTerrainTimer.Elapsed.TotalMilliseconds:N1} ms.");
+
+var renderItems = Enumerable.Range(0, 8_192)
+    .Select(index => new WorldRenderItem(
+        new(
+            ((index * 7919) % 997) / 7f,
+            ((index * 3571) % 991) / 5f),
+        1,
+        $"item:{(index * 104729) % 8191:D4}",
+        $"atlas:{index % 31}"))
+    .ToArray();
+var expectedRenderOrder = WorldRenderQueue.LegacyOrder(renderItems);
+var reusableRenderQueue = new WorldRenderQueue();
+reusableRenderQueue.Reset(renderItems.Length);
+foreach (var item in renderItems)
+    reusableRenderQueue.AddObject(
+        item.World, item.Opacity, item.StableKey, item.AtlasKey);
+reusableRenderQueue.Sort();
+Require(expectedRenderOrder.Zip(
+            reusableRenderQueue.Objects,
+            (expected, actual) =>
+                expected.World == actual.World &&
+                expected.Opacity == actual.Opacity &&
+                expected.StableKey == actual.StableKey &&
+                expected.AtlasKey == actual.AtlasKey)
+        .All(matches => matches),
+    "the reusable render queue must preserve the legacy isometric depth order");
+const int renderBenchmarkIterations = 32;
+_ = WorldRenderQueue.LegacyOrder(renderItems);
+reusableRenderQueue.Reset(renderItems.Length);
+foreach (var item in renderItems)
+    reusableRenderQueue.AddObject(
+        item.World, item.Opacity, item.StableKey, item.AtlasKey);
+reusableRenderQueue.Sort();
+GC.Collect();
+GC.WaitForPendingFinalizers();
+var legacyAllocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+var legacyTimer = System.Diagnostics.Stopwatch.StartNew();
+for (var iteration = 0;
+     iteration < renderBenchmarkIterations;
+     iteration++)
+    _ = WorldRenderQueue.LegacyOrder(renderItems);
+legacyTimer.Stop();
+var legacyAllocated =
+    GC.GetAllocatedBytesForCurrentThread() - legacyAllocatedBefore;
+GC.Collect();
+GC.WaitForPendingFinalizers();
+var optimizedAllocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+var optimizedTimer = System.Diagnostics.Stopwatch.StartNew();
+for (var iteration = 0;
+     iteration < renderBenchmarkIterations;
+     iteration++)
+{
+    reusableRenderQueue.Reset(renderItems.Length);
+    foreach (var item in renderItems)
+        reusableRenderQueue.AddObject(
+            item.World, item.Opacity, item.StableKey, item.AtlasKey);
+    reusableRenderQueue.Sort();
+}
+optimizedTimer.Stop();
+var optimizedAllocated =
+    GC.GetAllocatedBytesForCurrentThread() - optimizedAllocatedBefore;
+Require(optimizedAllocated * 4 < legacyAllocated,
+    "the reusable render queue must remove most legacy managed allocations");
+Console.WriteLine(
+    "Render queue benchmark " +
+    $"({renderItems.Length:N0} items x {renderBenchmarkIterations}): " +
+    $"legacy {legacyTimer.Elapsed.TotalMilliseconds:N1} ms / " +
+    $"{legacyAllocated:N0} B, reusable " +
+    $"{optimizedTimer.Elapsed.TotalMilliseconds:N1} ms / " +
+    $"{optimizedAllocated:N0} B.");
+var vertexSource = Enumerable.Range(0, 196_608)
+    .Select(index => index / 17f)
+    .ToList();
+const int vertexBenchmarkIterations = 48;
+_ = vertexSource.ToArray();
+_ = reusableRenderQueue.CopyVertices(vertexSource);
+GC.Collect();
+GC.WaitForPendingFinalizers();
+var legacyVertexAllocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+var legacyVertexTimer = System.Diagnostics.Stopwatch.StartNew();
+float[] legacyVertexUpload = [];
+for (var iteration = 0;
+     iteration < vertexBenchmarkIterations;
+     iteration++)
+    legacyVertexUpload = vertexSource.ToArray();
+legacyVertexTimer.Stop();
+var legacyVertexAllocated =
+    GC.GetAllocatedBytesForCurrentThread() - legacyVertexAllocatedBefore;
+GC.Collect();
+GC.WaitForPendingFinalizers();
+var reusableVertexAllocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+var reusableVertexTimer = System.Diagnostics.Stopwatch.StartNew();
+float[] reusableVertexUpload = [];
+for (var iteration = 0;
+     iteration < vertexBenchmarkIterations;
+     iteration++)
+    reusableVertexUpload =
+        reusableRenderQueue.CopyVertices(vertexSource);
+reusableVertexTimer.Stop();
+var reusableVertexAllocated =
+    GC.GetAllocatedBytesForCurrentThread() - reusableVertexAllocatedBefore;
+Require(legacyVertexUpload[12345] == reusableVertexUpload[12345] &&
+        reusableVertexAllocated * 100 < legacyVertexAllocated,
+    "reusable vertex staging must preserve data while eliminating upload arrays");
+Console.WriteLine(
+    "Vertex staging benchmark " +
+    $"({vertexSource.Count:N0} floats x {vertexBenchmarkIterations}): " +
+    $"legacy {legacyVertexTimer.Elapsed.TotalMilliseconds:N1} ms / " +
+    $"{legacyVertexAllocated:N0} B, reusable " +
+    $"{reusableVertexTimer.Elapsed.TotalMilliseconds:N1} ms / " +
+    $"{reusableVertexAllocated:N0} B.");
+
 Require(FarmingSkill.LevelForExperience(0) == 1 &&
         FarmingSkill.LevelForExperience(
             FarmingSkill.ExperienceForLevel(20)) == 20,

@@ -95,6 +95,13 @@ internal sealed partial class GameHostWindow
                     ? WindowState.Fullscreen
                     : WindowState.Normal;
             }
+            else if (window._settingsMenu.SelectedTab ==
+                         SettingsTab.Display &&
+                     SettingsMenuState.OptionBounds(
+                         panel, 1).Contains(pointer))
+            {
+                window.TogglePerformanceMetrics();
+            }
             else if (window._settingsMenu.SelectedTab == SettingsTab.Dev &&
                      window.UpdateDeveloperSettings(pointer, panel))
                 return;
