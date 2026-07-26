@@ -162,9 +162,14 @@ internal sealed partial class GameHostWindow
         _vegetationContext.Close();
         _inventoryContext.Open(
             pointer,
-            ItemCatalog.Get(itemId).HasTag(ItemTag.Seed)
-                ? ["Plant", "Drop", "Examine"]
-                : ["Use", "Drop", "Examine"],
+            ItemCatalog.Get(itemId) switch
+            {
+                { } item when item.HasTag(ItemTag.Seed) =>
+                    ["Plant", "Drop", "Examine"],
+                { } item when item.HasTag(ItemTag.PlaceableObject) =>
+                    ["Place", "Examine"],
+                _ => ["Use", "Drop", "Examine"]
+            },
             SceneClientBounds());
     }
 
@@ -192,8 +197,14 @@ internal sealed partial class GameHostWindow
     {
         var inventory = _activePlayer?.Inventory ?? [];
         if ((uint)slot >= (uint)inventory.Length ||
-            inventory[slot] is null)
+            inventory[slot] is not { } itemId)
             return;
+        if (ItemCatalog.Get(itemId).HasTag(
+                ItemTag.PlaceableObject))
+        {
+            BeginPlaceableObjectPlacement(slot, itemId);
+            return;
+        }
         if (_activeInventorySlot == slot)
         {
             _activeInventorySlot = -1;
@@ -371,6 +382,15 @@ internal sealed partial class GameHostWindow
             inventory[slot] is not { } itemId)
             return;
         var item = ItemCatalog.Get(itemId);
+        if (item.HasTag(ItemTag.PlaceableObject))
+        {
+            if (option == 0)
+                BeginPlaceableObjectPlacement(slot, itemId);
+            else if (option == 1)
+                _chatUi.AddMessage(
+                    item.Examine, ChatMessageStyle.Normal);
+            return;
+        }
         if (option == 0)
         {
             if (item.HasTag(ItemTag.Seed))

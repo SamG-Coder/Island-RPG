@@ -292,6 +292,42 @@ Require(CraftingSkill.Availability(
             [ItemIds.SharpenedRock, ItemIds.MediumRock, ItemIds.Sticks]) ==
         RecipeAvailability.Ready,
     "recipe state must distinguish locked, missing-resource, and ready recipes");
+var workbenchRecipe = CraftingSkill.Recipes.Single(
+    recipe => recipe.ResultItemId == ItemIds.Workbench);
+Require(workbenchRecipe.Category == CraftingCategory.Furniture &&
+        workbenchRecipe.RequiredLevel == 5 &&
+        workbenchRecipe.Experience == 75 &&
+        workbenchRecipe.Ingredients.SequenceEqual(
+        [
+            new CraftingIngredient(ItemIds.Plank, 4),
+            new CraftingIngredient(ItemIds.Sticks, 2)
+        ]) &&
+        CraftingSkill.Availability(
+            workbenchRecipe, 5,
+            [
+                ItemIds.Plank, ItemIds.Plank,
+                ItemIds.Plank, ItemIds.Plank,
+                ItemIds.Sticks, ItemIds.Sticks
+            ]) == RecipeAvailability.Ready,
+    "the workbench must be a level-five Furniture recipe made from prepared timber");
+Require(PlaceableObjectCatalog.TryGet(
+            ItemIds.Workbench, out var workbenchDefinition) &&
+        workbenchDefinition.FootprintWidth == 2 &&
+        workbenchDefinition.FootprintDepth == 1 &&
+        PlaceableObjectCatalog.ProjectedFrontOffsetPixels(
+            ItemIds.Workbench) == 36 &&
+        PlaceableObjectCatalog.SnapToGrid(
+            ItemIds.Workbench, new(4.31f, 7.72f)) ==
+        new OpenTK.Mathematics.Vector2(4, 7.5f) &&
+        PlaceableObjectCatalog.ContainsPoint(
+            workbenchDefinition,
+            new OpenTK.Mathematics.Vector2(4, 7.5f),
+            new OpenTK.Mathematics.Vector2(4.8f, 7.7f)) &&
+        !PlaceableObjectCatalog.ContainsPoint(
+            workbenchDefinition,
+            new OpenTK.Mathematics.Vector2(4, 7.5f),
+            new OpenTK.Mathematics.Vector2(5.1f, 7.7f)),
+    "placeable objects must use deterministic grid snapping and their full footprint");
 var modalScreen = new ModalScreenState();
 modalScreen.Open(ModalScreenKind.Crafting);
 Require(modalScreen.IsOpen &&
@@ -309,9 +345,10 @@ Require(!modalScreen.IsOpen,
 
 var startingInventory = PlayerInventory.CreateStartingInventory();
 Require(startingInventory.Length == PlayerInventory.Capacity &&
-        PlayerInventory.Count(startingInventory) == 0 &&
+        PlayerInventory.Count(startingInventory) == 1 &&
+        startingInventory[0] == ItemIds.Workbench &&
         !PlayerInventory.HasAxe(startingInventory),
-    "a new character must start with an empty fixed 28-slot inventory");
+    "a new character must receive one test workbench in its fixed 28-slot inventory");
 Require(PlayerInventory.CanDrop(ItemIds.IronAxe) &&
         PlayerInventory.CanDrop(ItemIds.Logs),
     "all inventory items must be droppable into the world");
@@ -344,6 +381,10 @@ Require(ItemCatalog.Get(ItemIds.PlantFibres) is var fibreDefinition &&
             [ItemIds.PlantFibres, ItemIds.PrimitiveFishingNet])?.Id ==
         ItemIds.PrimitiveFishingNet,
     "fibres and the primitive fishing net must have distinct resource/tool behaviour");
+Require(ItemCatalog.Get(ItemIds.Workbench) is var workbenchItem &&
+        workbenchItem.HasTag(ItemTag.PlaceableObject) &&
+        !workbenchItem.Droppable,
+    "the packed workbench must be placeable once rather than droppable");
 Require(PlayerInventory.TrySwap(
             ["axe", "logs", "oak_logs"], 0, 2,
             out var swappedInventory) &&

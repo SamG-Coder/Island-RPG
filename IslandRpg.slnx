@@ -2,5 +2,6 @@
   <Project Path="src/IslandRpg/IslandRpg.csproj" />
   <Project Path="tests/IslandRpg.WorldChecks/IslandRpg.WorldChecks.csproj" />
   <Project Path="tools/IslandRpg.SpriteTool/IslandRpg.SpriteTool.csproj" />
+  <Project Path="tools/IslandRpg.ObjectSpriteTool/IslandRpg.ObjectSpriteTool.csproj" />
   <Project Path="tools/AoeCursorSheet/AoeCursorSheet.csproj" />
 </Solution>

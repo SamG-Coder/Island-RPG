@@ -1,4 +1,5 @@
 using IslandRpg.Assets;
+using IslandRpg.Gameplay;
 using IslandRpg.Rendering.Ui;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Common.Input;
@@ -72,7 +73,8 @@ internal sealed partial class GameHostWindow
             return;
         var next = GameCursorKind.Default;
         MouseCursor cursor = _defaultNativeCursor;
-        if (IsWorldDropDragOutsideInventory() &&
+        if ((IsWorldDropDragOutsideInventory() ||
+             IsPlaceablePlacementActiveOverWorld()) &&
             _dropNativeCursor is not null)
         {
             next = GameCursorKind.DropItem;
@@ -81,7 +83,9 @@ internal sealed partial class GameHostWindow
         else if (!pointerBlocked)
         {
             if (TryGetGroundObjectUnderMouse(
-                    SceneMousePosition(), out _, out _) &&
+                    SceneMousePosition(), out var groundObject, out _) &&
+                !PlaceableObjectCatalog.IsPlaceable(
+                    groundObject.ItemId) &&
                 _pickupNativeCursor is not null)
             {
                 next = GameCursorKind.PickUpItem;

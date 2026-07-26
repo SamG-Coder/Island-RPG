@@ -18,7 +18,8 @@ internal enum ItemTag
     CookedFish = 1 << 11,
     BurntFish = 1 << 12,
     FishingNet = 1 << 13,
-    FibreNetSprite = 1 << 14
+    FibreNetSprite = 1 << 14,
+    PlaceableObject = 1 << 15
 }
 
 internal sealed record ItemDefinition(
@@ -93,6 +94,7 @@ internal static class ItemIds
     public const string BurntBluefinTuna = "burnt_bluefin_tuna";
     public const string PlantFibres = "plant_fibres";
     public const string PrimitiveFishingNet = "primitive_fishing_net";
+    public const string Workbench = "workbench";
 }
 
 internal static class ItemCatalog
@@ -306,7 +308,13 @@ internal static class ItemCatalog
                 "primitive fishing net", "Fishing net",
                 "A simple hand-woven net for catching fish.", 1,
                 Tags: ItemTag.Tool | ItemTag.FishingNet |
-                      ItemTag.FibreNetSprite)
+                      ItemTag.FibreNetSprite),
+            [ItemIds.Workbench] = new(
+                ItemIds.Workbench,
+                "workbench", "Workbench",
+                "A sturdy woodworking bench. Place it on clear, level ground.",
+                0, Droppable: false,
+                Tags: ItemTag.PlaceableObject)
         };
 
     private static ItemDefinition Coastal(

@@ -29,6 +29,7 @@ internal sealed partial class GameHostWindow
 
         public void SetPaused(bool paused)
         {
+            window.CancelPlaceableObjectPlacement();
             IsPaused = paused;
             if (paused)
                 window._modalScreen.Open(ModalScreenKind.Pause);

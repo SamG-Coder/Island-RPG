@@ -6,7 +6,9 @@ internal static class PlayerInventory
 
     public static string?[] CreateStartingInventory()
     {
-        return new string?[Capacity];
+        var inventory = new string?[Capacity];
+        inventory[0] = ItemIds.Workbench;
+        return inventory;
     }
 
     public static string?[] Normalize(string?[]? items)

@@ -4,6 +4,7 @@ internal enum CraftingCategory
 {
     All,
     Tools,
+    Furniture,
     Resources
 }
 
@@ -136,6 +137,18 @@ internal static class CraftingSkill
                         new(ItemIds.Sticks, 1)
                     ],
                     [new(ItemIds.StonePickaxe, 1)])
+            ]),
+        new(
+            "workbench", ItemIds.Workbench,
+            CraftingCategory.Furniture, 5, 75,
+            [
+                new(ItemIds.Plank, 4),
+                new(ItemIds.Sticks, 2)
+            ],
+            [
+                "Lay four planks together to form a broad working surface.",
+                "Shape the sticks into sturdy trestle supports.",
+                "Fasten the top to the supports and brace the frame."
             ])
     ];
 

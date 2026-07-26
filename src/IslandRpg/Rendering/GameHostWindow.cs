@@ -209,6 +209,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[3];
     private readonly Dictionary<string, GroundToolSprite> _groundToolSprites =
         new(StringComparer.OrdinalIgnoreCase);
+    private PlaceableObjectSprites _placeableObjectSprites = new();
     private CoastalCollectibleSprites _coastalSprites = new();
     private FibreNetItemSprites _fibreNetSprites = new();
     private readonly CoastalCollectibleRespawnController _coastalRespawns = new();
@@ -245,6 +246,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private bool _gameRightWasDown;
     private readonly InventoryInteractionController _inventoryInteraction =
         new();
+    private readonly PlaceableObjectPlacementController
+        _placeableObjectPlacement = new();
     private bool _skillsLeftWasDown;
     private int _selectedSkill = -1;
     private readonly GameUiControlState _gameUi = new();
@@ -379,7 +382,9 @@ internal sealed partial class GameHostWindow : GameWindow
         _waterTime = (_waterTime + (float)e.Time) % 10000f;
         if (KeyboardState.IsKeyPressed(Keys.Escape))
         {
-            if (_screen == ScreenState.MainMenu &&
+            if (_placeableObjectPlacement.Active)
+                CancelPlaceableObjectPlacement();
+            else if (_screen == ScreenState.MainMenu &&
                 _frontendPage != FrontendPage.Main)
             {
                 _frontendPage = FrontendPage.Main;
@@ -1087,7 +1092,10 @@ internal sealed partial class GameHostWindow : GameWindow
         _worldActions.ProcessPendingPath();
 
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
-        if (rightDown && !_gameRightWasDown &&
+        var placingObject = UpdatePlaceableObjectPlacementInput(
+            MouseState.IsButtonDown(MouseButton.Left), rightDown);
+        if (!placingObject &&
+            rightDown && !_gameRightWasDown &&
             !IsPointerOverGameUi(MouseState.Position))
         {
             var target = ScreenToTerrain(SceneMousePosition());
@@ -1100,9 +1108,14 @@ internal sealed partial class GameHostWindow : GameWindow
                 _treeContext.Close();
                 _fishContext.Close();
                 _vegetationContext.Close();
+                var fixedObject =
+                    PlaceableObjectCatalog.IsPlaceable(
+                        contextObject.ItemId);
                 _groundObjectContext.Open(
                     MouseState.Position,
-                    ["Pick up", "Walk Here", "Examine"],
+                    fixedObject
+                        ? ["Walk Here", "Examine"]
+                        : ["Pick up", "Walk Here", "Examine"],
                     SceneClientBounds(), 142);
             }
             else if (TryGetFishUnderMouse(
@@ -1138,13 +1151,16 @@ internal sealed partial class GameHostWindow : GameWindow
         _gameRightWasDown = rightDown;
 
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
-        if (leftDown && !_gameLeftWasDown &&
+        if (!placingObject &&
+            leftDown && !_gameLeftWasDown &&
             !IsPointerOverGameUi(MouseState.Position))
         {
             if (TryGetGroundObjectUnderMouse(
                     SceneMousePosition(), out var groundObject, out _))
             {
-                QueueGroundObjectPickup(groundObject);
+                if (!PlaceableObjectCatalog.IsPlaceable(
+                        groundObject.ItemId))
+                    QueueGroundObjectPickup(groundObject);
             }
             else if (TryGetFishUnderMouse(
                          SceneMousePosition(), out var fish))
@@ -3082,7 +3098,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void RenderInventoryContextMenu()
     {
-        RenderContextMenu(_inventoryContext, 1);
+        RenderContextMenu(
+            _inventoryContext,
+            _inventoryContext.Items.Count == 3 ? 1 : -1);
         RenderContextMenu(_treeContext);
         RenderContextMenu(_groundObjectContext);
         RenderContextMenu(_fishContext);
@@ -3170,6 +3188,17 @@ internal sealed partial class GameHostWindow : GameWindow
         var groundObject = _groundObjectContextTarget;
         _groundObjectContextTarget = null;
         if (groundObject is null) return;
+        if (PlaceableObjectCatalog.IsPlaceable(
+                groundObject.ItemId))
+        {
+            if (option == 0)
+                QueueWalk(_groundObjectContextWalkTarget);
+            else if (option == 1)
+                _chatUi.AddMessage(
+                    ItemCatalog.Get(groundObject.ItemId).Examine,
+                    ChatMessageStyle.Normal);
+            return;
+        }
         switch (option)
         {
             case 0:
@@ -3314,7 +3343,8 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.SupplementalSprite) ||
             item.HasTag(ItemTag.StoneToolSprite) ||
             item.HasTag(ItemTag.Fish) ||
-            item.HasTag(ItemTag.FibreNetSprite))
+            item.HasTag(ItemTag.FibreNetSprite) ||
+            item.HasTag(ItemTag.PlaceableObject))
             return cell is null ? null : new Vector4(0, 0, 1, 1);
         return cell is null
             ? null
@@ -3349,6 +3379,11 @@ internal sealed partial class GameHostWindow : GameWindow
                    (uint)_fibreNetSprites.Textures.Length
                 ? _fibreNetSprites.Textures[fibreCell]
                 : 0;
+        if (item.HasTag(ItemTag.PlaceableObject))
+            return _placeableObjectSprites.TryGet(
+                item.Id, out var placeable)
+                ? placeable.Texture
+                : 0;
         if (item.HasTag(ItemTag.SupplementalSprite))
             return item.SpriteCell is { } supplementalCell &&
                    (uint)supplementalCell <
@@ -3381,6 +3416,10 @@ internal sealed partial class GameHostWindow : GameWindow
             (uint)cell < (uint)_fibreNetSprites.Frames.Length)
             return _fibreNetSprites.Frames[cell] ??
                    WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.PlaceableObject) &&
+            _placeableObjectSprites.TryGet(
+                item.Id, out var placeable))
+            return placeable.Frame;
         if (item.HasTag(ItemTag.SupplementalSprite) &&
             (uint)cell < (uint)_supplementalItemFrames.Length)
             return _supplementalItemFrames[cell] ?? WoodcuttingItemsFrame;
@@ -3398,7 +3437,8 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.SupplementalSprite) ||
             item.HasTag(ItemTag.NaturalMaterial) ||
             item.HasTag(ItemTag.Fish) ||
-            item.HasTag(ItemTag.FibreNetSprite))
+            item.HasTag(ItemTag.FibreNetSprite) ||
+            item.HasTag(ItemTag.PlaceableObject))
             return InventoryItemFrame(itemId);
         return (uint)cell < (uint)_woodcuttingInventoryFrames.Length
             ? _woodcuttingInventoryFrames[cell] ?? WoodcuttingItemsFrame
@@ -4830,6 +4870,10 @@ internal sealed partial class GameHostWindow : GameWindow
                 AppContext.BaseDirectory, "Resources", "Images",
                 "fibre-net-items.png"),
             Upload);
+        _placeableObjectSprites = PlaceableObjectSprites.Load(
+            Path.Combine(
+                AppContext.BaseDirectory, "Resources", "Images"),
+            Upload);
         PrepareGroundToolSprites();
         GL.BindTexture(TextureTarget.Texture2D, _minimapTexture);
         GL.TexParameter(
@@ -5139,6 +5183,17 @@ internal sealed partial class GameHostWindow : GameWindow
                 GroundToolAtlasKey(tool.Key, shadow: true),
                 null, tool.Value.Shadow);
         }
+        foreach (var placeable in _placeableObjectSprites.All)
+        {
+            Place(
+                PlaceableObjectAtlasKey(
+                    placeable.Key, shadow: false),
+                null, placeable.Value.Frame);
+            Place(
+                PlaceableObjectAtlasKey(
+                    placeable.Key, shadow: true),
+                null, placeable.Value.Shadow);
+        }
         Place(
             WorldFishPresentation.DepthAtlasKey,
             null,
@@ -5204,6 +5259,12 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static string FibreNetAtlasKey(int cell, bool shadow) =>
         shadow ? $"FIBRE_NET_SHADOW#{cell}" : $"FIBRE_NET#{cell}";
+
+    private static string PlaceableObjectAtlasKey(
+        string itemId, bool shadow) =>
+        shadow
+            ? $"PLACEABLE_OBJECT_SHADOW#{itemId}"
+            : $"PLACEABLE_OBJECT#{itemId}";
 
     private GpuWorldChunk UploadWorldChunk(WorldChunk chunk)
     {
@@ -5958,6 +6019,9 @@ internal sealed partial class GameHostWindow : GameWindow
             if (tool.Texture != 0) GL.DeleteTexture(tool.Texture);
         foreach (var texture in _fibreNetSprites.Textures)
             if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var placeable in _placeableObjectSprites.All)
+            if (placeable.Value.Texture != 0)
+                GL.DeleteTexture(placeable.Value.Texture);
         if (_uiTabTexture != 0) GL.DeleteTexture(_uiTabTexture);
         if (_uiActiveTabTexture != 0) GL.DeleteTexture(_uiActiveTabTexture);
         if (_minimapTexture != 0) GL.DeleteTexture(_minimapTexture);

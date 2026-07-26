@@ -14,6 +14,7 @@ internal sealed partial class GameHostWindow
 
     private void OpenCraftingWindow()
     {
+        CancelPlaceableObjectPlacement();
         _craftingWindow.Open();
         _modalScreen.Open(ModalScreenKind.Crafting);
         _chatUi.BlurInput();

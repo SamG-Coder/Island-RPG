@@ -148,7 +148,10 @@ internal sealed partial class GameHostWindow
             _worldSeed, groundObject.X, groundObject.Y);
         return new(
             (groundObject.X - groundObject.Y) * 48,
-            (groundObject.X + groundObject.Y) * 24 - elevation * 20);
+            (groundObject.X + groundObject.Y) * 24 -
+            elevation * 20 +
+            PlaceableObjectCatalog.ProjectedFrontOffsetPixels(
+                groundObject.ItemId));
     }
 
     private void QueueGroundObjectPickup(WorldGroundObject groundObject)
@@ -164,6 +167,13 @@ internal sealed partial class GameHostWindow
             item => item.Id == groundObjectId);
         if (chunk is null || groundObject is null) return;
         var itemId = groundObject.ItemId;
+        if (PlaceableObjectCatalog.IsPlaceable(itemId))
+        {
+            ReportBlockedAction(
+                "placed-object-fixed",
+                "That has been built in place and cannot be picked up.");
+            return;
+        }
         if (!PlayerInventory.TryAdd(
                 _activePlayer.Inventory, itemId, out var inventory))
         {
@@ -197,9 +207,12 @@ internal sealed partial class GameHostWindow
             return;
         }
 
-        var exists = _worldChunks.Values.Any(gpu =>
-            gpu.Chunk.GroundObjects.Any(item => item.Id == groundObjectId));
-        if (!exists) return;
+        var groundObject = _worldChunks.Values
+            .SelectMany(gpu => gpu.Chunk.GroundObjects)
+            .FirstOrDefault(item => item.Id == groundObjectId);
+        if (groundObject is null ||
+            PlaceableObjectCatalog.IsPlaceable(groundObject.ItemId))
+            return;
 
         _activeTreeId = null;
         _activeGroundPickupId = groundObjectId;
@@ -250,12 +263,14 @@ internal sealed partial class GameHostWindow
         var inventory = _activePlayer.Inventory ?? [];
         if ((uint)_inventoryDraggingSlot >= (uint)inventory.Length ||
             inventory[_inventoryDraggingSlot] is not { } itemId ||
-            !PlayerInventory.CanDrop(itemId) ||
+            !CanReleaseInventoryItemToWorld(itemId) ||
             !TryGroundItemVisual(itemId, out _, out _, out _, out _))
             return;
 
-        var target = ScreenToTerrain(SceneMousePosition());
-        var valid = CanPlaceGroundObjectAt(target, out _, out _);
+        var target = PlaceableObjectCatalog.SnapToGrid(
+            itemId, ScreenToTerrain(SceneMousePosition()));
+        var valid = CanPlaceInventoryItemAt(
+            itemId, target, out _, out _);
         _groundDropPreview = new(
             _inventoryDraggingSlot, itemId, target, valid);
     }
@@ -269,7 +284,7 @@ internal sealed partial class GameHostWindow
         var inventory = _activePlayer?.Inventory ?? [];
         return (uint)_inventoryDraggingSlot < (uint)inventory.Length &&
                inventory[_inventoryDraggingSlot] is { } itemId &&
-               PlayerInventory.CanDrop(itemId) &&
+               CanReleaseInventoryItemToWorld(itemId) &&
                TryGroundItemVisual(itemId, out _, out _, out _, out _);
     }
 
@@ -325,7 +340,14 @@ internal sealed partial class GameHostWindow
         _queuedAction = null;
         _pathRequestId++;
         _moveMarker = new(preview.Target, 0, Action: true);
-        if ((_player.Position - preview.Target).Length <= .80f)
+        var interactionRange = PlaceableObjectCatalog.TryGet(
+            preview.ItemId, out var placeable)
+            ? Math.Max(
+                placeable.FootprintWidth,
+                placeable.FootprintDepth) * .5f + .55f
+            : .46f;
+        if ((_player.Position - preview.Target).Length <=
+            Math.Max(interactionRange, .80f))
         {
             BeginGroundObjectDrop(
                 preview.InventorySlot, preview.ItemId, preview.Target);
@@ -333,7 +355,7 @@ internal sealed partial class GameHostWindow
         }
         _worldActions.QueuePath(
             preview.Target,
-            .46f,
+            interactionRange,
             WorldActionType.DropGroundObject,
             inventorySlot: preview.InventorySlot,
             itemId: preview.ItemId);
@@ -344,14 +366,15 @@ internal sealed partial class GameHostWindow
     {
         if (_player is null ||
             !InventoryContainsAt(inventorySlot, itemId) ||
-            !PlayerInventory.CanDrop(itemId))
+            !CanReleaseInventoryItemToWorld(itemId))
         {
             ReportBlockedAction(
                 "drop-item-unavailable",
                 "That item is no longer available to drop.");
             return;
         }
-        if (!CanPlaceGroundObjectAt(target, out _, out var reason))
+        if (!CanPlaceInventoryItemAt(
+                itemId, target, out _, out var reason))
         {
             ReportBlockedAction("drop-location-blocked", reason);
             return;
@@ -383,8 +406,8 @@ internal sealed partial class GameHostWindow
             _player.Stop();
             return;
         }
-        if (!CanPlaceGroundObjectAt(
-                drop.Target, out var gpu, out var reason))
+        if (!CanPlaceInventoryItemAt(
+                drop.ItemId, drop.Target, out var gpu, out var reason))
         {
             ReportBlockedAction("drop-location-blocked", reason);
             _player.Stop();
@@ -414,7 +437,9 @@ internal sealed partial class GameHostWindow
         _saves.SavePlayer(_activePlayer);
         QueueChunkSave(gpu.Chunk);
         _chatUi.AddMessage(
-            $"You drop the {ItemCatalog.Get(drop.ItemId).Name}.",
+            PlaceableObjectCatalog.IsPlaceable(drop.ItemId)
+                ? $"You place the {ItemCatalog.Get(drop.ItemId).Name}."
+                : $"You drop the {ItemCatalog.Get(drop.ItemId).Name}.",
             ChatMessageStyle.Action);
         _player.Stop();
     }
@@ -443,6 +468,26 @@ internal sealed partial class GameHostWindow
             atlasKey = "";
             shadowKey = null;
             return false;
+        }
+
+        if (item.HasTag(ItemTag.PlaceableObject))
+        {
+            if (!_placeableObjectSprites.TryGet(
+                    item.Id, out var placeable))
+            {
+                frame = null!;
+                texture = 0;
+                atlasKey = "";
+                shadowKey = null;
+                return false;
+            }
+            frame = placeable.Frame;
+            texture = placeable.Texture;
+            atlasKey = PlaceableObjectAtlasKey(
+                item.Id, shadow: false);
+            shadowKey = PlaceableObjectAtlasKey(
+                item.Id, shadow: true);
+            return true;
         }
 
         if (item.HasTag(ItemTag.Tool))
@@ -689,6 +734,22 @@ internal sealed partial class GameHostWindow
         return false;
     }
 
+    private bool CanPlaceInventoryItemAt(
+        string itemId,
+        Vector2 target,
+        out GpuWorldChunk gpu,
+        out string reason) =>
+        PlaceableObjectCatalog.IsPlaceable(itemId)
+            ? CanPlacePlaceableObjectAt(
+                itemId, target, out gpu, out reason)
+            : CanPlaceGroundObjectAt(
+                target, out gpu, out reason);
+
+    private static bool CanReleaseInventoryItemToWorld(
+        string itemId) =>
+        PlayerInventory.CanDrop(itemId) ||
+        PlaceableObjectCatalog.IsPlaceable(itemId);
+
     private bool TryGetDropTerrain(
         int tileX,
         int tileY,
@@ -750,8 +811,16 @@ internal sealed partial class GameHostWindow
                     treeClearance * treeClearance))
                 return false;
             if (chunk.GroundObjects.Any(item =>
-                    (candidate - new Vector2(item.X, item.Y)).LengthSquared <
-                    itemClearance * itemClearance))
+                    PlaceableObjectCatalog.TryGet(
+                        item.ItemId, out var definition)
+                        ? PlaceableObjectCatalog.ContainsPoint(
+                            definition,
+                            new Vector2(item.X, item.Y),
+                            candidate,
+                            itemClearance)
+                        : (candidate - new Vector2(
+                              item.X, item.Y)).LengthSquared <
+                          itemClearance * itemClearance))
                 return false;
         }
 

@@ -1,0 +1,33 @@
+{
+  "projection": {
+    "tileWidthPixels": 96,
+    "tileHeightPixels": 48,
+    "verticalPixelsPerUnit": 48
+  },
+  "presets": {
+    "workbench": {
+      "footprintWidth": 2.0,
+      "footprintDepth": 1.0,
+      "height": 1.0,
+      "visualScale": 0.62,
+      "padding": 6,
+      "description": "Waist-high crafting bench for one standing character."
+    },
+    "chair": {
+      "footprintWidth": 0.5,
+      "footprintDepth": 0.5,
+      "height": 1.0,
+      "visualScale": 0.7,
+      "padding": 4,
+      "description": "Single-seat chair."
+    },
+    "door": {
+      "footprintWidth": 0.5,
+      "footprintDepth": 1.0,
+      "height": 2.0,
+      "visualScale": 0.75,
+      "padding": 4,
+      "description": "Standing doorway or door assembly."
+    }
+  }
+}
