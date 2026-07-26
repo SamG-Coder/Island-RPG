@@ -233,6 +233,26 @@ internal static class PlayerInventory
         return true;
     }
 
+    public static bool TryAddAtPreferredSlot(
+        string?[]? items,
+        string itemId,
+        int preferredSlot,
+        out string?[] updated)
+    {
+        updated = Normalize(items);
+        if ((uint)preferredSlot < Capacity &&
+            updated[preferredSlot] is null)
+        {
+            updated[preferredSlot] = itemId;
+            return true;
+        }
+        var emptySlot = Array.FindIndex(
+            updated, item => item is null);
+        if (emptySlot < 0) return false;
+        updated[emptySlot] = itemId;
+        return true;
+    }
+
     public static bool TryRemove(
         string?[]? items, int slot, out string?[] updated)
     {

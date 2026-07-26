@@ -12,16 +12,37 @@ internal sealed record SkillGuideDefinition(
 internal static class SkillGuideService
 {
     public static bool IsSupported(SkillType skill) =>
-        skill is SkillType.Woodcutting or SkillType.Fishing;
+        skill is SkillType.Woodcutting or
+            SkillType.Fishing or
+            SkillType.Cooking;
 
     public static SkillGuideDefinition Definition(SkillType skill) =>
         skill switch
         {
             SkillType.Woodcutting => Woodcutting(),
             SkillType.Fishing => Fishing(),
+            SkillType.Cooking => Cooking(),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(skill), skill, "This skill has no level guide.")
         };
+
+    private static SkillGuideDefinition Cooking()
+    {
+        var unlocks = CookingSkill.CookProfiles
+            .GroupBy(profile => profile.RequiredLevel)
+            .OrderBy(group => group.Key)
+            .Select(group => new SkillGuideEntry(
+                group.Key,
+                string.Join(
+                    " • ",
+                    group.Select(profile =>
+                        $"Cook {ItemCatalog.Get(profile.RawItemId).Name}"))))
+            .ToArray();
+        return new(
+            SkillType.Cooking,
+            "Cooking",
+            unlocks);
+    }
 
     private static SkillGuideDefinition Fishing()
     {

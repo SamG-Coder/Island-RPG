@@ -283,6 +283,20 @@ internal sealed partial class GameHostWindow
                 campfire.Id);
             return;
         }
+        if (CookingSkill.TryProfile(itemId, out _) &&
+            TryGetGroundObjectUnderMouse(
+                SceneMousePosition(), out var cookingFire, out _) &&
+            CampfireService.IsCampfire(cookingFire))
+        {
+            _groundDropPreview = new(
+                _inventoryDraggingSlot,
+                itemId,
+                new(cookingFire.X, cookingFire.Y),
+                CanCookOnCampfire(
+                    cookingFire, itemId, out _),
+                cookingFire.Id);
+            return;
+        }
 
         var target = PlaceableObjectCatalog.SnapToGrid(
             itemId, ScreenToTerrain(SceneMousePosition()));
@@ -363,6 +377,16 @@ internal sealed partial class GameHostWindow
     private void QueueGroundObjectDrop(GroundDropPreview preview)
     {
         if (_player is null || !preview.Valid) return;
+        if (preview.TargetObjectId is { } cookingFireId &&
+            CookingSkill.TryProfile(preview.ItemId, out _) &&
+            FindGroundObject(cookingFireId) is { } cookingFire)
+        {
+            QueueCampfireCooking(
+                cookingFire,
+                preview.InventorySlot,
+                preview.ItemId);
+            return;
+        }
         _activeTreeId = null;
         _activeGroundPickupId = null;
         _activeGroundDrop = null;

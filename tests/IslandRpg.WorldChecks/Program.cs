@@ -939,7 +939,7 @@ var ironAxeStrike = WoodcuttingSkill.Roll(0, 0, 0, 2);
 Require(ironAxeStrike.Damage > stoneAxeStrike.Damage,
     "an axe's woodcutting power must improve its chopping damage");
 Require(
-    Enum.GetValues<SkillType>().Length == 4 &&
+    Enum.GetValues<SkillType>().Length == 5 &&
     SkillService.LevelForExperience(
         SkillService.ExperienceForLevel(10)) == 10 &&
     WoodcuttingSkill.ExperienceForLevel(10) ==
@@ -947,7 +947,9 @@ Require(
     FarmingSkill.ExperienceForLevel(10) ==
     CraftingSkill.ExperienceForLevel(10) &&
     CraftingSkill.ExperienceForLevel(10) ==
-    FishingSkill.ExperienceForLevel(10),
+    FishingSkill.ExperienceForLevel(10) &&
+    FishingSkill.ExperienceForLevel(10) ==
+    CookingSkill.ExperienceForLevel(10),
     "all registered skills must reuse the shared level and experience progression service");
 Require(
     FishingSkill.CanCatch(WorldFishSpecies.ShoreMinnows, 1) &&
@@ -964,6 +966,36 @@ Require(
     fishingGuide.Entries.Single(entry => entry.Level == 17)
         .Description.Contains("bluefin tuna"),
     "the fishing guide must show only meaningful catch-unlock levels derived from fishing profiles");
+var cookingGuide = SkillGuideService.Definition(SkillType.Cooking);
+Require(
+    CookingSkill.CookProfiles.Select(profile => profile.RequiredLevel)
+        .SequenceEqual([1, 1, 5, 9, 13, 17]) &&
+    cookingGuide.Entries.Select(entry => entry.Level)
+        .SequenceEqual([1, 5, 9, 13, 17]) &&
+    cookingGuide.Entries.Single(entry => entry.Level == 1)
+        .Description.Contains("raw minnows") &&
+    cookingGuide.Entries.Single(entry => entry.Level == 17)
+        .Description.Contains("raw bluefin tuna"),
+    "cooking unlocks must follow the fish progression and omit levels without a new recipe");
+Require(
+    CookingSkill.CanCook(ItemIds.RawMinnows, 1) &&
+    !CookingSkill.CanCook(ItemIds.RawBluefinTuna, 16) &&
+    CookingSkill.CanCook(ItemIds.RawBluefinTuna, 17) &&
+    CookingSkill.BurnChance(ItemIds.RawRedSnapper, 20) <
+    CookingSkill.BurnChance(ItemIds.RawRedSnapper, 9),
+    "cooking must enforce unlock levels while higher levels meaningfully reduce burning");
+var burntMinnows =
+    CookingSkill.Roll(ItemIds.RawMinnows, 1, 0f);
+var cookedMinnows =
+    CookingSkill.Roll(ItemIds.RawMinnows, 1, .99f);
+Require(
+    burntMinnows.Burnt &&
+    burntMinnows.ItemId == ItemIds.BurntMinnows &&
+    burntMinnows.Experience == 0 &&
+    !cookedMinnows.Burnt &&
+    cookedMinnows.ItemId == ItemIds.CookedMinnows &&
+    cookedMinnows.Experience > 0,
+    "cooking rolls must deterministically map failures to shader-derived burnt fish and successes to cooked sprites");
 var woodcuttingGuide =
     SkillGuideService.Definition(SkillType.Woodcutting);
 Require(
@@ -1001,8 +1033,23 @@ Require(
         0,
         new CraftingRecipe(
             "shared-xp-test", ItemIds.Sticks,
-            CraftingCategory.Resources, 1, 25, [], [])) == sharedAward,
+            CraftingCategory.Resources, 1, 25, [], [])) == sharedAward &&
+    CookingSkill.AwardExperience(0, 25) == sharedAward,
     "every skill award path must delegate shared XP arithmetic to SkillService");
+Require(
+    PlayerInventory.TryAddAtPreferredSlot(
+        [ItemIds.Sticks, null, ItemIds.Logs],
+        ItemIds.CookedMinnows,
+        1,
+        out var preferredCookingSlot) &&
+    preferredCookingSlot[1] == ItemIds.CookedMinnows &&
+    PlayerInventory.TryAddAtPreferredSlot(
+        [ItemIds.Sticks, ItemIds.Logs, null],
+        ItemIds.CookedMinnows,
+        1,
+        out var fallbackCookingSlot) &&
+    fallbackCookingSlot[2] == ItemIds.CookedMinnows,
+    "cooked food must return to its original slot when possible and safely fall back to another free slot");
 Require(
     ItemCatalog.Get(ItemIds.RawRedSnapper).SpriteCell == 6 &&
     ItemCatalog.Get(ItemIds.CookedRedSnapper).SpriteCell == 7 &&

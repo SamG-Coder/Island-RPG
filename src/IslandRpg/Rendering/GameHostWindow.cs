@@ -75,6 +75,7 @@ internal sealed partial class GameHostWindow : GameWindow
         DropGroundObject,
         LightCampfire,
         TakeCampfireFuel,
+        CookOnCampfire,
         Fish,
         GatherFibres
     }
@@ -1143,9 +1144,15 @@ internal sealed partial class GameHostWindow : GameWindow
                     ? CampfireService.State(
                         contextObject, _worldGameSeconds)
                     : (CampfireState?)null;
+                var canCookSelected =
+                    campfireState == CampfireState.Lit &&
+                    TrySelectedRawCookingItem(
+                        out _, out _);
                 _groundObjectContext.Open(
                     MouseState.Position,
-                    campfireState == CampfireState.Fueled
+                    canCookSelected
+                        ? ["Cook", "Walk Here", "Examine"]
+                        : campfireState == CampfireState.Fueled
                         ? ["Light", "Take log", "Walk Here", "Examine"]
                         : fixedObject
                         ? ["Walk Here", "Examine"]
@@ -3285,6 +3292,25 @@ internal sealed partial class GameHostWindow : GameWindow
                     ExamineCampfire(groundObject);
                 return;
             }
+            if (CampfireService.IsCampfire(groundObject) &&
+                CampfireService.State(
+                    groundObject, _worldGameSeconds) ==
+                CampfireState.Lit &&
+                TrySelectedRawCookingItem(
+                    out var cookingSlot,
+                    out var cookingItemId))
+            {
+                if (option == 0)
+                    QueueCampfireCooking(
+                        groundObject,
+                        cookingSlot,
+                        cookingItemId);
+                else if (option == 1)
+                    QueueWalk(_groundObjectContextWalkTarget);
+                else if (option == 2)
+                    ExamineCampfire(groundObject);
+                return;
+            }
             if (option == 0)
                 QueueWalk(_groundObjectContextWalkTarget);
             else if (option == 1)
@@ -5149,7 +5175,8 @@ internal sealed partial class GameHostWindow : GameWindow
             ? VillagerDirectionRig.NeutralIdleFrame(framesPerAngle)
             : (int)(_player.ActionTime / animation.SecondsPerFrame);
         if (_player.Action == EntityAction.Gather &&
-            _activeGroundDrop is not null)
+            (_activeGroundDrop is not null ||
+             _activeCooking is { ReadyAt: null }))
         {
             var progress = Math.Clamp(
                 (float)(_player.ActionTime /

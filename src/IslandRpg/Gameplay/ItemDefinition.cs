@@ -293,22 +293,22 @@ internal static class ItemCatalog
                 "A substantial bluefin tuna cooked through.", 11),
             [ItemIds.BurntMinnows] = BurntFish(
                 ItemIds.BurntMinnows, "burnt minnows", "Burnt",
-                "A blackened netful of minnows.", 1),
+                "A burnt netful of minnows.", 1),
             [ItemIds.BurntRiverPerch] = BurntFish(
                 ItemIds.BurntRiverPerch, "burnt river perch", "Burnt",
-                "A river perch ruined by too much heat.", 3),
+                "A burnt river perch ruined by too much heat.", 3),
             [ItemIds.BurntSilverHerring] = BurntFish(
                 ItemIds.BurntSilverHerring, "burnt silver herring", "Burnt",
                 "A badly burnt silver herring.", 5),
             [ItemIds.BurntRedSnapper] = BurntFish(
                 ItemIds.BurntRedSnapper, "burnt red snapper", "Burnt",
-                "A red snapper cooked far beyond saving.", 7),
+                "A burnt red snapper cooked far beyond saving.", 7),
             [ItemIds.BurntOceanMackerel] = BurntFish(
                 ItemIds.BurntOceanMackerel, "burnt ocean mackerel", "Burnt",
-                "A charred ocean mackerel.", 9),
+                "A burnt ocean mackerel.", 9),
             [ItemIds.BurntBluefinTuna] = BurntFish(
                 ItemIds.BurntBluefinTuna, "burnt bluefin tuna", "Burnt",
-                "A rare tuna reduced to a burnt meal.", 11),
+                "A rare bluefin tuna burnt beyond saving.", 11),
             [ItemIds.PlantFibres] = new(
                 ItemIds.PlantFibres, "plant fibres", "Fibres",
                 "Stripped plant fibres suitable for weaving.", 0,

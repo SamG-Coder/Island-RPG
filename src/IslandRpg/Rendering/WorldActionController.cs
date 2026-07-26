@@ -205,6 +205,19 @@ internal sealed partial class GameHostWindow
                 break;
             case
             {
+                Type: GameHostWindow.WorldActionType.CookOnCampfire,
+                GroundObjectId: { } campfireId,
+                InventorySlot: >= 0,
+                ItemId: { } itemId
+            }:
+                window.BeginCampfireCooking(
+                    campfireId,
+                    action.InventorySlot,
+                    itemId,
+                    action.Target);
+                break;
+            case
+            {
                 Type: GameHostWindow.WorldActionType.GatherFibres,
                 VegetationKey: { } vegetationKey
             }:
@@ -227,6 +240,7 @@ internal sealed partial class GameHostWindow
         window.UpdateGroundObjectPickup();
         window.UpdateGroundObjectDrop();
         window.UpdateCampfireFuelPickup();
+        window.UpdateCooking();
         window.UpdateFishing();
         window.UpdateFibreGathering();
     }
