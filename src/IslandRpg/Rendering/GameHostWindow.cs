@@ -2914,8 +2914,14 @@ internal sealed partial class GameHostWindow : GameWindow
         if (!_entityAnimations.TryGetValue(
                 (gender, EntityAction.Idle), out var animation))
             return;
-        var frame = animation.Graphic.Sprite.Frames[0];
-        var texture = animation.Textures[0];
+        const int authoredAngles = 5;
+        var framesPerAngle = Math.Max(
+            1,
+            animation.Graphic.Sprite.Frames.Count / authoredAngles);
+        var frameIndex = VillagerDirectionRig.NeutralIdleFrame(
+            framesPerAngle);
+        var frame = animation.Graphic.Sprite.Frames[frameIndex];
+        var texture = animation.Textures[frameIndex];
         var scale = Math.Min(
             (bounds.Z - 36) / frame.Width,
             (bounds.W - 46) / frame.Height);
@@ -5026,7 +5032,7 @@ internal sealed partial class GameHostWindow : GameWindow
         var framesPerAngle = Math.Max(
             1, graphic.Sprite.Frames.Count / storedVillagerAngles);
         var rawFrame = _player.Action == EntityAction.Idle
-            ? 0
+            ? VillagerDirectionRig.NeutralIdleFrame(framesPerAngle)
             : (int)(_player.ActionTime / animation.SecondsPerFrame);
         if (_player.Action == EntityAction.Gather &&
             _activeGroundDrop is not null)

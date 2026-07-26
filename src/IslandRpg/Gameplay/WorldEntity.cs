@@ -165,6 +165,9 @@ internal static class VillagerDirectionRig
         return new(Math.Min(frame, totalFrames - 1), mapping.Mirror);
     }
 
+    public static int NeutralIdleFrame(int framesPerAngle) =>
+        Math.Clamp(framesPerAngle / 3, 0, framesPerAngle - 1);
+
     private static int ScreenDirection(Vector2 direction)
     {
         var x = direction.X;

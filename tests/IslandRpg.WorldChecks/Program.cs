@@ -1091,6 +1091,8 @@ entity.GatherAt(new Vector2(0, 2));
 Require(entity.Action == EntityAction.Gather && entity.Facing.Y > 0,
     "gathering should face the collectible and select the gather animation");
 var rigFrame = VillagerDirectionRig.Resolve(new Vector2(-1, 0), 75, 5, 4);
+Require(VillagerDirectionRig.NeutralIdleFrame(15) == 5,
+    "villagers must stop on the neutral lowered-arm frame rather than walking frame zero");
 Require(rigFrame.Index is >= 0 and < 75,
     "directional rig should resolve a valid authored frame");
 var northFrame = VillagerDirectionRig.Resolve(new Vector2(-1, -1), 75, 5, 0);
