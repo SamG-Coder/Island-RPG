@@ -290,6 +290,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _worldSeed = worldSeed;
         _pauseMenu = new(this);
         _worldActions = new(this);
+        InitializeFishing();
         _inventoryContext.Selected += HandleInventoryContextSelection;
         _treeContext.Selected += HandleTreeContextSelection;
         _groundObjectContext.Selected +=
@@ -1101,6 +1102,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 _groundObjectContextWalkTarget = target;
                 _inventoryContext.Close();
                 _treeContext.Close();
+                _fishContext.Close();
                 _groundObjectContext.Open(
                     MouseState.Position,
                     ["Pick up", "Walk Here", "Examine"],
@@ -1109,10 +1111,7 @@ internal sealed partial class GameHostWindow : GameWindow
             else if (TryGetFishUnderMouse(
                          SceneMousePosition(), out var contextFish))
             {
-                _inventoryContext.Close();
-                _treeContext.Close();
-                _groundObjectContext.Close();
-                QueueFishing(contextFish);
+                OpenFishContext(contextFish, target);
             }
             else if (TryGetTreeUnderMouse(
                     SceneMousePosition(), out var contextTree))
@@ -1121,6 +1120,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 _treeContextWalkTarget = target;
                 _inventoryContext.Close();
                 _groundObjectContext.Close();
+                _fishContext.Close();
                 _treeContext.Open(
                     MouseState.Position,
                     ["Chop tree", "Gather sticks", "Walk Here", "Examine"],
@@ -1216,6 +1216,9 @@ internal sealed partial class GameHostWindow : GameWindow
         _groundObjectContext.UpdatePointer(
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
+        _fishContext.UpdatePointer(
+            MouseState.Position,
+            MouseState.IsButtonDown(MouseButton.Left));
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         UpdateCraftingWindowInput(MouseState.Position, leftDown);
         UpdateSkillsPanelInput(MouseState.Position, leftDown);
@@ -1252,6 +1255,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _inventoryContext.HitTest(mouse) ||
         _treeContext.HitTest(mouse) ||
         _groundObjectContext.HitTest(mouse) ||
+        _fishContext.HitTest(mouse) ||
         _inventoryDraggingSlot >= 0 ||
         _modalScreen.CapturesAllInput ||
         _minimapUi.HitTest(mouse);
@@ -1287,7 +1291,8 @@ internal sealed partial class GameHostWindow : GameWindow
             var candidate = new Vector2(
                 targetCell.X + x + .5f,
                 targetCell.Y + y + .5f);
-            if ((candidate - target).Length <= standOff + .25f)
+            if (actionType != WorldActionType.Fish ||
+                (candidate - target).Length <= standOff + .25f)
                 candidates.Add(candidate);
         }
 
@@ -3060,6 +3065,7 @@ internal sealed partial class GameHostWindow : GameWindow
         RenderContextMenu(_inventoryContext, 1);
         RenderContextMenu(_treeContext);
         RenderContextMenu(_groundObjectContext);
+        RenderContextMenu(_fishContext);
     }
 
     private void RenderContextMenu(

@@ -242,6 +242,7 @@ internal sealed partial class GameHostWindow
             _inventoryContext.HitTest(pointer) ||
             _treeContext.HitTest(pointer) ||
             _groundObjectContext.HitTest(pointer) ||
+            _fishContext.HitTest(pointer) ||
             _minimapUi.HitTest(pointer))
             return;
 

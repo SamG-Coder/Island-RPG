@@ -20,6 +20,7 @@ internal sealed partial class GameHostWindow
         _inventoryContext.Close();
         _treeContext.Close();
         _groundObjectContext.Close();
+        _fishContext.Close();
         _gameUi.Close();
         UseDefaultGameCursor();
     }

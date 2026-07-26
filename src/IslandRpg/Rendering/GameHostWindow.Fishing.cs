@@ -9,6 +9,9 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
+    private readonly ContextMenuControlState _fishContext = new();
+    private WorldFish? _fishContextTarget;
+    private Vector2 _fishContextWalkTarget;
     private string? _activeFishKey;
     private int _completedFishingCycles;
     private readonly int[] _fishItemTextures =
@@ -17,6 +20,47 @@ internal sealed partial class GameHostWindow
         new SpriteFrame?[12];
     private readonly SpriteFrame?[] _fishItemShadowFrames =
         new SpriteFrame?[12];
+
+    private void InitializeFishing() =>
+        _fishContext.Selected += HandleFishContextSelection;
+
+    private void OpenFishContext(
+        WorldFish fish, Vector2 walkTarget)
+    {
+        _fishContextTarget = fish;
+        _fishContextWalkTarget = walkTarget;
+        _inventoryContext.Close();
+        _treeContext.Close();
+        _groundObjectContext.Close();
+        _fishContext.Open(
+            MouseState.Position,
+            ["Fish", "Walk Here", "Examine"],
+            SceneClientBounds(), 142);
+    }
+
+    private void HandleFishContextSelection(int option)
+    {
+        var fish = _fishContextTarget;
+        _fishContextTarget = null;
+        if (fish is null) return;
+        switch (option)
+        {
+            case 0:
+                QueueFishing(fish);
+                break;
+            case 1:
+                QueueWalk(_fishContextWalkTarget);
+                break;
+            case 2:
+                var profile = WorldFishGenerator.Profile(fish.Species);
+                _chatUi.AddMessage(
+                    $"A school of {profile.DisplayName}. " +
+                    $"{profile.Rarity}; found in " +
+                    $"{profile.Habitat.ToLowerInvariant()}.",
+                    ChatMessageStyle.Normal);
+                break;
+        }
+    }
 
     private void PrepareFishingItemSprites()
     {

@@ -158,6 +158,7 @@ internal sealed partial class GameHostWindow
         _inventoryContextSlot = slot;
         _treeContext.Close();
         _groundObjectContext.Close();
+        _fishContext.Close();
         _inventoryContext.Open(
             pointer,
             ItemCatalog.Get(itemId).HasTag(ItemTag.Seed)
