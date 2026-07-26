@@ -84,24 +84,8 @@ internal sealed partial class GameHostWindow
             if (window._settingsMenu.SelectAt(panel, pointer))
                 return;
             if (window._settingsMenu.SelectedTab == SettingsTab.Display &&
-                SettingsMenuState.OptionBounds(
-                    panel, 0).Contains(pointer))
-            {
-                var settings = window._saves.LoadSettings();
-                var fullscreen = !settings.Fullscreen;
-                window._saves.SaveSettings(
-                    settings with { Fullscreen = fullscreen });
-                window.WindowState = fullscreen
-                    ? WindowState.Fullscreen
-                    : WindowState.Normal;
-            }
-            else if (window._settingsMenu.SelectedTab ==
-                         SettingsTab.Display &&
-                     SettingsMenuState.OptionBounds(
-                         panel, 1).Contains(pointer))
-            {
-                window.TogglePerformanceMetrics();
-            }
+                window.UpdateDisplaySettings(pointer, panel))
+                return;
             else if (window._settingsMenu.SelectedTab == SettingsTab.Dev &&
                      window.UpdateDeveloperSettings(pointer, panel))
                 return;

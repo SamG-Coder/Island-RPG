@@ -131,7 +131,7 @@ internal sealed partial class GameHostWindow
                 : new(.10f, .085f, .050f, .98f));
         DrawPanelOutline(back, 1, new(.42f, .32f, .15f, 1));
         DrawCenteredUiText(
-            "< Back", back, new(224, 213, 175, 255));
+            "Back", back, new(224, 213, 175, 255));
         DrawCenteredUiText(
             name, SkillPanelLayout.TitleBounds(panel),
             new(234, 221, 177, 255));

@@ -34,11 +34,20 @@ internal sealed record WorldPlayerState(
     float PositionY,
     DateTime UpdatedUtc);
 
+internal enum DisplayVSyncMode
+{
+    On,
+    Adaptive,
+    Off
+}
+
 internal sealed record GameSettings(
     float UiScale = 1,
     float MasterVolume = 1,
     bool Fullscreen = false,
-    bool PerformanceMetrics = false);
+    bool PerformanceMetrics = false,
+    DisplayVSyncMode VSyncMode = DisplayVSyncMode.Adaptive,
+    int FrameRateLimit = 0);
 
 internal sealed class GameSaveRepository
 {

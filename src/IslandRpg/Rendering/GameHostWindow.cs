@@ -316,8 +316,7 @@ internal sealed partial class GameHostWindow : GameWindow
         CreateSceneTarget();
         PrepareGameUi();
         var settings = _saves.LoadSettings();
-        _performanceMetricsEnabled = settings.PerformanceMetrics;
-        if (settings.Fullscreen) WindowState = WindowState.Fullscreen;
+        ApplyDisplaySettings(settings);
         var progress = new Progress<(int Done, int Total, string Name)>(value =>
         {
             _done = value.Done;
@@ -656,22 +655,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 if (_settingsMenu.SelectAt(settingsPanel, pointer))
                     break;
                 if (_settingsMenu.SelectedTab == SettingsTab.Display &&
-                    SettingsMenuState.OptionBounds(
-                        settingsPanel, 0).Contains(pointer))
-                {
-                    var settings = _saves.LoadSettings();
-                    var fullscreen = !settings.Fullscreen;
-                    _saves.SaveSettings(settings with { Fullscreen = fullscreen });
-                    WindowState = fullscreen
-                        ? WindowState.Fullscreen
-                        : WindowState.Normal;
-                }
-                else if (_settingsMenu.SelectedTab == SettingsTab.Display &&
-                         SettingsMenuState.OptionBounds(
-                             settingsPanel, 1).Contains(pointer))
-                {
-                    TogglePerformanceMetrics();
-                }
+                    UpdateDisplaySettings(pointer, settingsPanel))
+                    break;
                 else if (_settingsMenu.SelectedTab == SettingsTab.Dev &&
                          UpdateDeveloperSettings(pointer, settingsPanel))
                     break;
@@ -2471,8 +2456,7 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawMenuButton(NewCharacterButtonBounds(), "New Character");
         if (_selectedPlayer is not null)
             DrawMenuButton(ContinueCharacterButtonBounds(), "Use Character");
-        DrawMenuButton(
-            SettingsMenuState.BackButtonBounds(panel), "< Back");
+        DrawMenuButton(BackButtonBounds(), "Back");
     }
 
     private void RenderNewWorldMenu()
@@ -2621,7 +2605,8 @@ internal sealed partial class GameHostWindow : GameWindow
             new(232, 217, 166, 255));
         RenderSettingsTabs(panel);
         RenderSelectedSettingsTab(panel);
-        DrawMenuButton(BackButtonBounds(), "Back");
+        DrawMenuButton(
+            SettingsMenuState.BackButtonBounds(panel), "Back");
     }
 
     private void DrawTextField(TextBoxControlState control)

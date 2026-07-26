@@ -6,6 +6,27 @@ using IslandRpg.Rendering;
 using IslandRpg.Rendering.Ui;
 using OpenTK.Mathematics;
 
+var defaultDisplaySettings = new GameSettings();
+Require(defaultDisplaySettings.VSyncMode ==
+            DisplayVSyncMode.Adaptive &&
+        defaultDisplaySettings.FrameRateLimit == 0,
+    "display settings must default to adaptive VSync and unlimited FPS");
+var cycledDisplaySettings =
+    DisplaySettingsController.CycleVSync(defaultDisplaySettings);
+Require(cycledDisplaySettings.VSyncMode == DisplayVSyncMode.Off &&
+        DisplaySettingsController.CycleVSync(
+            DisplaySettingsController.CycleVSync(
+                cycledDisplaySettings)).VSyncMode ==
+        DisplayVSyncMode.Adaptive,
+    "VSync settings must cycle through adaptive, off, and on");
+var frameLimitedSettings =
+    DisplaySettingsController.CycleFrameRateLimit(
+        defaultDisplaySettings);
+Require(frameLimitedSettings.FrameRateLimit == 60 &&
+        DisplaySettingsController.FrameRateLabel(0) == "Unlimited" &&
+        DisplaySettingsController.FrameRateLabel(144) == "144 FPS",
+    "frame limits must cycle from unlimited through supported FPS presets");
+
 var metrics = new PerformanceMetricsOverlay();
 metrics.RecordFrame(1d / 60);
 metrics.RecordFrame(1d / 30);

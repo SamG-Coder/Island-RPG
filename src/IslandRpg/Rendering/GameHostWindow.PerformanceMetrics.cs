@@ -10,16 +10,6 @@ internal sealed partial class GameHostWindow
     private readonly PerformanceMetricsOverlay _performanceMetrics = new();
     private bool _performanceMetricsEnabled;
 
-    private void TogglePerformanceMetrics()
-    {
-        var settings = _saves.LoadSettings();
-        _performanceMetricsEnabled = !settings.PerformanceMetrics;
-        _saves.SaveSettings(settings with
-        {
-            PerformanceMetrics = _performanceMetricsEnabled
-        });
-    }
-
     private void RenderPerformanceMetrics()
     {
         if (!_performanceMetricsEnabled) return;

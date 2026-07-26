@@ -134,7 +134,7 @@ internal sealed partial class GameHostWindow
         RenderSettingsTabs(panel);
         RenderSelectedSettingsTab(panel);
         DrawMenuButton(
-            SettingsMenuState.BackButtonBounds(panel), "< Back");
+            SettingsMenuState.BackButtonBounds(panel), "Back");
     }
 
     private void RenderSettingsTabs(Vector4 panel)
@@ -164,6 +164,14 @@ internal sealed partial class GameHostWindow
                     $"Fullscreen: {(settings.Fullscreen ? "On" : "Off")}");
                 DrawMenuButton(
                     SettingsMenuState.OptionBounds(panel, 1),
+                    $"VSync: {settings.VSyncMode}");
+                DrawMenuButton(
+                    SettingsMenuState.OptionBounds(panel, 2),
+                    "Frame limit: " +
+                    DisplaySettingsController.FrameRateLabel(
+                        settings.FrameRateLimit));
+                DrawMenuButton(
+                    SettingsMenuState.OptionBounds(panel, 3),
                     "Performance metrics: " +
                     $"{(settings.PerformanceMetrics ? "On" : "Off")}");
                 break;
