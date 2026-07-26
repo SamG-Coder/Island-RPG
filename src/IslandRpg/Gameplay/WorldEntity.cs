@@ -64,6 +64,14 @@ internal sealed class WorldEntity
         SetAction(EntityAction.Idle);
     }
 
+    public void PrepareForPathRequest()
+    {
+        // Repathing while already moving must not bounce through Idle. Keeping
+        // Move active preserves the walk cycle until the replacement arrives.
+        if (Action != EntityAction.Move)
+            Stop();
+    }
+
     public void Attack() => SetAction(EntityAction.Attack);
     public void Work() => SetAction(EntityAction.Work);
     public void Gather() => SetAction(EntityAction.Gather);

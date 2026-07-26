@@ -84,7 +84,7 @@ internal sealed partial class GameHostWindow
         window._queuedAction = null;
         window._activeTreeId = null;
         window._activeTreeStickGatherId = null;
-        window._player.Stop();
+        window._player.PrepareForPathRequest();
         CancelPath();
         window._pathCancellation = new CancellationTokenSource();
         var token = window._pathCancellation.Token;
@@ -120,7 +120,7 @@ internal sealed partial class GameHostWindow
             window._activeTreeStickGatherId = null;
         }
 
-        window._player.Stop();
+        window._player.PrepareForPathRequest();
         CancelPath();
         window._pathCancellation = new CancellationTokenSource();
         var token = window._pathCancellation.Token;

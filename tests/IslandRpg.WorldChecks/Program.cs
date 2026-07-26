@@ -1084,6 +1084,11 @@ entity.MoveTo(new Vector2(3, 0));
 entity.Update(.5f);
 Require(entity.Action == EntityAction.Move && entity.Position.X > 1,
     "moving entity should advance toward its target");
+var walkingAnimationTime = entity.ActionTime;
+entity.PrepareForPathRequest();
+Require(entity.Action == EntityAction.Move &&
+        entity.ActionTime == walkingAnimationTime,
+    "requesting a replacement path while walking must preserve the active walk cycle");
 entity.SetGender(EntityGender.Female);
 Require(entity.Gender == EntityGender.Female,
     "entity gender should switch without replacing the entity");

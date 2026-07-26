@@ -332,7 +332,7 @@ internal sealed partial class GameHostWindow
         _activeTreeId = null;
         _activeGroundPickupId = null;
         _activeGroundDrop = null;
-        _player.Stop();
+        _player.PrepareForPathRequest();
         _pathCancellation?.Cancel();
         _pathCancellation?.Dispose();
         _pathCancellation = null;
