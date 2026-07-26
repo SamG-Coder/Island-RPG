@@ -340,6 +340,30 @@ internal sealed partial class GameHostWindow
             y += 23;
         }
 
+        if (recipe.RequiredTools is { Count: > 0 } tools)
+        {
+            y += 8;
+            DrawUiText(
+                "Required tools",
+                new(details.X + 14, y),
+                new(224, 210, 168, 255));
+            y += 25;
+            foreach (var tool in tools)
+            {
+                var held = inventory.Count(value =>
+                    value is not null &&
+                    ItemCatalog.Get(value).HasTag(tool.Tag));
+                DrawUiText(
+                    $"- {tool.Name} " +
+                    $"({held}/{tool.Count}) - not consumed",
+                    new(details.X + 14, y),
+                    held >= tool.Count
+                        ? new(175, 207, 132, 255)
+                        : new(226, 121, 103, 255));
+                y += 23;
+            }
+        }
+
         y += 12;
         DrawUiText(
             "How to make it",

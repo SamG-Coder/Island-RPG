@@ -19,7 +19,8 @@ internal enum ItemTag
     BurntFish = 1 << 12,
     FishingNet = 1 << 13,
     FibreNetSprite = 1 << 14,
-    PlaceableObject = 1 << 15
+    PlaceableObject = 1 << 15,
+    Hammer = 1 << 16
 }
 
 internal sealed record ItemDefinition(
@@ -131,7 +132,8 @@ internal static class ItemCatalog
             [ItemIds.StoneHammer] = new(
                 ItemIds.StoneHammer, "stone hammer", "Stone hammer",
                 "A primitive hammer with a stone head lashed to a wooden handle.",
-                0, Tags: ItemTag.Tool | ItemTag.StoneToolSprite),
+                0, Tags: ItemTag.Tool | ItemTag.Hammer |
+                         ItemTag.StoneToolSprite),
             [ItemIds.StoneAxe] = new(
                 ItemIds.StoneAxe, "stone axe", "Stone axe",
                 "A primitive axe with a sharp stone head lashed to a wooden handle.",
@@ -145,7 +147,8 @@ internal static class ItemCatalog
             [ItemIds.BluntStoneHammer] = new(
                 ItemIds.BluntStoneHammer, "blunt stone hammer", "Blunt hammer",
                 "A stone hammer with worn, blunt working edges.", 0,
-                Tags: ItemTag.Tool | ItemTag.StoneToolSprite),
+                Tags: ItemTag.Tool | ItemTag.Hammer |
+                      ItemTag.StoneToolSprite),
             [ItemIds.BluntStoneAxe] = new(
                 ItemIds.BluntStoneAxe, "blunt stone axe", "Blunt axe",
                 "A stone axe too blunt to chop effectively.", 1,

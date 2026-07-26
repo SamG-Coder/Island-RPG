@@ -17,6 +17,8 @@ internal enum RecipeAvailability
 }
 
 internal sealed record CraftingIngredient(string ItemId, int Count);
+internal sealed record CraftingToolRequirement(
+    ItemTag Tag, string Name, int Count = 1);
 
 internal sealed record CraftingInventoryStep(
     IReadOnlyList<CraftingIngredient> Consumes,
@@ -30,7 +32,8 @@ internal sealed record CraftingRecipe(
     int Experience,
     IReadOnlyList<CraftingIngredient> Ingredients,
     IReadOnlyList<string> Steps,
-    IReadOnlyList<CraftingInventoryStep>? InventorySteps = null);
+    IReadOnlyList<CraftingInventoryStep>? InventorySteps = null,
+    IReadOnlyList<CraftingToolRequirement>? RequiredTools = null);
 
 internal static class CraftingSkill
 {
@@ -148,7 +151,11 @@ internal static class CraftingSkill
             [
                 "Lay four planks together to form a broad working surface.",
                 "Shape the sticks into sturdy trestle supports.",
-                "Fasten the top to the supports and brace the frame."
+                "Use a hammer to fasten the top and brace the frame."
+            ],
+            RequiredTools:
+            [
+                new(ItemTag.Hammer, "hammer")
             ])
     ];
 

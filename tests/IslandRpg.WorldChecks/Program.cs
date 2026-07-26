@@ -302,14 +302,46 @@ Require(workbenchRecipe.Category == CraftingCategory.Furniture &&
             new CraftingIngredient(ItemIds.Plank, 4),
             new CraftingIngredient(ItemIds.Sticks, 2)
         ]) &&
+        workbenchRecipe.RequiredTools?.SequenceEqual(
+            [new CraftingToolRequirement(ItemTag.Hammer, "hammer")]) ==
+        true &&
         CraftingSkill.Availability(
             workbenchRecipe, 5,
             [
                 ItemIds.Plank, ItemIds.Plank,
                 ItemIds.Plank, ItemIds.Plank,
-                ItemIds.Sticks, ItemIds.Sticks
+                ItemIds.Sticks, ItemIds.Sticks,
+                ItemIds.StoneHammer
             ]) == RecipeAvailability.Ready,
-    "the workbench must be a level-five Furniture recipe made from prepared timber");
+    "the workbench must be a level-five Furniture recipe made with a stone hammer");
+Require(CraftingSkill.Availability(
+            workbenchRecipe, 5,
+            [
+                ItemIds.Plank, ItemIds.Plank,
+                ItemIds.Plank, ItemIds.Plank,
+                ItemIds.Sticks, ItemIds.Sticks
+            ]) == RecipeAvailability.MissingResources &&
+        CraftingService.TryCraft(
+            workbenchRecipe, 5,
+            [
+                ItemIds.Plank, ItemIds.Plank,
+                ItemIds.Plank, ItemIds.Plank,
+                ItemIds.Sticks, ItemIds.Sticks,
+                ItemIds.StoneHammer
+            ],
+            out var craftedWorkbenchInventory) &&
+        craftedWorkbenchInventory.Contains(ItemIds.Workbench) &&
+        craftedWorkbenchInventory.Contains(ItemIds.StoneHammer),
+    "crafting a workbench must require but not consume its stone hammer");
+Require(CraftingSkill.Availability(
+            workbenchRecipe, 5,
+            [
+                ItemIds.Plank, ItemIds.Plank,
+                ItemIds.Plank, ItemIds.Plank,
+                ItemIds.Sticks, ItemIds.Sticks,
+                ItemIds.BluntStoneHammer
+            ]) == RecipeAvailability.Ready,
+    "the workbench must accept any item registered as a hammer");
 Require(PlaceableObjectCatalog.TryGet(
             ItemIds.Workbench, out var workbenchDefinition) &&
         workbenchDefinition.FootprintWidth == 2 &&
@@ -345,10 +377,9 @@ Require(!modalScreen.IsOpen,
 
 var startingInventory = PlayerInventory.CreateStartingInventory();
 Require(startingInventory.Length == PlayerInventory.Capacity &&
-        PlayerInventory.Count(startingInventory) == 1 &&
-        startingInventory[0] == ItemIds.Workbench &&
+        PlayerInventory.Count(startingInventory) == 0 &&
         !PlayerInventory.HasAxe(startingInventory),
-    "a new character must receive one test workbench in its fixed 28-slot inventory");
+    "a new character must start with an empty fixed 28-slot inventory");
 Require(PlayerInventory.CanDrop(ItemIds.IronAxe) &&
         PlayerInventory.CanDrop(ItemIds.Logs),
     "all inventory items must be droppable into the world");

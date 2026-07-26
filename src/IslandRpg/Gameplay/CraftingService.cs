@@ -31,6 +31,14 @@ internal static class CraftingService
         if (craftingLevel < recipe.RequiredLevel)
             return CraftResult.Locked;
         var working = PlayerInventory.Normalize(updated);
+        foreach (var tool in recipe.RequiredTools ?? [])
+        {
+            var held = working.Count(item =>
+                item is not null &&
+                ItemCatalog.Get(item).HasTag(tool.Tag));
+            if (held < tool.Count)
+                return CraftResult.MissingResources;
+        }
 
         var steps = recipe.InventorySteps ??
         [
