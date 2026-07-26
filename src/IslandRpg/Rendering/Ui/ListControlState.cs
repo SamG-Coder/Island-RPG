@@ -130,6 +130,15 @@ internal sealed class ListControlState
         return true;
     }
 
+    public void ScrollToIndex(int index, int leadingRows = 0)
+    {
+        FirstVisibleIndex = Math.Clamp(
+            index - Math.Max(0, leadingRows),
+            0,
+            MaximumFirstIndex);
+        UpdateThumbBounds();
+    }
+
     public void UpdatePointer(Vector2 pointer, bool leftDown)
     {
         ScrollTrack.Hovered = ScrollTrack.HitTest(pointer);

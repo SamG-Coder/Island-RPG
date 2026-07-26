@@ -4,8 +4,12 @@ namespace IslandRpg.Rendering.Ui;
 
 internal static class SkillPanelLayout
 {
-    public static Vector4 ListItemBounds(Vector4 panel, int index) =>
-        new(panel.X + 12, panel.Y + 48 + index * 64, panel.Z - 24, 54);
+    public static Vector4 ListBounds(Vector4 panel) =>
+        new(
+            panel.X + 12,
+            panel.Y + 48,
+            panel.Z - 24,
+            panel.W - 58);
 
     public static Vector4 BackButtonBounds(Vector4 panel) =>
         new(panel.X + 12, panel.Y + 48, 48, 27);

@@ -31,6 +31,12 @@ internal static class FishingSkill
                 WorldFishSpecies.BluefinTuna, ItemIds.RawBluefinTuna, 17, 75, 2)
         };
 
+    public static IReadOnlyList<FishingCatchProfile> CatchProfiles =>
+        Profiles.Values
+            .OrderBy(profile => profile.RequiredLevel)
+            .ThenBy(profile => profile.Species)
+            .ToArray();
+
     public static int LevelForExperience(int experience) =>
         SkillService.LevelForExperience(experience);
 

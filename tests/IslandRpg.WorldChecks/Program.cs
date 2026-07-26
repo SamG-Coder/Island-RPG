@@ -404,6 +404,13 @@ Require(modalScreen.PausesSimulation,
 modalScreen.Close(ModalScreenKind.Pause);
 Require(!modalScreen.IsOpen,
     "closing a modal must restore the normal game screen");
+modalScreen.Open(ModalScreenKind.SkillGuide);
+Require(modalScreen.CapturesAllInput &&
+        modalScreen.BlursBackground &&
+        modalScreen.HidesGameUi &&
+        !modalScreen.PausesSimulation,
+    "the skill guide must use the reusable non-pausing modal standard");
+modalScreen.Close(ModalScreenKind.SkillGuide);
 
 var startingInventory = PlayerInventory.CreateStartingInventory();
 Require(startingInventory.Length == PlayerInventory.Capacity &&
@@ -877,6 +884,36 @@ Require(
     !FishingSkill.CanCatch(WorldFishSpecies.BluefinTuna, 16) &&
     FishingSkill.CanCatch(WorldFishSpecies.BluefinTuna, 17),
     "fishing progression must unlock difficult catches without changing the authored net action");
+var fishingGuide = SkillGuideService.Definition(SkillType.Fishing);
+Require(
+    fishingGuide.Entries.Select(entry => entry.Level)
+        .SequenceEqual([1, 5, 9, 13, 17]) &&
+    fishingGuide.Entries.Single(entry => entry.Level == 1)
+        .Description.Contains("shore minnows") &&
+    fishingGuide.Entries.Single(entry => entry.Level == 17)
+        .Description.Contains("bluefin tuna"),
+    "the fishing guide must show only meaningful catch-unlock levels derived from fishing profiles");
+var woodcuttingGuide =
+    SkillGuideService.Definition(SkillType.Woodcutting);
+Require(
+    woodcuttingGuide.Entries.Count == SkillService.MaximumLevel &&
+    woodcuttingGuide.Entries[0].Description.Contains(
+        $"{WoodcuttingSkill.MinimumDamage(1)}–" +
+        $"{WoodcuttingSkill.MaximumDamage(1)}") &&
+    WoodcuttingSkill.MinimumDamage(20) >
+    WoodcuttingSkill.MinimumDamage(1),
+    "the woodcutting guide must show the shared accuracy and damage effects at every level");
+var skillGuideWindow = new SkillGuideWindowState();
+skillGuideWindow.Open(fishingGuide, 20);
+skillGuideWindow.Layout(new(0, 0, 1280, 720));
+Require(
+    skillGuideWindow.Visible &&
+    skillGuideWindow.CurrentLevel == 20 &&
+    skillGuideWindow.List.VisibleIndices.Last() ==
+        fishingGuide.Entries.Count - 1 &&
+    !skillGuideWindow.List.ScrollTrack.Visible,
+    "the reusable skill guide must retain the highest meaningful unlock without empty rows");
+skillGuideWindow.Close();
 var fishingAward = FishingSkill.AwardExperience(
     0, WorldFishSpecies.RiverPerch);
 Require(

@@ -19,21 +19,29 @@ internal sealed partial class GameHostWindow
             var panel = _gameUi.Panel.Bounds;
             if (_selectedSkill < 0)
             {
-                for (var index = 0; index < 4; index++)
-                    if (SkillPanelLayout.ListItemBounds(panel, index)
-                        .Contains(pointer))
-                    {
-                        _selectedSkill = index;
-                        break;
-                    }
+                LayoutSkillsList();
+                _skillsList.UpdatePointer(pointer, leftDown);
+                if (_skillsList.TryHit(
+                        pointer, out var index, out _))
+                    _selectedSkill = index;
             }
             else if (SkillPanelLayout.BackButtonBounds(panel)
                      .Contains(pointer))
                 _selectedSkill = -1;
+            else if (SkillGuideService.IsSupported(
+                         (SkillType)_selectedSkill) &&
+                     SkillPanelLayout.TitleBounds(panel)
+                         .Contains(pointer))
+                OpenSkillGuideWindow((SkillType)_selectedSkill);
             else if (_selectedSkill == 2 &&
                      SkillPanelLayout.ActionButtonBounds(panel)
                          .Contains(pointer))
                 OpenCraftingWindow();
+        }
+        else if (_selectedSkill < 0)
+        {
+            LayoutSkillsList();
+            _skillsList.UpdatePointer(pointer, leftDown);
         }
         _skillsLeftWasDown = leftDown;
     }
@@ -44,22 +52,15 @@ internal sealed partial class GameHostWindow
         DrawPanelCaption("Skills", panel);
         if (_selectedSkill < 0)
         {
-            DrawSkillListItem(
-                panel, 0, "Woodcutting",
-                WoodcuttingSkill.LevelForExperience(
-                    _activePlayer?.WoodcuttingExperience ?? 0));
-            DrawSkillListItem(
-                panel, 1, "Farming",
-                FarmingSkill.LevelForExperience(
-                    _activePlayer?.FarmingExperience ?? 0));
-            DrawSkillListItem(
-                panel, 2, "Crafting",
-                CraftingSkill.LevelForExperience(
-                    _activePlayer?.CraftingExperience ?? 0));
-            DrawSkillListItem(
-                panel, 3, "Fishing",
-                FishingSkill.LevelForExperience(
-                    _activePlayer?.FishingExperience ?? 0));
+            LayoutSkillsList();
+            var skills = SkillOverview();
+            foreach (var index in _skillsList.VisibleIndices)
+                DrawSkillListItem(
+                    _skillsList.RowBounds(index),
+                    skills[index].Skill,
+                    skills[index].Name,
+                    skills[index].Level);
+            RenderListScrollbar(_skillsList);
             return;
         }
 
@@ -132,9 +133,20 @@ internal sealed partial class GameHostWindow
         DrawPanelOutline(back, 1, new(.42f, .32f, .15f, 1));
         DrawCenteredUiText(
             "Back", back, new(224, 213, 175, 255));
+        var title = SkillPanelLayout.TitleBounds(panel);
+        var opensGuide = SkillGuideService.IsSupported(
+            (SkillType)_selectedSkill);
+        if (opensGuide)
+        {
+            DrawUiColor(
+                title,
+                title.Contains(MouseState.Position)
+                    ? new(.25f, .19f, .075f, .98f)
+                    : new(.12f, .10f, .052f, .98f));
+            DrawPanelOutline(title, 1, new(.48f, .36f, .15f, 1));
+        }
         DrawCenteredUiText(
-            name, SkillPanelLayout.TitleBounds(panel),
-            new(234, 221, 177, 255));
+            name, title, new(234, 221, 177, 255));
     }
 
     private void RenderSkillLevelCard(
@@ -199,7 +211,7 @@ internal sealed partial class GameHostWindow
             new(info.X + 9, info.Y + 9),
             new(194, 184, 151, 255));
         DrawUiText(
-            fishing ? "Levels unlock more difficult fish" :
+            fishing ? "Unlocks more fish" :
             crafting ? "Browse learned recipes" :
             farming ? "Plant seeds to gain XP" :
             $"Hit chance: {WoodcuttingSkill.HitChance(level) * 100:0}%",
@@ -221,24 +233,93 @@ internal sealed partial class GameHostWindow
             new(235, 222, 178, 255));
     }
 
-    private void DrawSkillListItem(
-        Vector4 panel, int index, string name, int level)
+    private void LayoutSkillsList()
     {
-        var bounds = SkillPanelLayout.ListItemBounds(panel, index);
+        var skills = SkillOverview();
+        _skillsList.Layout(
+            SkillPanelLayout.ListBounds(_gameUi.Panel.Bounds),
+            skills.Select(skill => skill.Skill.ToString()).ToArray(),
+            rowHeight: 54,
+            rowGap: 6,
+            deleteWidth: 0,
+            actionGap: 0);
+    }
+
+    private (SkillType Skill, string Name, int Level)[] SkillOverview() =>
+    [
+        (
+            SkillType.Woodcutting,
+            "Woodcutting",
+            WoodcuttingSkill.LevelForExperience(
+                _activePlayer?.WoodcuttingExperience ?? 0)),
+        (
+            SkillType.Farming,
+            "Farming",
+            FarmingSkill.LevelForExperience(
+                _activePlayer?.FarmingExperience ?? 0)),
+        (
+            SkillType.Crafting,
+            "Crafting",
+            CraftingSkill.LevelForExperience(
+                _activePlayer?.CraftingExperience ?? 0)),
+        (
+            SkillType.Fishing,
+            "Fishing",
+            FishingSkill.LevelForExperience(
+                _activePlayer?.FishingExperience ?? 0))
+    ];
+
+    private void DrawSkillListItem(
+        Vector4 bounds, SkillType skill, string name, int level)
+    {
         var hovered = bounds.Contains(MouseState.Position);
+        var accent = skill switch
+        {
+            SkillType.Woodcutting => new Vector4(.31f, .57f, .20f, 1),
+            SkillType.Farming => new Vector4(.57f, .55f, .20f, 1),
+            SkillType.Crafting => new Vector4(.63f, .38f, .14f, 1),
+            _ => new Vector4(.20f, .46f, .66f, 1)
+        };
         DrawUiColor(
             bounds,
             hovered
-                ? new(.18f, .145f, .075f, .98f)
-                : new(.075f, .064f, .043f, .96f));
-        DrawPanelOutline(bounds, 1, new(.35f, .27f, .13f, 1));
+                ? new(.15f, .13f, .075f, .98f)
+                : new(.060f, .055f, .040f, .97f));
+        DrawUiColor(
+            new(bounds.X + 3, bounds.Y + 3, 4, bounds.W - 6),
+            accent);
+        DrawPanelOutline(
+            bounds, hovered ? 2 : 1,
+            hovered
+                ? new(.49f, .38f, .17f, 1)
+                : new(.27f, .22f, .13f, 1));
         DrawUiText(
             name,
-            new(bounds.X + 10, bounds.Y + 9),
+            new(bounds.X + 13, bounds.Y + 10),
             new(229, 218, 177, 255));
-        DrawUiText(
-            $"Level {level}",
-            new(bounds.X + 10, bounds.Y + 31),
-            new(190, 181, 150, 255));
+        var badge = new Vector4(
+            bounds.X + bounds.Z - 57,
+            bounds.Y + 8,
+            48,
+            24);
+        DrawUiColor(badge, new(.035f, .032f, .025f, .92f));
+        DrawPanelOutline(badge, 1, new(.25f, .21f, .13f, 1));
+        DrawCenteredUiText(
+            $"Lv {level}", badge,
+            level >= SkillService.MaximumLevel
+                ? new(210, 190, 105, 255)
+                : new(192, 183, 151, 255));
+        var track = new Vector4(
+            bounds.X + 13,
+            bounds.Y + bounds.W - 12,
+            bounds.Z - 26,
+            5);
+        DrawUiColor(track, new(.025f, .024f, .020f, .95f));
+        DrawUiColor(
+            new(
+                track.X, track.Y,
+                track.Z * level / SkillService.MaximumLevel,
+                track.W),
+            accent);
     }
 }

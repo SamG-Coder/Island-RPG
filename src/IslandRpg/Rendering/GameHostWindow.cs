@@ -249,6 +249,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly PlaceableObjectPlacementController
         _placeableObjectPlacement = new();
     private bool _skillsLeftWasDown;
+    private readonly ListControlState _skillsList = new();
     private int _selectedSkill = -1;
     private readonly GameUiControlState _gameUi = new();
     private readonly ChatUiControlState _chatUi = new();
@@ -256,6 +257,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly SettingsMenuState _settingsMenu = new();
     private readonly DeveloperSettingsController _developerSettings = new();
     private readonly DeveloperMapWindow _developerMap = new();
+    private readonly SkillGuideWindowState _skillGuideWindow = new();
     private readonly WorldActionController _worldActions;
     private string? _overheadSpeech;
     private double _overheadSpeechExpiresAt;
@@ -399,6 +401,8 @@ internal sealed partial class GameHostWindow : GameWindow
                     _chatUi.BlurInput();
                 else if (_developerMap.IsOpen)
                     CloseDeveloperMap();
+                else if (_skillGuideWindow.Visible)
+                    CloseSkillGuideWindow();
                 else if (_craftingWindowOpen)
                     CloseCraftingWindow();
                 else
@@ -518,6 +522,14 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_mode == PreviewMode.Game &&
                 _modalScreen.PausesSimulation)
                 _pauseMenu.Update();
+            else if (_mode == PreviewMode.Game &&
+                     _skillGuideWindow.Visible)
+            {
+                UpdateSkillGuideWindowInput(
+                    MouseState.Position,
+                    MouseState.IsButtonDown(MouseButton.Left));
+                UpdateGame((float)e.Time);
+            }
             else if (_mode == PreviewMode.Game && _craftingWindowOpen)
             {
                 UpdateCraftingWindowInput(
@@ -2168,6 +2180,20 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         if (_screen != ScreenState.WorldPreview || e.OffsetY == 0) return;
         if (_mode == PreviewMode.Game && _pauseMenu.IsPaused) return;
+        if (_mode == PreviewMode.Game && _skillGuideWindow.Visible)
+        {
+            _skillGuideWindow.Scroll(
+                MouseState.Position, e.OffsetY);
+            return;
+        }
+        if (_mode == PreviewMode.Game &&
+            _gameUi.ActivePanel == GameUiPanel.Skills &&
+            _selectedSkill < 0)
+        {
+            LayoutSkillsList();
+            if (_skillsList.Scroll(MouseState.Position, e.OffsetY))
+                return;
+        }
         if (_mode == PreviewMode.Game)
         {
             _chatUi.Layout(SceneClientBounds());
@@ -2308,6 +2334,7 @@ internal sealed partial class GameHostWindow : GameWindow
             if (!_modalScreen.HidesGameUi) RenderGameUi();
             if (_pauseMenu.IsPaused) RenderPauseMenu();
             else if (_craftingWindowOpen) RenderCraftingWindow();
+            else if (_skillGuideWindow.Visible) RenderSkillGuideWindow();
         }
         else if (_screen == ScreenState.WorldPreview &&
                  _mode == PreviewMode.Game &&

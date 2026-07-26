@@ -4,7 +4,8 @@ internal enum ModalScreenKind
 {
     None,
     Pause,
-    Crafting
+    Crafting,
+    SkillGuide
 }
 
 internal sealed class ModalScreenState
