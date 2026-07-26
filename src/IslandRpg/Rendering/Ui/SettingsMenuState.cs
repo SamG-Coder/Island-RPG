@@ -13,13 +13,24 @@ internal enum SettingsTab
 
 internal sealed class SettingsMenuState
 {
+    private const float PanelPadding = 24;
+    private const float BackButtonWidth = 108;
+    private const float BackButtonHeight = 40;
+    private bool _developerModeEnabled;
+
     public SettingsTab SelectedTab { get; private set; } =
         SettingsTab.Display;
 
+    public bool DeveloperModeEnabled =>
+        _developerModeEnabled || Debugger.IsAttached;
+
     public IReadOnlyList<SettingsTab> VisibleTabs =>
-        Debugger.IsAttached
+        DeveloperModeEnabled
             ? Enum.GetValues<SettingsTab>()
             : [SettingsTab.Display, SettingsTab.Game, SettingsTab.Sound];
+
+    public void EnableDeveloperMode() =>
+        _developerModeEnabled = true;
 
     public void EnsureVisible()
     {
@@ -57,10 +68,10 @@ internal sealed class SettingsMenuState
 
     public static Vector4 BackButtonBounds(Vector4 panel) =>
         new(
-            panel.X + panel.Z - 132,
-            panel.Y + panel.W - 62,
-            108,
-            40);
+            panel.X + panel.Z - PanelPadding - BackButtonWidth,
+            panel.Y + panel.W - PanelPadding - BackButtonHeight,
+            BackButtonWidth,
+            BackButtonHeight);
 
     public static Vector4 OptionBounds(Vector4 panel, int index)
     {

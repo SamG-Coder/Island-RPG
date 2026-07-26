@@ -64,6 +64,14 @@ internal sealed class WorldEntity
         SetAction(EntityAction.Idle);
     }
 
+    public void TeleportTo(Vector2 position)
+    {
+        _path.Clear();
+        Position = position;
+        Target = position;
+        SetAction(EntityAction.Idle);
+    }
+
     public void PrepareForPathRequest()
     {
         // Repathing while already moving must not bounce through Idle. Keeping

@@ -84,15 +84,18 @@ internal sealed partial class GameHostWindow
             var panel = window.PauseSubmenuPanel();
             if (window._settingsMenu.SelectAt(panel, pointer))
                 return;
+            if (SettingsMenuState.BackButtonBounds(
+                    panel).Contains(pointer))
+            {
+                Page = PausePage.Main;
+                return;
+            }
             if (window._settingsMenu.SelectedTab == SettingsTab.Display &&
                 window.UpdateDisplaySettings(pointer, panel))
                 return;
             else if (window._settingsMenu.SelectedTab == SettingsTab.Dev &&
                      window.UpdateDeveloperSettings(pointer, panel))
                 return;
-            else if (SettingsMenuState.BackButtonBounds(
-                         panel).Contains(pointer))
-                Page = PausePage.Main;
         }
     }
 }

@@ -93,14 +93,29 @@ internal static class CraftingSkill
         new(
             "plank", ItemIds.Plank,
             CraftingCategory.Resources, 2, 20,
-            [new(ItemIds.SharpenedRock, 1), new(ItemIds.Logs, 1)],
+            [new(ItemIds.Logs, 1)],
             [
-                "Use a sharpened rock on any type of log.",
+                "Use a knife on any type of log.",
                 "Carve along the grain until the log becomes a plank."
+            ],
+            RequiredTools:
+            [
+                new(ItemTag.Knife, "knife")
+            ]),
+        new(
+            "stone-knife", ItemIds.StoneKnife,
+            CraftingCategory.Tools, 1, 20,
+            [
+                new(ItemIds.PlantFibres, 1),
+                new(ItemIds.SharpenedRock, 1)
+            ],
+            [
+                "Wrap the plant fibres around one end of the sharp rock.",
+                "Bind the fibres tightly to form a safe grip."
             ]),
         new(
             "stone-hammer", ItemIds.StoneHammer,
-            CraftingCategory.Tools, 3, 30,
+            CraftingCategory.Tools, 1, 30,
             [new(ItemIds.MediumRock, 1), new(ItemIds.Sticks, 1)],
             [
                 "Place a medium rock against the end of the sticks.",
@@ -108,7 +123,7 @@ internal static class CraftingSkill
             ]),
         new(
             "stone-axe", ItemIds.StoneAxe,
-            CraftingCategory.Tools, 4, 40,
+            CraftingCategory.Tools, 1, 40,
             [new(ItemIds.SharpenedRock, 1), new(ItemIds.Sticks, 1)],
             [
                 "Place the sharpened rock against the sticks.",
@@ -116,7 +131,7 @@ internal static class CraftingSkill
             ]),
         new(
             "stone-pickaxe", ItemIds.StonePickaxe,
-            CraftingCategory.Tools, 6, 60,
+            CraftingCategory.Tools, 1, 60,
             [
                 new(ItemIds.SharpenedRock, 1),
                 new(ItemIds.MediumRock, 1),

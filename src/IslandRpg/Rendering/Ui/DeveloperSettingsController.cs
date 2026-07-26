@@ -75,6 +75,12 @@ internal sealed class DeveloperSettingsController
         return new(content.X + 16, content.Y + 14, 150, 34);
     }
 
+    public static Vector4 MapToolBounds(Vector4 panel)
+    {
+        var content = SettingsMenuState.ContentBounds(panel);
+        return new(content.X + 182, content.Y + 14, 150, 34);
+    }
+
     public static Vector4 SkillRowBounds(
         Vector4 panel, SkillType skill)
     {

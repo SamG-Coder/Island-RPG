@@ -8,7 +8,17 @@ internal sealed record WorldAtlasSnapshot(
     int Height,
     byte[] Rgba);
 
-internal readonly record struct WorldAtlasTileKey(int X, int Y, int ChunksAcross)
+internal enum WorldAtlasLayer
+{
+    Terrain,
+    TreeDensity
+}
+
+internal readonly record struct WorldAtlasTileKey(
+    int X,
+    int Y,
+    int ChunksAcross,
+    WorldAtlasLayer Layer = WorldAtlasLayer.Terrain)
 {
     public int SpanTiles => ChunksAcross * WorldChunk.Size;
 }
@@ -33,6 +43,8 @@ internal static class WorldAtlasGenerator
         var size = TilePixelSize;
         var span = key.SpanTiles;
         var rgba = new byte[size * size * 4];
+        var river = new bool[size * size];
+        var bridgeable = new bool[size * size];
         var samples = new System.Collections.Concurrent.ConcurrentDictionary<(int X, int Y), IslandTile>();
         Parallel.For(0, size, imageY =>
         {
@@ -55,23 +67,126 @@ internal static class WorldAtlasGenerator
                     terrainIsoY = apparentIsoY + elevation * 1.35f;
                 }
 
-                var color = BaseColor(tile);
+                var color = key.Layer == WorldAtlasLayer.TreeDensity
+                    ? TreeDensityColor(tile)
+                    : BaseColor(tile);
                 var slopeX = (tile.East + tile.South - tile.North - tile.West) * .5f;
                 var slopeY = (tile.West + tile.South - tile.North - tile.East) * .5f;
                 var relief = Math.Clamp((-slopeX + slopeY) * .065f, -.24f, .22f);
                 var elevationShade =
                     (tile.North + tile.East + tile.South + tile.West) / 88f;
-                var shade = tile.Region == WorldBiome.Ocean
+                var shade = key.Layer == WorldAtlasLayer.TreeDensity
+                    ? 1f
+                    : tile.Region == WorldBiome.Ocean
                     ? .94f
                     : .88f + elevationShade * .15f + relief;
                 var index = (imageY * size + imageX) * 4;
+                var pixel = imageY * size + imageX;
+                river[pixel] =
+                    tile.Biome == Biome.RiverWater ||
+                    tile.Region == WorldBiome.River;
+                bridgeable[pixel] =
+                    tile.Region != WorldBiome.Ocean &&
+                    tile.Biome is not
+                        (Biome.DeepWater or Biome.ShallowWater);
                 rgba[index] = (byte)Math.Clamp(color.R * shade, 0, 255);
                 rgba[index + 1] = (byte)Math.Clamp(color.G * shade, 0, 255);
                 rgba[index + 2] = (byte)Math.Clamp(color.B * shade, 0, 255);
                 rgba[index + 3] = 255;
             }
         });
+        if (key.Layer == WorldAtlasLayer.Terrain)
+            SmoothRiverContinuity(rgba, river, bridgeable, size);
         return new(key, size, size, rgba);
+    }
+
+    private static (byte R, byte G, byte B) TreeDensityColor(
+        IslandTile tile)
+    {
+        var elevation =
+            (tile.North + tile.East + tile.South + tile.West) / 4f;
+        var density = Math.Clamp(
+            WorldTreeCatalog.SpawnChance(tile.Region, elevation) / .31f,
+            0,
+            1);
+        if (density <= 0)
+            return tile.Region == WorldBiome.Ocean
+                ? ((byte)10, (byte)18, (byte)25)
+                : ((byte)24, (byte)25, (byte)21);
+        if (density < .5f)
+        {
+            var amount = density * 2;
+            return (
+                (byte)MathF.Round(24 + (43 - 24) * amount),
+                (byte)MathF.Round(25 + (142 - 25) * amount),
+                (byte)MathF.Round(21 + (65 - 21) * amount));
+        }
+        else
+        {
+            var amount = (density - .5f) * 2;
+            return (
+                (byte)MathF.Round(43 + (238 - 43) * amount),
+                (byte)MathF.Round(142 + (205 - 142) * amount),
+                (byte)MathF.Round(65 + (70 - 65) * amount));
+        }
+    }
+
+    internal static void SmoothRiverContinuity(
+        byte[] rgba, bool[] river, bool[] bridgeable, int size)
+    {
+        if (rgba.Length != size * size * 4 ||
+            river.Length != size * size ||
+            bridgeable.Length != size * size)
+            throw new ArgumentException("Atlas river buffers have invalid dimensions.");
+
+        var additions = new bool[river.Length];
+        ReadOnlySpan<(int X, int Y)> directions =
+        [
+            (1, 0), (0, 1), (1, 1), (1, -1)
+        ];
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            if (!river[y * size + x]) continue;
+            foreach (var direction in directions)
+            for (var distance = 2; distance <= 3; distance++)
+            {
+                var endX = x + direction.X * distance;
+                var endY = y + direction.Y * distance;
+                if ((uint)endX >= (uint)size ||
+                    (uint)endY >= (uint)size ||
+                    !river[endY * size + endX])
+                    continue;
+
+                var canBridge = true;
+                for (var step = 1; step < distance; step++)
+                {
+                    var bridgeIndex =
+                        (y + direction.Y * step) * size +
+                        x + direction.X * step;
+                    canBridge &= bridgeable[bridgeIndex];
+                }
+                if (!canBridge) break;
+                for (var step = 1; step < distance; step++)
+                    additions[
+                        (y + direction.Y * step) * size +
+                        x + direction.X * step] = true;
+                break;
+            }
+        }
+
+        for (var pixel = 0; pixel < additions.Length; pixel++)
+        {
+            if (!additions[pixel]) continue;
+            river[pixel] = true;
+            var index = pixel * 4;
+            // Match the atlas river palette while retaining a small amount of
+            // underlying terrain shading at the newly bridged pixel.
+            rgba[index] = (byte)((rgba[index] + 45 * 3) / 4);
+            rgba[index + 1] = (byte)((rgba[index + 1] + 125 * 3) / 4);
+            rgba[index + 2] = (byte)((rgba[index + 2] + 171 * 3) / 4);
+            rgba[index + 3] = 255;
+        }
     }
 
     public static WorldAtlasSnapshot Generate(

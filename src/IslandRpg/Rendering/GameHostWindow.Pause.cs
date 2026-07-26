@@ -193,10 +193,14 @@ internal sealed partial class GameHostWindow
 
     private void RenderDeveloperSettings(Vector4 panel)
     {
-        if (!System.Diagnostics.Debugger.IsAttached) return;
+        if (!_settingsMenu.DeveloperModeEnabled) return;
         DrawMenuButton(
             DeveloperSettingsController.MultiplierBounds(panel),
             $"XP multiplier: x{_developerSettings.ExperienceMultiplier}");
+        if (_activePlayer is not null)
+            DrawMenuButton(
+                DeveloperSettingsController.MapToolBounds(panel),
+                "Map tool");
         foreach (var skill in Enum.GetValues<SkillType>())
         {
             var row = DeveloperSettingsController.SkillRowBounds(
@@ -231,7 +235,7 @@ internal sealed partial class GameHostWindow
 
     private Vector4 PausePanel() => FrontendPanel(400, 470);
 
-    private Vector4 PauseSubmenuPanel() => FrontendPanel(560, 500);
+    private Vector4 PauseSubmenuPanel() => SettingsPanel();
 
     private Vector4 PauseButton(int index)
     {

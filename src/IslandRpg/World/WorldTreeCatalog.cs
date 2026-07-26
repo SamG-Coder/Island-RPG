@@ -18,6 +18,26 @@ internal static class WorldTreeCatalog
         VariantCounts.ContainsKey(graphicName) ||
         VariantCounts.ContainsKey(VisibleName(graphicName));
 
+    public static float SpawnChance(WorldBiome region, float elevation)
+    {
+        var chance = region switch
+        {
+            WorldBiome.Rainforest => .31f,
+            WorldBiome.TemperateForest => .23f,
+            WorldBiome.Taiga => .19f,
+            WorldBiome.Wetland => .13f,
+            WorldBiome.Savanna => .065f,
+            WorldBiome.Alpine => .045f,
+            WorldBiome.Coast => .012f,
+            WorldBiome.Tundra => .025f,
+            WorldBiome.Desert => .009f,
+            _ => 0
+        };
+        return region == WorldBiome.Alpine
+            ? chance * Math.Clamp((12f - elevation) / 4f, 0, 1)
+            : chance;
+    }
+
     public static int FrameCount(string graphicName) =>
         VariantCounts.GetValueOrDefault(VisibleName(graphicName), 1);
 

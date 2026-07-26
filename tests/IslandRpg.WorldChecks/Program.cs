@@ -273,25 +273,55 @@ Require(primitiveNetRecipe.Category == CraftingCategory.Tools &&
             Enumerable.Repeat(ItemIds.PlantFibres, 6).ToArray()) ==
         RecipeAvailability.Ready,
     "the primitive fishing net must be a level-two tool woven from six fibres");
+var stoneKnifeRecipe = CraftingSkill.Recipes.Single(
+    recipe => recipe.ResultItemId == ItemIds.StoneKnife);
+Require(stoneKnifeRecipe.Category == CraftingCategory.Tools &&
+        stoneKnifeRecipe.RequiredLevel == 1 &&
+        stoneKnifeRecipe.Ingredients.SequenceEqual(
+        [
+            new CraftingIngredient(ItemIds.PlantFibres, 1),
+            new CraftingIngredient(ItemIds.SharpenedRock, 1)
+        ]) &&
+        CraftingSkill.Availability(
+            stoneKnifeRecipe, 1,
+            [ItemIds.PlantFibres, ItemIds.SharpenedRock]) ==
+        RecipeAvailability.Ready,
+    "the stone knife must be a level-one tool made from fibre and a sharp rock");
+Require(CraftingService.TryCraft(
+            stoneKnifeRecipe, 1,
+            [ItemIds.PlantFibres, ItemIds.SharpenedRock],
+            out var craftedStoneKnife) &&
+        craftedStoneKnife.Count(
+            item => item == ItemIds.StoneKnife) == 1 &&
+        !craftedStoneKnife.Contains(ItemIds.PlantFibres) &&
+        !craftedStoneKnife.Contains(ItemIds.SharpenedRock),
+    "crafting a stone knife must consume its fibre and sharp rock");
+var plankRecipe = CraftingSkill.Recipes.Single(
+    recipe => recipe.ResultItemId == ItemIds.Plank);
+Require(plankRecipe.RequiredTools?.SequenceEqual(
+            [new CraftingToolRequirement(ItemTag.Knife, "knife")]) == true &&
+        CraftingService.TryCraft(
+            plankRecipe, 2,
+            [ItemIds.StoneKnife, ItemIds.Logs],
+            out var craftedPlank) &&
+        craftedPlank.Contains(ItemIds.StoneKnife) &&
+        craftedPlank.Contains(ItemIds.Plank),
+    "the plank recipe must require and preserve any knife tool");
 var pickaxeRecipe = CraftingSkill.Recipes.Single(
     recipe => recipe.ResultItemId == ItemIds.StonePickaxe);
 Require(pickaxeRecipe.Category == CraftingCategory.Tools &&
-        pickaxeRecipe.RequiredLevel == 6 &&
+        pickaxeRecipe.RequiredLevel == 1 &&
         pickaxeRecipe.Ingredients.Count == 3 &&
         pickaxeRecipe.Steps.Count == 3,
     "the stone pickaxe recipe must define its level, materials, and ordered steps");
 Require(CraftingSkill.Availability(
-            pickaxeRecipe, 5,
-            [ItemIds.SharpenedRock, ItemIds.MediumRock, ItemIds.Sticks]) ==
-        RecipeAvailability.Locked &&
-        CraftingSkill.Availability(
-            pickaxeRecipe, 6, []) ==
+            pickaxeRecipe, 1, []) ==
         RecipeAvailability.MissingResources &&
         CraftingSkill.Availability(
-            pickaxeRecipe, 6,
+            pickaxeRecipe, 1,
             [ItemIds.SharpenedRock, ItemIds.MediumRock, ItemIds.Sticks]) ==
         RecipeAvailability.Ready,
-    "recipe state must distinguish locked, missing-resource, and ready recipes");
+    "the level-one stone pickaxe must still require all of its resources");
 var workbenchRecipe = CraftingSkill.Recipes.Single(
     recipe => recipe.ResultItemId == ItemIds.Workbench);
 Require(workbenchRecipe.Category == CraftingCategory.Furniture &&
@@ -402,6 +432,12 @@ Require(ItemCatalog.Get(ItemIds.StonePickaxe) is var pickaxeDefinition &&
         pickaxeDefinition.HasTag(ItemTag.StoneToolSprite) &&
         !pickaxeDefinition.HasTag(ItemTag.Axe),
     "the stone pickaxe must use the third stone-tool sprite without acting as an axe");
+Require(ItemCatalog.Get(ItemIds.StoneKnife) is var knifeDefinition &&
+        knifeDefinition.SpriteCell == 3 &&
+        knifeDefinition.HasTag(ItemTag.Tool) &&
+        knifeDefinition.HasTag(ItemTag.Knife) &&
+        knifeDefinition.HasTag(ItemTag.StoneToolSprite),
+    "the stone knife must use the fourth stone-tool sprite and knife capability");
 Require(ItemCatalog.Get(ItemIds.PlantFibres) is var fibreDefinition &&
         fibreDefinition.HasTag(ItemTag.NaturalMaterial) &&
         fibreDefinition.HasTag(ItemTag.FibreNetSprite) &&
@@ -505,6 +541,10 @@ Require(
 if (!System.Diagnostics.Debugger.IsAttached)
     Require(!visibleSettingsTabs.Contains(SettingsTab.Dev),
         "the Dev settings tab must stay hidden without an attached debugger");
+settingsMenu.EnableDeveloperMode();
+Require(settingsMenu.DeveloperModeEnabled &&
+        settingsMenu.VisibleTabs.Contains(SettingsTab.Dev),
+    "the hidden chat command must be able to enable the Dev settings tab");
 var settingsPanel = new Vector4(360, 110, 560, 500);
 Require(
     DeveloperSettingsController.GrantBounds(
@@ -516,6 +556,73 @@ Require(
     "developer XP grant and max-level buttons must not overlap");
 var settingsContent = SettingsMenuState.ContentBounds(settingsPanel);
 var settingsBack = SettingsMenuState.BackButtonBounds(settingsPanel);
+var tallerSettingsPanel = new Vector4(
+    settingsPanel.X,
+    settingsPanel.Y,
+    settingsPanel.Z,
+    settingsPanel.W + 120);
+var tallerSettingsBack =
+    SettingsMenuState.BackButtonBounds(tallerSettingsPanel);
+Require(
+    Math.Abs(
+        tallerSettingsBack.Y - settingsBack.Y - 120) < .001f &&
+    Math.Abs(
+        tallerSettingsPanel.Y + tallerSettingsPanel.W -
+        (tallerSettingsBack.Y + tallerSettingsBack.W) -
+        (settingsPanel.Y + settingsPanel.W -
+         settingsBack.Y - settingsBack.W)) < .001f,
+    "the settings Back button must remain anchored to a resized panel footer");
+Require(
+    !DeveloperSettingsController.MapToolBounds(settingsPanel)
+        .Contains(settingsBack.Xy),
+    "the developer map-tool button must not overlap settings navigation");
+var developerMap = new DeveloperMapWindow();
+developerMap.Open();
+Require(developerMap.IsOpen,
+    "the in-game developer map must track its open state");
+developerMap.ToggleTreeDensity();
+Require(developerMap.Layer == WorldAtlasLayer.TreeDensity,
+    "the developer map must expose a tree-density layer");
+developerMap.ToggleTreeDensity();
+Require(developerMap.Layer == WorldAtlasLayer.Terrain,
+    "the developer map must toggle back to terrain");
+var developerFallback = Enumerable.Range(-160, 321)
+    .SelectMany(y => Enumerable.Range(-160, 321)
+        .Select(x => new Vector2(x + .5f, y + .5f)))
+    .First(position =>
+        InfiniteWorldGenerator.BiomeAt(
+            2187,
+            (int)MathF.Floor(position.X),
+            (int)MathF.Floor(position.Y)) is not
+            (Biome.DeepWater or Biome.ShallowWater or
+             Biome.RiverWater or Biome.MangroveShallows));
+var developerDestination = DeveloperMapWindow.ResolveDestination(
+    Vector2.Zero, Vector2.Zero, Vector2.Zero, 1, 2187,
+    developerFallback);
+Require(
+    InfiniteWorldGenerator.BiomeAt(
+        2187,
+        (int)MathF.Floor(developerDestination.X),
+        (int)MathF.Floor(developerDestination.Y)) is not
+        (Biome.DeepWater or Biome.ShallowWater or
+         Biome.RiverWater or Biome.MangroveShallows),
+    "developer-map teleport destinations must resolve onto walkable land");
+developerMap.Close();
+Require(!developerMap.IsOpen,
+    "the in-game developer map must close cleanly");
+var atlasRiverPixels = new byte[7 * 7 * 4];
+var atlasRiverMask = new bool[7 * 7];
+var atlasRiverLand = Enumerable.Repeat(true, 7 * 7).ToArray();
+atlasRiverMask[1 * 7 + 1] = true;
+atlasRiverMask[3 * 7 + 3] = true;
+atlasRiverMask[5 * 7 + 5] = true;
+WorldAtlasGenerator.SmoothRiverContinuity(
+    atlasRiverPixels, atlasRiverMask, atlasRiverLand, 7);
+Require(
+    atlasRiverMask[2 * 7 + 2] &&
+    atlasRiverMask[4 * 7 + 4] &&
+    atlasRiverPixels[(2 * 7 + 2) * 4 + 2] > 0,
+    "the atlas must bridge short sampling gaps in diagonal river channels");
 Require(
     settingsContent.Y + settingsContent.W < settingsBack.Y &&
     settingsBack.X + settingsBack.Z <=
@@ -613,6 +720,21 @@ Require(!PlayerInventory.TryCraftStoneAxe(
         [ItemIds.SharpenedRock, ItemIds.Logs],
         0, 1, out _),
     "crafting an axe must require sticks");
+Require(PlayerInventory.TryCraftStoneKnife(
+        [ItemIds.SharpenedRock, ItemIds.PlantFibres],
+        0, 1, out var craftedKnife) &&
+        craftedKnife[0] is null &&
+        craftedKnife[1] == ItemIds.StoneKnife &&
+        PlayerInventory.Count(craftedKnife) == 1 &&
+        PlayerInventory.TryCraftStoneKnife(
+            [ItemIds.PlantFibres, ItemIds.SharpenedRock],
+            0, 1, out var reverseCraftedKnife) &&
+        reverseCraftedKnife[1] == ItemIds.StoneKnife,
+    "using fibre and a sharp rock in either order must create a stone knife");
+Require(!PlayerInventory.TryCraftStoneKnife(
+        [ItemIds.SharpenedRock, ItemIds.Sticks],
+        0, 1, out _),
+    "crafting a stone knife must require plant fibre");
 Require(PlayerInventory.TryCraftStoneHammer(
         [ItemIds.MediumRock, ItemIds.Sticks],
         0, 1, out var craftedHammer) &&
@@ -783,19 +905,19 @@ Require(
         .HasTag(ItemTag.BurntFish),
     "fish states must use authored raw/cooked pairs and reuse the cooked icon for shader-derived burnt fish");
 Require(PlayerInventory.TryCarvePlank(
-        [ItemIds.SharpenedRock, ItemIds.Logs],
-        0, 1, .25f, out var carvedPlank, out var sharpRockSurvived) &&
-        carvedPlank[0] == ItemIds.SharpenedRock &&
+        [ItemIds.StoneKnife, ItemIds.Logs],
+        0, 1, out var carvedPlank) &&
+        carvedPlank[0] == ItemIds.StoneKnife &&
         carvedPlank[1] == ItemIds.Plank &&
-        !sharpRockSurvived,
-    "using a sharp rock on a log must create a plank and usually keep the tool");
-Require(PlayerInventory.TryCarvePlank(
-        [ItemIds.SharpenedRock, ItemIds.OakLogs],
-        0, 1, .249f, out var carvedOakPlank, out var sharpRockDestroyed) &&
-        carvedOakPlank[0] is null &&
+        PlayerInventory.TryCarvePlank(
+            [ItemIds.StoneKnife, ItemIds.OakLogs],
+            0, 1, out var carvedOakPlank) &&
+        carvedOakPlank[0] == ItemIds.StoneKnife &&
         carvedOakPlank[1] == ItemIds.Plank &&
-        sharpRockDestroyed,
-    "carving a plank must have a twenty-five percent sharp-rock break chance");
+        !PlayerInventory.TryCarvePlank(
+            [ItemIds.SharpenedRock, ItemIds.Logs],
+            0, 1, out _),
+    "a knife must carve any log into a plank without being consumed");
 Require(ItemCatalog.Get(ItemIds.Plank) is var plankDefinition &&
         plankDefinition.SpriteCell == 7 &&
         plankDefinition.HasTag(ItemTag.WoodcuttingMaterial),

@@ -20,7 +20,8 @@ internal enum ItemTag
     FishingNet = 1 << 13,
     FibreNetSprite = 1 << 14,
     PlaceableObject = 1 << 15,
-    Hammer = 1 << 16
+    Hammer = 1 << 16,
+    Knife = 1 << 17
 }
 
 internal sealed record ItemDefinition(
@@ -43,6 +44,7 @@ internal static class ItemIds
     public const string StoneAxe = "stone_axe";
     public const string StoneHammer = "stone_hammer";
     public const string StonePickaxe = "stone_pickaxe";
+    public const string StoneKnife = "stone_knife";
     public const string BluntStoneAxe = "blunt_stone_axe";
     public const string BluntStoneHammer = "blunt_stone_hammer";
     public const string Logs = "logs";
@@ -144,6 +146,11 @@ internal static class ItemCatalog
                 ItemIds.StonePickaxe, "stone pickaxe", "Stone pickaxe",
                 "A primitive pickaxe with a pointed stone head lashed to a wooden handle.",
                 2, Tags: ItemTag.Tool | ItemTag.StoneToolSprite),
+            [ItemIds.StoneKnife] = new(
+                ItemIds.StoneKnife, "stone knife", "Stone knife",
+                "A primitive cutting tool with a stone blade bound to a wooden grip.",
+                3, Tags: ItemTag.Tool | ItemTag.Knife |
+                         ItemTag.StoneToolSprite),
             [ItemIds.BluntStoneHammer] = new(
                 ItemIds.BluntStoneHammer, "blunt stone hammer", "Blunt hammer",
                 "A stone hammer with worn, blunt working edges.", 0,

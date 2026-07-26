@@ -220,6 +220,26 @@ internal sealed partial class GameHostWindow
 
         var source = inventory[_activeInventorySlot]!;
         var target = inventory[slot]!;
+        if (source is ItemIds.SharpenedRock or ItemIds.PlantFibres &&
+            target is ItemIds.SharpenedRock or ItemIds.PlantFibres &&
+            CanCraftRecipe("stone-knife") &&
+            PlayerInventory.TryCraftStoneKnife(
+                inventory, _activeInventorySlot, slot,
+                out var craftedKnife))
+        {
+            _activePlayer = _activePlayer! with
+            {
+                Inventory = craftedKnife,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            _saves.SavePlayer(_activePlayer);
+            _chatUi.AddMessage(
+                "You bind the sharp rock with fibre and create a stone knife.",
+                ChatMessageStyle.Action);
+            AwardCraftingExperience("stone-knife");
+            _activeInventorySlot = -1;
+            return;
+        }
         if (source == ItemIds.SmallRocks &&
             PlayerInventory.TrySharpenStoneTool(
                 inventory, _activeInventorySlot, slot,
@@ -238,13 +258,12 @@ internal sealed partial class GameHostWindow
             _activeInventorySlot = -1;
             return;
         }
-        if (source == ItemIds.SharpenedRock &&
+        if (ItemCatalog.Get(source).HasTag(ItemTag.Knife) &&
             ItemCatalog.Get(target).HasTag(ItemTag.Log) &&
             CanCraftRecipe("plank") &&
             PlayerInventory.TryCarvePlank(
                 inventory, _activeInventorySlot, slot,
-                Random.Shared.NextSingle(), out var carvedPlank,
-                out var sharpRockDestroyed))
+                out var carvedPlank))
         {
             _activePlayer = _activePlayer! with
             {
@@ -253,9 +272,8 @@ internal sealed partial class GameHostWindow
             };
             _saves.SavePlayer(_activePlayer);
             _chatUi.AddMessage(
-                sharpRockDestroyed
-                    ? "You carve the log into a plank, but the sharp rock breaks."
-                    : "You carve the log into a plank with the sharp rock.",
+                $"You carve the log into a plank with the " +
+                $"{ItemCatalog.Get(source).Name}.",
                 ChatMessageStyle.Action);
             AwardCraftingExperience("plank");
             _activeInventorySlot = -1;

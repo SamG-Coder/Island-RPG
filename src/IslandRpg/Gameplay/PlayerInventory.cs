@@ -112,6 +112,27 @@ internal static class PlayerInventory
         return true;
     }
 
+    public static bool TryCraftStoneKnife(
+        string?[]? items, int firstSlot, int secondSlot,
+        out string?[] updated)
+    {
+        updated = Normalize(items);
+        if (firstSlot == secondSlot ||
+            (uint)firstSlot >= Capacity ||
+            (uint)secondSlot >= Capacity)
+            return false;
+        var first = updated[firstSlot];
+        var second = updated[secondSlot];
+        if (!((first == ItemIds.SharpenedRock &&
+               second == ItemIds.PlantFibres) ||
+              (first == ItemIds.PlantFibres &&
+               second == ItemIds.SharpenedRock)))
+            return false;
+        updated[firstSlot] = null;
+        updated[secondSlot] = ItemIds.StoneKnife;
+        return true;
+    }
+
     public static bool TryCraftStoneHammer(
         string?[]? items, int toolSlot, int targetSlot,
         out string?[] updated)
@@ -170,22 +191,18 @@ internal static class PlayerInventory
 
     public static bool TryCarvePlank(
         string?[]? items, int toolSlot, int targetSlot,
-        float toolDestructionRoll, out string?[] updated,
-        out bool toolDestroyed)
+        out string?[] updated)
     {
         updated = Normalize(items);
-        toolDestroyed = false;
         if (toolSlot == targetSlot ||
             (uint)toolSlot >= Capacity ||
             (uint)targetSlot >= Capacity ||
-            updated[toolSlot] != ItemIds.SharpenedRock ||
+            !ItemCatalog.Get(updated[toolSlot] ?? string.Empty)
+                .HasTag(ItemTag.Knife) ||
             !ItemCatalog.Get(updated[targetSlot] ?? string.Empty)
                 .HasTag(ItemTag.Log))
             return false;
         updated[targetSlot] = ItemIds.Plank;
-        toolDestroyed = toolDestructionRoll < .25f;
-        if (toolDestroyed)
-            updated[toolSlot] = null;
         return true;
     }
 

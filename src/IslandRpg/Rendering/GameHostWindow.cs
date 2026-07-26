@@ -204,9 +204,9 @@ internal sealed partial class GameHostWindow : GameWindow
         new SpriteFrame?[12];
     private readonly SpriteFrame?[] _supplementalShadowFrames =
         new SpriteFrame?[12];
-    private readonly int[] _stoneToolTextures = new int[3];
-    private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[3];
-    private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[3];
+    private readonly int[] _stoneToolTextures = new int[4];
+    private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[4];
+    private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[4];
     private readonly Dictionary<string, GroundToolSprite> _groundToolSprites =
         new(StringComparer.OrdinalIgnoreCase);
     private PlaceableObjectSprites _placeableObjectSprites = new();
@@ -255,6 +255,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly RepeatedActionMonologue _repeatedActions = new();
     private readonly SettingsMenuState _settingsMenu = new();
     private readonly DeveloperSettingsController _developerSettings = new();
+    private readonly DeveloperMapWindow _developerMap = new();
     private readonly WorldActionController _worldActions;
     private string? _overheadSpeech;
     private double _overheadSpeechExpiresAt;
@@ -302,7 +303,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _treeContext.Selected += HandleTreeContextSelection;
         _groundObjectContext.Selected +=
             HandleGroundObjectContextSelection;
-        _chatUi.Submitted += ShowOverheadSpeech;
+        _chatUi.Submitted += HandleChatSubmission;
     }
 
     protected override void OnLoad()
@@ -396,12 +397,20 @@ internal sealed partial class GameHostWindow : GameWindow
             {
                 if (_chatUi.Input.Focused)
                     _chatUi.BlurInput();
+                else if (_developerMap.IsOpen)
+                    CloseDeveloperMap();
                 else if (_craftingWindowOpen)
                     CloseCraftingWindow();
                 else
                     _pauseMenu.HandleEscapeKey();
             }
             else Close();
+        }
+        if (_developerMap.IsOpen &&
+            KeyboardState.IsKeyPressed(Keys.T))
+        {
+            _developerMap.ToggleTreeDensity();
+            RequestVisibleAtlasTiles();
         }
         if (_screen == ScreenState.WorldPreview && _mode == PreviewMode.World &&
             KeyboardState.IsKeyPressed(Keys.M))
@@ -656,18 +665,21 @@ internal sealed partial class GameHostWindow : GameWindow
                 UpdateLoadWorldClick(pointer);
                 break;
             case FrontendPage.Settings:
-                var settingsPanel = FrontendPanel(560, 500);
+                var settingsPanel = SettingsPanel();
                 if (_settingsMenu.SelectAt(settingsPanel, pointer))
                     break;
+                if (SettingsMenuState.BackButtonBounds(
+                        settingsPanel).Contains(pointer))
+                {
+                    _frontendPage = FrontendPage.Main;
+                    break;
+                }
                 if (_settingsMenu.SelectedTab == SettingsTab.Display &&
                     UpdateDisplaySettings(pointer, settingsPanel))
                     break;
                 else if (_settingsMenu.SelectedTab == SettingsTab.Dev &&
                          UpdateDeveloperSettings(pointer, settingsPanel))
                     break;
-                else if (SettingsMenuState.BackButtonBounds(
-                             settingsPanel).Contains(pointer))
-                    _frontendPage = FrontendPage.Main;
                 break;
         }
     }
@@ -2040,6 +2052,11 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void TravelToAtlasPosition(Vector2 mouse)
     {
+        if (_developerMap.IsOpen)
+        {
+            TeleportFromDeveloperMap(mouse);
+            return;
+        }
         var apparent = _atlasCenterIso +
                        (mouse - new Vector2(ReferenceWidth, ReferenceHeight) * .5f) /
                        AtlasPixelsPerTile();
@@ -2097,7 +2114,11 @@ internal sealed partial class GameHostWindow : GameWindow
         var visible = new HashSet<WorldAtlasTileKey>();
         for (var y = firstY; y <= lastY; y++)
         for (var x = firstX; x <= lastX; x++)
-            visible.Add(new(x, y, chunksPerTile));
+            visible.Add(new(
+                x, y, chunksPerTile,
+                _developerMap.IsOpen
+                    ? _developerMap.Layer
+                    : WorldAtlasLayer.Terrain));
         _visibleAtlasTiles = visible;
 
         foreach (var key in visible
@@ -2287,6 +2308,13 @@ internal sealed partial class GameHostWindow : GameWindow
             if (!_modalScreen.HidesGameUi) RenderGameUi();
             if (_pauseMenu.IsPaused) RenderPauseMenu();
             else if (_craftingWindowOpen) RenderCraftingWindow();
+        }
+        else if (_screen == ScreenState.WorldPreview &&
+                 _mode == PreviewMode.Game &&
+                 _atlasOpen && _developerMap.IsOpen)
+        {
+            GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
+            RenderDeveloperMapOverlay();
         }
         RenderPerformanceMetrics();
         SwapBuffers();
@@ -2614,7 +2642,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void RenderSettingsMenu()
     {
-        var panel = FrontendPanel(560, 500);
+        var panel = SettingsPanel();
         DrawAoEPanelBorder(panel);
         DrawCenteredUiText(
             "SETTINGS", new(panel.X, panel.Y + 24, panel.Z, 38),
@@ -2712,6 +2740,11 @@ internal sealed partial class GameHostWindow : GameWindow
             MathF.Round((ClientSize.Y - height) * .5f),
             width, height);
 
+    private Vector4 SettingsPanel() =>
+        FrontendPanel(
+            560,
+            _settingsMenu.DeveloperModeEnabled ? 620 : 500);
+
     private Vector4 FrontendCloseButtonBounds()
     {
         var panel = _frontendPage switch
@@ -2720,7 +2753,7 @@ internal sealed partial class GameHostWindow : GameWindow
             FrontendPage.CharacterSelect => FrontendPanel(660, 600),
             FrontendPage.NewWorld => FrontendPanel(760, 640),
             FrontendPage.LoadWorld => FrontendPanel(600, 560),
-            FrontendPage.Settings => FrontendPanel(560, 500),
+            FrontendPage.Settings => SettingsPanel(),
             _ => FrontendPanel(400, 470)
         };
         return new(panel.X + panel.Z - 40, panel.Y + 10, 28, 28);
@@ -2811,7 +2844,7 @@ internal sealed partial class GameHostWindow : GameWindow
             FrontendPage.CharacterSelect => FrontendPanel(660, 600),
             FrontendPage.NewWorld => FrontendPanel(760, 640),
             FrontendPage.LoadWorld => FrontendPanel(600, 560),
-            FrontendPage.Settings => FrontendPanel(560, 500),
+            FrontendPage.Settings => SettingsPanel(),
             _ => FrontendPanel(480, 360)
         };
         return new(panel.X + panel.Z - 156, panel.Y + panel.W - 92, 108, 48);
@@ -4865,6 +4898,21 @@ internal sealed partial class GameHostWindow : GameWindow
             _stoneToolShadowFrames[2] =
                 ItemShadowGenerator.Create(frame);
             _stoneToolTextures[2] = Upload(frame);
+        }
+        var stoneKnifePath = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Images",
+            "stone-knife-item.png");
+        if (File.Exists(stoneKnifePath))
+        {
+            using var stream = File.OpenRead(stoneKnifePath);
+            var image = ImageResult.FromStream(
+                stream, ColorComponents.RedGreenBlueAlpha);
+            var frame = new SpriteFrame(
+                image.Width, image.Height, image.Width / 2, 28, image.Data);
+            _stoneToolFrames[3] = frame;
+            _stoneToolShadowFrames[3] =
+                ItemShadowGenerator.Create(frame);
+            _stoneToolTextures[3] = Upload(frame);
         }
         _coastalSprites = CoastalCollectibleSprites.Load(
             Path.Combine(

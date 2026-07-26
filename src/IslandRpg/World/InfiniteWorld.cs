@@ -94,21 +94,7 @@ internal static class InfiniteWorldGenerator
                 Surface(heights[x, y]), Surface(heights[x + 1, y]),
                 Surface(heights[x + 1, y + 1]), Surface(heights[x, y + 1]), region);
 
-            var chance = region switch
-            {
-                WorldBiome.Rainforest => .31f,
-                WorldBiome.TemperateForest => .23f,
-                WorldBiome.Taiga => .19f,
-                WorldBiome.Wetland => .13f,
-                WorldBiome.Savanna => .065f,
-                WorldBiome.Alpine => .045f,
-                WorldBiome.Coast => .012f,
-                WorldBiome.Tundra => .025f,
-                WorldBiome.Desert => .009f,
-                _ => 0
-            };
-            if (region == WorldBiome.Alpine)
-                chance *= Math.Clamp((12f - average) / 4f, 0, 1);
+            var chance = WorldTreeCatalog.SpawnChance(region, average);
             if (UnitHash(seed, worldX, worldY, 91) >= chance) continue;
             var tile = tiles[y * WorldChunk.Size + x];
             var graphic = WorldTreeCatalog.SelectGraphic(seed, tile);
