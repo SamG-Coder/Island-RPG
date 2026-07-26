@@ -32,6 +32,7 @@ internal sealed partial class GameHostWindow
         _inventoryContext.Close();
         _treeContext.Close();
         _groundObjectContext.Close();
+        _vegetationContext.Close();
         _fishContext.Open(
             MouseState.Position,
             ["Fish", "Walk Here", "Examine"],
@@ -133,6 +134,14 @@ internal sealed partial class GameHostWindow
     private void QueueFishing(WorldFish fish)
     {
         if (_activePlayer is null || IsFishDepleted(fish)) return;
+        if (PlayerInventory.BestFishingNet(
+                _activePlayer.Inventory) is null)
+        {
+            ReportBlockedAction(
+                "fishing-without-net",
+                "You need a fishing net to catch fish.");
+            return;
+        }
         var level = FishingSkill.LevelForExperience(
             _activePlayer.FishingExperience);
         var profile = FishingSkill.Profile(fish.Species);
@@ -153,6 +162,14 @@ internal sealed partial class GameHostWindow
         if (_player is null || _activePlayer is null) return;
         var fish = FindFish(fishKey);
         if (fish is null || IsFishDepleted(fish)) return;
+        if (PlayerInventory.BestFishingNet(
+                _activePlayer.Inventory) is null)
+        {
+            ReportBlockedAction(
+                "fishing-without-net",
+                "You need a fishing net to catch fish.");
+            return;
+        }
         if (PlayerInventory.IsFull(_activePlayer.Inventory))
         {
             ReportBlockedAction(
@@ -183,6 +200,15 @@ internal sealed partial class GameHostWindow
         var fish = FindFish(_activeFishKey);
         if (fish is null || IsFishDepleted(fish))
         {
+            StopFishing();
+            return;
+        }
+        if (PlayerInventory.BestFishingNet(
+                _activePlayer.Inventory) is null)
+        {
+            ReportBlockedAction(
+                "fishing-net-lost",
+                "You can no longer fish without a fishing net.");
             StopFishing();
             return;
         }

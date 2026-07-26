@@ -1,0 +1,233 @@
+using IslandRpg.Gameplay;
+using IslandRpg.Rendering.Ui;
+using IslandRpg.World;
+using OpenTK.Mathematics;
+
+namespace IslandRpg.Rendering;
+
+internal sealed partial class GameHostWindow
+{
+    private const double FibreShrubCooldownSeconds = 5 * 60;
+    private readonly ContextMenuControlState _vegetationContext = new();
+    private string? _vegetationContextKey;
+    private Vector2 _vegetationContextWalkTarget;
+    private string? _activeFibreVegetationKey;
+
+    private void InitializeFibreGathering() =>
+        _vegetationContext.Selected +=
+            HandleVegetationContextSelection;
+
+    private bool TryGetFibreShrubUnderMouse(
+        Vector2 mouse,
+        out WorldVegetation vegetation,
+        out string stableKey)
+    {
+        foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible))
+        for (var index = gpu.VegetationRenderItems.Length - 1;
+             index >= 0;
+             index--)
+        {
+            var cached = gpu.VegetationRenderItems[index];
+            var candidate = gpu.Chunk.Vegetation[index];
+            if (!IsFibreShrub(candidate) ||
+                !_treeAtlas.TryGetValue(
+                    cached.AtlasKey, out var entry))
+                continue;
+            var bounds = SpriteBounds(entry.Frame, cached.World);
+            if (mouse.X < bounds.Left || mouse.X >= bounds.Right ||
+                mouse.Y < bounds.Top || mouse.Y >= bounds.Bottom)
+                continue;
+            var scale = Math.Max(SpritePixelScale(), .001f);
+            var x = (int)((mouse.X - bounds.Left) / scale);
+            var y = (int)((mouse.Y - bounds.Top) / scale);
+            if ((uint)x >= (uint)entry.Frame.Width ||
+                (uint)y >= (uint)entry.Frame.Height ||
+                entry.Frame.Rgba[
+                    (y * entry.Frame.Width + x) * 4 + 3] <= 24)
+                continue;
+            vegetation = candidate;
+            stableKey = cached.StableKey;
+            return true;
+        }
+        vegetation = null!;
+        stableKey = "";
+        return false;
+    }
+
+    private bool IsFibreShrub(WorldVegetation vegetation)
+    {
+        if (!vegetation.CanBecomeInstance ||
+            vegetation.Kind != WorldVegetationKind.Shrub)
+            return false;
+        var biome = InfiniteWorldGenerator.BiomeAt(
+            _worldSeed,
+            (int)MathF.Floor(vegetation.X),
+            (int)MathF.Floor(vegetation.Y));
+        return biome is not Biome.Snow and not Biome.Tundra;
+    }
+
+    private void OpenVegetationContext(
+        WorldVegetation vegetation,
+        string stableKey,
+        Vector2 walkTarget)
+    {
+        _vegetationContextKey = stableKey;
+        _vegetationContextWalkTarget = walkTarget;
+        _inventoryContext.Close();
+        _treeContext.Close();
+        _groundObjectContext.Close();
+        _fishContext.Close();
+        _vegetationContext.Open(
+            MouseState.Position,
+            ["Gather fibres", "Walk Here", "Examine"],
+            SceneClientBounds(), 154);
+    }
+
+    private void HandleVegetationContextSelection(int option)
+    {
+        var key = _vegetationContextKey;
+        _vegetationContextKey = null;
+        if (key is null) return;
+        switch (option)
+        {
+            case 0:
+                QueueFibreGather(key);
+                break;
+            case 1:
+                QueueWalk(_vegetationContextWalkTarget);
+                break;
+            case 2:
+                _chatUi.AddMessage(
+                    "A fibrous green shrub. Its stems can be stripped " +
+                    "and woven.",
+                    ChatMessageStyle.Normal);
+                break;
+        }
+    }
+
+    private void QueueFibreGather(string stableKey)
+    {
+        var located = FindVegetation(stableKey);
+        if (located is not { } target) return;
+        if (!FibreShrubReady(target.Gpu.Chunk, stableKey))
+        {
+            ReportBlockedAction(
+                "fibre-shrub-recovering",
+                "This shrub needs time to grow more usable fibres.");
+            return;
+        }
+        if (PlayerInventory.IsFull(_activePlayer?.Inventory))
+        {
+            ReportBlockedAction(
+                "fibre-inventory-full",
+                "Your inventory is too full to gather fibres.");
+            return;
+        }
+        _worldActions.QueueFibreShrub(
+            target.Vegetation, stableKey);
+    }
+
+    internal void BeginFibreGather(
+        string stableKey, Vector2 target)
+    {
+        if (_player is null || _activePlayer is null) return;
+        var located = FindVegetation(stableKey);
+        if (located is null ||
+            !FibreShrubReady(located.Value.Gpu.Chunk, stableKey))
+            return;
+        _activeFibreVegetationKey = stableKey;
+        _player.GatherAt(target);
+    }
+
+    internal void UpdateFibreGathering()
+    {
+        if (_activeFibreVegetationKey is null ||
+            _player is null || _activePlayer is null)
+            return;
+        if (_player.Action != EntityAction.Gather)
+        {
+            _activeFibreVegetationKey = null;
+            return;
+        }
+        if (_player.ActionTime < GroundItemActionSeconds) return;
+
+        var key = _activeFibreVegetationKey;
+        _activeFibreVegetationKey = null;
+        var located = FindVegetation(key);
+        if (located is not { } target ||
+            !FibreShrubReady(target.Gpu.Chunk, key))
+        {
+            _player.Stop();
+            return;
+        }
+
+        var requested = Random.Shared.Next(1, 3);
+        var inventory = _activePlayer.Inventory;
+        var gathered = 0;
+        for (var index = 0; index < requested; index++)
+        {
+            if (!PlayerInventory.TryAdd(
+                    inventory, ItemIds.PlantFibres,
+                    out var updated))
+                break;
+            inventory = updated;
+            gathered++;
+        }
+        if (gathered == 0)
+        {
+            ReportBlockedAction(
+                "fibre-inventory-full",
+                "Your inventory is too full to gather fibres.");
+            _player.Stop();
+            return;
+        }
+
+        _activePlayer = _activePlayer with
+        {
+            Inventory = inventory,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        SetFibreShrubCooldown(target.Gpu.Chunk, key);
+        _saves.SavePlayer(_activePlayer);
+        QueueChunkSave(target.Gpu.Chunk);
+        _chatUi.AddMessage(
+            gathered == 1
+                ? "You gather some plant fibres."
+                : "You gather two bundles of plant fibres.",
+            ChatMessageStyle.Action);
+        _player.Stop();
+    }
+
+    private bool FibreShrubReady(
+        WorldChunk chunk, string stableKey) =>
+        chunk.VegetationFibreStates.FirstOrDefault(state =>
+            state.StableKey.Equals(
+                stableKey, StringComparison.Ordinal))
+        is not { } state ||
+        state.ReadyAtGameSeconds <= _worldGameSeconds;
+
+    private void SetFibreShrubCooldown(
+        WorldChunk chunk, string stableKey)
+    {
+        chunk.VegetationFibreStates.RemoveAll(state =>
+            state.StableKey.Equals(
+                stableKey, StringComparison.Ordinal));
+        chunk.VegetationFibreStates.Add(new(
+            stableKey,
+            _worldGameSeconds + FibreShrubCooldownSeconds));
+    }
+
+    private (
+        WorldVegetation Vegetation,
+        GpuWorldChunk Gpu)? FindVegetation(string stableKey)
+    {
+        foreach (var gpu in _worldChunks.Values)
+        for (var index = 0;
+             index < gpu.VegetationRenderItems.Length;
+             index++)
+            if (gpu.VegetationRenderItems[index].StableKey.Equals(
+                    stableKey, StringComparison.Ordinal))
+                return (gpu.Chunk.Vegetation[index], gpu);
+        return null;
+    }
+}

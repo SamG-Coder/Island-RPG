@@ -36,6 +36,9 @@ internal sealed record WorldVegetation(
     int FrameIndex,
     WorldVegetationKind Kind,
     bool CanBecomeInstance);
+internal sealed record WorldVegetationFibreState(
+    string StableKey,
+    double ReadyAtGameSeconds);
 
 internal sealed class WorldChunk
 {
@@ -57,6 +60,8 @@ internal sealed class WorldChunk
     public List<WorldGroundObject> GroundObjects { get; init; } = [];
     public WorldVegetation[] Vegetation { get; init; } = [];
     public WorldFish[] Fish { get; init; } = [];
+    public List<WorldVegetationFibreState> VegetationFibreStates
+        { get; init; } = [];
     public Dictionary<string, int> FishRemaining { get; init; } =
         new(StringComparer.Ordinal);
 }
@@ -687,7 +692,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 4;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 16;
+    private const int ChunkPayloadVersion = 17;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -913,6 +918,12 @@ internal sealed class WorldChunkStore
                 writer.Write(school.Key);
                 writer.Write(school.Value);
             }
+            writer.Write(chunk.VegetationFibreStates.Count);
+            foreach (var state in chunk.VegetationFibreStates)
+            {
+                writer.Write(state.StableKey);
+                writer.Write(state.ReadyAtGameSeconds);
+            }
         }
         return stream.ToArray();
     }
@@ -1058,6 +1069,25 @@ internal sealed class WorldChunkStore
                     fishRemaining[stableKey] = remaining;
                 }
             }
+            var fibreStates = new List<WorldVegetationFibreState>();
+            if (payloadVersion >= 17)
+            {
+                var stateCount = reader.ReadInt32();
+                if (stateCount is < 0 or > 96)
+                    throw new InvalidDataException(
+                        $"Chunk vegetation-fibre count is invalid: {stateCount}");
+                for (var i = 0; i < stateCount; i++)
+                {
+                    var stableKey = reader.ReadString();
+                    var readyAt = reader.ReadDouble();
+                    if (string.IsNullOrWhiteSpace(stableKey) ||
+                        stableKey.Length > 96 ||
+                        !double.IsFinite(readyAt) || readyAt < 0)
+                        throw new InvalidDataException(
+                            "Chunk vegetation-fibre state is invalid.");
+                    fibreStates.Add(new(stableKey, readyAt));
+                }
+            }
             var weights = InfiniteWorldGenerator.GenerateBiomeWeights(Seed, coordinate);
             var cliffs = InfiniteWorldGenerator.GenerateCliffs(Seed, tiles);
             return new()
@@ -1071,7 +1101,8 @@ internal sealed class WorldChunkStore
                 Vegetation = WorldVegetationGenerator.Generate(
                     Seed, tiles, trees),
                 Fish = WorldFishGenerator.Generate(Seed, tiles),
-                FishRemaining = fishRemaining
+                FishRemaining = fishRemaining,
+                VegetationFibreStates = fibreStates
             };
         }
         catch (EndOfStreamException ex)

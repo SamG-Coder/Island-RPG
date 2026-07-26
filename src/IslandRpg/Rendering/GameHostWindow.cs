@@ -71,14 +71,16 @@ internal sealed partial class GameHostWindow : GameWindow
         GatherTreeSticks,
         PickUpGroundObject,
         DropGroundObject,
-        Fish
+        Fish,
+        GatherFibres
     }
     private sealed record QueuedWorldAction(
         WorldActionType Type, Vector2 Target, float Range,
         Guid? GroundObjectId = null,
         int InventorySlot = -1,
         string? ItemId = null,
-        string? FishKey = null);
+        string? FishKey = null,
+        string? VegetationKey = null);
     private sealed record PathResult(
         int RequestId,
         IReadOnlyList<Vector2> Path,
@@ -208,6 +210,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly Dictionary<string, GroundToolSprite> _groundToolSprites =
         new(StringComparer.OrdinalIgnoreCase);
     private CoastalCollectibleSprites _coastalSprites = new();
+    private FibreNetItemSprites _fibreNetSprites = new();
     private readonly CoastalCollectibleRespawnController _coastalRespawns = new();
     private static readonly SpriteFrame WoodcuttingItemsFrame =
         new(128, 64, 0, 0, []);
@@ -291,6 +294,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _pauseMenu = new(this);
         _worldActions = new(this);
         InitializeFishing();
+        InitializeFibreGathering();
         _inventoryContext.Selected += HandleInventoryContextSelection;
         _treeContext.Selected += HandleTreeContextSelection;
         _groundObjectContext.Selected +=
@@ -1103,6 +1107,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 _inventoryContext.Close();
                 _treeContext.Close();
                 _fishContext.Close();
+                _vegetationContext.Close();
                 _groundObjectContext.Open(
                     MouseState.Position,
                     ["Pick up", "Walk Here", "Examine"],
@@ -1113,6 +1118,14 @@ internal sealed partial class GameHostWindow : GameWindow
             {
                 OpenFishContext(contextFish, target);
             }
+            else if (TryGetFibreShrubUnderMouse(
+                         SceneMousePosition(),
+                         out var contextVegetation,
+                         out var vegetationKey))
+            {
+                OpenVegetationContext(
+                    contextVegetation, vegetationKey, target);
+            }
             else if (TryGetTreeUnderMouse(
                     SceneMousePosition(), out var contextTree))
             {
@@ -1121,6 +1134,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 _inventoryContext.Close();
                 _groundObjectContext.Close();
                 _fishContext.Close();
+                _vegetationContext.Close();
                 _treeContext.Open(
                     MouseState.Position,
                     ["Chop tree", "Gather sticks", "Walk Here", "Examine"],
@@ -1144,6 +1158,11 @@ internal sealed partial class GameHostWindow : GameWindow
                          SceneMousePosition(), out var fish))
             {
                 QueueFishing(fish);
+            }
+            else if (TryGetFibreShrubUnderMouse(
+                         SceneMousePosition(), out _, out var vegetationKey))
+            {
+                QueueFibreGather(vegetationKey);
             }
             else if (!TryGetTreeUnderMouse(SceneMousePosition(), out var actionTree))
             {
@@ -1219,6 +1238,9 @@ internal sealed partial class GameHostWindow : GameWindow
         _fishContext.UpdatePointer(
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
+        _vegetationContext.UpdatePointer(
+            MouseState.Position,
+            MouseState.IsButtonDown(MouseButton.Left));
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         UpdateCraftingWindowInput(MouseState.Position, leftDown);
         UpdateSkillsPanelInput(MouseState.Position, leftDown);
@@ -1256,6 +1278,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _treeContext.HitTest(mouse) ||
         _groundObjectContext.HitTest(mouse) ||
         _fishContext.HitTest(mouse) ||
+        _vegetationContext.HitTest(mouse) ||
         _inventoryDraggingSlot >= 0 ||
         _modalScreen.CapturesAllInput ||
         _minimapUi.HitTest(mouse);
@@ -1270,7 +1293,8 @@ internal sealed partial class GameHostWindow : GameWindow
         Guid? groundObjectId = null,
         int inventorySlot = -1,
         string? itemId = null,
-        string? fishKey = null)
+        string? fishKey = null,
+        string? vegetationKey = null)
     {
         var targetCell = new Vector2i(
             (int)MathF.Floor(target.X),
@@ -1341,7 +1365,8 @@ internal sealed partial class GameHostWindow : GameWindow
                     groundObjectId,
                     inventorySlot,
                     itemId,
-                    fishKey));
+                    fishKey,
+                    vegetationKey));
     }
 
     private float TreeInteractionDistance(string graphicName)
@@ -3066,6 +3091,7 @@ internal sealed partial class GameHostWindow : GameWindow
         RenderContextMenu(_treeContext);
         RenderContextMenu(_groundObjectContext);
         RenderContextMenu(_fishContext);
+        RenderContextMenu(_vegetationContext);
     }
 
     private void RenderContextMenu(
@@ -3292,7 +3318,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.HasTag(ItemTag.NaturalMaterial) ||
             item.HasTag(ItemTag.SupplementalSprite) ||
             item.HasTag(ItemTag.StoneToolSprite) ||
-            item.HasTag(ItemTag.Fish))
+            item.HasTag(ItemTag.Fish) ||
+            item.HasTag(ItemTag.FibreNetSprite))
             return cell is null ? null : new Vector4(0, 0, 1, 1);
         return cell is null
             ? null
@@ -3320,6 +3347,12 @@ internal sealed partial class GameHostWindow : GameWindow
             return item.SpriteCell is { } fishCell &&
                    (uint)fishCell < (uint)_fishItemTextures.Length
                 ? _fishItemTextures[fishCell]
+                : 0;
+        if (item.HasTag(ItemTag.FibreNetSprite))
+            return item.SpriteCell is { } fibreCell &&
+                   (uint)fibreCell <
+                   (uint)_fibreNetSprites.Textures.Length
+                ? _fibreNetSprites.Textures[fibreCell]
                 : 0;
         if (item.HasTag(ItemTag.SupplementalSprite))
             return item.SpriteCell is { } supplementalCell &&
@@ -3349,6 +3382,10 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.HasTag(ItemTag.Fish) &&
             (uint)cell < (uint)_fishItemFrames.Length)
             return _fishItemFrames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.FibreNetSprite) &&
+            (uint)cell < (uint)_fibreNetSprites.Frames.Length)
+            return _fibreNetSprites.Frames[cell] ??
+                   WoodcuttingItemsFrame;
         if (item.HasTag(ItemTag.SupplementalSprite) &&
             (uint)cell < (uint)_supplementalItemFrames.Length)
             return _supplementalItemFrames[cell] ?? WoodcuttingItemsFrame;
@@ -3365,7 +3402,8 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.StoneToolSprite) ||
             item.HasTag(ItemTag.SupplementalSprite) ||
             item.HasTag(ItemTag.NaturalMaterial) ||
-            item.HasTag(ItemTag.Fish))
+            item.HasTag(ItemTag.Fish) ||
+            item.HasTag(ItemTag.FibreNetSprite))
             return InventoryItemFrame(itemId);
         return (uint)cell < (uint)_woodcuttingInventoryFrames.Length
             ? _woodcuttingInventoryFrames[cell] ?? WoodcuttingItemsFrame
@@ -4737,6 +4775,11 @@ internal sealed partial class GameHostWindow : GameWindow
                 AppContext.BaseDirectory, "Resources", "Images",
                 "coastal-collectibles.png"),
             Upload);
+        _fibreNetSprites = FibreNetItemSprites.Load(
+            Path.Combine(
+                AppContext.BaseDirectory, "Resources", "Images",
+                "fibre-net-items.png"),
+            Upload);
         PrepareGroundToolSprites();
         GL.BindTexture(TextureTarget.Texture2D, _minimapTexture);
         GL.TexParameter(
@@ -5025,6 +5068,19 @@ internal sealed partial class GameHostWindow : GameWindow
                     FishItemAtlasKey(cell, shadow: true),
                     null, shadowFrame);
         }
+        for (var cell = 0;
+             cell < _fibreNetSprites.Frames.Length;
+             cell++)
+        {
+            if (_fibreNetSprites.Frames[cell] is { } itemFrame)
+                Place(
+                    FibreNetAtlasKey(cell, shadow: false),
+                    null, itemFrame);
+            if (_fibreNetSprites.Shadows[cell] is { } shadowFrame)
+                Place(
+                    FibreNetAtlasKey(cell, shadow: true),
+                    null, shadowFrame);
+        }
         foreach (var tool in _groundToolSprites)
         {
             Place(
@@ -5094,6 +5150,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static string GroundToolAtlasKey(string itemId, bool shadow) =>
         shadow ? $"GROUND_TOOL_SHADOW#{itemId}" : $"GROUND_TOOL#{itemId}";
+
+    private static string FibreNetAtlasKey(int cell, bool shadow) =>
+        shadow ? $"FIBRE_NET_SHADOW#{cell}" : $"FIBRE_NET#{cell}";
 
     private GpuWorldChunk UploadWorldChunk(WorldChunk chunk)
     {
@@ -5306,7 +5365,11 @@ internal sealed partial class GameHostWindow : GameWindow
             TreeInstances = source.TreeInstances.ToList(),
             GroundObjects = source.GroundObjects.ToList(),
             Vegetation = source.Vegetation,
-            Fish = source.Fish
+            Fish = source.Fish,
+            FishRemaining = new(
+                source.FishRemaining, StringComparer.Ordinal),
+            VegetationFibreStates =
+                source.VegetationFibreStates.ToList()
         };
         var previous = _saveTail;
         _saveTail = Task.Run(async () =>
@@ -5809,6 +5872,8 @@ internal sealed partial class GameHostWindow : GameWindow
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var tool in _groundToolSprites.Values)
             if (tool.Texture != 0) GL.DeleteTexture(tool.Texture);
+        foreach (var texture in _fibreNetSprites.Textures)
+            if (texture != 0) GL.DeleteTexture(texture);
         if (_uiTabTexture != 0) GL.DeleteTexture(_uiTabTexture);
         if (_uiActiveTabTexture != 0) GL.DeleteTexture(_uiActiveTabTexture);
         if (_minimapTexture != 0) GL.DeleteTexture(_minimapTexture);

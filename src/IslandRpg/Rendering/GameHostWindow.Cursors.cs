@@ -83,6 +83,13 @@ internal sealed partial class GameHostWindow
                 next = GameCursorKind.PickUpItem;
                 cursor = _pickupNativeCursor;
             }
+            else if (TryGetFibreShrubUnderMouse(
+                         SceneMousePosition(), out _, out _) &&
+                     _pickupNativeCursor is not null)
+            {
+                next = GameCursorKind.PickUpItem;
+                cursor = _pickupNativeCursor;
+            }
             else if (TryGetTreeUnderMouse(SceneMousePosition(), out _))
             {
                 next = GameCursorKind.CutTree;

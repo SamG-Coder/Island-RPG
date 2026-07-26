@@ -54,6 +54,18 @@ Require(CraftingSkill.LevelForExperience(0) == 1 &&
         CraftingSkill.LevelForExperience(
             CraftingSkill.ExperienceForLevel(20)) == 20,
     "crafting must use the complete 20-level progression");
+var primitiveNetRecipe = CraftingSkill.Recipes.Single(
+    recipe => recipe.ResultItemId == ItemIds.PrimitiveFishingNet);
+Require(primitiveNetRecipe.Category == CraftingCategory.Tools &&
+        primitiveNetRecipe.RequiredLevel == 2 &&
+        primitiveNetRecipe.Ingredients.SequenceEqual(
+            [new CraftingIngredient(ItemIds.PlantFibres, 6)]) &&
+        primitiveNetRecipe.Steps.Count == 3 &&
+        CraftingSkill.Availability(
+            primitiveNetRecipe, 2,
+            Enumerable.Repeat(ItemIds.PlantFibres, 6).ToArray()) ==
+        RecipeAvailability.Ready,
+    "the primitive fishing net must be a level-two tool woven from six fibres");
 var pickaxeRecipe = CraftingSkill.Recipes.Single(
     recipe => recipe.ResultItemId == ItemIds.StonePickaxe);
 Require(pickaxeRecipe.Category == CraftingCategory.Tools &&
@@ -115,6 +127,16 @@ Require(ItemCatalog.Get(ItemIds.StonePickaxe) is var pickaxeDefinition &&
         pickaxeDefinition.HasTag(ItemTag.StoneToolSprite) &&
         !pickaxeDefinition.HasTag(ItemTag.Axe),
     "the stone pickaxe must use the third stone-tool sprite without acting as an axe");
+Require(ItemCatalog.Get(ItemIds.PlantFibres) is var fibreDefinition &&
+        fibreDefinition.HasTag(ItemTag.NaturalMaterial) &&
+        fibreDefinition.HasTag(ItemTag.FibreNetSprite) &&
+        ItemCatalog.Get(ItemIds.PrimitiveFishingNet) is var netDefinition &&
+        netDefinition.HasTag(ItemTag.Tool) &&
+        netDefinition.HasTag(ItemTag.FishingNet) &&
+        PlayerInventory.BestFishingNet(
+            [ItemIds.PlantFibres, ItemIds.PrimitiveFishingNet])?.Id ==
+        ItemIds.PrimitiveFishingNet,
+    "fibres and the primitive fishing net must have distinct resource/tool behaviour");
 Require(PlayerInventory.TrySwap(
             ["axe", "logs", "oak_logs"], 0, 2,
             out var swappedInventory) &&
@@ -695,8 +717,13 @@ Require(WorldFishPresentation.BaseHitTest(
             new(130, 100), new(100, 100), 1),
     "fish hover must use a compact rectangle around the water-level base");
 Require(origin.Vegetation.All(item =>
-        item.CanBecomeInstance == (item.Kind == WorldVegetationKind.BerryBush)),
-    "only harvestable berry vegetation should be flagged to become an instance");
+            !item.CanBecomeInstance ||
+            item.Kind is WorldVegetationKind.BerryBush or
+                WorldVegetationKind.Shrub) &&
+        origin.Vegetation
+            .Where(item => item.Kind == WorldVegetationKind.BerryBush)
+            .All(item => item.CanBecomeInstance),
+    "berry bushes and green fibre shrubs should be flagged for interaction");
 Require(new[]
     {
         "PLANTS", "BUSH_NN", "BUSH_N0", "BUSH2_NN", "BUSH2_N0",

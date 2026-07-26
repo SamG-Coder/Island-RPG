@@ -38,6 +38,15 @@ internal static class CraftingSkill
     public static readonly IReadOnlyList<CraftingRecipe> Recipes =
     [
         new(
+            "primitive-fishing-net", ItemIds.PrimitiveFishingNet,
+            CraftingCategory.Tools, 2, 25,
+            [new(ItemIds.PlantFibres, 6)],
+            [
+                "Separate the plant fibres into long strands.",
+                "Twist and weave the strands into an open mesh.",
+                "Knot the edges to finish a primitive casting net."
+            ]),
+        new(
             "medium-rock", ItemIds.MediumRock,
             CraftingCategory.Resources, 1, 8,
             [new(ItemIds.LargeRock, 2)],

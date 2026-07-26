@@ -41,6 +41,7 @@ internal sealed partial class GameHostWindow
             {
                 window._chatUi.BlurInput();
                 window._inventoryContext.Close();
+                window._vegetationContext.Close();
                 window.UseDefaultGameCursor();
             }
             else if (window._defaultNativeCursor is not null)

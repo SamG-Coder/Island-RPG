@@ -16,7 +16,9 @@ internal enum ItemTag
     CoastalSprite = 1 << 9,
     Fish = 1 << 10,
     CookedFish = 1 << 11,
-    BurntFish = 1 << 12
+    BurntFish = 1 << 12,
+    FishingNet = 1 << 13,
+    FibreNetSprite = 1 << 14
 }
 
 internal sealed record ItemDefinition(
@@ -89,6 +91,8 @@ internal static class ItemIds
     public const string BurntRedSnapper = "burnt_red_snapper";
     public const string BurntOceanMackerel = "burnt_ocean_mackerel";
     public const string BurntBluefinTuna = "burnt_bluefin_tuna";
+    public const string PlantFibres = "plant_fibres";
+    public const string PrimitiveFishingNet = "primitive_fishing_net";
 }
 
 internal static class ItemCatalog
@@ -291,7 +295,18 @@ internal static class ItemCatalog
                 "A charred ocean mackerel.", 9),
             [ItemIds.BurntBluefinTuna] = BurntFish(
                 ItemIds.BurntBluefinTuna, "burnt bluefin tuna", "Burnt",
-                "A rare tuna reduced to a burnt meal.", 11)
+                "A rare tuna reduced to a burnt meal.", 11),
+            [ItemIds.PlantFibres] = new(
+                ItemIds.PlantFibres, "plant fibres", "Fibres",
+                "Stripped plant fibres suitable for weaving.", 0,
+                Tags: ItemTag.NaturalMaterial |
+                      ItemTag.FibreNetSprite),
+            [ItemIds.PrimitiveFishingNet] = new(
+                ItemIds.PrimitiveFishingNet,
+                "primitive fishing net", "Fishing net",
+                "A simple hand-woven net for catching fish.", 1,
+                Tags: ItemTag.Tool | ItemTag.FishingNet |
+                      ItemTag.FibreNetSprite)
         };
 
     private static ItemDefinition Coastal(

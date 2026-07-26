@@ -67,6 +67,17 @@ internal sealed partial class GameHostWindow
             clearTreeActions: true);
     }
 
+    public void QueueFibreShrub(
+        WorldVegetation vegetation, string stableKey)
+    {
+        QueuePath(
+            new Vector2(vegetation.X, vegetation.Y),
+            .72f,
+            GameHostWindow.WorldActionType.GatherFibres,
+            vegetationKey: stableKey,
+            clearTreeActions: true);
+    }
+
     public void QueueWalk(Vector2 target)
     {
         if (window._player is null) return;
@@ -99,6 +110,7 @@ internal sealed partial class GameHostWindow
         int inventorySlot = -1,
         string? itemId = null,
         string? fishKey = null,
+        string? vegetationKey = null,
         bool clearTreeActions = false)
     {
         if (window._player is null) return;
@@ -126,7 +138,8 @@ internal sealed partial class GameHostWindow
                 groundObjectId,
                 inventorySlot,
                 itemId,
-                fishKey),
+                fishKey,
+                vegetationKey),
             token);
         window._moveMarker = null;
     }
@@ -173,6 +186,14 @@ internal sealed partial class GameHostWindow
                 window.BeginGroundObjectDrop(
                     action.InventorySlot, itemId, action.Target);
                 break;
+            case
+            {
+                Type: GameHostWindow.WorldActionType.GatherFibres,
+                VegetationKey: { } vegetationKey
+            }:
+                window.BeginFibreGather(
+                    vegetationKey, action.Target);
+                break;
         }
     }
 
@@ -189,6 +210,7 @@ internal sealed partial class GameHostWindow
         window.UpdateGroundObjectPickup();
         window.UpdateGroundObjectDrop();
         window.UpdateFishing();
+        window.UpdateFibreGathering();
     }
 
     public void CancelPath()

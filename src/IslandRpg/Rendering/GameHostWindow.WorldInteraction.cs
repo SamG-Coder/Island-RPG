@@ -243,6 +243,7 @@ internal sealed partial class GameHostWindow
             _treeContext.HitTest(pointer) ||
             _groundObjectContext.HitTest(pointer) ||
             _fishContext.HitTest(pointer) ||
+            _vegetationContext.HitTest(pointer) ||
             _minimapUi.HitTest(pointer))
             return;
 
@@ -459,6 +460,27 @@ internal sealed partial class GameHostWindow
             texture = toolSprite.Texture;
             atlasKey = GroundToolAtlasKey(item.Id, shadow: false);
             shadowKey = GroundToolAtlasKey(item.Id, shadow: true);
+            return true;
+        }
+
+        if (item.HasTag(ItemTag.FibreNetSprite))
+        {
+            if ((uint)cell >= (uint)_fibreNetSprites.Frames.Length ||
+                _fibreNetSprites.Frames[cell] is not { } fibreFrame ||
+                _fibreNetSprites.Textures[cell] == 0)
+            {
+                frame = null!;
+                texture = 0;
+                atlasKey = "";
+                shadowKey = null;
+                return false;
+            }
+            frame = fibreFrame;
+            texture = _fibreNetSprites.Textures[cell];
+            atlasKey = FibreNetAtlasKey(cell, shadow: false);
+            shadowKey = _fibreNetSprites.Shadows[cell] is null
+                ? null
+                : FibreNetAtlasKey(cell, shadow: true);
             return true;
         }
 

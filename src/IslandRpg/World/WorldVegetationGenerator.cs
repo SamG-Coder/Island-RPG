@@ -39,7 +39,7 @@ internal static class WorldVegetationGenerator
                 _ => 0
             }),
         new(
-            "BUSH_NN", 2, WorldVegetationKind.Shrub, false, 8f,
+            "BUSH_NN", 2, WorldVegetationKind.Shrub, true, 8f,
             region => region switch
             {
                 WorldBiome.TemperateForest => .018f,
@@ -48,7 +48,7 @@ internal static class WorldVegetationGenerator
                 _ => 0
             }),
         new(
-            "BUSH2_NN", 18, WorldVegetationKind.Shrub, false, 7f,
+            "BUSH2_NN", 18, WorldVegetationKind.Shrub, true, 7f,
             region => region switch
             {
                 WorldBiome.TemperateForest => .038f,

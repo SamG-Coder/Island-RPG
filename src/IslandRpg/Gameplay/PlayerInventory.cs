@@ -43,6 +43,15 @@ internal static class PlayerInventory
                 item.HasTag(ItemTag.Tool) &&
                 item.HasTag(ItemTag.Axe)) ?? false;
 
+    public static ItemDefinition? BestFishingNet(string?[]? items) =>
+        items?
+            .Where(item => item is not null)
+            .Select(item => ItemCatalog.Get(item!))
+            .Where(item =>
+                item.HasTag(ItemTag.Tool) &&
+                item.HasTag(ItemTag.FishingNet))
+            .FirstOrDefault();
+
     public static bool CanDrop(string itemId) =>
         ItemCatalog.Get(itemId).Droppable;
 
