@@ -81,6 +81,12 @@ internal sealed class DeveloperSettingsController
         return new(content.X + 182, content.Y + 14, 150, 34);
     }
 
+    public static Vector4 AdvanceTimeBounds(Vector4 panel)
+    {
+        var content = SettingsMenuState.ContentBounds(panel);
+        return new(content.X + 348, content.Y + 14, 150, 34);
+    }
+
     public static Vector4 SkillRowBounds(
         Vector4 panel, SkillType skill)
     {

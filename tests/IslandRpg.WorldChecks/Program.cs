@@ -234,6 +234,12 @@ Require(morning.Day == 1 && morning.Hour == 8 &&
 Require(WorldTime.Advance(0, WorldTime.RealSecondsPerGameDay) ==
         24 * 60 * 60,
     "one full game day must take 24 real minutes");
+Require(WorldTime.At(
+            morning.Hour * 60 * 60 + 12 * 60 * 60).Hour == 20,
+    "the developer twelve-hour advance must preserve exact world-clock arithmetic");
+Require(CampfireLightSource.Opacity(0, 0) == 0 &&
+        CampfireLightSource.Opacity(0, 1) > .8f,
+    "campfire lighting must disappear in daylight and remain strong at night");
 
 Require(WoodcuttingSkill.LevelForExperience(0) == 1,
     "woodcutting must begin at level one");
@@ -641,6 +647,13 @@ Require(
     !DeveloperSettingsController.MapToolBounds(settingsPanel)
         .Contains(settingsBack.Xy),
     "the developer map-tool button must not overlap settings navigation");
+Require(
+    DeveloperSettingsController.MapToolBounds(settingsPanel).X +
+        DeveloperSettingsController.MapToolBounds(settingsPanel).Z <=
+    DeveloperSettingsController.AdvanceTimeBounds(settingsPanel).X &&
+    !DeveloperSettingsController.AdvanceTimeBounds(settingsPanel)
+        .Contains(settingsBack.Xy),
+    "the developer time button must align beside the map tool without overlapping navigation");
 var developerMap = new DeveloperMapWindow();
 developerMap.Open();
 Require(developerMap.IsOpen,

@@ -11,6 +11,8 @@ internal static class CampfirePresentation
     public const int FuelHeight = 13;
     public const int FuelAnchorX = 29;
     public const int FuelAnchorY = 33;
+    public const int FireAnchorX = 29;
+    public const int FireAnchorY = 33;
 
     public static string FueledAtlasKey(string fuelItemId) =>
         $"PLACEABLE_OBJECT#campfire:fueled:{fuelItemId}";

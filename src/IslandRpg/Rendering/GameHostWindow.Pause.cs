@@ -201,6 +201,10 @@ internal sealed partial class GameHostWindow
             DrawMenuButton(
                 DeveloperSettingsController.MapToolBounds(panel),
                 "Map tool");
+        if (_activeWorld is not null)
+            DrawMenuButton(
+                DeveloperSettingsController.AdvanceTimeBounds(panel),
+                "+12 Hours");
         foreach (var skill in Enum.GetValues<SkillType>())
         {
             var row = DeveloperSettingsController.SkillRowBounds(

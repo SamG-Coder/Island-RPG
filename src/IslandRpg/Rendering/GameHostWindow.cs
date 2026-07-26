@@ -323,6 +323,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _streamVbo = GL.GenBuffer();
         CreateSceneTarget();
         PrepareGameUi();
+        InitializeCampfireLighting();
         var settings = _saves.LoadSettings();
         ApplyDisplaySettings(settings);
         var progress = new Progress<(int Done, int Total, string Name)>(value =>
@@ -2324,7 +2325,10 @@ internal sealed partial class GameHostWindow : GameWindow
         PresentScene();
         if (_screen == ScreenState.WorldPreview &&
             _mode == PreviewMode.Game && !_atlasOpen)
+        {
             RenderDayNightOverlay();
+            RenderCampfireLights();
+        }
         if (_screen is ScreenState.LoadingAssets or ScreenState.PreparingGpu)
         {
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);

@@ -120,7 +120,8 @@ internal sealed class PlaceableObjectSprites
                  frameIndex < frameCount;
                  frameIndex++)
             {
-                var litPixels = (byte[])fueledPixels.Clone();
+                var litPixels =
+                    (byte[])campfireBase.Frame.Rgba.Clone();
                 BlendCell(
                     fireSheet, frameIndex * frameWidth, 0,
                     frameWidth, fireSheet.Height,
