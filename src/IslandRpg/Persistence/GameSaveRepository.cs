@@ -34,7 +34,8 @@ internal sealed record WorldPlayerState(
     string PlayerId,
     float PositionX,
     float PositionY,
-    DateTime UpdatedUtc);
+    DateTime UpdatedUtc,
+    int WorldLevel = (int)IslandRpg.World.WorldLevel.Overworld);
 
 internal enum DisplayVSyncMode
 {

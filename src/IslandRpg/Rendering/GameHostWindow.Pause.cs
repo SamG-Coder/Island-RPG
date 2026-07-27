@@ -1,5 +1,6 @@
 using IslandRpg.Gameplay;
 using IslandRpg.Rendering.Ui;
+using IslandRpg.World;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
@@ -202,9 +203,16 @@ internal sealed partial class GameHostWindow
                 DeveloperSettingsController.MapToolBounds(panel),
                 "Map tool");
         if (_activeWorld is not null)
+        {
             DrawMenuButton(
                 DeveloperSettingsController.AdvanceTimeBounds(panel),
                 "+12 Hours");
+            DrawMenuButton(
+                DeveloperSettingsController.WorldLevelBounds(panel),
+                _activeWorldLevel == (int)WorldLevel.Overworld
+                    ? "Enter underground"
+                    : "Return overworld");
+        }
         foreach (var skill in Enum.GetValues<SkillType>())
         {
             var row = DeveloperSettingsController.SkillRowBounds(

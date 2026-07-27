@@ -3,9 +3,18 @@ using System.IO.Compression;
 
 namespace IslandRpg.World;
 
-internal readonly record struct ChunkCoordinate(int X, int Y)
+internal enum WorldLevel
 {
-    public override string ToString() => $"{X},{Y}";
+    Underground = -1,
+    Overworld = 0
+}
+
+internal readonly record struct ChunkCoordinate(
+    int X,
+    int Y,
+    int Level = (int)WorldLevel.Overworld)
+{
+    public override string ToString() => $"{X},{Y}@{Level}";
 }
 
 internal sealed record CliffFace(int X1, int Y1, int X2, int Y2, byte Top, byte Bottom);
@@ -62,6 +71,9 @@ internal sealed class WorldChunk
     public required byte[] BiomeWeightsD { get; init; }
     public required byte[] ShoreDistance { get; init; }
     public required CliffFace[] Cliffs { get; init; }
+    public bool[] RenderableTiles { get; init; } = [];
+    public float[] UndergroundDensity { get; init; } = [];
+    public float[] UndergroundMeshVertices { get; set; } = [];
     public List<WorldTreeInstance> TreeInstances { get; init; } = [];
     public List<WorldGroundObject> GroundObjects { get; init; } = [];
     public WorldVegetation[] Vegetation { get; init; } = [];
@@ -70,6 +82,38 @@ internal sealed class WorldChunk
         { get; init; } = [];
     public Dictionary<string, int> FishRemaining { get; init; } =
         new(StringComparer.Ordinal);
+
+    public bool IsRenderable(int localX, int localY) =>
+        RenderableTiles.Length == 0 ||
+        RenderableTiles[localY * Size + localX];
+
+    public float SampleUndergroundDensity(float localX, float localY)
+    {
+        if (UndergroundDensity.Length == 0) return float.MinValue;
+        var sampleX = Math.Clamp(
+            localX * UndergroundWorldGenerator.SamplesPerTile,
+            0, UndergroundWorldGenerator.DensityStride - 1);
+        var sampleY = Math.Clamp(
+            localY * UndergroundWorldGenerator.SamplesPerTile,
+            0, UndergroundWorldGenerator.DensityStride - 1);
+        var x0 = (int)MathF.Floor(sampleX);
+        var y0 = (int)MathF.Floor(sampleY);
+        var x1 = Math.Min(x0 + 1, UndergroundWorldGenerator.DensityStride - 1);
+        var y1 = Math.Min(y0 + 1, UndergroundWorldGenerator.DensityStride - 1);
+        var tx = sampleX - x0;
+        var ty = sampleY - y0;
+        var stride = UndergroundWorldGenerator.DensityStride;
+        return Lerp(
+            Lerp(
+                UndergroundDensity[y0 * stride + x0],
+                UndergroundDensity[y0 * stride + x1], tx),
+            Lerp(
+                UndergroundDensity[y1 * stride + x0],
+                UndergroundDensity[y1 * stride + x1], tx), ty);
+
+        static float Lerp(float first, float second, float amount) =>
+            first + (second - first) * amount;
+    }
 }
 
 internal static class InfiniteWorldGenerator
@@ -81,6 +125,13 @@ internal static class InfiniteWorldGenerator
         ChunkCoordinate coordinate,
         CancellationToken cancellationToken = default)
     {
+        if (coordinate.Level == (int)WorldLevel.Underground)
+            return UndergroundWorldGenerator.Generate(
+                seed, coordinate, cancellationToken);
+        if (coordinate.Level != (int)WorldLevel.Overworld)
+            throw new ArgumentOutOfRangeException(
+                nameof(coordinate),
+                $"World level {coordinate.Level} is not supported.");
         var originX = coordinate.X * WorldChunk.Size;
         var originY = coordinate.Y * WorldChunk.Size;
         var heights = new byte[WorldChunk.Size + 1, WorldChunk.Size + 1];
@@ -147,6 +198,8 @@ internal static class InfiniteWorldGenerator
             BiomeWeightsD = weights.D,
             ShoreDistance = weights.Shore,
             Cliffs = cliffs,
+            RenderableTiles = Enumerable.Repeat(
+                true, WorldChunk.Size * WorldChunk.Size).ToArray(),
             GroundObjects = groundObjects,
             Vegetation = vegetation,
             Fish = fish
@@ -703,9 +756,9 @@ internal static class InfiniteWorldGenerator
 internal sealed class WorldChunkStore
 {
     internal const int RegionSize = 8;
-    private const int WorldFormatVersion = 4;
+    private const int WorldFormatVersion = 5;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 18;
+    private const int ChunkPayloadVersion = 19;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -757,6 +810,9 @@ internal sealed class WorldChunkStore
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        if (coordinate.Level != (int)WorldLevel.Overworld)
+            return InfiniteWorldGenerator.Generate(
+                Seed, coordinate, cancellationToken);
         var legacyPath = LegacyChunkPath(coordinate);
         var hadLegacyChunk = File.Exists(legacyPath);
         var migrated = LoadLegacyChunk(coordinate);
@@ -779,12 +835,19 @@ internal sealed class WorldChunkStore
 
     public void Save(WorldChunk chunk)
     {
+        // Underground terrain is entirely deterministic and currently has no
+        // mutable entities. Persisting its large render payload only creates
+        // I/O that LoadOrGenerate intentionally never reads.
+        if (chunk.Coordinate.Level != (int)WorldLevel.Overworld)
+            return;
         var uncompressed = SerializeChunk(chunk);
         var compressed = Compress(uncompressed);
         lock (_gate)
         {
             var region = RegionFor(chunk.Coordinate);
-            var path = RegionPath(region.X, region.Y);
+            var path = RegionPath(
+                region.X, region.Y, chunk.Coordinate.Level);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             using var stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
             EnsureRegionHeader(stream, region.X, region.Y);
             var slot = RegionSlot(chunk.Coordinate);
@@ -822,13 +885,14 @@ internal sealed class WorldChunkStore
     internal string RegionPathFor(ChunkCoordinate coordinate)
     {
         var region = RegionFor(coordinate);
-        return RegionPath(region.X, region.Y);
+        return RegionPath(region.X, region.Y, coordinate.Level);
     }
 
     private byte[]? ReadRegionPayload(ChunkCoordinate coordinate)
     {
         var region = RegionFor(coordinate);
-        var path = RegionPath(region.X, region.Y);
+        var path = RegionPath(
+            region.X, region.Y, coordinate.Level);
         if (!File.Exists(path)) return null;
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         ValidateRegionHeader(stream, region.X, region.Y);
@@ -889,6 +953,7 @@ internal sealed class WorldChunkStore
             writer.Write(ChunkPayloadVersion);
             writer.Write(chunk.Coordinate.X);
             writer.Write(chunk.Coordinate.Y);
+            writer.Write(chunk.Coordinate.Level);
             writer.Write(chunk.Tiles.Length);
             foreach (var tile in chunk.Tiles)
             {
@@ -897,6 +962,9 @@ internal sealed class WorldChunkStore
                 writer.Write(tile.South); writer.Write(tile.West);
                 writer.Write((byte)tile.Region);
             }
+            writer.Write(chunk.RenderableTiles.Length);
+            foreach (var renderable in chunk.RenderableTiles)
+                writer.Write(renderable);
             writer.Write(chunk.Trees.Length);
             foreach (var tree in chunk.Trees)
             {
@@ -962,8 +1030,12 @@ internal sealed class WorldChunkStore
             var payloadVersion = reader.ReadInt32();
             var storedX = reader.ReadInt32();
             var storedY = reader.ReadInt32();
+            var storedLevel = payloadVersion >= 19
+                ? reader.ReadInt32()
+                : (int)WorldLevel.Overworld;
             if (payloadVersion < 1 || payloadVersion > ChunkPayloadVersion ||
-                storedX != coordinate.X || storedY != coordinate.Y)
+                storedX != coordinate.X || storedY != coordinate.Y ||
+                storedLevel != coordinate.Level)
                 throw new InvalidDataException($"Chunk payload does not match {coordinate}.");
             if (payloadVersion < 10)
                 return InfiniteWorldGenerator.Generate(Seed, coordinate);
@@ -988,6 +1060,20 @@ internal sealed class WorldChunkStore
                     coordinate.Y * WorldChunk.Size + localY,
                     material, north, east, south, west, region);
             }
+            bool[] renderableTiles;
+            if (payloadVersion >= 19)
+            {
+                var renderableCount = reader.ReadInt32();
+                if (renderableCount != 0 &&
+                    renderableCount != tileCount)
+                    throw new InvalidDataException(
+                        "Chunk renderable-tile count is invalid.");
+                renderableTiles = new bool[renderableCount];
+                for (var index = 0; index < renderableCount; index++)
+                    renderableTiles[index] = reader.ReadBoolean();
+            }
+            else
+                renderableTiles = [];
             var treeCount = reader.ReadInt32();
             if (treeCount < 0 || treeCount > tileCount)
                 throw new InvalidDataException($"Chunk tree count is invalid: {treeCount}");
@@ -1124,7 +1210,21 @@ internal sealed class WorldChunkStore
                     fibreStates.Add(new(stableKey, readyAt));
                 }
             }
-            var weights = InfiniteWorldGenerator.GenerateBiomeWeights(Seed, coordinate);
+            if (coordinate.Level == (int)WorldLevel.Underground)
+            {
+                // Derived presentation data is deterministic and deliberately
+                // excluded from the payload.
+                var generated = UndergroundWorldGenerator.Generate(
+                    Seed, coordinate);
+                generated.TreeInstances.AddRange(treeInstances);
+                generated.GroundObjects.AddRange(groundObjects);
+                foreach (var school in fishRemaining)
+                    generated.FishRemaining[school.Key] = school.Value;
+                generated.VegetationFibreStates.AddRange(fibreStates);
+                return generated;
+            }
+            var weights = InfiniteWorldGenerator.GenerateBiomeWeights(
+                Seed, coordinate);
             var cliffs = InfiniteWorldGenerator.GenerateCliffs(Seed, tiles);
             return new()
             {
@@ -1132,6 +1232,7 @@ internal sealed class WorldChunkStore
                 BiomeWeightsA = weights.A, BiomeWeightsB = weights.B,
                 BiomeWeightsC = weights.C, BiomeWeightsD = weights.D,
                 ShoreDistance = weights.Shore, Cliffs = cliffs,
+                RenderableTiles = renderableTiles,
                 TreeInstances = treeInstances,
                 GroundObjects = groundObjects,
                 Vegetation = WorldVegetationGenerator.Generate(
@@ -1250,11 +1351,24 @@ internal sealed class WorldChunkStore
         PositiveMod(coordinate.Y, RegionSize) * RegionSize +
         PositiveMod(coordinate.X, RegionSize);
 
-    private string RegionPath(int regionX, int regionY) =>
-        Path.Combine(_chunkDirectory, $"r.{regionX}.{regionY}.irrg");
+    private string RegionPath(int regionX, int regionY, int level) =>
+        Path.Combine(
+            level == (int)WorldLevel.Overworld
+                ? _chunkDirectory
+                : Path.Combine(
+                    WorldDirectory, "levels",
+                    level.ToString(), "chunks"),
+            $"r.{regionX}.{regionY}.irrg");
 
     private string LegacyChunkPath(ChunkCoordinate coordinate) =>
-        Path.Combine(_chunkDirectory, $"c.{coordinate.X}.{coordinate.Y}.bin");
+        coordinate.Level == (int)WorldLevel.Overworld
+            ? Path.Combine(
+                _chunkDirectory,
+                $"c.{coordinate.X}.{coordinate.Y}.bin")
+            : Path.Combine(
+                WorldDirectory, "levels",
+                coordinate.Level.ToString(), "chunks",
+                $"c.{coordinate.X}.{coordinate.Y}.bin");
 
     private void DeleteLegacyChunk(string path)
     {

@@ -874,7 +874,8 @@ internal sealed partial class GameHostWindow
     {
         var coordinate = new ChunkCoordinate(
             FloorDiv(tileX, WorldChunk.Size),
-            FloorDiv(tileY, WorldChunk.Size));
+            FloorDiv(tileY, WorldChunk.Size),
+            _activeWorldLevel);
         if (!_worldChunks.TryGetValue(coordinate, out gpu!))
         {
             reason = "You cannot drop that here.";
@@ -888,6 +889,18 @@ internal sealed partial class GameHostWindow
             localY is < 0 or >= WorldChunk.Size)
         {
             reason = "You cannot drop that here.";
+            return false;
+        }
+        if (!chunk.IsRenderable(localX, localY))
+        {
+            reason = "You cannot drop that into the void.";
+            return false;
+        }
+        if (_activeWorldLevel == (int)WorldLevel.Underground &&
+            chunk.SampleUndergroundDensity(localX + .5f, localY + .5f) <
+            CaveHydrologyField.Boundary)
+        {
+            reason = "You cannot drop that into the void.";
             return false;
         }
 

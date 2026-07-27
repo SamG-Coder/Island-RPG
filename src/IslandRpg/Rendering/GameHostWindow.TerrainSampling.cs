@@ -15,7 +15,8 @@ internal sealed partial class GameHostWindow
         var tileY = (int)MathF.Floor(y);
         var coordinate = new ChunkCoordinate(
             FloorDiv(tileX, WorldChunk.Size),
-            FloorDiv(tileY, WorldChunk.Size));
+            FloorDiv(tileY, WorldChunk.Size),
+            _activeWorldLevel);
         if (!_worldChunks.TryGetValue(coordinate, out var gpu))
         {
             renderedHeight = 0;
@@ -25,9 +26,23 @@ internal sealed partial class GameHostWindow
 
         var localX = PositiveMod(tileX, WorldChunk.Size);
         var localY = PositiveMod(tileY, WorldChunk.Size);
-        var stride = WorldChunk.Size + 1;
         var fractionX = x - tileX;
         var fractionY = y - tileY;
+        if (!gpu.Chunk.IsRenderable(localX, localY))
+        {
+            renderedHeight = 0;
+            biome = default;
+            return false;
+        }
+        if (_activeWorldLevel == (int)WorldLevel.Underground &&
+            gpu.Chunk.SampleUndergroundDensity(localX + fractionX, localY + fractionY) <
+            CaveHydrologyField.Boundary)
+        {
+            renderedHeight = 0;
+            biome = default;
+            return false;
+        }
+        var stride = WorldChunk.Size + 1;
         renderedHeight = LoadedTerrainSampler.Interpolate(
             gpu.RenderedHeights,
             stride,

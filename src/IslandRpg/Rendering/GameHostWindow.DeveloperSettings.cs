@@ -1,4 +1,5 @@
 using IslandRpg.Rendering.Ui;
+using IslandRpg.World;
 using OpenTK.Mathematics;
 
 namespace IslandRpg.Rendering;
@@ -24,6 +25,13 @@ internal sealed partial class GameHostWindow
             AdvanceWorldTimeForDeveloper();
             return true;
         }
+        if (_activeWorld is not null &&
+            DeveloperSettingsController.WorldLevelBounds(panel)
+                .Contains(pointer))
+        {
+            SwitchWorldLevelForDeveloper();
+            return true;
+        }
         var changed = _developerSettings.TryUpdate(
             pointer, panel, _activePlayer, out var updated);
         if (!changed || updated is null) return false;
@@ -46,6 +54,25 @@ internal sealed partial class GameHostWindow
         _chatUi.AddMessage(
             $"Developer time advance: Day {time.Day}, " +
             $"{time.Hour:00}:{time.Minute:00}.",
+            ChatMessageStyle.Action);
+    }
+
+    private void SwitchWorldLevelForDeveloper()
+    {
+        CancelPendingChunkLoad();
+        foreach (var coordinate in _worldChunks.Keys.ToArray())
+            UnloadWorldChunk(coordinate, save: true);
+        _activeWorldLevel =
+            _activeWorldLevel == (int)WorldLevel.Overworld
+                ? (int)WorldLevel.Underground
+                : (int)WorldLevel.Overworld;
+        _queuedAction = null;
+        _moveMarker = null;
+        StreamWorld();
+        _chatUi.AddMessage(
+            _activeWorldLevel == (int)WorldLevel.Overworld
+                ? "Developer level: overworld (0)."
+                : "Developer level: underground (-1).",
             ChatMessageStyle.Action);
     }
 }

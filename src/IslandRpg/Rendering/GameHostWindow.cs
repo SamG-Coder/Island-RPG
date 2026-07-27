@@ -119,6 +119,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private Task<WorldChunk>? _pendingChunkTask;
     private CancellationTokenSource? _pendingChunkCancellation;
     private ChunkCoordinate _pendingChunkCoordinate;
+    private int _activeWorldLevel = (int)WorldLevel.Overworld;
     private Task _saveTail = Task.CompletedTask;
     private volatile bool _atlasOpen;
     private int _atlasDone;
@@ -876,6 +877,7 @@ internal sealed partial class GameHostWindow : GameWindow
         player ??= _selectedPlayer;
         player ??= _saves.ListPlayers().FirstOrDefault();
         _worldSeed = world.Seed;
+        _activeWorldLevel = (int)WorldLevel.Overworld;
         var spawn = FindPlayableSpawn();
         player ??= _saves.CreatePlayer(
             "Adventurer", EntityGender.Male, 2, 0);
@@ -897,6 +899,11 @@ internal sealed partial class GameHostWindow : GameWindow
         var worldPlayer = _saves.LoadWorldPlayer(world.Id, player.Id)
             ?? new WorldPlayerState(
                 player.Id, spawn.X, spawn.Y, DateTime.UtcNow);
+        _activeWorldLevel = worldPlayer.WorldLevel;
+        if (_activeWorldLevel is not (
+                (int)WorldLevel.Overworld or
+                (int)WorldLevel.Underground))
+            _activeWorldLevel = (int)WorldLevel.Overworld;
 
         FinishPendingMenuChunk();
         foreach (var coordinate in _worldChunks.Keys.ToArray())
@@ -969,7 +976,8 @@ internal sealed partial class GameHostWindow : GameWindow
                     _activePlayer.Id,
                     _player.Position.X,
                     _player.Position.Y,
-                    DateTime.UtcNow));
+                    DateTime.UtcNow,
+                    _activeWorldLevel));
         }
     }
 
@@ -1407,7 +1415,8 @@ internal sealed partial class GameHostWindow : GameWindow
             var path = GridPathfinder.Find(
                 _worldSeed, start, candidate,
                 maximumVisited: 8192,
-                cancellationToken: cancellationToken);
+                cancellationToken: cancellationToken,
+                worldLevel: _activeWorldLevel);
             if (!sameCell && path.Count == 0) continue;
             var approach = candidate - target;
             var diagonal = MathF.Abs(approach.X) > .5f &&
@@ -1477,7 +1486,9 @@ internal sealed partial class GameHostWindow : GameWindow
         var x = (int)MathF.Floor(target.X);
         var y = (int)MathF.Floor(target.Y);
         var coordinate = new ChunkCoordinate(
-            FloorDiv(x, WorldChunk.Size), FloorDiv(y, WorldChunk.Size));
+            FloorDiv(x, WorldChunk.Size),
+            FloorDiv(y, WorldChunk.Size),
+            _activeWorldLevel);
         if (!_worldChunks.TryGetValue(coordinate, out var gpu)) return;
         var source = gpu.Chunk.Trees.FirstOrDefault(tree => tree.X == x && tree.Y == y);
         if (source is null) return;
@@ -1534,7 +1545,9 @@ internal sealed partial class GameHostWindow : GameWindow
         var x = (int)MathF.Floor(target.X);
         var y = (int)MathF.Floor(target.Y);
         var coordinate = new ChunkCoordinate(
-            FloorDiv(x, WorldChunk.Size), FloorDiv(y, WorldChunk.Size));
+            FloorDiv(x, WorldChunk.Size),
+            FloorDiv(y, WorldChunk.Size),
+            _activeWorldLevel);
         if (!_worldChunks.TryGetValue(coordinate, out var gpu)) return;
         var source = gpu.Chunk.Trees.FirstOrDefault(
             tree => tree.X == x && tree.Y == y);
@@ -2355,7 +2368,11 @@ internal sealed partial class GameHostWindow : GameWindow
         _performanceMetrics.RecordFrame(e.Time);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFramebuffer);
         GL.Viewport(0, 0, ReferenceWidth, ReferenceHeight);
-        GL.ClearColor(0.08f, 0.09f, 0.08f, 1);
+        if (_screen == ScreenState.WorldPreview &&
+            _activeWorldLevel == (int)WorldLevel.Underground)
+            GL.ClearColor(0, 0, 0, 1);
+        else
+            GL.ClearColor(0.08f, 0.09f, 0.08f, 1);
         GL.Clear(ClearBufferMask.ColorBufferBit);
         if (_screen is ScreenState.WorldPreview or ScreenState.MainMenu)
         {
@@ -3400,12 +3417,21 @@ internal sealed partial class GameHostWindow : GameWindow
             var y = originY + offsetY;
             var coordinate = new ChunkCoordinate(
                 FloorDiv(x, WorldChunk.Size),
-                FloorDiv(y, WorldChunk.Size));
+                FloorDiv(y, WorldChunk.Size),
+                _activeWorldLevel);
             if (!_worldChunks.TryGetValue(coordinate, out var gpu))
                 continue;
             var tile = gpu.Chunk.Tiles.FirstOrDefault(
                 candidate => candidate.X == x && candidate.Y == y);
             if (tile is null ||
+                !gpu.Chunk.IsRenderable(
+                    PositiveMod(x, WorldChunk.Size),
+                    PositiveMod(y, WorldChunk.Size)) ||
+                (_activeWorldLevel == (int)WorldLevel.Underground &&
+                 gpu.Chunk.SampleUndergroundDensity(
+                     PositiveMod(x, WorldChunk.Size) + .5f,
+                     PositiveMod(y, WorldChunk.Size) + .5f) <
+                 CaveHydrologyField.Boundary) ||
                 tile.Biome is Biome.DeepWater or Biome.ShallowWater or
                     Biome.RiverWater or Biome.MangroveShallows ||
                 gpu.Chunk.Trees.Any(tree => tree.X == x && tree.Y == y) ||
@@ -4760,16 +4786,20 @@ internal sealed partial class GameHostWindow : GameWindow
             new(ReferenceWidth * .5f, ReferenceHeight * .5f));
         var center = new ChunkCoordinate(
             FloorDiv((int)MathF.Floor(mapCenter.X), WorldChunk.Size),
-            FloorDiv((int)MathF.Floor(mapCenter.Y), WorldChunk.Size));
+            FloorDiv((int)MathF.Floor(mapCenter.Y), WorldChunk.Size),
+            _activeWorldLevel);
         const int loadRadius = 2;
         const int unloadRadius = 3;
 
         var wanted = new List<ChunkCoordinate>();
         for (var y = center.Y - loadRadius; y <= center.Y + loadRadius; y++)
         for (var x = center.X - loadRadius; x <= center.X + loadRadius; x++)
-            if (!_worldChunks.ContainsKey(new(x, y)) &&
-                (_pendingChunkTask is null || _pendingChunkCoordinate != new ChunkCoordinate(x, y)))
-                wanted.Add(new(x, y));
+            if (!_worldChunks.ContainsKey(
+                    new(x, y, _activeWorldLevel)) &&
+                (_pendingChunkTask is null ||
+                 _pendingChunkCoordinate !=
+                 new ChunkCoordinate(x, y, _activeWorldLevel)))
+                wanted.Add(new(x, y, _activeWorldLevel));
         if (wanted.Count > 0 && _pendingChunkTask is null)
         {
             _pendingChunkCoordinate = wanted.OrderBy(value =>
@@ -5464,10 +5494,20 @@ internal sealed partial class GameHostWindow : GameWindow
         var shadeCache = new Dictionary<(int X, int Y), float>();
         var heightCache = new Dictionary<(int X, int Y), float>();
         var rawHeightCache = new Dictionary<(int X, int Y), byte>();
+        float[]? preparedVertices = null;
+        if (chunk.Coordinate.Level ==
+            (int)WorldLevel.Underground)
+        {
+            preparedVertices = chunk.UndergroundMeshVertices;
+        }
+        else
+        {
         foreach (var tile in chunk.Tiles.OrderBy(tile => tile.X + tile.Y))
         {
             var localX = PositiveMod(tile.X, WorldChunk.Size);
             var localY = PositiveMod(tile.Y, WorldChunk.Size);
+            if (!chunk.IsRenderable(localX, localY))
+                continue;
             var points = new[]
             {
                 Project(tile.X, tile.Y, SmoothedHeightAt(tile.X, tile.Y)),
@@ -5502,10 +5542,17 @@ internal sealed partial class GameHostWindow : GameWindow
                 vertices.Add(cornerShades[corner]);
             }
         }
+        }
+        preparedVertices ??= vertices.ToArray();
         var vbo = GL.GenBuffer();
         GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float),
-            vertices.ToArray(), BufferUsageHint.StaticDraw);
+        GL.BufferData(
+            BufferTarget.ArrayBuffer,
+            preparedVertices.Length * sizeof(float),
+            preparedVertices,
+            BufferUsageHint.StaticDraw);
+        if (chunk.Coordinate.Level == (int)WorldLevel.Underground)
+            chunk.UndergroundMeshVertices = [];
         var weights = UploadChunkBiomeWeights(chunk);
         var renderedHeights = new float[
             (WorldChunk.Size + 1) * (WorldChunk.Size + 1)];
@@ -5513,11 +5560,19 @@ internal sealed partial class GameHostWindow : GameWindow
         for (var vertexX = 0; vertexX <= WorldChunk.Size; vertexX++)
             renderedHeights[
                 vertexY * (WorldChunk.Size + 1) + vertexX] =
-                SmoothedHeightAt(
-                    chunk.Coordinate.X * WorldChunk.Size + vertexX,
-                    chunk.Coordinate.Y * WorldChunk.Size + vertexY);
+                chunk.Coordinate.Level == (int)WorldLevel.Underground
+                    ? UndergroundWorldGenerator.Height(
+                        chunk.UndergroundDensity[
+                            vertexY *
+                            UndergroundWorldGenerator.SamplesPerTile *
+                            UndergroundWorldGenerator.DensityStride +
+                            vertexX *
+                            UndergroundWorldGenerator.SamplesPerTile])
+                    : SmoothedHeightAt(
+                        chunk.Coordinate.X * WorldChunk.Size + vertexX,
+                        chunk.Coordinate.Y * WorldChunk.Size + vertexY);
         var gpu = new GpuWorldChunk(
-            chunk, vbo, vertices.Count / 12,
+            chunk, vbo, preparedVertices.Length / 12,
             weights.A, weights.B, weights.C, weights.D, weights.Shore,
             WorldChunkProjection.TerrainBounds(vertices, 12),
             renderedHeights);
@@ -5557,8 +5612,12 @@ internal sealed partial class GameHostWindow : GameWindow
                 var sample = (X: x + offsetX, Y: y + offsetY);
                 if (!rawHeightCache.TryGetValue(sample, out var rawHeight))
                 {
-                    rawHeight = InfiniteWorldGenerator.SampleSurfaceHeight(
-                        _worldSeed, sample.X, sample.Y);
+                    rawHeight = chunk.Coordinate.Level ==
+                                (int)WorldLevel.Underground
+                        ? (byte)UndergroundWorldGenerator.SampleHeight(
+                            _worldSeed, sample.X, sample.Y)
+                        : InfiniteWorldGenerator.SampleSurfaceHeight(
+                            _worldSeed, sample.X, sample.Y);
                     rawHeightCache[sample] = rawHeight;
                 }
                 weightedHeight += rawHeight * weight;
@@ -5684,6 +5743,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private void QueueChunkSave(WorldChunk source)
     {
         if (_worldStore is null) return;
+        if (source.Coordinate.Level != (int)WorldLevel.Overworld)
+            return;
         var store = _worldStore;
         var snapshot = new WorldChunk
         {
@@ -5696,6 +5757,7 @@ internal sealed partial class GameHostWindow : GameWindow
             BiomeWeightsD = source.BiomeWeightsD,
             ShoreDistance = source.ShoreDistance,
             Cliffs = source.Cliffs,
+            RenderableTiles = source.RenderableTiles.ToArray(),
             TreeInstances = source.TreeInstances.ToList(),
             GroundObjects = source.GroundObjects.ToList(),
             Vegetation = source.Vegetation,

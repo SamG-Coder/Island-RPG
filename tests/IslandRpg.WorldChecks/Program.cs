@@ -1727,6 +1727,78 @@ try
     var negativeLoaded = store.LoadOrGenerate(new(-1, -1));
     Require(negativeLoaded.Coordinate == new ChunkCoordinate(-1, -1),
         "negative region coordinates must round-trip");
+    var undergroundCoordinate = new ChunkCoordinate(
+        0, 0, (int)WorldLevel.Underground);
+    var undergroundAllocatedBefore =
+        GC.GetAllocatedBytesForCurrentThread();
+    var undergroundTimer =
+        System.Diagnostics.Stopwatch.StartNew();
+    var underground = store.LoadOrGenerate(undergroundCoordinate);
+    undergroundTimer.Stop();
+    var undergroundAllocated =
+        GC.GetAllocatedBytesForCurrentThread() -
+        undergroundAllocatedBefore;
+    store.Save(underground);
+    Require(!File.Exists(store.RegionPathFor(undergroundCoordinate)),
+        "deterministic underground chunks must not produce unused save files");
+    var undergroundReloaded =
+        store.LoadOrGenerate(undergroundCoordinate);
+    Require(
+        underground.Coordinate.X == origin.Coordinate.X &&
+        underground.Coordinate.Y == origin.Coordinate.Y &&
+        underground.Coordinate.Level == (int)WorldLevel.Underground &&
+        underground.RenderableTiles.Any(value => value) &&
+        underground.RenderableTiles.Any(value => !value),
+        "underground chunks must share overworld coordinates and contain carved floor plus void");
+    Require(
+        underground.RenderableTiles.SequenceEqual(
+            undergroundReloaded.RenderableTiles) &&
+        underground.UndergroundDensity.SequenceEqual(
+            undergroundReloaded.UndergroundDensity),
+        "transient underground generation must be deterministic");
+    var undergroundMesh = underground.UndergroundMeshVertices;
+    var hasInterpolatedContourVertex = false;
+    for (var offset = 0; offset < undergroundMesh.Length; offset += 12)
+    {
+        var sampleX = undergroundMesh[offset + 2] * 8 * 4;
+        var sampleY = undergroundMesh[offset + 3] * 8 * 4;
+        if (MathF.Abs(sampleX - MathF.Round(sampleX)) > .001f ||
+            MathF.Abs(sampleY - MathF.Round(sampleY)) > .001f)
+        {
+            hasInterpolatedContourVertex = true;
+            break;
+        }
+    }
+    Require(
+        undergroundMesh.Length > 0 &&
+        undergroundMesh.Length % 12 == 0 &&
+        hasInterpolatedContourVertex,
+        "underground terrain must clip triangles at an interpolated sub-tile contour");
+    Require(
+        underground.UndergroundDensity.Length ==
+        UndergroundWorldGenerator.DensityStride *
+        UndergroundWorldGenerator.DensityStride,
+        "underground generation must retain one reusable sub-tile density field");
+    Require(undergroundTimer.Elapsed < TimeSpan.FromSeconds(5) &&
+            undergroundAllocated < 128L * 1024 * 1024,
+        "underground chunk generation exceeded its performance budget");
+    Console.WriteLine(
+        $"Underground chunk benchmark: {undergroundTimer.Elapsed.TotalMilliseconds:N1} ms / " +
+        $"{undergroundAllocated:N0} B, {undergroundMesh.Length / 12:N0} vertices.");
+    for (var sample = 0; sample <= WorldChunk.Size * 4; sample++)
+    {
+        var y = sample / 4f;
+        var seamFromWest = CaveHydrologyField.Density(
+            store.Seed, WorldChunk.Size, y);
+        var seamFromEast = CaveHydrologyField.Density(
+            store.Seed,
+            undergroundCoordinate.X * WorldChunk.Size +
+            WorldChunk.Size,
+            undergroundCoordinate.Y * WorldChunk.Size + y);
+        Require(
+            MathF.Abs(seamFromWest - seamFromEast) < .000001f,
+            "underground contours must agree at chunk boundaries");
+    }
 
     var saves = new GameSaveRepository(Path.Combine(root, "profiles"));
     var player = saves.CreatePlayer(
@@ -1792,6 +1864,7 @@ static WorldChunk CloneAt(WorldChunk source, ChunkCoordinate coordinate) => new(
     BiomeWeightsD = source.BiomeWeightsD,
     ShoreDistance = source.ShoreDistance,
     Cliffs = source.Cliffs,
+    RenderableTiles = source.RenderableTiles,
     TreeInstances = source.TreeInstances.ToList(),
     GroundObjects = source.GroundObjects.ToList(),
     Vegetation = source.Vegetation,

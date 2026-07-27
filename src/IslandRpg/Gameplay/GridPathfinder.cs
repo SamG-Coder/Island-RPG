@@ -17,11 +17,24 @@ internal static class GridPathfinder
         Vector2 startPosition,
         Vector2 requestedTarget,
         int maximumVisited = 8192,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int worldLevel = (int)WorldLevel.Overworld)
     {
         var start = ((int)MathF.Floor(startPosition.X), (int)MathF.Floor(startPosition.Y));
         var goal = ((int)MathF.Floor(requestedTarget.X), (int)MathF.Floor(requestedTarget.Y));
-        if (!Passable(seed, goal.Item1, goal.Item2)) return [];
+        var caveContext = worldLevel == (int)WorldLevel.Underground
+            ? new CaveHydrologyField.SamplingContext(seed)
+            : null;
+        var caveDensity = new Dictionary<(int X, int Y), float>();
+        float Density(int x, int y)
+        {
+            if (caveDensity.TryGetValue((x, y), out var density))
+                return density;
+            density = caveContext!.Density(x + .5f, y + .5f);
+            caveDensity[(x, y)] = density;
+            return density;
+        }
+        if (!Passable(seed, goal.Item1, goal.Item2, worldLevel, Density)) return [];
 
         var frontier = new PriorityQueue<(int X, int Y), float>();
         var cameFrom = new Dictionary<(int X, int Y), (int X, int Y)>();
@@ -36,13 +49,19 @@ internal static class GridPathfinder
             foreach (var neighbour in Neighbours)
             {
                 var next = (current.X + neighbour.X, current.Y + neighbour.Y);
-                if (!Passable(seed, next.Item1, next.Item2)) continue;
-                if (neighbour.X != 0 && neighbour.Y != 0 &&
-                    (!Passable(seed, current.X + neighbour.X, current.Y) ||
-                     !Passable(seed, current.X, current.Y + neighbour.Y)))
+                if (!Passable(seed, next.Item1, next.Item2, worldLevel, Density))
                     continue;
-                var slope = Math.Abs(Height(seed, next.Item1, next.Item2) -
-                                     Height(seed, current.X, current.Y));
+                if (neighbour.X != 0 && neighbour.Y != 0 &&
+                    (!Passable(
+                         seed, current.X + neighbour.X, current.Y,
+                         worldLevel, Density) ||
+                     !Passable(
+                         seed, current.X, current.Y + neighbour.Y,
+                         worldLevel, Density)))
+                    continue;
+                var slope = Math.Abs(
+                    Height(seed, next.Item1, next.Item2, worldLevel, Density) -
+                    Height(seed, current.X, current.Y, worldLevel, Density));
                 if (slope > 4) continue;
                 var nextCost = costs[current] + neighbour.Cost + slope * .32f;
                 if (costs.TryGetValue(next, out var previous) && previous <= nextCost) continue;
@@ -68,12 +87,21 @@ internal static class GridPathfinder
         }
     }
 
-    private static bool Passable(long seed, int x, int y)
+    private static bool Passable(
+        long seed, int x, int y, int worldLevel,
+        Func<int, int, float> density)
     {
+        if (worldLevel == (int)WorldLevel.Underground)
+            return density(x, y) >=
+                CaveHydrologyField.Boundary;
         var biome = InfiniteWorldGenerator.BiomeAt(seed, x, y);
         return biome != Biome.DeepWater;
     }
 
-    private static int Height(long seed, int x, int y) =>
-        InfiniteWorldGenerator.SampleSurfaceHeight(seed, x, y);
+    private static int Height(
+        long seed, int x, int y, int worldLevel,
+        Func<int, int, float> density) =>
+        worldLevel == (int)WorldLevel.Underground
+            ? (int)MathF.Round(UndergroundWorldGenerator.Height(density(x, y)))
+            : InfiniteWorldGenerator.SampleSurfaceHeight(seed, x, y);
 }

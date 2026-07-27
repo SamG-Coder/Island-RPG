@@ -97,7 +97,8 @@ internal sealed partial class GameHostWindow
                     window._worldSeed,
                     start,
                     target,
-                    cancellationToken: token)),
+                    cancellationToken: token,
+                    worldLevel: window._activeWorldLevel)),
             token);
         window._moveMarker = new(target, 0);
     }
