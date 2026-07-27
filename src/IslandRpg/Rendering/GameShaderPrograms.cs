@@ -356,9 +356,10 @@ internal static class GameShaderPrograms
             "uniform vec3 outlineColor;" +
             "uniform int preserveDarkTint;" +
             "uniform int spriteOutline;uniform vec3 spriteOutlineColor;" +
-            "uniform int caveLighting;uniform vec2 playerLightUv;" +
-            "uniform float playerLightScale;" +
-            "uniform int caveEntranceLight;uniform vec2 caveEntranceLightUv;" +
+            "uniform int sceneLighting;uniform float sceneDarkness;" +
+            "uniform int sceneUnderground;uniform int localLightCount;" +
+            "uniform vec2 localLightUv[16];uniform vec2 localLightRadius[16];" +
+            "uniform vec3 localLightColor[16];uniform float localLightIntensity[16];" +
             "uniform float waterlineUv;uniform vec2 texelSize;" +
             "void main(){vec4 source=texture(image,uv);" +
             "if(outlineOnly==1){float around=0.0;" +
@@ -399,21 +400,17 @@ internal static class GameShaderPrograms
             "vec3 colorized=clamp(colorTint*(shade/targetPeak),0.0,1.0);" +
             "c.rgb=mix(vec3(shade),colorized,tintAmount);" +
             "}else{c.rgb=mix(c.rgb,colorTint,tintAmount);}" +
-            "if(caveLighting==1){" +
-            "vec2 groundDelta=(uv-playerLightUv)/(vec2(0.175,0.115)*playerLightScale);" +
-            "vec2 bodyDelta=(uv-playerLightUv)/(vec2(0.085,0.155)*playerLightScale);" +
-            "float ground=clamp(1.0-length(groundDelta),0.0,1.0);" +
-            "float body=clamp(1.0-length(bodyDelta),0.0,1.0);" +
-            "ground=ground*ground*(3.0-2.0*ground);" +
-            "body=body*body*(3.0-2.0*body);" +
-            "float localLight=max(ground*0.92,body*0.58);" +
-            "if(caveEntranceLight==1){" +
-            "vec2 openingDelta=(uv-caveEntranceLightUv)/(vec2(0.11,0.075)*playerLightScale);" +
-            "float opening=clamp(1.0-length(openingDelta),0.0,1.0);" +
-            "opening=opening*opening*(3.0-2.0*opening);" +
-            "localLight=max(localLight,opening*0.88);}" +
-            "vec3 lightColor=vec3(0.96,0.98,1.0);" +
-            "c.rgb*=clamp(vec3(0.16)+lightColor*localLight,0.0,1.08);" +
+            "if(sceneLighting==1){" +
+            "float night=sceneDarkness*sceneDarkness;" +
+            "vec3 ambient=sceneUnderground==1?vec3(0.16):" +
+            "mix(vec3(1.0),vec3(0.40,0.46,0.66),night);" +
+            "vec3 illumination=vec3(0.0);" +
+            "for(int i=0;i<16;i++){if(i>=localLightCount)break;" +
+            "vec2 delta=(uv-localLightUv[i])/max(localLightRadius[i],vec2(0.0001));" +
+            "float light=clamp(1.0-length(delta),0.0,1.0);" +
+            "light=light*light*(3.0-2.0*light);" +
+            "illumination+=localLightColor[i]*light*localLightIntensity[i];}" +
+            "c.rgb*=clamp(ambient+illumination,vec3(0.0),vec3(1.12));" +
             "}" +
             "c.a*=opacity*alpha;}}");
         var program = GL.CreateProgram(); GL.AttachShader(program, vs); GL.AttachShader(program, fs); GL.LinkProgram(program);
