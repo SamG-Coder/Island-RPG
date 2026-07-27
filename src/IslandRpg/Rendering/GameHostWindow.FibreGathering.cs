@@ -22,14 +22,19 @@ internal sealed partial class GameHostWindow
         out WorldVegetation vegetation,
         out string stableKey)
     {
-        foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible))
+        vegetation = null!;
+        stableKey = "";
+        var selectedDepth = float.NegativeInfinity;
+        foreach (var gpu in _worldChunks.Values)
+        {
+            if (!IsChunkVisible(gpu)) continue;
         for (var index = gpu.VegetationRenderItems.Length - 1;
              index >= 0;
              index--)
         {
             var cached = gpu.VegetationRenderItems[index];
             var candidate = gpu.Chunk.Vegetation[index];
-            if (!IsFibreShrub(candidate) ||
+            if (!cached.CanGatherFibre ||
                 !_treeAtlas.TryGetValue(
                     cached.AtlasKey, out var entry))
                 continue;
@@ -45,25 +50,14 @@ internal sealed partial class GameHostWindow
                 entry.Frame.Rgba[
                     (y * entry.Frame.Width + x) * 4 + 3] <= 24)
                 continue;
+            if (!WorldHoverSelection.Prefer(
+                    cached.World.Y, ref selectedDepth))
+                continue;
             vegetation = candidate;
             stableKey = cached.StableKey;
-            return true;
         }
-        vegetation = null!;
-        stableKey = "";
-        return false;
-    }
-
-    private bool IsFibreShrub(WorldVegetation vegetation)
-    {
-        if (!vegetation.CanBecomeInstance ||
-            vegetation.Kind != WorldVegetationKind.Shrub)
-            return false;
-        var biome = InfiniteWorldGenerator.BiomeAt(
-            _worldSeed,
-            (int)MathF.Floor(vegetation.X),
-            (int)MathF.Floor(vegetation.Y));
-        return biome is not Biome.Snow and not Biome.Tundra;
+        }
+        return vegetation is not null;
     }
 
     private void OpenVegetationContext(

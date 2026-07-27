@@ -1963,8 +1963,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private void FollowPlayer()
     {
         if (_player is null) return;
-        var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
-            _worldSeed, _player.Position.X, _player.Position.Y);
+        var elevation = SamplePlayerTerrain(
+            _player.Position.X, _player.Position.Y).Height;
         var projected = new Vector2(
             (_player.Position.X - _player.Position.Y) * 48,
             (_player.Position.X + _player.Position.Y) * 24 - elevation * 20);
@@ -5522,7 +5522,7 @@ internal sealed partial class GameHostWindow : GameWindow
             WorldChunkProjection.TerrainBounds(vertices, 12),
             renderedHeights);
         gpu.VegetationRenderItems = WorldVegetationRenderCache.Build(
-            _worldSeed, chunk.Vegetation);
+            chunk, renderedHeights);
         gpu.FishRenderItems = WorldFishRenderCache.Build(
             _worldSeed, chunk.Fish);
         return gpu;

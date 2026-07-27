@@ -10,6 +10,7 @@ namespace IslandRpg.Rendering;
 internal sealed partial class GameHostWindow
 {
     private const float GroundItemActionSeconds = .75f;
+    private readonly HashSet<long> _stumpHoverScratch = [];
 
     private sealed record GroundDropPreview(
         int InventorySlot,
@@ -40,47 +41,61 @@ internal sealed partial class GameHostWindow
     private bool TryGetTreeUnderMouse(
         Vector2 mouse, out IslandTree hoveredTree)
     {
-        foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible)
-                     .OrderByDescending(gpu =>
-                         gpu.Chunk.Coordinate.X + gpu.Chunk.Coordinate.Y))
-        foreach (var tree in gpu.Chunk.Trees
-                     .OrderByDescending(tree => tree.X + tree.Y))
-        {
-            if (gpu.Chunk.TreeInstances.Any(instance =>
-                    instance.X == tree.X && instance.Y == tree.Y &&
-                    instance.State == TreeLifecycleState.Stump))
-                continue;
-            if (!_treeAtlas.TryGetValue(
-                    WorldTreeCatalog.AtlasKey(tree), out var entry))
-                continue;
-            var tileX = PositiveMod(tree.X, WorldChunk.Size);
-            var tileY = PositiveMod(tree.Y, WorldChunk.Size);
-            var tile = gpu.Chunk.Tiles[
-                tileY * WorldChunk.Size + tileX];
-            var height =
-                (tile.North + tile.East + tile.South + tile.West) / 4f;
-            var world = new Vector2(
-                (tree.X - tree.Y) * 48,
-                (tree.X + tree.Y + 1) * 24 - height * 20);
-            var bounds = SpriteBounds(entry.Frame, world);
-            if (mouse.X < bounds.Left || mouse.X >= bounds.Right ||
-                mouse.Y < bounds.Top || mouse.Y >= bounds.Bottom)
-                continue;
-
-            var scale = Math.Max(SpritePixelScale(), .001f);
-            var x = (int)((mouse.X - bounds.Left) / scale);
-            var y = (int)((mouse.Y - bounds.Top) / scale);
-            if ((uint)x >= (uint)entry.Frame.Width ||
-                (uint)y >= (uint)entry.Frame.Height)
-                continue;
-            if (entry.Frame.Rgba[
-                    (y * entry.Frame.Width + x) * 4 + 3] <= 24)
-                continue;
-            hoveredTree = tree;
-            return true;
-        }
         hoveredTree = null!;
-        return false;
+        var selectedDepth = float.NegativeInfinity;
+        foreach (var gpu in _worldChunks.Values)
+        {
+            if (!IsChunkVisible(gpu)) continue;
+            _stumpHoverScratch.Clear();
+            foreach (var instance in gpu.Chunk.TreeInstances)
+                if (instance.State == TreeLifecycleState.Stump)
+                    _stumpHoverScratch.Add(
+                        WorldHoverSelection.TileKey(
+                            instance.X, instance.Y));
+            foreach (var tree in gpu.Chunk.Trees)
+            {
+                if (_stumpHoverScratch.Contains(
+                        WorldHoverSelection.TileKey(
+                            tree.X, tree.Y)) ||
+                    !_treeAtlas.TryGetValue(
+                        WorldTreeCatalog.AtlasKey(tree),
+                        out var entry))
+                    continue;
+                var tileX = PositiveMod(tree.X, WorldChunk.Size);
+                var tileY = PositiveMod(tree.Y, WorldChunk.Size);
+                var tile = gpu.Chunk.Tiles[
+                    tileY * WorldChunk.Size + tileX];
+                var height =
+                    (tile.North + tile.East +
+                     tile.South + tile.West) / 4f;
+                var world = new Vector2(
+                    (tree.X - tree.Y) * 48,
+                    (tree.X + tree.Y + 1) * 24 -
+                    height * 20);
+                var bounds = SpriteBounds(entry.Frame, world);
+                if (mouse.X < bounds.Left ||
+                    mouse.X >= bounds.Right ||
+                    mouse.Y < bounds.Top ||
+                    mouse.Y >= bounds.Bottom)
+                    continue;
+
+                var scale = Math.Max(
+                    SpritePixelScale(), .001f);
+                var x = (int)(
+                    (mouse.X - bounds.Left) / scale);
+                var y = (int)(
+                    (mouse.Y - bounds.Top) / scale);
+                if ((uint)x >= (uint)entry.Frame.Width ||
+                    (uint)y >= (uint)entry.Frame.Height ||
+                    entry.Frame.Rgba[
+                        (y * entry.Frame.Width + x) * 4 + 3] <= 24 ||
+                    !WorldHoverSelection.Prefer(
+                        world.Y, ref selectedDepth))
+                    continue;
+                hoveredTree = tree;
+            }
+        }
+        return hoveredTree is not null;
     }
 
     private bool TryGetGroundObjectUnderMouse(
@@ -88,18 +103,20 @@ internal sealed partial class GameHostWindow
         out WorldGroundObject groundObject,
         out GpuWorldChunk chunk)
     {
-        foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible)
-                     .OrderByDescending(value =>
-                         value.Chunk.Coordinate.X +
-                         value.Chunk.Coordinate.Y))
-        foreach (var candidate in gpu.Chunk.GroundObjects
-                     .OrderByDescending(value => value.X + value.Y))
+        groundObject = null!;
+        chunk = null!;
+        var selectedDepth = float.NegativeInfinity;
+        foreach (var gpu in _worldChunks.Values)
+        {
+            if (!IsChunkVisible(gpu)) continue;
+        foreach (var candidate in gpu.Chunk.GroundObjects)
         {
             if (!TryGroundItemVisual(
                     candidate.ItemId, out var frame, out _, out _, out _))
                 continue;
+            var world = GroundObjectWorld(candidate);
             var visualBounds = SpriteBounds(
-                frame, GroundObjectWorld(candidate));
+                frame, world);
             const float minimumHitSize = 24;
             var centerX = (visualBounds.Left + visualBounds.Right) * .5f;
             var centerY = (visualBounds.Top + visualBounds.Bottom) * .5f;
@@ -115,21 +132,25 @@ internal sealed partial class GameHostWindow
             if (mouse.X < bounds.Left || mouse.X >= bounds.Right ||
                 mouse.Y < bounds.Top || mouse.Y >= bounds.Bottom)
                 continue;
+            if (!WorldHoverSelection.Prefer(
+                    world.Y, ref selectedDepth))
+                continue;
             groundObject = candidate;
             chunk = gpu;
-            return true;
         }
-        groundObject = null!;
-        chunk = null!;
-        return false;
+        }
+        return groundObject is not null;
     }
 
     private bool TryGetFishUnderMouse(
         Vector2 mouse, out WorldFish hoveredFish)
     {
-        foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible))
-        foreach (var cached in gpu.FishRenderItems
-                     .OrderByDescending(item => item.World.Y))
+        hoveredFish = null!;
+        var selectedDepth = float.NegativeInfinity;
+        foreach (var gpu in _worldChunks.Values)
+        {
+            if (!IsChunkVisible(gpu)) continue;
+        foreach (var cached in gpu.FishRenderItems)
         {
             if (IsFishDepleted(cached.Fish)) continue;
             if (!WorldFishPresentation.BaseHitTest(
@@ -137,17 +158,19 @@ internal sealed partial class GameHostWindow
                     SpriteAnchor(cached.World),
                     SpritePixelScale()))
                 continue;
+            if (!WorldHoverSelection.Prefer(
+                    cached.World.Y, ref selectedDepth))
+                continue;
             hoveredFish = cached.Fish;
-            return true;
         }
-        hoveredFish = null!;
-        return false;
+        }
+        return hoveredFish is not null;
     }
 
     private Vector2 GroundObjectWorld(WorldGroundObject groundObject)
     {
-        var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
-            _worldSeed, groundObject.X, groundObject.Y);
+        var elevation = SamplePlayerTerrain(
+            groundObject.X, groundObject.Y).Height;
         return new(
             (groundObject.X - groundObject.Y) * 48,
             (groundObject.X + groundObject.Y) * 24 -

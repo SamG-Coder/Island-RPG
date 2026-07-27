@@ -7,32 +7,55 @@ internal sealed record WorldVegetationRenderItem(
     Vector2 World,
     string StableKey,
     string AtlasKey,
-    string? ShadowAtlasKey);
+    string? ShadowAtlasKey,
+    bool CanGatherFibre);
 
 internal static class WorldVegetationRenderCache
 {
     public static WorldVegetationRenderItem[] Build(
-        long seed, IReadOnlyList<WorldVegetation> vegetation)
+        WorldChunk chunk,
+        IReadOnlyList<float> renderedHeights)
     {
-        var result = new WorldVegetationRenderItem[vegetation.Count];
-        for (var index = 0; index < vegetation.Count; index++)
+        var vegetation = chunk.Vegetation;
+        var result = new WorldVegetationRenderItem[vegetation.Length];
+        for (var index = 0; index < vegetation.Length; index++)
         {
             var item = vegetation[index];
-            var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
-                seed, item.X, item.Y);
+            var tileX = (int)MathF.Floor(item.X);
+            var tileY = (int)MathF.Floor(item.Y);
+            var localX = PositiveMod(tileX, WorldChunk.Size);
+            var localY = PositiveMod(tileY, WorldChunk.Size);
+            var elevation = LoadedTerrainSampler.Interpolate(
+                renderedHeights,
+                WorldChunk.Size + 1,
+                localX,
+                localY,
+                item.X - tileX,
+                item.Y - tileY);
             var world = new Vector2(
                 (item.X - item.Y) * 48,
                 (item.X + item.Y) * 24 - elevation * 20);
             var shadowName = ShadowName(item.GraphicName);
+            var biome = chunk.Tiles[
+                localY * WorldChunk.Size + localX].Biome;
             result[index] = new(
                 world,
                 $"vegetation:{item.X:0.000}:{item.Y:0.000}",
                 $"{item.GraphicName}#{item.FrameIndex}",
                 shadowName is null
                     ? null
-                    : $"{shadowName}#{item.FrameIndex}");
+                    : $"{shadowName}#{item.FrameIndex}",
+                item.CanBecomeInstance &&
+                item.Kind == WorldVegetationKind.Shrub &&
+                biome is not Biome.Snow and not Biome.Tundra);
         }
         return result;
+    }
+
+    private static int PositiveMod(int value, int divisor)
+    {
+        var result = value % divisor;
+        return result < 0 ? result + divisor : result;
     }
 
     private static string? ShadowName(string graphicName)

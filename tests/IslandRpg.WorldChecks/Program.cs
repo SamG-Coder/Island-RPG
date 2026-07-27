@@ -53,9 +53,30 @@ Require(hoverProbeCount == 1 &&
             new(321, 180), new(20, -10), .8f,
             blocked: false, nowSeconds: .12),
     "stationary cursor probing must be skipped until input changes or expires");
+var movingCameraProbeCount = 0;
+hoverGate.Invalidate();
+for (var frame = 0; frame < 240; frame++)
+    if (hoverGate.ShouldProbe(
+            new(321, 180),
+            new(20 + frame, -10),
+            .8f,
+            blocked: false,
+            nowSeconds: frame / 240d))
+        movingCameraProbeCount++;
+Require(
+    movingCameraProbeCount is >= 9 and <= 11,
+    "following a moving player must throttle stationary-cursor world probes");
 Console.WriteLine(
     "World-hover probe benchmark (1,000 stationary updates): " +
-    $"legacy 1,000 scans, gated {hoverProbeCount} scan.");
+    $"legacy 1,000 scans, gated {hoverProbeCount} scan; " +
+    $"moving camera {movingCameraProbeCount} scans/second.");
+var selectedHoverDepth = float.NegativeInfinity;
+Require(
+    WorldHoverSelection.Prefer(10, ref selectedHoverDepth) &&
+    !WorldHoverSelection.Prefer(9, ref selectedHoverDepth) &&
+    WorldHoverSelection.Prefer(11, ref selectedHoverDepth) &&
+    selectedHoverDepth == 11,
+    "allocation-free hover traversal must retain the frontmost candidate");
 
 const long terrainBenchmarkSeed = 974_321;
 const int terrainBenchmarkTiles = 8;
