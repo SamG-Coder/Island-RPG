@@ -216,12 +216,15 @@ internal sealed partial class GameHostWindow
         GpuWorldChunk Gpu)? FindVegetation(string stableKey)
     {
         foreach (var gpu in _worldChunks.Values)
+        {
+        if (!IsActiveWorldChunk(gpu)) continue;
         for (var index = 0;
              index < gpu.VegetationRenderItems.Length;
              index++)
             if (gpu.VegetationRenderItems[index].StableKey.Equals(
                     stableKey, StringComparison.Ordinal))
                 return (gpu.Chunk.Vegetation[index], gpu);
+        }
         return null;
     }
 }

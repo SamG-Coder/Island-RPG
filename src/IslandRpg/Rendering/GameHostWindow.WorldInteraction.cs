@@ -186,6 +186,7 @@ internal sealed partial class GameHostWindow
     {
         if (_player is null || _activePlayer is null) return;
         var chunk = _worldChunks.Values.FirstOrDefault(gpu =>
+            IsActiveWorldChunk(gpu) &&
             gpu.Chunk.GroundObjects.Any(
                 item => item.Id == groundObjectId));
         var groundObject = chunk?.Chunk.GroundObjects.FirstOrDefault(
@@ -233,6 +234,7 @@ internal sealed partial class GameHostWindow
         }
 
         var groundObject = _worldChunks.Values
+            .Where(IsActiveWorldChunk)
             .SelectMany(gpu => gpu.Chunk.GroundObjects)
             .FirstOrDefault(item => item.Id == groundObjectId);
         if (groundObject is null ||
@@ -557,6 +559,7 @@ internal sealed partial class GameHostWindow
 
     private WorldGroundObject? FindGroundObject(Guid id) =>
         _worldChunks.Values
+            .Where(IsActiveWorldChunk)
             .SelectMany(gpu => gpu.Chunk.GroundObjects)
             .FirstOrDefault(item => item.Id == id);
 
@@ -932,7 +935,9 @@ internal sealed partial class GameHostWindow
     {
         const float treeClearance = .46f;
         const float itemClearance = .30f;
-        foreach (var chunk in _worldChunks.Values.Select(value => value.Chunk))
+        foreach (var chunk in _worldChunks.Values
+                     .Where(IsActiveWorldChunk)
+                     .Select(value => value.Chunk))
         {
             if (chunk.Trees.Any(tree =>
                     (candidate - new Vector2(

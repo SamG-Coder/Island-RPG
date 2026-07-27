@@ -5,6 +5,10 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
+    private CaveHydrologyField.SamplingContext?
+        _fallbackCaveSampling;
+    private long _fallbackCaveSamplingSeed;
+
     private bool TrySampleLoadedTerrain(
         float x,
         float y,
@@ -58,17 +62,58 @@ internal sealed partial class GameHostWindow
     private (float Height, Biome Biome) SamplePlayerTerrain(
         float x, float y)
     {
+        return SampleLevelTerrain(x, y);
+    }
+
+    private (float Height, Biome Biome) SampleLevelTerrain(
+        float x,
+        float y,
+        CaveHydrologyField.SamplingContext? caveContext = null)
+    {
         if (TrySampleLoadedTerrain(
                 x, y, out var height, out var biome))
             return (height, biome);
+        return SampleProceduralLevelTerrain(x, y, caveContext);
+    }
+
+    private (float Height, Biome Biome) SampleProceduralLevelTerrain(
+        float x,
+        float y,
+        CaveHydrologyField.SamplingContext? caveContext = null)
+    {
+        if (_activeWorldLevel == (int)WorldLevel.Underground)
+        {
+            caveContext ??=
+                FallbackCaveSampling();
+            var density = caveContext.Density(x, y);
+            return (
+                UndergroundWorldGenerator.Height(density),
+                UndergroundWorldGenerator.MaterialAt(
+                    _worldSeed,
+                    (int)MathF.Floor(x),
+                    (int)MathF.Floor(y)));
+        }
+
         return (
-            InfiniteWorldGenerator.SampleRenderedHeight(
-                _worldSeed, x, y),
+            InfiniteWorldGenerator.SampleRenderedHeight(_worldSeed, x, y),
             InfiniteWorldGenerator.BiomeAt(
                 _worldSeed,
                 (int)MathF.Floor(x),
                 (int)MathF.Floor(y)));
     }
+
+    private CaveHydrologyField.SamplingContext FallbackCaveSampling()
+    {
+        if (_fallbackCaveSampling is not null &&
+            _fallbackCaveSamplingSeed == _worldSeed)
+            return _fallbackCaveSampling;
+        _fallbackCaveSamplingSeed = _worldSeed;
+        return _fallbackCaveSampling =
+            new CaveHydrologyField.SamplingContext(_worldSeed);
+    }
+
+    private void ClearFallbackCaveSampling() =>
+        _fallbackCaveSampling = null;
 }
 
 internal static class LoadedTerrainSampler

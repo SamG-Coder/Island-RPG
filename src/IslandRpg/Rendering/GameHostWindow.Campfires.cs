@@ -218,6 +218,7 @@ internal sealed partial class GameHostWindow
         _nextCampfireExpiryCheckAt = _clock + 1;
         foreach (var gpu in _worldChunks.Values)
         {
+            if (!IsActiveWorldChunk(gpu)) continue;
             var changed = false;
             for (var index = 0;
                  index < gpu.Chunk.GroundObjects.Count;
@@ -244,6 +245,7 @@ internal sealed partial class GameHostWindow
     {
         foreach (var gpu in _worldChunks.Values)
         {
+            if (!IsActiveWorldChunk(gpu)) continue;
             var index = gpu.Chunk.GroundObjects.FindIndex(
                 item => item.Id == id);
             if (index >= 0)

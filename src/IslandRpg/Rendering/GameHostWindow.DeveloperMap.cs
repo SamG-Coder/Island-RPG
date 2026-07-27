@@ -32,23 +32,17 @@ internal sealed partial class GameHostWindow
             _atlasCenterIso,
             AtlasPixelsPerTile(),
             _worldSeed,
-            _player.Position);
+            _player.Position,
+            _activeWorldLevel);
 
-        _pathCancellation?.Cancel();
-        _pathCancellation?.Dispose();
-        _pathCancellation = null;
-        _pendingPathTask = null;
-        _pathRequestId++;
-        _queuedAction = null;
+        CancelWorldLevelWork(clearMinimap: true);
         _activeTreeId = null;
         _activeTreeStickGatherId = null;
         _activeGroundPickupId = null;
         _activeGroundDrop = null;
-        _moveMarker = null;
         _player.TeleportTo(destination);
 
-        CancelPendingChunkLoad();
-        CloseDeveloperMap();
+        _developerMap.Close();
         FollowPlayer();
         StreamWorld();
         SaveActivePlayerState();
@@ -60,6 +54,7 @@ internal sealed partial class GameHostWindow
     private void RenderDeveloperMapOverlay()
     {
         var densityLayer =
+            _activeWorldLevel == (int)WorldLevel.Overworld &&
             _developerMap.Layer == WorldAtlasLayer.TreeDensity;
         var title = new Vector4(
             ReferenceWidth * .5f - 310, 18, 620,
@@ -67,7 +62,8 @@ internal sealed partial class GameHostWindow
         DrawUiColor(title, new(.035f, .031f, .023f, .94f));
         DrawPanelOutline(title, 2, new(.48f, .38f, .18f, 1));
         DrawCenteredUiText(
-            "DEVELOPER MAP",
+            $"DEVELOPER MAP - " +
+            WorldLevelMapPresentation.LevelName(_activeWorldLevel),
             new(title.X, title.Y + 5, title.Z, 25),
             new(232, 217, 166, 255));
         DrawCenteredUiText(

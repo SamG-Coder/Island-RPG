@@ -32,9 +32,8 @@ internal static class WorldVegetationRenderCache
                 localY,
                 item.X - tileX,
                 item.Y - tileY);
-            var world = new Vector2(
-                (item.X - item.Y) * 48,
-                (item.X + item.Y) * 24 - elevation * 20);
+            var world = IsometricTerrainProjection.Project(
+                item.X, item.Y, elevation);
             var shadowName = ShadowName(item.GraphicName);
             var biome = chunk.Tiles[
                 localY * WorldChunk.Size + localX].Biome;

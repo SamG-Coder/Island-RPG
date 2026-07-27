@@ -5,7 +5,9 @@ namespace IslandRpg.Rendering;
 internal static class WorldChunkProjection
 {
     public static Vector4 TerrainBounds(
-        IReadOnlyList<float> vertices, int stride)
+        IReadOnlyList<float> vertices,
+        int stride,
+        CancellationToken cancellationToken = default)
     {
         if (stride < 2 || vertices.Count < 2)
             return Vector4.Zero;
@@ -15,6 +17,8 @@ internal static class WorldChunkProjection
              offset + 1 < vertices.Count;
              offset += stride)
         {
+            if ((offset & 4095) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             var projected = new Vector2(
                 vertices[offset], vertices[offset + 1]);
             minimum = Vector2.ComponentMin(minimum, projected);

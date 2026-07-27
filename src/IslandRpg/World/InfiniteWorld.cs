@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.IO.Compression;
+using OpenTK.Mathematics;
 
 namespace IslandRpg.World;
 
@@ -74,6 +75,7 @@ internal sealed class WorldChunk
     public bool[] RenderableTiles { get; init; } = [];
     public float[] UndergroundDensity { get; init; } = [];
     public float[] UndergroundMeshVertices { get; set; } = [];
+    public Vector4 UndergroundProjectedBounds { get; set; }
     public List<WorldTreeInstance> TreeInstances { get; init; } = [];
     public List<WorldGroundObject> GroundObjects { get; init; } = [];
     public WorldVegetation[] Vegetation { get; init; } = [];

@@ -10,36 +10,57 @@ namespace IslandRpg.Rendering;
 /// </summary>
 internal static class UndergroundTerrainMeshBuilder
 {
-    private const int SamplesPerTile =
+    // Navigation and boundary sampling retain the full density resolution.
+    // Rendering every density sub-cell produces up to sixteen times the
+    // overworld triangle count, so the mesh consumes every second sample.
+    private const int DensitySamplesPerTile =
         UndergroundWorldGenerator.SamplesPerTile;
+    private const int MeshSamplesPerTile = 2;
+    private const int DensitySampleStep =
+        DensitySamplesPerTile / MeshSamplesPerTile;
 
-    public static float[] Build(WorldChunk chunk, long seed)
+    public static float[] Build(
+        WorldChunk chunk,
+        long seed,
+        CancellationToken cancellationToken = default)
     {
         var vertices = new List<float>(
             WorldChunk.Size * WorldChunk.Size *
-            SamplesPerTile * SamplesPerTile * 6 * 12);
+            MeshSamplesPerTile * MeshSamplesPerTile * 6 * 12);
         var originX = chunk.Coordinate.X * WorldChunk.Size;
         var originY = chunk.Coordinate.Y * WorldChunk.Size;
-        var step = 1f / SamplesPerTile;
+        var step = 1f / MeshSamplesPerTile;
         for (var tileY = 0; tileY < WorldChunk.Size; tileY++)
+        {
+        cancellationToken.ThrowIfCancellationRequested();
         for (var tileX = 0; tileX < WorldChunk.Size; tileX++)
-        for (var sampleY = 0; sampleY < SamplesPerTile; sampleY++)
-        for (var sampleX = 0; sampleX < SamplesPerTile; sampleX++)
+        for (var sampleY = 0; sampleY < MeshSamplesPerTile; sampleY++)
+        for (var sampleX = 0; sampleX < MeshSamplesPerTile; sampleX++)
         {
             var x0 = originX + tileX + sampleX * step;
             var y0 = originY + tileY + sampleY * step;
             var x1 = x0 + step;
             var y1 = y0 + step;
-            var gridX = tileX * SamplesPerTile + sampleX;
-            var gridY = tileY * SamplesPerTile + sampleY;
+            var gridX =
+                (tileX * MeshSamplesPerTile + sampleX) *
+                DensitySampleStep;
+            var gridY =
+                (tileY * MeshSamplesPerTile + sampleY) *
+                DensitySampleStep;
             var northWest = Point(chunk, x0, y0, gridX, gridY);
-            var northEast = Point(chunk, x1, y0, gridX + 1, gridY);
-            var southEast = Point(chunk, x1, y1, gridX + 1, gridY + 1);
-            var southWest = Point(chunk, x0, y1, gridX, gridY + 1);
+            var northEast = Point(
+                chunk, x1, y0, gridX + DensitySampleStep, gridY);
+            var southEast = Point(
+                chunk, x1, y1,
+                gridX + DensitySampleStep,
+                gridY + DensitySampleStep);
+            var southWest = Point(
+                chunk, x0, y1, gridX, gridY + DensitySampleStep);
             AddClippedTriangle(
                 northWest, northEast, southEast);
             AddClippedTriangle(
                 northWest, southEast, southWest);
+        }
         }
         return vertices.ToArray();
 
@@ -62,9 +83,8 @@ internal static class UndergroundTerrainMeshBuilder
         void AddVertex(CavePoint point)
         {
             var height = UndergroundWorldGenerator.Height(point.Density);
-            var projected = new Vector2(
-                (point.X - point.Y) * 48,
-                (point.X + point.Y) * 24 - height * 20);
+            var projected = IsometricTerrainProjection.Project(
+                point.X, point.Y, height);
             var localX = point.X - originX;
             var localY = point.Y - originY;
             var haloSamples =

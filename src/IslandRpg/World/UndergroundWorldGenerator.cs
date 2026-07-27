@@ -21,7 +21,8 @@ internal static class UndergroundWorldGenerator
         var originX = coordinate.X * WorldChunk.Size;
         var originY = coordinate.Y * WorldChunk.Size;
         var context = new CaveHydrologyField.SamplingContext(seed);
-        var density = BuildDensity(context, originX, originY);
+        var density = BuildDensity(
+            context, originX, originY, cancellationToken);
         var heights = new byte[WorldChunk.Size + 1, WorldChunk.Size + 1];
         for (var y = 0; y <= WorldChunk.Size; y++)
         for (var x = 0; x <= WorldChunk.Size; x++)
@@ -35,6 +36,8 @@ internal static class UndergroundWorldGenerator
         var tiles = new IslandTile[WorldChunk.Size * WorldChunk.Size];
         var renderable = new bool[tiles.Length];
         for (var y = 0; y < WorldChunk.Size; y++)
+        {
+        cancellationToken.ThrowIfCancellationRequested();
         for (var x = 0; x < WorldChunk.Size; x++)
         {
             var worldX = originX + x;
@@ -50,8 +53,10 @@ internal static class UndergroundWorldGenerator
                 heights[x, y + 1],
                 WorldBiome.Alpine);
         }
+        }
 
-        var weights = BuildWeights(seed, coordinate);
+        var weights = BuildWeights(
+            seed, coordinate, cancellationToken);
         var chunk = new WorldChunk
         {
             Coordinate = coordinate,
@@ -73,21 +78,31 @@ internal static class UndergroundWorldGenerator
             Fish = []
         };
         chunk.UndergroundMeshVertices =
-            UndergroundTerrainMeshBuilder.Build(chunk, seed);
+            UndergroundTerrainMeshBuilder.Build(
+                chunk, seed, cancellationToken);
+        chunk.UndergroundProjectedBounds =
+            WorldChunkProjection.TerrainBounds(
+                chunk.UndergroundMeshVertices,
+                12,
+                cancellationToken);
         return chunk;
     }
 
     private static float[] BuildDensity(
         CaveHydrologyField.SamplingContext context,
         int originX,
-        int originY)
+        int originY,
+        CancellationToken cancellationToken)
     {
         var values = new float[DensityStride * DensityStride];
         var step = 1f / SamplesPerTile;
         for (var y = 0; y < DensityStride; y++)
+        {
+        cancellationToken.ThrowIfCancellationRequested();
         for (var x = 0; x < DensityStride; x++)
             values[y * DensityStride + x] =
                 context.Density(originX + x * step, originY + y * step);
+        }
         return values;
     }
 
@@ -133,7 +148,8 @@ internal static class UndergroundWorldGenerator
 
     private static byte[][] BuildWeights(
         long seed,
-        ChunkCoordinate coordinate)
+        ChunkCoordinate coordinate,
+        CancellationToken cancellationToken)
     {
         var size = WorldChunk.WeightTextureSize;
         var textures = Enumerable.Range(0, 4)
@@ -144,6 +160,8 @@ internal static class UndergroundWorldGenerator
         var firstY = coordinate.Y * WorldChunk.Size -
                      WorldChunk.WeightHaloTiles;
         for (var y = 0; y < size; y++)
+        {
+        cancellationToken.ThrowIfCancellationRequested();
         for (var x = 0; x < size; x++)
         {
             var worldX = firstX +
@@ -154,6 +172,7 @@ internal static class UndergroundWorldGenerator
                 seed, (int)MathF.Floor(worldX), (int)MathF.Floor(worldY));
             var layer = (int)biome;
             textures[layer / 4][(y * size + x) * 4 + layer % 4] = 255;
+        }
         }
         return textures;
     }

@@ -88,6 +88,7 @@ internal sealed partial class GameHostWindow : GameWindow
         string? VegetationKey = null);
     private sealed record PathResult(
         int RequestId,
+        int WorldLevel,
         IReadOnlyList<Vector2> Path,
         QueuedWorldAction? Action = null);
     private sealed record NewWorldPreviewResult(
@@ -116,6 +117,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly ListControlState _worldList = new();
     private WorldChunkStore? _worldStore;
     private readonly Dictionary<ChunkCoordinate, GpuWorldChunk> _worldChunks = [];
+    private readonly List<GpuWorldChunk> _visibleWorldChunkBuffer = [];
+    private readonly List<WorldChunk> _activeWorldChunkBuffer = [];
     private Task<WorldChunk>? _pendingChunkTask;
     private CancellationTokenSource? _pendingChunkCancellation;
     private ChunkCoordinate _pendingChunkCoordinate;
@@ -223,18 +226,10 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly CoastalCollectibleRespawnController _coastalRespawns = new();
     private static readonly SpriteFrame WoodcuttingItemsFrame =
         new(128, 64, 0, 0, []);
-    private readonly MinimapControlState _minimapUi = new();
-    private SpriteFrame? _minimapFrame;
-    private int _minimapTexture;
     private int _newWorldPreviewTexture;
     private SpriteFrame? _newWorldPreviewFrame;
     private Task<NewWorldPreviewResult>? _newWorldPreviewTask;
     private string? _newWorldPreviewSeedText;
-    private Vector2i _minimapCenter = new(int.MinValue, int.MinValue);
-    private byte[]? _minimapTerrain;
-    private Task<MinimapBuildResult>? _minimapBuildTask;
-    private sealed record MinimapBuildResult(
-        Vector2i Center, byte[] Terrain, byte[] Pixels);
     private static readonly SpriteFrame SolidUiFrame = new(1, 1, 0, 0, []);
     private MoveMarker? _moveMarker;
     private Task<PathResult>? _pendingPathTask;
@@ -420,6 +415,7 @@ internal sealed partial class GameHostWindow : GameWindow
             else Close();
         }
         if (_developerMap.IsOpen &&
+            _activeWorldLevel == (int)WorldLevel.Overworld &&
             KeyboardState.IsKeyPressed(Keys.T))
         {
             _developerMap.ToggleTreeDensity();
@@ -565,7 +561,10 @@ internal sealed partial class GameHostWindow : GameWindow
                 if (_mode is PreviewMode.World or PreviewMode.Game)
                 {
                     foreach (var chunk in _worldChunks.Values)
+                    {
+                        if (!IsActiveWorldChunk(chunk)) continue;
                         chunk.Opacity = Math.Min(1, chunk.Opacity + (float)e.Time / .38f);
+                    }
                     StreamWorld();
                 }
             }
@@ -615,7 +614,10 @@ internal sealed partial class GameHostWindow : GameWindow
         _camera.X -= 7f * elapsed;
         _camera.Y += 2f * elapsed;
         foreach (var chunk in _worldChunks.Values)
+        {
+            if (!IsActiveWorldChunk(chunk)) continue;
             chunk.Opacity = Math.Min(1, chunk.Opacity + elapsed / .38f);
+        }
         StreamWorld();
     }
 
@@ -874,6 +876,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void EnterWorld(WorldProfile world, PlayerProfile? player = null)
     {
+        CancelWorldLevelWork(clearMinimap: true);
         player ??= _selectedPlayer;
         player ??= _saves.ListPlayers().FirstOrDefault();
         _worldSeed = world.Seed;
@@ -930,11 +933,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private void ReturnToMainMenu()
     {
         SaveActivePlayerState();
-        CancelPendingChunkLoad();
-        _pathCancellation?.Cancel();
-        _pathCancellation?.Dispose();
-        _pathCancellation = null;
-        _pendingPathTask = null;
+        CancelWorldLevelWork(clearMinimap: true);
         foreach (var coordinate in _worldChunks.Keys.ToArray())
             UnloadWorldChunk(coordinate, save: true);
         _saveTail.GetAwaiter().GetResult();
@@ -1278,9 +1277,15 @@ internal sealed partial class GameHostWindow : GameWindow
         _worldActions.CompleteQueuedAction();
         _worldActions.Update();
         UpdateWaterRipples(wading);
+        _activeWorldChunkBuffer.Clear();
+        foreach (var gpu in _worldChunks.Values)
+        {
+            if (IsActiveWorldChunk(gpu))
+                _activeWorldChunkBuffer.Add(gpu.Chunk);
+        }
         _coastalRespawns.Update(
             elapsed,
-            _worldChunks.Values.Select(gpu => gpu.Chunk),
+            _activeWorldChunkBuffer,
             _player.Position,
             QueueChunkSave);
         if (_moveMarker is not null)
@@ -1368,6 +1373,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private PathResult FindActionPath(
         int requestId,
+        int worldLevel,
         Vector2 start,
         Vector2 target,
         float standOff,
@@ -1416,7 +1422,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 _worldSeed, start, candidate,
                 maximumVisited: 8192,
                 cancellationToken: cancellationToken,
-                worldLevel: _activeWorldLevel);
+                worldLevel: worldLevel);
             if (!sameCell && path.Count == 0) continue;
             var approach = candidate - target;
             var diagonal = MathF.Abs(approach.X) > .5f &&
@@ -1439,9 +1445,10 @@ internal sealed partial class GameHostWindow : GameWindow
         }
 
         return bestPath is null
-            ? new PathResult(requestId, [])
+            ? new PathResult(requestId, worldLevel, [])
             : new PathResult(
                 requestId,
+                worldLevel,
                 bestPath,
                 new QueuedWorldAction(
                     actionType, target,
@@ -1647,6 +1654,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _activeTreeStickGatherId = null;
         foreach (var gpu in _worldChunks.Values)
         {
+            if (!IsActiveWorldChunk(gpu)) continue;
             var index = gpu.Chunk.TreeInstances.FindIndex(
                 tree => tree.Id == id);
             if (index < 0) continue;
@@ -1776,6 +1784,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
         foreach (var gpu in _worldChunks.Values)
         {
+            if (!IsActiveWorldChunk(gpu)) continue;
             var index = gpu.Chunk.TreeInstances.FindIndex(
                 tree => tree.Id == _activeTreeId.Value);
             if (index < 0) continue;
@@ -1962,13 +1971,35 @@ internal sealed partial class GameHostWindow : GameWindow
     private Vector2 ScreenToTerrain(Vector2 screen)
     {
         var projected = (screen - new Vector2(ReferenceWidth, ReferenceHeight) * .5f - _camera) /
-                        Math.Max(_zoom, .001f);
-        var map = ScreenWorldToMap(projected);
+                         Math.Max(_zoom, .001f);
+        if (_activeWorldLevel == (int)WorldLevel.Overworld)
+        {
+            return IsometricTerrainProjection.Unproject(
+                projected,
+                map => InfiniteWorldGenerator.SampleRenderedHeight(
+                    _worldSeed, map.X, map.Y));
+        }
+
+        var map = IsometricTerrainProjection.FlatUnproject(projected);
         for (var iteration = 0; iteration < 3; iteration++)
         {
-            var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
-                _worldSeed, map.X, map.Y);
-            map = ScreenWorldToMap(new(projected.X, projected.Y + elevation * 20));
+            float height;
+            if (TrySampleLoadedTerrain(
+                    map.X, map.Y, out height, out _))
+            {
+                // Loaded height is already the exact rendered surface.
+            }
+            else
+            {
+                height = SampleProceduralLevelTerrain(
+                    map.X,
+                    map.Y,
+                    _activeWorldLevel == (int)WorldLevel.Underground
+                        ? FallbackCaveSampling()
+                        : null).Height;
+            }
+            map = IsometricTerrainProjection.UnprojectAtHeight(
+                projected, height);
         }
         return map;
     }
@@ -1978,9 +2009,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_player is null) return;
         var elevation = SamplePlayerTerrain(
             _player.Position.X, _player.Position.Y).Height;
-        var projected = new Vector2(
-            (_player.Position.X - _player.Position.Y) * 48,
-            (_player.Position.X + _player.Position.Y) * 24 - elevation * 20);
+        var projected = IsometricTerrainProjection.Project(
+            _player.Position.X, _player.Position.Y, elevation);
         _camera = -projected * _zoom;
     }
 
@@ -2159,7 +2189,8 @@ internal sealed partial class GameHostWindow : GameWindow
             var elevation = (tile.North + tile.East + tile.South + tile.West) / 4f;
             terrainIsoY = apparent.Y + elevation * 1.35f;
         }
-        var projected = new Vector2((tileX - tileY) * 48, (tileX + tileY) * 24);
+        var projected =
+            IsometricTerrainProjection.Project(tileX, tileY, 0);
         _zoom = .8f;
         _camera = -projected * _zoom;
         CloseWorldAtlasSession();
@@ -2203,9 +2234,11 @@ internal sealed partial class GameHostWindow : GameWindow
         for (var x = firstX; x <= lastX; x++)
             visible.Add(new(
                 x, y, chunksPerTile,
-                _developerMap.IsOpen
+                _developerMap.IsOpen &&
+                _activeWorldLevel == (int)WorldLevel.Overworld
                     ? _developerMap.Layer
-                    : WorldAtlasLayer.Terrain));
+                    : WorldAtlasLayer.Terrain,
+                _activeWorldLevel));
         _visibleAtlasTiles = visible;
         _visibleAtlasTileOrder = visible
             .OrderBy(key =>
@@ -3707,35 +3740,84 @@ internal sealed partial class GameHostWindow : GameWindow
             (int)MathF.Floor(_player.Position.Y));
         if (_minimapBuildTask is { IsCompleted: true })
         {
-            var result = _minimapBuildTask.GetAwaiter().GetResult();
+            var completed = _minimapBuildTask;
             _minimapBuildTask = null;
-            _minimapCenter = result.Center;
-            _minimapTerrain = result.Terrain;
-            GL.BindTexture(TextureTarget.Texture2D, _minimapTexture);
-            GL.TexSubImage2D(
-                TextureTarget.Texture2D,
-                0,
-                0,
-                0,
-                _minimapFrame.Width,
-                _minimapFrame.Height,
-                PixelFormat.Rgba,
-                PixelType.UnsignedByte,
-                result.Pixels);
+            _minimapBuildCancellation?.Dispose();
+            _minimapBuildCancellation = null;
+            if (completed.IsCanceled)
+            {
+                // A replacement build will be requested below.
+            }
+            else
+            {
+                var result = completed.GetAwaiter().GetResult();
+                if (result.Level == _activeWorldLevel)
+                {
+                    _minimapCenter = result.Center;
+                    _minimapLevel = result.Level;
+                    _minimapTerrain = result.Terrain;
+                    GL.BindTexture(TextureTarget.Texture2D, _minimapTexture);
+                    GL.TexSubImage2D(
+                        TextureTarget.Texture2D,
+                        0,
+                        0,
+                        0,
+                        _minimapFrame.Width,
+                        _minimapFrame.Height,
+                        PixelFormat.Rgba,
+                        PixelType.UnsignedByte,
+                        result.Pixels);
+                }
+            }
         }
 
-        if (_minimapBuildTask is null && center != _minimapCenter)
+        if (_minimapBuildTask is null &&
+            (center != _minimapCenter ||
+             _activeWorldLevel != _minimapLevel))
         {
             var previousCenter = _minimapCenter;
+            var previousLevel = _minimapLevel;
             var previousTerrain = _minimapTerrain;
+            var level = _activeWorldLevel;
+            IReadOnlyDictionary<ChunkCoordinate, WorldChunk>?
+                loadedChunks = null;
+            if (level == (int)WorldLevel.Underground)
+                loadedChunks = _worldChunks
+                    .Where(pair =>
+                        pair.Key.Level == level)
+                    .ToDictionary(
+                        pair => pair.Key,
+                        pair => pair.Value.Chunk);
+            _minimapBuildCancellation = new();
+            var cancellationToken =
+                _minimapBuildCancellation.Token;
             _minimapBuildTask = Task.Run(() =>
-                BuildMinimap(center, previousCenter, previousTerrain));
+                BuildMinimap(
+                    center, level, previousCenter, previousLevel,
+                    previousTerrain, loadedChunks,
+                    cancellationToken),
+                cancellationToken);
         }
         DrawUiSprite(_minimapFrame, _minimapTexture, _minimapUi.Bounds);
+        DrawCenteredUiText(
+            WorldLevelMapPresentation.LevelName(_activeWorldLevel),
+            new(
+                _minimapUi.Bounds.X + 18,
+                _minimapUi.Bounds.Y + 8,
+                _minimapUi.Bounds.Z - 36,
+                18),
+            new(226, 216, 181, 230));
     }
 
     private MinimapBuildResult BuildMinimap(
-        Vector2i center, Vector2i previousCenter, byte[]? previousTerrain)
+        Vector2i center,
+        int level,
+        Vector2i previousCenter,
+        int previousLevel,
+        byte[]? previousTerrain,
+        IReadOnlyDictionary<ChunkCoordinate, WorldChunk>?
+            loadedChunks,
+        CancellationToken cancellationToken)
     {
         const int terrainSize = 105;
         const int terrainRadius = terrainSize / 2;
@@ -3744,10 +3826,14 @@ internal sealed partial class GameHostWindow : GameWindow
             ? Vector2i.Zero
             : center - previousCenter;
         var canShift = previousTerrain is not null &&
+                       level == previousLevel &&
                        Math.Abs(delta.X) < terrainSize &&
                        Math.Abs(delta.Y) < terrainSize;
+        CaveHydrologyField.SamplingContext? caveContext = null;
 
         for (var y = 0; y < terrainSize; y++)
+        {
+        cancellationToken.ThrowIfCancellationRequested();
         for (var x = 0; x < terrainSize; x++)
         {
             var sourceX = x + delta.X;
@@ -3764,17 +3850,26 @@ internal sealed partial class GameHostWindow : GameWindow
                 continue;
             }
 
-            var (red, green, blue) = ReliefMinimapColor(
-                _worldSeed,
-                center.X + x - terrainRadius,
-                center.Y + y - terrainRadius);
+            var worldX = center.X + x - terrainRadius;
+            var worldY = center.Y + y - terrainRadius;
+            var (red, green, blue) =
+                level == (int)WorldLevel.Underground
+                    ? UndergroundMinimapColor(
+                        loadedChunks,
+                        ref caveContext,
+                        worldX,
+                        worldY)
+                    : ReliefMinimapColor(_worldSeed, worldX, worldY);
             terrain[targetIndex] = red;
             terrain[targetIndex + 1] = green;
             terrain[targetIndex + 2] = blue;
         }
+        }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return new MinimapBuildResult(
-            center, terrain, ComposeMinimapPixels(terrain, terrainSize));
+            center, level, terrain,
+            ComposeMinimapPixels(terrain, terrainSize));
     }
 
     private static byte[] ComposeMinimapPixels(byte[] terrain, int terrainSize)
@@ -3930,6 +4025,35 @@ internal sealed partial class GameHostWindow : GameWindow
         byte Shade(byte channel) => (byte)Math.Clamp(
             (int)MathF.Round(channel * factor), 0, 255);
         return (Shade(red), Shade(green), Shade(blue));
+    }
+
+    private (byte Red, byte Green, byte Blue)
+        UndergroundMinimapColor(
+            IReadOnlyDictionary<ChunkCoordinate, WorldChunk>?
+                loadedChunks,
+            ref CaveHydrologyField.SamplingContext? context,
+            int x,
+            int y)
+    {
+        var coordinate = new ChunkCoordinate(
+            FloorDiv(x, WorldChunk.Size),
+            FloorDiv(y, WorldChunk.Size),
+            (int)WorldLevel.Underground);
+        if (loadedChunks is not null &&
+            loadedChunks.TryGetValue(coordinate, out var chunk))
+        {
+            var localX = x - coordinate.X * WorldChunk.Size + .5f;
+            var localY = y - coordinate.Y * WorldChunk.Size + .5f;
+            return WorldLevelMapPresentation.UndergroundColor(
+                _worldSeed,
+                chunk.SampleUndergroundDensity(localX, localY),
+                x + .5f,
+                y + .5f);
+        }
+        context ??=
+            new CaveHydrologyField.SamplingContext(_worldSeed);
+        return WorldLevelMapPresentation.UndergroundColor(
+            _worldSeed, context, x + .5f, y + .5f);
     }
 
     private void RenderChatUi()
@@ -4353,11 +4477,33 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.UseProgram(_terrainProgram);
         UploadWaterRipples();
         BeginWorldTerrainBatch();
-        var visibleChunks = _worldChunks.Values.Where(IsChunkVisible).ToArray();
-        foreach (var gpu in visibleChunks
-                     .Where(gpu => IsChunkVisibleWithPadding(gpu, 0))
-                     .OrderBy(gpu => gpu.Chunk.Coordinate.X + gpu.Chunk.Coordinate.Y))
+        _visibleWorldChunkBuffer.Clear();
+        foreach (var gpu in _worldChunks.Values)
+        {
+            if (gpu.Chunk.Coordinate.Level != _activeWorldLevel)
+            {
+                continue;
+            }
+
+            if (IsChunkVisible(gpu))
+            {
+                _visibleWorldChunkBuffer.Add(gpu);
+            }
+        }
+
+        _visibleWorldChunkBuffer.Sort(static (left, right) =>
+            (left.Chunk.Coordinate.X + left.Chunk.Coordinate.Y)
+                .CompareTo(right.Chunk.Coordinate.X + right.Chunk.Coordinate.Y));
+        List<GpuWorldChunk> visibleChunks = _visibleWorldChunkBuffer;
+        foreach (var gpu in visibleChunks)
+        {
+            if (!IsChunkVisibleWithPadding(gpu, 0))
+            {
+                continue;
+            }
+
             DrawWorldChunkTerrain(gpu);
+        }
         if (_mode == PreviewMode.Game) DrawMoveMarker();
 
         var player = _mode == PreviewMode.Game ? GetPlayerVisual() : null;
@@ -4610,7 +4756,7 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.DrawArrays(PrimitiveType.Triangles, 0, vertices.Count / 5);
 
         static Vector2 Project(float x, float y, float z) =>
-            new((x - y) * 48, (x + y) * 24 - z * 20);
+            IsometricTerrainProjection.Project(x, y, z);
     }
 
     private void AddTreeQuad(string graphicName, Vector2 world, float opacity, List<float> vertices)
@@ -4621,9 +4767,8 @@ internal sealed partial class GameHostWindow : GameWindow
         var midpointX = (face.X1 + face.X2) * .5f;
         var midpointY = (face.Y1 + face.Y2) * .5f;
         var midpointHeight = (face.Top + face.Bottom) * .5f;
-        return new Vector2(
-            (midpointX - midpointY) * 48,
-            (midpointX + midpointY) * 24 - midpointHeight * 20);
+        return IsometricTerrainProjection.Project(
+            midpointX, midpointY, midpointHeight);
     }
 
     private (float Left, float Top, float Right, float Bottom) SpriteBounds(
@@ -4774,9 +4919,12 @@ internal sealed partial class GameHostWindow : GameWindow
                           new InvalidOperationException(
                               "Chunk loading failed.");
                 var loaded = _pendingChunkTask.Result;
-                if (!_worldChunks.ContainsKey(loaded.Coordinate))
+                if (loaded.Coordinate.Level == _activeWorldLevel &&
+                    !_worldChunks.ContainsKey(loaded.Coordinate))
                     _worldChunks.Add(
                         loaded.Coordinate, UploadWorldChunk(loaded));
+                if (loaded.Coordinate.Level == _activeWorldLevel)
+                    ClearFallbackCaveSampling();
                 _pendingChunkTask = null;
                 _pendingChunkCancellation?.Dispose();
                 _pendingChunkCancellation = null;
@@ -4817,8 +4965,9 @@ internal sealed partial class GameHostWindow : GameWindow
         }
 
         foreach (var coordinate in _worldChunks.Keys
-                     .Where(value => Math.Abs(value.X - center.X) > unloadRadius ||
-                                     Math.Abs(value.Y - center.Y) > unloadRadius)
+                     .Where(value =>
+                         WorldChunkCachePolicy.IsOutsideRetentionRadius(
+                             value, center, unloadRadius))
                      .ToArray())
             UnloadWorldChunk(coordinate, save: true);
     }
@@ -5216,9 +5365,10 @@ internal sealed partial class GameHostWindow : GameWindow
         var elevation = SamplePlayerTerrain(
             _moveMarker.Position.X,
             _moveMarker.Position.Y).Height;
-        var world = new Vector2(
-            (_moveMarker.Position.X - _moveMarker.Position.Y) * 48,
-            (_moveMarker.Position.X + _moveMarker.Position.Y) * 24 - elevation * 20);
+        var world = IsometricTerrainProjection.Project(
+            _moveMarker.Position.X,
+            _moveMarker.Position.Y,
+            elevation);
         DrawSprite(
             animation.Graphic.Sprite.Frames[frameIndex],
             animation.Textures[frameIndex],
@@ -5272,9 +5422,10 @@ internal sealed partial class GameHostWindow : GameWindow
         var terrain = SamplePlayerTerrain(
             _player.Position.X, _player.Position.Y);
         var elevation = terrain.Height;
-        var world = new Vector2(
-            (_player.Position.X - _player.Position.Y) * 48,
-            (_player.Position.X + _player.Position.Y) * 24 - elevation * 20);
+        var world = IsometricTerrainProjection.Project(
+            _player.Position.X,
+            _player.Position.Y,
+            elevation);
         var biome = terrain.Biome;
         return new(
             graphic.Sprite.Frames[directional.Index],
@@ -5488,7 +5639,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private GpuWorldChunk UploadWorldChunk(WorldChunk chunk)
     {
         Vector2 Project(float x, float y, float z) =>
-            new((x - y) * 48, (x + y) * 24 - z * 20);
+            IsometricTerrainProjection.Project(x, y, z);
         var layers = Enum.GetValues<Biome>().ToDictionary(biome => biome, biome => (float)(int)biome);
         var vertices = new List<float>(WorldChunk.Size * WorldChunk.Size * 6 * 12);
         var shadeCache = new Dictionary<(int X, int Y), float>();
@@ -5574,7 +5725,10 @@ internal sealed partial class GameHostWindow : GameWindow
         var gpu = new GpuWorldChunk(
             chunk, vbo, preparedVertices.Length / 12,
             weights.A, weights.B, weights.C, weights.D, weights.Shore,
-            WorldChunkProjection.TerrainBounds(vertices, 12),
+            chunk.Coordinate.Level == (int)WorldLevel.Underground
+                ? chunk.UndergroundProjectedBounds
+                : WorldChunkProjection.TerrainBounds(
+                    preparedVertices, 12),
             renderedHeights);
         gpu.VegetationRenderItems = WorldVegetationRenderCache.Build(
             chunk, renderedHeights);
@@ -5656,7 +5810,12 @@ internal sealed partial class GameHostWindow : GameWindow
         }
     }
 
+    private bool IsActiveWorldChunk(GpuWorldChunk gpu) =>
+        WorldChunkCachePolicy.IsActiveLevel(
+            gpu.Chunk.Coordinate, _activeWorldLevel);
+
     private bool IsChunkVisible(GpuWorldChunk gpu) =>
+        IsActiveWorldChunk(gpu) &&
         IsChunkVisibleWithPadding(gpu, 96);
 
     private bool IsChunkVisibleWithPadding(
@@ -5775,9 +5934,8 @@ internal sealed partial class GameHostWindow : GameWindow
         });
     }
 
-    private static Vector2 ScreenWorldToMap(Vector2 world) => new(
-        (world.Y / 24f + world.X / 48f) * .5f,
-        (world.Y / 24f - world.X / 48f) * .5f);
+    private static Vector2 ScreenWorldToMap(Vector2 world) =>
+        IsometricTerrainProjection.FlatUnproject(world);
 
     private static int FloorDiv(int value, int divisor)
     {
@@ -6227,10 +6385,8 @@ internal sealed partial class GameHostWindow : GameWindow
 
     protected override void OnUnload()
     {
+        CancelWorldLevelWork(clearMinimap: true);
         SaveActivePlayerState();
-        CancelPendingChunkLoad();
-        _pathCancellation?.Cancel();
-        _pathCancellation?.Dispose();
         foreach (var coordinate in _worldChunks.Keys.ToArray())
             UnloadWorldChunk(coordinate, save: true);
         Exception? saveFailure = null;

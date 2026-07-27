@@ -27,6 +27,28 @@ Require(frameLimitedSettings.FrameRateLimit == 60 &&
         DisplaySettingsController.FrameRateLabel(144) == "144 FPS",
     "frame limits must cycle from unlimited through supported FPS presets");
 
+var overworldCacheChunk = new ChunkCoordinate(4, -2, (int)WorldLevel.Overworld);
+var undergroundCacheChunk = new ChunkCoordinate(4, -2, (int)WorldLevel.Underground);
+var activeCacheCenter = new ChunkCoordinate(4, -2, (int)WorldLevel.Overworld);
+Require(
+    !WorldChunkCachePolicy.IsOutsideRetentionRadius(
+        overworldCacheChunk, activeCacheCenter, 3) &&
+    !WorldChunkCachePolicy.IsOutsideRetentionRadius(
+        undergroundCacheChunk, activeCacheCenter, 3),
+    "nearby chunks from both levels must remain cached across level transitions");
+Require(
+    WorldChunkCachePolicy.IsActiveLevel(
+        overworldCacheChunk, (int)WorldLevel.Overworld) &&
+    !WorldChunkCachePolicy.IsActiveLevel(
+        undergroundCacheChunk, (int)WorldLevel.Overworld),
+    "CPU world queries must reject cached chunks from inactive levels");
+Require(
+    WorldChunkCachePolicy.IsOutsideRetentionRadius(
+        new ChunkCoordinate(8, -2, (int)WorldLevel.Underground),
+        activeCacheCenter,
+        3),
+    "inactive-level chunk caching must remain spatially bounded");
+
 var metrics = new PerformanceMetricsOverlay();
 metrics.RecordFrame(1d / 60);
 metrics.RecordFrame(1d / 30);
@@ -646,6 +668,17 @@ Require(
         1,
         new(1280, 720)),
     "chunk visibility must use the complete elevated vertex bounds instead of a fixed flat height");
+foreach (var height in new[] { 0f, 2.5f, 4f, 17f })
+{
+    var expectedMap = new Vector2(37.25f, -19.75f);
+    var projectedMap = IsometricTerrainProjection.Project(
+        expectedMap.X, expectedMap.Y, height);
+    var unprojectedMap = IsometricTerrainProjection.Unproject(
+        projectedMap, _ => height);
+    Require(
+        (unprojectedMap - expectedMap).LengthSquared < .000001f,
+        "isometric click mapping must round-trip terrain at every world level height");
+}
 var craftingWindowBounds =
     CraftingWindowState.WindowBounds(new(0, 0, 1280, 720));
 var craftingButton =
@@ -745,6 +778,22 @@ Require(
         (Biome.DeepWater or Biome.ShallowWater or
          Biome.RiverWater or Biome.MangroveShallows),
     "developer-map teleport destinations must resolve onto walkable land");
+var undergroundDeveloperDestination =
+    DeveloperMapWindow.ResolveDestination(
+        Vector2.Zero,
+        Vector2.Zero,
+        Vector2.Zero,
+        1,
+        2187,
+        developerFallback,
+        (int)WorldLevel.Underground);
+Require(
+    CaveHydrologyField.Density(
+        2187,
+        undergroundDeveloperDestination.X,
+        undergroundDeveloperDestination.Y) >=
+    CaveHydrologyField.Boundary,
+    "underground developer-map teleports must resolve onto cave floor");
 developerMap.Close();
 Require(!developerMap.IsOpen,
     "the in-game developer map must close cleanly");
@@ -1535,10 +1584,22 @@ Require(atlas.Width == 6 && atlas.Height == 6 && atlas.SpanTiles == 64,
 var isometricKey = new WorldAtlasTileKey(0, 0, 1);
 var isometricTile = WorldAtlasGenerator.GenerateIsometricTile(seed, isometricKey);
 var repeatedIsometricTile = WorldAtlasGenerator.GenerateIsometricTile(seed, isometricKey);
+var undergroundIsometricKey = isometricKey with
+{
+    Level = (int)WorldLevel.Underground
+};
+var undergroundIsometricTile =
+    WorldAtlasGenerator.GenerateIsometricTile(
+        seed, undergroundIsometricKey);
 Require(isometricTile.Width == 256 && isometricTile.Height == 256,
     "isometric map sections must render at high-resolution 256x256");
 Require(isometricTile.Rgba.SequenceEqual(repeatedIsometricTile.Rgba),
     "isometric map section generation must be deterministic");
+Require(
+    undergroundIsometricKey != isometricKey &&
+    undergroundIsometricTile.Rgba.Any(value => value != 0) &&
+    !undergroundIsometricTile.Rgba.SequenceEqual(isometricTile.Rgba),
+    "atlas cache keys and pixels must distinguish underground from overworld");
 using (var cancelledAtlas = new CancellationTokenSource())
 {
     cancelledAtlas.Cancel();
@@ -1716,6 +1777,78 @@ try
     store.Save(origin);
     Require(new FileInfo(positiveRegion).Length == regionBytes,
         "saving an unchanged chunk must not append duplicate region data");
+    const int simulatedLevelTransitions = 4;
+    const int visibleChunksPerTransition = 25;
+    var transitionProcess =
+        System.Diagnostics.Process.GetCurrentProcess();
+    transitionProcess.Refresh();
+    var transitionBaselineManaged = GC.GetTotalMemory(false);
+    var transitionBaselineWorkingSet =
+        transitionProcess.WorkingSet64;
+    var transitionBaselinePrivate =
+        transitionProcess.PrivateMemorySize64;
+    var transitionBaselineHandles = transitionProcess.HandleCount;
+    var transitionBaselineThreads = transitionProcess.Threads.Count;
+    var transitionBaselineGen0 = GC.CollectionCount(0);
+    var transitionBaselineGen1 = GC.CollectionCount(1);
+    var transitionBaselineGen2 = GC.CollectionCount(2);
+    var transitionSaveAllocatedBefore =
+        GC.GetAllocatedBytesForCurrentThread();
+    var transitionSaveTimer =
+        System.Diagnostics.Stopwatch.StartNew();
+    for (var transition = 0;
+         transition < simulatedLevelTransitions;
+         transition++)
+    for (var chunk = 0;
+         chunk < visibleChunksPerTransition;
+         chunk++)
+        store.Save(origin);
+    transitionSaveTimer.Stop();
+    var transitionSaveAllocated =
+        GC.GetAllocatedBytesForCurrentThread() -
+        transitionSaveAllocatedBefore;
+    Console.WriteLine(
+        $"Unchanged level-transition saves " +
+        $"({simulatedLevelTransitions} x " +
+        $"{visibleChunksPerTransition} chunks): " +
+        $"{transitionSaveTimer.Elapsed.TotalMilliseconds:N1} ms / " +
+        $"{transitionSaveAllocated:N0} B.");
+    transitionProcess.Refresh();
+    var transitionPeakManaged = GC.GetTotalMemory(false);
+    var transitionPeakWorkingSet = transitionProcess.WorkingSet64;
+    var transitionPeakPrivate =
+        transitionProcess.PrivateMemorySize64;
+    var transitionPeakHandles = transitionProcess.HandleCount;
+    var transitionPeakThreads = transitionProcess.Threads.Count;
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+    transitionProcess.Refresh();
+    var transitionIdleManaged = GC.GetTotalMemory(true);
+    Console.WriteLine(
+        "Transition process metrics:" +
+        $"\n  managed: {transitionBaselineManaged / 1048576d:N1} -> " +
+        $"{transitionPeakManaged / 1048576d:N1} -> " +
+        $"{transitionIdleManaged / 1048576d:N1} MiB (baseline/after/idle)" +
+        $"\n  working: {transitionBaselineWorkingSet / 1048576d:N1} -> " +
+        $"{transitionPeakWorkingSet / 1048576d:N1} -> " +
+        $"{transitionProcess.WorkingSet64 / 1048576d:N1} MiB" +
+        $"\n  private: {transitionBaselinePrivate / 1048576d:N1} -> " +
+        $"{transitionPeakPrivate / 1048576d:N1} -> " +
+        $"{transitionProcess.PrivateMemorySize64 / 1048576d:N1} MiB" +
+        $"\n  handles: {transitionBaselineHandles} -> " +
+        $"{transitionPeakHandles} -> {transitionProcess.HandleCount}" +
+        $"\n  threads: {transitionBaselineThreads} -> " +
+        $"{transitionPeakThreads} -> {transitionProcess.Threads.Count}" +
+        $"\n  collections: gen0 +" +
+        $"{GC.CollectionCount(0) - transitionBaselineGen0}, gen1 +" +
+        $"{GC.CollectionCount(1) - transitionBaselineGen1}, gen2 +" +
+        $"{GC.CollectionCount(2) - transitionBaselineGen2}");
+    Require(
+        transitionSaveAllocated >= 1_000_000 ||
+        transitionSaveTimer.Elapsed >= TimeSpan.FromMilliseconds(50),
+        "level-transition characterization must reproduce the current " +
+        "unchanged-chunk save workload before it is optimized");
     Require(new FileInfo(positiveRegion).Length <
             (long)WorldChunkStore.RegionSize * WorldChunkStore.RegionSize *
             (origin.BiomeWeightsA.Length + origin.BiomeWeightsB.Length +
@@ -1775,10 +1908,42 @@ try
         hasInterpolatedContourVertex,
         "underground terrain must clip triangles at an interpolated sub-tile contour");
     Require(
+        undergroundMesh.Length / 12 < 10_000,
+        "underground render meshes must not regress to full density-grid tessellation");
+    var undergroundBounds =
+        WorldChunkProjection.TerrainBounds(undergroundMesh, 12);
+    Require(
+        undergroundBounds.Z > 0 &&
+        undergroundBounds.W > 0,
+        "underground culling bounds must come from the prepared cave mesh");
+    Require(
         underground.UndergroundDensity.Length ==
         UndergroundWorldGenerator.DensityStride *
         UndergroundWorldGenerator.DensityStride,
         "underground generation must retain one reusable sub-tile density field");
+    Require(
+        underground.UndergroundProjectedBounds == undergroundBounds,
+        "underground generation must carry background-computed culling bounds");
+    using (var cancelledUnderground =
+           new CancellationTokenSource())
+    {
+        cancelledUnderground.Cancel();
+        var cancellationObserved = false;
+        try
+        {
+            UndergroundWorldGenerator.Generate(
+                store.Seed,
+                new(1, 0, (int)WorldLevel.Underground),
+                cancelledUnderground.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            cancellationObserved = true;
+        }
+        Require(
+            cancellationObserved,
+            "underground density, mesh, and bounds generation must observe cancellation");
+    }
     Require(undergroundTimer.Elapsed < TimeSpan.FromSeconds(5) &&
             undergroundAllocated < 128L * 1024 * 1024,
         "underground chunk generation exceeded its performance budget");

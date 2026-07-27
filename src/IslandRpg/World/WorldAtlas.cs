@@ -18,7 +18,8 @@ internal readonly record struct WorldAtlasTileKey(
     int X,
     int Y,
     int ChunksAcross,
-    WorldAtlasLayer Layer = WorldAtlasLayer.Terrain)
+    WorldAtlasLayer Layer = WorldAtlasLayer.Terrain,
+    int Level = (int)WorldLevel.Overworld)
 {
     public int SpanTiles => ChunksAcross * WorldChunk.Size;
 }
@@ -42,6 +43,8 @@ internal static class WorldAtlasGenerator
         WorldAtlasTileKey key,
         CancellationToken cancellationToken = default)
     {
+        if (key.Level == (int)WorldLevel.Underground)
+            return GenerateUndergroundTile(seed, key, cancellationToken);
         var size = TilePixelSize;
         var span = key.SpanTiles;
         var rgba = new byte[size * size * 4];
@@ -113,6 +116,50 @@ internal static class WorldAtlasGenerator
         });
         if (key.Layer == WorldAtlasLayer.Terrain)
             SmoothRiverContinuity(rgba, river, bridgeable, size);
+        return new(key, size, size, rgba);
+    }
+
+    private static WorldAtlasTileSnapshot GenerateUndergroundTile(
+        long seed,
+        WorldAtlasTileKey key,
+        CancellationToken cancellationToken)
+    {
+        var size = TilePixelSize;
+        var span = key.SpanTiles;
+        var rgba = new byte[size * size * 4];
+        Parallel.For(
+            0,
+            size,
+            new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+                MaxDegreeOfParallelism = 2
+            },
+            () => new CaveHydrologyField.SamplingContext(seed),
+            (imageY, _, context) =>
+            {
+            for (var imageX = 0; imageX < size; imageX++)
+            {
+                if ((imageX & 31) == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
+                var isoX =
+                    (key.X + (imageX + .5f) / size) * span;
+                var isoY =
+                    (key.Y + (imageY + .5f) / size) * span;
+                var worldX = isoX + isoY;
+                var worldY = isoY - isoX;
+                var color =
+                    WorldLevelMapPresentation.UndergroundColor(
+                        seed, context, worldX, worldY);
+                var index = (imageY * size + imageX) * 4;
+                rgba[index] = color.Red;
+                rgba[index + 1] = color.Green;
+                rgba[index + 2] = color.Blue;
+                rgba[index + 3] = 255;
+            }
+                return context;
+            },
+            _ => { });
         return new(key, size, size, rgba);
     }
 

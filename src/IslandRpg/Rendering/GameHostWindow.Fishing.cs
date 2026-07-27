@@ -285,12 +285,15 @@ internal sealed partial class GameHostWindow
 
     private WorldFish? FindFish(string stableKey) =>
         _worldChunks.Values
+            .Where(IsActiveWorldChunk)
             .SelectMany(chunk => chunk.Chunk.Fish)
             .FirstOrDefault(fish =>
                 fish.StableKey.Equals(stableKey, StringComparison.Ordinal));
 
     private GpuWorldChunk? FindFishChunk(string stableKey) =>
-        _worldChunks.Values.FirstOrDefault(chunk =>
+        _worldChunks.Values
+            .Where(IsActiveWorldChunk)
+            .FirstOrDefault(chunk =>
             chunk.Chunk.Fish.Any(fish =>
                 fish.StableKey.Equals(stableKey, StringComparison.Ordinal)));
 

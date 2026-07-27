@@ -23,7 +23,8 @@ internal sealed partial class GameHostWindow
         if (task.IsCompletedSuccessfully)
         {
             var result = task.Result;
-            if (result.RequestId == window._pathRequestId)
+            if (result.RequestId == window._pathRequestId &&
+                result.WorldLevel == window._activeWorldLevel)
             {
                 window._queuedAction = result.Action;
                 window._player?.FollowPath(result.Path);
@@ -89,16 +90,18 @@ internal sealed partial class GameHostWindow
         window._pathCancellation = new CancellationTokenSource();
         var token = window._pathCancellation.Token;
         var requestId = ++window._pathRequestId;
+        var worldLevel = window._activeWorldLevel;
         var start = window._player.Position;
         window._pendingPathTask = Task.Run(
             () => new GameHostWindow.PathResult(
                 requestId,
+                worldLevel,
                 GridPathfinder.Find(
                     window._worldSeed,
                     start,
                     target,
                     cancellationToken: token,
-                    worldLevel: window._activeWorldLevel)),
+                    worldLevel: worldLevel)),
             token);
         window._moveMarker = new(target, 0);
     }
@@ -126,11 +129,13 @@ internal sealed partial class GameHostWindow
         window._pathCancellation = new CancellationTokenSource();
         var token = window._pathCancellation.Token;
         var requestId = ++window._pathRequestId;
+        var worldLevel = window._activeWorldLevel;
         var start = window._player.Position;
         window._queuedAction = null;
         window._pendingPathTask = Task.Run(
             () => window.FindActionPath(
                 requestId,
+                worldLevel,
                 start,
                 target,
                 range,
@@ -251,7 +256,15 @@ internal sealed partial class GameHostWindow
         window._pathCancellation?.Cancel();
         window._pathCancellation?.Dispose();
         window._pathCancellation = null;
+        if (window._pendingPathTask is { } abandoned)
+            _ = abandoned.ContinueWith(
+                completed => _ = completed.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted |
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         window._pendingPathTask = null;
+        window._pathRequestId++;
     }
     }
 }

@@ -143,7 +143,9 @@ internal sealed partial class GameHostWindow
             return false;
         }
 
-        foreach (var chunk in _worldChunks.Values.Select(value => value.Chunk))
+        foreach (var chunk in _worldChunks.Values
+                     .Where(IsActiveWorldChunk)
+                     .Select(value => value.Chunk))
         {
             if (chunk.Trees.Any(tree =>
                     PlaceableObjectCatalog.ContainsPoint(

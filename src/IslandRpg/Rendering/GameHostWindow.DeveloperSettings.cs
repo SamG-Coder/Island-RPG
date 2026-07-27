@@ -59,20 +59,11 @@ internal sealed partial class GameHostWindow
 
     private void SwitchWorldLevelForDeveloper()
     {
-        CancelPendingChunkLoad();
-        foreach (var coordinate in _worldChunks.Keys.ToArray())
-            UnloadWorldChunk(coordinate, save: true);
+        CancelWorldLevelWork(clearMinimap: true);
         _activeWorldLevel =
             _activeWorldLevel == (int)WorldLevel.Overworld
                 ? (int)WorldLevel.Underground
                 : (int)WorldLevel.Overworld;
-        _queuedAction = null;
-        _moveMarker = null;
         StreamWorld();
-        _chatUi.AddMessage(
-            _activeWorldLevel == (int)WorldLevel.Overworld
-                ? "Developer level: overworld (0)."
-                : "Developer level: underground (-1).",
-            ChatMessageStyle.Action);
     }
 }

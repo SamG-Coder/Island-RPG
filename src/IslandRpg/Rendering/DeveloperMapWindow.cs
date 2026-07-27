@@ -30,10 +30,18 @@ internal sealed class DeveloperMapWindow
         Vector2 atlasCenterIso,
         float pixelsPerTile,
         long seed,
-        Vector2 fallback)
+        Vector2 fallback,
+        int level = (int)WorldLevel.Overworld)
     {
         var apparent = atlasCenterIso +
             (pointer - viewportCenter) / pixelsPerTile;
+        if (level == (int)WorldLevel.Underground)
+            return WorldLevelNavigation.NearestWalkable(
+                seed,
+                new(apparent.X + apparent.Y, apparent.Y - apparent.X),
+                fallback,
+                level);
+
         var terrainIsoY = apparent.Y;
         float tileX = 0;
         float tileY = 0;
@@ -47,28 +55,7 @@ internal sealed class DeveloperMapWindow
                 (tile.North + tile.East + tile.South + tile.West) / 4f;
             terrainIsoY = apparent.Y + elevation * 1.35f;
         }
-        return NearestWalkable(seed, new(tileX, tileY), fallback);
-    }
-
-    private static Vector2 NearestWalkable(
-        long seed, Vector2 destination, Vector2 fallback)
-    {
-        var originX = (int)MathF.Floor(destination.X);
-        var originY = (int)MathF.Floor(destination.Y);
-        for (var radius = 0; radius <= 24; radius++)
-        for (var y = -radius; y <= radius; y++)
-        for (var x = -radius; x <= radius; x++)
-        {
-            if (Math.Max(Math.Abs(x), Math.Abs(y)) != radius)
-                continue;
-            var tileX = originX + x;
-            var tileY = originY + y;
-            var biome = InfiniteWorldGenerator.BiomeAt(seed, tileX, tileY);
-            if (biome is Biome.DeepWater or Biome.ShallowWater or
-                Biome.RiverWater or Biome.MangroveShallows)
-                continue;
-            return new(tileX + .5f, tileY + .5f);
-        }
-        return fallback;
+        return WorldLevelNavigation.NearestWalkable(
+            seed, new(tileX, tileY), fallback, level);
     }
 }

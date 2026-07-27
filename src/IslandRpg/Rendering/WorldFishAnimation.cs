@@ -25,8 +25,7 @@ internal static class WorldFishAnimation
     {
         var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
             seed, fish.X, fish.Y);
-        return new(
-            (fish.X - fish.Y) * 48,
-            (fish.X + fish.Y) * 24 - elevation * 20);
+        return IsometricTerrainProjection.Project(
+            fish.X, fish.Y, elevation);
     }
 }
