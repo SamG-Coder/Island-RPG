@@ -367,10 +367,8 @@ internal static class InfiniteWorldGenerator
     internal static (byte[] A, byte[] B, byte[] C, byte[] D, byte[] Shore) GenerateBiomeWeights(
         long seed, ChunkCoordinate coordinate)
     {
-        const int radius = 10;
         var size = WorldChunk.WeightTextureSize;
         var labels = new byte[size * size];
-        var usedMaterials = new bool[Enum.GetValues<Biome>().Length];
         var water = new bool[size * size];
         var firstTileX = coordinate.X * WorldChunk.Size - WorldChunk.WeightHaloTiles;
         var firstTileY = coordinate.Y * WorldChunk.Size - WorldChunk.WeightHaloTiles;
@@ -385,75 +383,16 @@ internal static class InfiniteWorldGenerator
                 var y = tileY * WorldChunk.WeightSamplesPerTile + sampleY;
                 var pixel = y * size + x;
                 labels[pixel] = (byte)biome;
-                usedMaterials[(int)biome] = true;
                 water[pixel] = biome is Biome.DeepWater or Biome.ShallowWater or
                     Biome.RiverWater or Biome.MangroveShallows;
             }
         }
-        var activeMaterials = Enumerable.Range(0, usedMaterials.Length)
-            .Where(index => usedMaterials[index]).ToArray();
-        var activeLookup = new int[usedMaterials.Length];
-        for (var channel = 0; channel < activeMaterials.Length; channel++)
-            activeLookup[activeMaterials[channel]] = channel;
-        var channels = activeMaterials.Length;
-        var weights = new float[size * size * channels];
-        for (var pixel = 0; pixel < labels.Length; pixel++)
-            weights[pixel * channels + activeLookup[labels[pixel]]] = 1;
-
-        var kernel = new float[radius * 2 + 1];
-        var kernelTotal = 0f;
-        for (var i = -radius; i <= radius; i++)
-        {
-            var value = MathF.Exp(-(i * i) / (2f * 4.6f * 4.6f));
-            kernel[i + radius] = value;
-            kernelTotal += value;
-        }
-        for (var i = 0; i < kernel.Length; i++) kernel[i] /= kernelTotal;
-
-        var scratch = new float[weights.Length];
-        for (var y = 0; y < size; y++)
-        for (var x = 0; x < size; x++)
-        for (var channel = 0; channel < channels; channel++)
-        {
-            var value = 0f;
-            for (var k = -radius; k <= radius; k++)
-                value += weights[(y * size + Math.Clamp(x + k, 0, size - 1)) * channels + channel] *
-                         kernel[k + radius];
-            scratch[(y * size + x) * channels + channel] = value;
-        }
-        for (var y = 0; y < size; y++)
-        for (var x = 0; x < size; x++)
-        for (var channel = 0; channel < channels; channel++)
-        {
-            var value = 0f;
-            for (var k = -radius; k <= radius; k++)
-                value += scratch[(Math.Clamp(y + k, 0, size - 1) * size + x) * channels + channel] *
-                         kernel[k + radius];
-            weights[(y * size + x) * channels + channel] = value;
-        }
-
-        var a = new byte[size * size * 4];
-        var b = new byte[size * size * 4];
-        var c = new byte[size * size * 4];
-        var d = new byte[size * size * 4];
+        var blended = BiomeWeightBlender.Build(labels, size);
+        var a = blended.A;
+        var b = blended.B;
+        var c = blended.C;
+        var d = blended.D;
         var shore = new byte[size * size];
-        for (var pixel = 0; pixel < size * size; pixel++)
-        {
-            var total = 0f;
-            for (var channel = 0; channel < channels; channel++)
-                total += weights[pixel * channels + channel];
-            for (var channel = 0; channel < channels; channel++)
-            {
-                var value = (byte)Math.Clamp(
-                    MathF.Round(weights[pixel * channels + channel] / Math.Max(total, .0001f) * 255),
-                    0, 255);
-                var material = activeMaterials[channel];
-                if (material < 4) a[pixel * 4 + material] = value;
-                else if (material < 8) b[pixel * 4 + material - 4] = value;
-                else if (material < 12) c[pixel * 4 + material - 8] = value;
-                else d[pixel * 4 + material - 12] = value;
-            }
-        }
 
         var distanceToWater = DistanceTo(targetWater: true);
         var distanceToLand = DistanceTo(targetWater: false);

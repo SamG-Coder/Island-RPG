@@ -152,9 +152,7 @@ internal static class UndergroundWorldGenerator
         CancellationToken cancellationToken)
     {
         var size = WorldChunk.WeightTextureSize;
-        var textures = Enumerable.Range(0, 4)
-            .Select(_ => new byte[size * size * 4])
-            .ToArray();
+        var labels = new byte[size * size];
         var firstX = coordinate.X * WorldChunk.Size -
                      WorldChunk.WeightHaloTiles;
         var firstY = coordinate.Y * WorldChunk.Size -
@@ -170,11 +168,12 @@ internal static class UndergroundWorldGenerator
                 y / (float)WorldChunk.WeightSamplesPerTile;
             var biome = MaterialAt(
                 seed, (int)MathF.Floor(worldX), (int)MathF.Floor(worldY));
-            var layer = (int)biome;
-            textures[layer / 4][(y * size + x) * 4 + layer % 4] = 255;
+            labels[y * size + x] = (byte)biome;
         }
         }
-        return textures;
+        var blended = BiomeWeightBlender.Build(
+            labels, size, cancellationToken);
+        return [blended.A, blended.B, blended.C, blended.D];
     }
 
     private static bool TileIntersectsCave(

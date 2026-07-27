@@ -1889,6 +1889,30 @@ try
         underground.UndergroundDensity.SequenceEqual(
             undergroundReloaded.UndergroundDensity),
         "transient underground generation must be deterministic");
+    var undergroundWeightTextures = new[]
+    {
+        underground.BiomeWeightsA,
+        underground.BiomeWeightsB,
+        underground.BiomeWeightsC,
+        underground.BiomeWeightsD
+    };
+    var blendedUndergroundPixels = 0;
+    for (var pixel = 0;
+         pixel < WorldChunk.WeightTextureSize *
+         WorldChunk.WeightTextureSize;
+         pixel++)
+    {
+        var activeWeights = 0;
+        foreach (var texture in undergroundWeightTextures)
+        for (var channel = 0; channel < 4; channel++)
+            if (texture[pixel * 4 + channel] > 0)
+                activeWeights++;
+        if (activeWeights > 1)
+            blendedUndergroundPixels++;
+    }
+    Require(
+        blendedUndergroundPixels > 0,
+        "underground material weights must blend rather than form hard tile edges");
     var undergroundMesh = underground.UndergroundMeshVertices;
     var hasInterpolatedContourVertex = false;
     for (var offset = 0; offset < undergroundMesh.Length; offset += 12)
