@@ -2381,6 +2381,28 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.Uniform1(_shaderUniforms.Get(_program, "opacity"), 1f);
         GL.Uniform1(_shaderUniforms.Get(_program, "outlineOnly"), 0);
         GL.Uniform1(_shaderUniforms.Get(_program, "wading"), 0);
+        var caveLighting =
+            _screen == ScreenState.WorldPreview &&
+            _mode == PreviewMode.Game &&
+            _activeWorldLevel == (int)WorldLevel.Underground &&
+            _player is not null;
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "caveLighting"),
+            caveLighting ? 1 : 0);
+        if (caveLighting)
+        {
+            var player = GetPlayerVisual();
+            var anchor = player is null
+                ? new Vector2(ReferenceWidth * .5f, ReferenceHeight * .5f)
+                : SpriteAnchor(player.World);
+            GL.Uniform2(
+                _shaderUniforms.Get(_program, "playerLightUv"),
+                anchor.X / ReferenceWidth,
+                1f - anchor.Y / ReferenceHeight);
+            GL.Uniform1(
+                _shaderUniforms.Get(_program, "playerLightScale"),
+                _zoom);
+        }
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, _sceneColor);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
@@ -2393,6 +2415,9 @@ internal sealed partial class GameHostWindow : GameWindow
             rightNdc,bottomNdc,1,0,
             rightNdc,topNdc,1,1
         ]);
+        // This program also renders sprites and UI. Keep the cave composite
+        // strictly scoped to this one fullscreen draw.
+        GL.Uniform1(_shaderUniforms.Get(_program, "caveLighting"), 0);
     }
 
     protected override void OnRenderFrame(FrameEventArgs e)
@@ -3160,8 +3185,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void RenderDayNightOverlay()
     {
-        var time = WorldTime.At(_worldGameSeconds);
-        var darkness = 1 - time.Daylight;
+        if (_activeWorldLevel == (int)WorldLevel.Underground)
+            return;
+        var darkness = SceneDarkness();
         if (darkness <= .01f) return;
         var scene = SceneClientBounds();
         DrawUiColor(
@@ -4285,6 +4311,8 @@ internal sealed partial class GameHostWindow : GameWindow
         var top = -(rectangle.Y - viewportHeight * .5f) * 2 / viewportHeight;
         var bottom = -(rectangle.Y + rectangle.W - viewportHeight * .5f) * 2 / viewportHeight;
         GL.UseProgram(_program);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "caveLighting"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
         GL.Uniform1(
             GL.GetUniformLocation(_program, "opacity"),
@@ -6412,6 +6440,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_minimapTexture != 0) GL.DeleteTexture(_minimapTexture);
         if (_newWorldPreviewTexture != 0)
             GL.DeleteTexture(_newWorldPreviewTexture);
+        if (_campfireLightTexture != 0)
+            GL.DeleteTexture(_campfireLightTexture);
         _fontSystem?.Dispose();
         _fontRenderer?.Dispose();
         if (_terrainArray != 0) GL.DeleteTexture(_terrainArray);

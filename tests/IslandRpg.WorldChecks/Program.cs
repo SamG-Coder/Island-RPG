@@ -292,6 +292,12 @@ Require(WorldTime.At(
 Require(CampfireLightSource.Opacity(0, 0) == 0 &&
         CampfireLightSource.Opacity(0, 1) > .8f,
     "campfire lighting must disappear in daylight and remain strong at night");
+Require(
+    WorldLighting.Darkness(
+        1, (int)WorldLevel.Overworld) == 0 &&
+    WorldLighting.Darkness(
+        1, (int)WorldLevel.Underground) == 1,
+    "underground lighting must remain dark regardless of surface daylight");
 
 Require(WoodcuttingSkill.LevelForExperience(0) == 1,
     "woodcutting must begin at level one");

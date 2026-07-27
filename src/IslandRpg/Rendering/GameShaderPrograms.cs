@@ -356,6 +356,8 @@ internal static class GameShaderPrograms
             "uniform vec3 outlineColor;" +
             "uniform int preserveDarkTint;" +
             "uniform int spriteOutline;uniform vec3 spriteOutlineColor;" +
+            "uniform int caveLighting;uniform vec2 playerLightUv;" +
+            "uniform float playerLightScale;" +
             "uniform float waterlineUv;uniform vec2 texelSize;" +
             "void main(){vec4 source=texture(image,uv);" +
             "if(outlineOnly==1){float around=0.0;" +
@@ -396,6 +398,17 @@ internal static class GameShaderPrograms
             "vec3 colorized=clamp(colorTint*(shade/targetPeak),0.0,1.0);" +
             "c.rgb=mix(vec3(shade),colorized,tintAmount);" +
             "}else{c.rgb=mix(c.rgb,colorTint,tintAmount);}" +
+            "if(caveLighting==1){" +
+            "vec2 groundDelta=(uv-playerLightUv)/(vec2(0.175,0.115)*playerLightScale);" +
+            "vec2 bodyDelta=(uv-playerLightUv)/(vec2(0.085,0.155)*playerLightScale);" +
+            "float ground=clamp(1.0-length(groundDelta),0.0,1.0);" +
+            "float body=clamp(1.0-length(bodyDelta),0.0,1.0);" +
+            "ground=ground*ground*(3.0-2.0*ground);" +
+            "body=body*body*(3.0-2.0*body);" +
+            "float localLight=max(ground*0.92,body*0.58);" +
+            "vec3 lightColor=vec3(0.96,0.98,1.0);" +
+            "c.rgb*=clamp(vec3(0.16)+lightColor*localLight,0.0,1.08);" +
+            "}" +
             "c.a*=opacity*alpha;}}");
         var program = GL.CreateProgram(); GL.AttachShader(program, vs); GL.AttachShader(program, fs); GL.LinkProgram(program);
         GL.DeleteShader(vs); GL.DeleteShader(fs);

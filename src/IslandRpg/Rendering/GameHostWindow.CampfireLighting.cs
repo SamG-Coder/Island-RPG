@@ -1,5 +1,6 @@
 using IslandRpg.Assets;
 using IslandRpg.Gameplay;
+using IslandRpg.World;
 using OpenTK.Mathematics;
 
 namespace IslandRpg.Rendering;
@@ -15,12 +16,17 @@ internal sealed partial class GameHostWindow
         _campfireLightTexture = Upload(_campfireLightFrame);
     }
 
+    private float SceneDarkness() =>
+        WorldLighting.Darkness(
+            WorldTime.At(_worldGameSeconds).Daylight,
+            _activeWorldLevel);
+
     private void RenderCampfireLights()
     {
         if (_campfireLightFrame is null ||
             _campfireLightTexture == 0)
             return;
-        var darkness = 1 - WorldTime.At(_worldGameSeconds).Daylight;
+        var darkness = SceneDarkness();
         if (darkness <= .04f) return;
         var scene = SceneClientBounds();
         var sceneScale = scene.Z / ReferenceWidth;
