@@ -56,7 +56,7 @@ internal static class UndergroundWorldGenerator
         }
 
         var weights = BuildWeights(
-            seed, coordinate, cancellationToken);
+            seed, coordinate, context, cancellationToken);
         var chunk = new WorldChunk
         {
             Coordinate = coordinate,
@@ -135,6 +135,24 @@ internal static class UndergroundWorldGenerator
             0, 4);
     }
 
+    internal static float EdgeVisibility(
+        long seed,
+        float worldX,
+        float worldY,
+        float density)
+    {
+        var fadeDistance = .68f +
+            CaveHydrologyField.EdgeVariation(
+                seed, worldX, worldY) * .28f;
+        var amount = Math.Clamp(
+            (density - CaveHydrologyField.Boundary) /
+            fadeDistance,
+            0f,
+            1f);
+        var smooth = amount * amount * (3f - 2f * amount);
+        return MathF.Pow(smooth, .68f);
+    }
+
     internal static Biome MaterialAt(long seed, int x, int y)
     {
         var variation = Value(seed ^ 0x6D756431, x / 11f, y / 11f);
@@ -149,6 +167,7 @@ internal static class UndergroundWorldGenerator
     private static byte[][] BuildWeights(
         long seed,
         ChunkCoordinate coordinate,
+        CaveHydrologyField.SamplingContext context,
         CancellationToken cancellationToken)
     {
         var size = WorldChunk.WeightTextureSize;
@@ -157,17 +176,33 @@ internal static class UndergroundWorldGenerator
                      WorldChunk.WeightHaloTiles;
         var firstY = coordinate.Y * WorldChunk.Size -
                      WorldChunk.WeightHaloTiles;
+        var tilesAcross =
+            WorldChunk.Size + WorldChunk.WeightHaloTiles * 2;
+        var wallMaterials = new Biome[tilesAcross * tilesAcross];
+        for (var tileY = 0; tileY < tilesAcross; tileY++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            for (var tileX = 0; tileX < tilesAcross; tileX++)
+            {
+                var worldX = firstX + tileX;
+                var worldY = firstY + tileY;
+                wallMaterials[tileY * tilesAcross + tileX] =
+                    context.Density(worldX + .5f, worldY + .5f) <
+                    1.05f
+                        ? Biome.Rock
+                        : MaterialAt(seed, worldX, worldY);
+            }
+        }
         for (var y = 0; y < size; y++)
         {
         cancellationToken.ThrowIfCancellationRequested();
         for (var x = 0; x < size; x++)
         {
-            var worldX = firstX +
-                x / (float)WorldChunk.WeightSamplesPerTile;
-            var worldY = firstY +
-                y / (float)WorldChunk.WeightSamplesPerTile;
-            var biome = MaterialAt(
-                seed, (int)MathF.Floor(worldX), (int)MathF.Floor(worldY));
+            var biome = wallMaterials[
+                Math.Min(y / WorldChunk.WeightSamplesPerTile,
+                    tilesAcross - 1) * tilesAcross +
+                Math.Min(x / WorldChunk.WeightSamplesPerTile,
+                    tilesAcross - 1)];
             labels[y * size + x] = (byte)biome;
         }
         }

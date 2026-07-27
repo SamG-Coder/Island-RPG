@@ -1931,6 +1931,21 @@ try
         undergroundMesh.Length % 12 == 0 &&
         hasInterpolatedContourVertex,
         "underground terrain must clip triangles at an interpolated sub-tile contour");
+    var darkestCaveVertex = 1f;
+    var brightestCaveVertex = 0f;
+    for (var offset = 11;
+         offset < undergroundMesh.Length;
+         offset += 12)
+    {
+        darkestCaveVertex = Math.Min(
+            darkestCaveVertex, undergroundMesh[offset]);
+        brightestCaveVertex = Math.Max(
+            brightestCaveVertex, undergroundMesh[offset]);
+    }
+    Require(
+        darkestCaveVertex <= .001f &&
+        brightestCaveVertex >= .99f,
+        "cave terrain must fade from black at its contour to full brightness inside");
     Require(
         undergroundMesh.Length / 12 < 10_000,
         "underground render meshes must not regress to full density-grid tessellation");

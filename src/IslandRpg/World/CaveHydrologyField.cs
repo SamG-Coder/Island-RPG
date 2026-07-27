@@ -70,6 +70,13 @@ internal static class CaveHydrologyField
     internal static float Strength(float density) =>
         SmoothStep(-1.1f, 1.3f, density);
 
+    internal static float EdgeVariation(
+        long seed, float worldX, float worldY) =>
+        ValueNoise(
+            seed ^ 0x41C64E6D,
+            worldX / 5.5f,
+            worldY / 5.5f);
+
     internal sealed class SamplingContext(long seed)
     {
         private readonly Dictionary<(int X, int Y), CellTopology> topology = [];

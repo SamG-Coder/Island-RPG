@@ -29,7 +29,6 @@ internal static class UndergroundTerrainMeshBuilder
             MeshSamplesPerTile * MeshSamplesPerTile * 6 * 12);
         var originX = chunk.Coordinate.X * WorldChunk.Size;
         var originY = chunk.Coordinate.Y * WorldChunk.Size;
-        var step = 1f / MeshSamplesPerTile;
         for (var tileY = 0; tileY < WorldChunk.Size; tileY++)
         {
         cancellationToken.ThrowIfCancellationRequested();
@@ -37,32 +36,56 @@ internal static class UndergroundTerrainMeshBuilder
         for (var sampleY = 0; sampleY < MeshSamplesPerTile; sampleY++)
         for (var sampleX = 0; sampleX < MeshSamplesPerTile; sampleX++)
         {
-            var x0 = originX + tileX + sampleX * step;
-            var y0 = originY + tileY + sampleY * step;
-            var x1 = x0 + step;
-            var y1 = y0 + step;
             var gridX =
                 (tileX * MeshSamplesPerTile + sampleX) *
                 DensitySampleStep;
             var gridY =
                 (tileY * MeshSamplesPerTile + sampleY) *
                 DensitySampleStep;
+            if (CellCrossesBoundary(
+                    chunk, gridX, gridY, DensitySampleStep))
+            {
+                var fineStep = DensitySampleStep / 2;
+                AddCell(gridX, gridY, fineStep);
+                AddCell(gridX + fineStep, gridY, fineStep);
+                AddCell(gridX, gridY + fineStep, fineStep);
+                AddCell(
+                    gridX + fineStep,
+                    gridY + fineStep,
+                    fineStep);
+            }
+            else
+            {
+                AddCell(gridX, gridY, DensitySampleStep);
+            }
+        }
+        }
+        return vertices.ToArray();
+
+        void AddCell(int gridX, int gridY, int densityStep)
+        {
+            var coordinateStep =
+                densityStep / (float)DensitySamplesPerTile;
+            var x0 = originX +
+                     gridX / (float)DensitySamplesPerTile;
+            var y0 = originY +
+                     gridY / (float)DensitySamplesPerTile;
+            var x1 = x0 + coordinateStep;
+            var y1 = y0 + coordinateStep;
             var northWest = Point(chunk, x0, y0, gridX, gridY);
             var northEast = Point(
-                chunk, x1, y0, gridX + DensitySampleStep, gridY);
+                chunk, x1, y0, gridX + densityStep, gridY);
             var southEast = Point(
                 chunk, x1, y1,
-                gridX + DensitySampleStep,
-                gridY + DensitySampleStep);
+                gridX + densityStep,
+                gridY + densityStep);
             var southWest = Point(
-                chunk, x0, y1, gridX, gridY + DensitySampleStep);
+                chunk, x0, y1, gridX, gridY + densityStep);
             AddClippedTriangle(
                 northWest, northEast, southEast);
             AddClippedTriangle(
                 northWest, southEast, southWest);
         }
-        }
-        return vertices.ToArray();
 
         void AddClippedTriangle(
             CavePoint first,
@@ -115,8 +138,9 @@ internal static class UndergroundTerrainMeshBuilder
             vertices.Add(layer);
             vertices.Add(layer);
             vertices.Add(
-                .72f +
-                CaveHydrologyField.Strength(point.Density) * .22f);
+                UndergroundWorldGenerator.EdgeVisibility(
+                    seed, point.X, point.Y, point.Density) *
+                WallLight(chunk, localX, localY));
         }
     }
 
@@ -127,6 +151,54 @@ internal static class UndergroundTerrainMeshBuilder
             y,
             chunk.UndergroundDensity[
                 gridY * UndergroundWorldGenerator.DensityStride + gridX]);
+
+    private static bool CellCrossesBoundary(
+        WorldChunk chunk,
+        int gridX,
+        int gridY,
+        int step)
+    {
+        var boundary = CaveHydrologyField.Boundary;
+        var first = Density(gridX, gridY) >= boundary;
+        return (Density(gridX + step, gridY) >= boundary) != first ||
+               (Density(gridX, gridY + step) >= boundary) != first ||
+               (Density(gridX + step, gridY + step) >= boundary) !=
+               first;
+
+        float Density(int x, int y) =>
+            chunk.UndergroundDensity[
+                y * UndergroundWorldGenerator.DensityStride + x];
+    }
+
+    private static float WallLight(
+        WorldChunk chunk,
+        float localX,
+        float localY)
+    {
+        var gridX = Math.Clamp(
+            (int)MathF.Round(
+                localX * DensitySamplesPerTile),
+            1,
+            UndergroundWorldGenerator.DensityStride - 2);
+        var gridY = Math.Clamp(
+            (int)MathF.Round(
+                localY * DensitySamplesPerTile),
+            1,
+            UndergroundWorldGenerator.DensityStride - 2);
+        var stride = UndergroundWorldGenerator.DensityStride;
+        var density = chunk.UndergroundDensity;
+        var gradient = new Vector2(
+            density[gridY * stride + gridX + 1] -
+            density[gridY * stride + gridX - 1],
+            density[(gridY + 1) * stride + gridX] -
+            density[(gridY - 1) * stride + gridX]);
+        if (gradient.LengthSquared < .00001f)
+            return 1f;
+        gradient.Normalize();
+        var light = Vector2.Normalize(new Vector2(-.55f, -.84f));
+        return .82f + MathF.Max(
+            0, Vector2.Dot(gradient, light)) * .18f;
+    }
 
     private static int Clip(
         CavePoint first,
