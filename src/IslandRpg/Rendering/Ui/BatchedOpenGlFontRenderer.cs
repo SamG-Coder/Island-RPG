@@ -24,6 +24,9 @@ internal sealed class BatchedOpenGlFontRenderer :
     private int _viewportHeight = 1;
     private readonly int _program;
     private readonly int _imageUniform;
+    private readonly int _edgeCenterUniform;
+    private readonly int _edgeSoftnessUniform;
+    private readonly int _textWeightUniform;
     private readonly int _vao;
     private readonly int _vbo;
     private int _gpuCapacityBytes;
@@ -32,6 +35,12 @@ internal sealed class BatchedOpenGlFontRenderer :
     {
         _program = CreateProgram();
         _imageUniform = GL.GetUniformLocation(_program, "image");
+        _edgeCenterUniform =
+            GL.GetUniformLocation(_program, "edgeCenter");
+        _edgeSoftnessUniform =
+            GL.GetUniformLocation(_program, "edgeSoftness");
+        _textWeightUniform =
+            GL.GetUniformLocation(_program, "textWeight");
         _vao = GL.GenVertexArray();
         _vbo = GL.GenBuffer();
         GL.GetInteger(GetPName.VertexArrayBinding, out var previousVao);
@@ -57,6 +66,22 @@ internal sealed class BatchedOpenGlFontRenderer :
     }
 
     public ITexture2DManager TextureManager => this;
+
+    /// <summary>
+    /// Coverage value treated as the glyph edge. Lower values make the
+    /// rasterized glyph slightly fuller.
+    /// </summary>
+    public float EdgeCenter { get; set; } = .48f;
+
+    /// <summary>
+    /// Multiplier applied to derivative-based antialiasing width.
+    /// </summary>
+    public float EdgeSoftness { get; set; } = .75f;
+
+    /// <summary>
+    /// Additional threshold shift used to strengthen small UI text.
+    /// </summary>
+    public float TextWeight { get; set; } = .035f;
 
     public void BeginFrame(int viewportWidth, int viewportHeight)
     {
@@ -145,6 +170,9 @@ internal sealed class BatchedOpenGlFontRenderer :
 
         GL.UseProgram(_program);
         GL.Uniform1(_imageUniform, 0);
+        GL.Uniform1(_edgeCenterUniform, EdgeCenter);
+        GL.Uniform1(_edgeSoftnessUniform, EdgeSoftness);
+        GL.Uniform1(_textWeightUniform, TextWeight);
         GL.BindTexture(TextureTarget.Texture2D, _currentTexture);
         GL.BindVertexArray(_vao);
         GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
@@ -232,12 +260,24 @@ internal sealed class BatchedOpenGlFontRenderer :
         const string fragmentSource = """
             #version 330 core
             uniform sampler2D image;
+            uniform float edgeCenter;
+            uniform float edgeSoftness;
+            uniform float textWeight;
             in vec2 uv;
             in vec4 tint;
             out vec4 outputColor;
             void main()
             {
-                outputColor = texture(image, uv) * tint;
+                float coverage = texture(image, uv).a;
+                float antialiasWidth = max(
+                    fwidth(coverage) * edgeSoftness,
+                    1.0 / 255.0);
+                float center = edgeCenter - textWeight;
+                float alpha = smoothstep(
+                    center - antialiasWidth,
+                    center + antialiasWidth,
+                    coverage);
+                outputColor = vec4(tint.rgb, tint.a * alpha);
             }
             """;
         var vertex = CompileShader(ShaderType.VertexShader, vertexSource);
