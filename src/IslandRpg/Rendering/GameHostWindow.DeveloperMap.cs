@@ -19,7 +19,7 @@ internal sealed partial class GameHostWindow
     private void CloseDeveloperMap()
     {
         _developerMap.Close();
-        _atlasOpen = false;
+        CloseWorldAtlasSession();
     }
 
     private void TeleportFromDeveloperMap(Vector2 pointer)
@@ -47,6 +47,7 @@ internal sealed partial class GameHostWindow
         _moveMarker = null;
         _player.TeleportTo(destination);
 
+        CancelPendingChunkLoad();
         CloseDeveloperMap();
         FollowPlayer();
         StreamWorld();
@@ -62,7 +63,7 @@ internal sealed partial class GameHostWindow
             _developerMap.Layer == WorldAtlasLayer.TreeDensity;
         var title = new Vector4(
             ReferenceWidth * .5f - 310, 18, 620,
-            densityLayer ? 82 : 62);
+            densityLayer ? 102 : 82);
         DrawUiColor(title, new(.035f, .031f, .023f, .94f));
         DrawPanelOutline(title, 2, new(.48f, .38f, .18f, 1));
         DrawCenteredUiText(
@@ -80,5 +81,15 @@ internal sealed partial class GameHostWindow
                 "Dark: none  •  Green: moderate  •  Yellow: densest",
                 new(title.X + 8, title.Y + 54, title.Z - 16, 18),
                 new(194, 185, 151, 255));
+        var cacheMiB = _atlasTextures.Bytes /
+                       (1024d * 1024d);
+        DrawUiText(
+            $"Tiles {_atlasDone}/{_atlasTotal}  •  " +
+            $"jobs {_atlasGeneration.ActiveCount}  •  " +
+            $"active {_atlasGeneration.OldestActiveMilliseconds:0} ms  •  " +
+            $"cache {cacheMiB:0.0} MiB  •  " +
+            $"last {_lastAtlasGenerationMilliseconds:0} ms",
+            new(title.X + 10, title.Y + title.W - 18),
+            new(155, 148, 124, 255));
     }
 }

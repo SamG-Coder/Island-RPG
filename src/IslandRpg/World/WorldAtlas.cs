@@ -38,18 +38,32 @@ internal static class WorldAtlasGenerator
     public const int TilePixelSize = 256;
 
     public static WorldAtlasTileSnapshot GenerateIsometricTile(
-        long seed, WorldAtlasTileKey key)
+        long seed,
+        WorldAtlasTileKey key,
+        CancellationToken cancellationToken = default)
     {
         var size = TilePixelSize;
         var span = key.SpanTiles;
         var rgba = new byte[size * size * 4];
         var river = new bool[size * size];
         var bridgeable = new bool[size * size];
-        var samples = new System.Collections.Concurrent.ConcurrentDictionary<(int X, int Y), IslandTile>();
-        Parallel.For(0, size, imageY =>
+        var samples = new System.Collections.Concurrent.ConcurrentDictionary<
+            (int X, int Y), IslandTile>();
+        Parallel.For(
+            0,
+            size,
+            new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+                MaxDegreeOfParallelism = 2
+            },
+            imageY =>
         {
+            cancellationToken.ThrowIfCancellationRequested();
             for (var imageX = 0; imageX < size; imageX++)
             {
+                if ((imageX & 31) == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
                 var apparentIsoX = (key.X + (imageX + .5f) / size) * span;
                 var apparentIsoY = (key.Y + (imageY + .5f) / size) * span;
                 var terrainIsoY = apparentIsoY;
@@ -58,9 +72,11 @@ internal static class WorldAtlasGenerator
                 {
                     var worldX = (int)MathF.Floor(apparentIsoX + terrainIsoY);
                     var worldY = (int)MathF.Floor(terrainIsoY - apparentIsoX);
-                    tile = samples.GetOrAdd((worldX, worldY),
+                    var sampled = samples.GetOrAdd(
+                        (worldX, worldY),
                         coordinate => InfiniteWorldGenerator.SampleTile(
                             seed, coordinate.X, coordinate.Y));
+                    tile = sampled;
                     var elevation = (tile.North + tile.East + tile.South + tile.West) / 4f;
                     // Height is exaggerated in the atlas so mountain structure
                     // remains readable at regional zoom levels.

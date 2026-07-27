@@ -1509,6 +1509,91 @@ Require(isometricTile.Width == 256 && isometricTile.Height == 256,
     "isometric map sections must render at high-resolution 256x256");
 Require(isometricTile.Rgba.SequenceEqual(repeatedIsometricTile.Rgba),
     "isometric map section generation must be deterministic");
+using (var cancelledAtlas = new CancellationTokenSource())
+{
+    cancelledAtlas.Cancel();
+    var cancelled = false;
+    try
+    {
+        WorldAtlasGenerator.GenerateIsometricTile(
+            seed, isometricKey, cancelledAtlas.Token);
+    }
+    catch (OperationCanceledException)
+    {
+        cancelled = true;
+    }
+    Require(cancelled,
+        "atlas generation must stop promptly when its session is cancelled");
+    cancelled = false;
+    try
+    {
+        InfiniteWorldGenerator.Generate(
+            seed, new(500, 500), cancelledAtlas.Token);
+    }
+    catch (OperationCanceledException)
+    {
+        cancelled = true;
+    }
+    Require(cancelled,
+        "teleporting must be able to cancel an obsolete detailed chunk load");
+}
+using (var atlasQueue = new WorldAtlasGenerationQueue())
+{
+    var movingKeys = new[]
+    {
+        new WorldAtlasTileKey(70, 70, 1),
+        new WorldAtlasTileKey(71, 70, 1),
+        new WorldAtlasTileKey(72, 70, 1)
+    };
+    atlasQueue.SetRequest(seed, movingKeys, _ => false);
+    Require(
+        atlasQueue.ActiveCount ==
+        WorldAtlasGenerationQueue.ConcurrencyLimit,
+        "atlas generation must obey one shared bounded concurrency limit");
+    atlasQueue.SetRequest(seed, [], _ => false);
+    Require(
+        atlasQueue.ActiveCount == 0 &&
+        atlasQueue.CancelledCount ==
+        WorldAtlasGenerationQueue.ConcurrencyLimit,
+        "moving or closing the atlas must cancel obsolete tile jobs");
+}
+var deletedAtlasTextures = new List<int>();
+var atlasTextureCache = new WorldAtlasTextureCache();
+var cacheA = new WorldAtlasTileKey(1, 1, 1);
+var cacheB = new WorldAtlasTileKey(2, 1, 1);
+var cacheC = new WorldAtlasTileKey(3, 1, 1);
+atlasTextureCache.Set(cacheA, 11, 256, 256, deletedAtlasTextures.Add);
+atlasTextureCache.Set(cacheB, 12, 256, 256, deletedAtlasTextures.Add);
+atlasTextureCache.TryGet(cacheA, out _);
+atlasTextureCache.Set(cacheC, 13, 256, 256, deletedAtlasTextures.Add);
+atlasTextureCache.Trim(
+    new HashSet<WorldAtlasTileKey> { cacheA },
+    2,
+    deletedAtlasTextures.Add);
+Require(
+    atlasTextureCache.Count == 2 &&
+    atlasTextureCache.Contains(cacheA) &&
+    !atlasTextureCache.Contains(cacheB) &&
+    deletedAtlasTextures.SequenceEqual([12]),
+    "atlas textures must use visible-aware LRU eviction");
+atlasTextureCache.Clear(deletedAtlasTextures.Add);
+Require(
+    atlasTextureCache.Count == 0 &&
+    atlasTextureCache.Bytes == 0 &&
+    deletedAtlasTextures.Count == 3,
+    "closing the atlas must release every retained GPU texture");
+var gameplayHydrologyCount = MacroHydrology.GameplayCacheCount;
+using (MacroHydrology.BeginAtlasSampling())
+{
+    _ = MacroHydrology.At(seed, 400_000, -400_000);
+    Require(
+        MacroHydrology.AtlasCacheCount > 0 &&
+        MacroHydrology.GameplayCacheCount == gameplayHydrologyCount,
+        "atlas exploration must not evict the gameplay hydrology working set");
+}
+MacroHydrology.ClearAtlasCache();
+Require(MacroHydrology.AtlasCacheCount == 0,
+    "closing the atlas must release its isolated hydrology cache");
 
 var textureSize = WorldChunk.WeightTextureSize;
 var halo = WorldChunk.WeightHaloTiles * WorldChunk.WeightSamplesPerTile;

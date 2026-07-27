@@ -117,9 +117,10 @@ internal sealed partial class GameHostWindow : GameWindow
     private WorldChunkStore? _worldStore;
     private readonly Dictionary<ChunkCoordinate, GpuWorldChunk> _worldChunks = [];
     private Task<WorldChunk>? _pendingChunkTask;
+    private CancellationTokenSource? _pendingChunkCancellation;
     private ChunkCoordinate _pendingChunkCoordinate;
     private Task _saveTail = Task.CompletedTask;
-    private bool _atlasOpen;
+    private volatile bool _atlasOpen;
     private int _atlasDone;
     private int _atlasTotal = 1;
     private int _atlasChunksAcross = WorldAtlasGenerator.ChunksAcross;
@@ -130,9 +131,12 @@ internal sealed partial class GameHostWindow : GameWindow
     private double _atlasLastClickTime = -1;
     private Vector2 _atlasLastClickPosition;
     private Vector2 _atlasCenterIso;
-    private readonly Dictionary<WorldAtlasTileKey, int> _atlasTileTextures = [];
-    private readonly Dictionary<WorldAtlasTileKey, Task<WorldAtlasTileSnapshot>> _atlasTileTasks = [];
+    private readonly WorldAtlasGenerationQueue _atlasGeneration = new();
+    private readonly WorldAtlasTextureCache _atlasTextures = new();
     private HashSet<WorldAtlasTileKey> _visibleAtlasTiles = [];
+    private IReadOnlyList<WorldAtlasTileKey> _visibleAtlasTileOrder = [];
+    private IReadOnlyList<WorldAtlasTileKey> _visibleAtlasRenderOrder = [];
+    private double _lastAtlasGenerationMilliseconds;
     private IslandMap? _island;
     private Task<AssetCatalog>? _loadTask;
     private AssetCatalog? _catalog;
@@ -423,8 +427,13 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_screen == ScreenState.WorldPreview && _mode == PreviewMode.World &&
             KeyboardState.IsKeyPressed(Keys.M))
         {
-            _atlasOpen = !_atlasOpen;
-            if (_atlasOpen) StartAtlasAtCamera();
+            if (_atlasOpen)
+                CloseWorldAtlasSession();
+            else
+            {
+                _atlasOpen = true;
+                StartAtlasAtCamera();
+            }
         }
 
         if (_screen == ScreenState.LoadingAssets && _loadTask is { IsCompleted: true })
@@ -914,6 +923,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private void ReturnToMainMenu()
     {
         SaveActivePlayerState();
+        CancelPendingChunkLoad();
         _pathCancellation?.Cancel();
         _pathCancellation?.Dispose();
         _pathCancellation = null;
@@ -928,7 +938,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _queuedAction = null;
         _activeTreeId = null;
         _moveMarker = null;
-        _atlasOpen = false;
+        CloseWorldAtlasSession();
         _pauseMenu.SetPaused(false);
         BeginMenuPreview();
         _screen = ScreenState.MainMenu;
@@ -973,7 +983,25 @@ internal sealed partial class GameHostWindow : GameWindow
         finally
         {
             _pendingChunkTask = null;
+            _pendingChunkCancellation?.Dispose();
+            _pendingChunkCancellation = null;
         }
+    }
+
+    private void CancelPendingChunkLoad()
+    {
+        if (_pendingChunkTask is null) return;
+        _pendingChunkCancellation?.Cancel();
+        var abandoned = _pendingChunkTask;
+        _ = abandoned.ContinueWith(
+            completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted |
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        _pendingChunkTask = null;
+        _pendingChunkCancellation?.Dispose();
+        _pendingChunkCancellation = null;
     }
 
     private static long SeedFromText(string value)
@@ -2033,21 +2061,39 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void UpdateAtlas()
     {
-        foreach (var pair in _atlasTileTasks.Where(pair => pair.Value.IsCompleted).ToArray())
+        var completed = _atlasGeneration.DrainCompleted();
+        foreach (var result in completed)
         {
-            if (pair.Value.IsFaulted)
-                throw pair.Value.Exception?.GetBaseException() ??
-                      new InvalidOperationException("Isometric map tile generation failed.");
-            var result = pair.Value.Result;
-            var texture = Upload(result.Width, result.Height, result.Rgba);
+            var snapshot = result.Snapshot;
+            if (!_visibleAtlasTiles.Contains(snapshot.Key))
+                continue;
+            var texture = Upload(
+                snapshot.Width, snapshot.Height, snapshot.Rgba);
             GL.BindTexture(TextureTarget.Texture2D, texture);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
                 (int)TextureMinFilter.Linear);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
                 (int)TextureMagFilter.Linear);
-            if (_atlasTileTextures.Remove(pair.Key, out var previous)) GL.DeleteTexture(previous);
-            _atlasTileTextures[pair.Key] = texture;
-            _atlasTileTasks.Remove(pair.Key);
+            _atlasTextures.Set(
+                snapshot.Key,
+                texture,
+                snapshot.Width,
+                snapshot.Height,
+                GL.DeleteTexture);
+            _lastAtlasGenerationMilliseconds =
+                result.ElapsedMilliseconds;
+        }
+        if (completed.Count > 0)
+        {
+            _atlasTextures.Trim(
+                _visibleAtlasTiles, 48, GL.DeleteTexture);
+            Interlocked.Exchange(
+                ref _atlasDone,
+                _visibleAtlasTiles.Count(_atlasTextures.Contains));
+            _atlasGeneration.SetRequest(
+                _worldSeed,
+                _visibleAtlasTileOrder,
+                _atlasTextures.Contains);
         }
 
         var mouse = SceneMousePosition();
@@ -2076,7 +2122,6 @@ internal sealed partial class GameHostWindow : GameWindow
         else if (!leftDown && _atlasDragging)
             _atlasDragging = false;
         _atlasLeftWasDown = leftDown;
-        RequestVisibleAtlasTiles();
     }
 
     private void TravelToAtlasPosition(Vector2 mouse)
@@ -2104,7 +2149,7 @@ internal sealed partial class GameHostWindow : GameWindow
         var projected = new Vector2((tileX - tileY) * 48, (tileX + tileY) * 24);
         _zoom = .8f;
         _camera = -projected * _zoom;
-        _atlasOpen = false;
+        CloseWorldAtlasSession();
         StreamWorld();
     }
 
@@ -2149,29 +2194,24 @@ internal sealed partial class GameHostWindow : GameWindow
                     ? _developerMap.Layer
                     : WorldAtlasLayer.Terrain));
         _visibleAtlasTiles = visible;
-
-        foreach (var key in visible
-                     .OrderBy(key => Math.Abs((key.X + .5f) * span - _atlasCenterIso.X) +
-                                     Math.Abs((key.Y + .5f) * span - _atlasCenterIso.Y)))
-        {
-            if (_atlasTileTextures.ContainsKey(key) || _atlasTileTasks.ContainsKey(key)) continue;
-            if (_atlasTileTasks.Count >= 3) break;
-            _atlasTileTasks[key] = Task.Run(
-                () => WorldAtlasGenerator.GenerateIsometricTile(_worldSeed, key));
-        }
-
-        if (_atlasTileTextures.Count > 48)
-        {
-            foreach (var key in _atlasTileTextures.Keys.Where(key => !visible.Contains(key)).ToArray())
-            {
-                GL.DeleteTexture(_atlasTileTextures[key]);
-                _atlasTileTextures.Remove(key);
-                if (_atlasTileTextures.Count <= 48) break;
-            }
-        }
+        _visibleAtlasTileOrder = visible
+            .OrderBy(key =>
+                Math.Abs((key.X + .5f) * span - _atlasCenterIso.X) +
+                Math.Abs((key.Y + .5f) * span - _atlasCenterIso.Y))
+            .ToArray();
+        _visibleAtlasRenderOrder = visible
+            .OrderBy(key => key.Y)
+            .ThenBy(key => key.X)
+            .ToArray();
+        _atlasGeneration.SetRequest(
+            _worldSeed,
+            _visibleAtlasTileOrder,
+            _atlasTextures.Contains);
+        _atlasTextures.Trim(
+            visible, 48, GL.DeleteTexture);
         Volatile.Write(ref _atlasTotal, visible.Count);
         Interlocked.Exchange(ref _atlasDone,
-            visible.Count(key => _atlasTileTextures.ContainsKey(key)));
+            visible.Count(_atlasTextures.Contains));
     }
 
     protected override void OnMouseWheel(MouseWheelEventArgs e)
@@ -4164,9 +4204,9 @@ internal sealed partial class GameHostWindow : GameWindow
         var width = ReferenceWidth;
         var height = ReferenceHeight;
         var scale = AtlasPixelsPerTile();
-        foreach (var key in _visibleAtlasTiles.OrderBy(key => key.Y).ThenBy(key => key.X))
+        foreach (var key in _visibleAtlasRenderOrder)
         {
-            if (!_atlasTileTextures.TryGetValue(key, out var texture)) continue;
+            if (!_atlasTextures.TryGet(key, out var texture)) continue;
             var span = key.SpanTiles;
             var pixelLeft = width * .5f + (key.X * span - _atlasCenterIso.X) * scale;
             var pixelTop = height * .5f + (key.Y * span - _atlasCenterIso.Y) * scale;
@@ -4194,7 +4234,7 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.Clear(ClearBufferMask.ColorBufferBit);
         GL.Disable(EnableCap.ScissorTest);
 
-        if (_atlasTileTasks.Count > 0)
+        if (_atlasGeneration.ActiveCount > 0)
         {
             const int margin = 90;
             const int barHeight = 18;
@@ -4716,13 +4756,26 @@ internal sealed partial class GameHostWindow : GameWindow
                   new IOException("Background chunk save failed.");
         if (_pendingChunkTask is { IsCompleted: true })
         {
-            if (_pendingChunkTask.IsFaulted)
-                throw _pendingChunkTask.Exception?.GetBaseException() ??
-                      new InvalidOperationException("Chunk loading failed.");
-            var loaded = _pendingChunkTask.Result;
-            if (!_worldChunks.ContainsKey(loaded.Coordinate))
-                _worldChunks.Add(loaded.Coordinate, UploadWorldChunk(loaded));
-            _pendingChunkTask = null;
+            if (_pendingChunkTask.IsCanceled)
+            {
+                _pendingChunkTask = null;
+                _pendingChunkCancellation?.Dispose();
+                _pendingChunkCancellation = null;
+            }
+            else
+            {
+                if (_pendingChunkTask.IsFaulted)
+                    throw _pendingChunkTask.Exception?.GetBaseException() ??
+                          new InvalidOperationException(
+                              "Chunk loading failed.");
+                var loaded = _pendingChunkTask.Result;
+                if (!_worldChunks.ContainsKey(loaded.Coordinate))
+                    _worldChunks.Add(
+                        loaded.Coordinate, UploadWorldChunk(loaded));
+                _pendingChunkTask = null;
+                _pendingChunkCancellation?.Dispose();
+                _pendingChunkCancellation = null;
+            }
         }
         var mapCenter = ScreenToTerrain(
             new(ReferenceWidth * .5f, ReferenceHeight * .5f));
@@ -4745,7 +4798,13 @@ internal sealed partial class GameHostWindow : GameWindow
                 (value.Y - center.Y) * (value.Y - center.Y)).First();
             var store = _worldStore;
             var coordinate = _pendingChunkCoordinate;
-            _pendingChunkTask = Task.Run(() => store.LoadOrGenerate(coordinate));
+            _pendingChunkCancellation = new();
+            var cancellationToken =
+                _pendingChunkCancellation.Token;
+            _pendingChunkTask = Task.Run(
+                () => store.LoadOrGenerate(
+                    coordinate, cancellationToken),
+                cancellationToken);
         }
 
         foreach (var coordinate in _worldChunks.Keys
@@ -6128,6 +6187,7 @@ internal sealed partial class GameHostWindow : GameWindow
     protected override void OnUnload()
     {
         SaveActivePlayerState();
+        CancelPendingChunkLoad();
         _pathCancellation?.Cancel();
         _pathCancellation?.Dispose();
         foreach (var coordinate in _worldChunks.Keys.ToArray())
@@ -6187,7 +6247,9 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_biomeWeightsD != 0) GL.DeleteTexture(_biomeWeightsD);
         if (_shoreDistance != 0) GL.DeleteTexture(_shoreDistance);
         if (_waterNormalArray != 0) GL.DeleteTexture(_waterNormalArray);
-        foreach (var texture in _atlasTileTextures.Values) GL.DeleteTexture(texture);
+        _atlasGeneration.Dispose();
+        _atlasTextures.Clear(GL.DeleteTexture);
+        MacroHydrology.ClearAtlasCache();
         if (_islandVbo != 0) GL.DeleteBuffer(_islandVbo);
         if (_streamVbo != 0) GL.DeleteBuffer(_streamVbo);
         if (_sceneFramebuffer != 0) GL.DeleteFramebuffer(_sceneFramebuffer);

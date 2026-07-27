@@ -76,40 +76,61 @@ internal static class InfiniteWorldGenerator
 {
     private const int IslandCellSize = 192;
 
-    public static WorldChunk Generate(long seed, ChunkCoordinate coordinate)
+    public static WorldChunk Generate(
+        long seed,
+        ChunkCoordinate coordinate,
+        CancellationToken cancellationToken = default)
     {
         var originX = coordinate.X * WorldChunk.Size;
         var originY = coordinate.Y * WorldChunk.Size;
         var heights = new byte[WorldChunk.Size + 1, WorldChunk.Size + 1];
         for (var y = 0; y <= WorldChunk.Size; y++)
-        for (var x = 0; x <= WorldChunk.Size; x++)
-            heights[x, y] = HeightAt(seed, originX + x, originY + y);
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            for (var x = 0; x <= WorldChunk.Size; x++)
+                heights[x, y] =
+                    HeightAt(seed, originX + x, originY + y);
+        }
 
         var tiles = new IslandTile[WorldChunk.Size * WorldChunk.Size];
         var trees = new List<IslandTree>();
         for (var y = 0; y < WorldChunk.Size; y++)
-        for (var x = 0; x < WorldChunk.Size; x++)
         {
-            var worldX = originX + x;
-            var worldY = originY + y;
-            var average = (heights[x, y] + heights[x + 1, y] +
-                           heights[x + 1, y + 1] + heights[x, y + 1]) / 4f;
-            var (biome, region) = ClassifyAt(seed, worldX, worldY, average);
-            tiles[y * WorldChunk.Size + x] = new(
-                worldX, worldY, biome,
-                Surface(heights[x, y]), Surface(heights[x + 1, y]),
-                Surface(heights[x + 1, y + 1]), Surface(heights[x, y + 1]), region);
+            cancellationToken.ThrowIfCancellationRequested();
+            for (var x = 0; x < WorldChunk.Size; x++)
+            {
+                var worldX = originX + x;
+                var worldY = originY + y;
+                var average = (heights[x, y] + heights[x + 1, y] +
+                               heights[x + 1, y + 1] +
+                               heights[x, y + 1]) / 4f;
+                var (biome, region) =
+                    ClassifyAt(seed, worldX, worldY, average);
+                tiles[y * WorldChunk.Size + x] = new(
+                    worldX, worldY, biome,
+                    Surface(heights[x, y]),
+                    Surface(heights[x + 1, y]),
+                    Surface(heights[x + 1, y + 1]),
+                    Surface(heights[x, y + 1]),
+                    region);
 
-            var chance = WorldTreeCatalog.SpawnChance(region, average);
-            if (UnitHash(seed, worldX, worldY, 91) >= chance) continue;
-            var tile = tiles[y * WorldChunk.Size + x];
-            var graphic = WorldTreeCatalog.SelectGraphic(seed, tile);
-            var frame = WorldTreeCatalog.SelectFrame(
-                seed, worldX, worldY, graphic);
-            trees.Add(new(worldX, worldY, graphic, frame));
+                var chance =
+                    WorldTreeCatalog.SpawnChance(region, average);
+                if (UnitHash(seed, worldX, worldY, 91) >= chance)
+                    continue;
+                var tile = tiles[y * WorldChunk.Size + x];
+                var graphic =
+                    WorldTreeCatalog.SelectGraphic(seed, tile);
+                var frame = WorldTreeCatalog.SelectFrame(
+                    seed, worldX, worldY, graphic);
+                trees.Add(new(
+                    worldX, worldY, graphic, frame));
+            }
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         var weights = GenerateBiomeWeights(seed, coordinate);
+        cancellationToken.ThrowIfCancellationRequested();
         var cliffs = GenerateCliffs(seed, tiles);
         var groundObjects = GenerateGroundObjects(seed, tiles, trees);
         var vegetation = WorldVegetationGenerator.Generate(
@@ -719,14 +740,23 @@ internal sealed class WorldChunkStore
         }, new JsonSerializerOptions { WriteIndented = true }));
     }
 
-    public WorldChunk LoadOrGenerate(ChunkCoordinate coordinate)
+    public WorldChunk LoadOrGenerate(
+        ChunkCoordinate coordinate,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
             var payload = ReadRegionPayload(coordinate);
-            if (payload is not null) return DeserializeChunk(payload, coordinate);
+            if (payload is not null)
+            {
+                var loaded = DeserializeChunk(payload, coordinate);
+                cancellationToken.ThrowIfCancellationRequested();
+                return loaded;
+            }
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         var legacyPath = LegacyChunkPath(coordinate);
         var hadLegacyChunk = File.Exists(legacyPath);
         var migrated = LoadLegacyChunk(coordinate);
@@ -736,7 +766,9 @@ internal sealed class WorldChunkStore
             DeleteLegacyChunk(legacyPath);
             return migrated;
         }
-        var generated = InfiniteWorldGenerator.Generate(Seed, coordinate);
+        cancellationToken.ThrowIfCancellationRequested();
+        var generated = InfiniteWorldGenerator.Generate(
+            Seed, coordinate, cancellationToken);
         if (hadLegacyChunk)
         {
             Save(generated);

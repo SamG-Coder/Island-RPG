@@ -16,9 +16,35 @@ internal static class MacroHydrology
     private const int GridSize = RegionCells + HaloCells * 2;
     private const int BlendTiles = HaloCells * CellSize / 2;
     private const int MaxCachedRegions = 64;
-    private static readonly ConcurrentDictionary<(long Seed, int X, int Y), Lazy<Region>> Cache = [];
+    private const int MaxAtlasCachedRegionsPerJob = 32;
+    private static readonly ConcurrentDictionary<
+        (long Seed, int X, int Y), Lazy<Region>> GameplayCache = [];
+    private static readonly ConcurrentDictionary<long, AtlasSamplingContext>
+        ActiveAtlasContexts = [];
+    private static readonly AsyncLocal<AtlasSamplingContext?>
+        CurrentAtlasContext = new();
+    private static long _nextAtlasContextId;
 
     internal readonly record struct Sample(float River, float Lake, float Flow);
+    internal static int GameplayCacheCount => GameplayCache.Count;
+    internal static int AtlasCacheCount =>
+        ActiveAtlasContexts.Values.Sum(context => context.Cache.Count);
+
+    public static IDisposable BeginAtlasSampling()
+    {
+        var previous = CurrentAtlasContext.Value;
+        var context = new AtlasSamplingContext(
+            Interlocked.Increment(ref _nextAtlasContextId));
+        ActiveAtlasContexts[context.Id] = context;
+        CurrentAtlasContext.Value = context;
+        return new AtlasSamplingScope(context, previous);
+    }
+
+    public static void ClearAtlasCache()
+    {
+        foreach (var context in ActiveAtlasContexts.Values)
+            context.Cache.Clear();
+    }
 
     public static Sample At(long seed, float worldX, float worldY)
     {
@@ -59,19 +85,47 @@ internal static class MacroHydrology
     private static Region Get(long seed, int x, int y)
     {
         var key = (Seed: seed, X: x, Y: y);
-        var region = Cache.GetOrAdd(key, value =>
+        var atlasContext = CurrentAtlasContext.Value;
+        var cache = atlasContext?.Cache ?? GameplayCache;
+        var maximum = atlasContext is null
+            ? MaxCachedRegions
+            : MaxAtlasCachedRegionsPerJob;
+        var region = cache.GetOrAdd(key, value =>
             new Lazy<Region>(() => Generate(value.Seed, value.X, value.Y),
                 LazyThreadSafetyMode.ExecutionAndPublication)).Value;
-        if (Cache.Count > MaxCachedRegions)
+        if (cache.Count > maximum)
         {
-            foreach (var candidate in Cache.Keys)
+            foreach (var candidate in cache.Keys)
             {
                 if (candidate == key) continue;
-                Cache.TryRemove(candidate, out _);
-                if (Cache.Count <= MaxCachedRegions) break;
+                cache.TryRemove(candidate, out _);
+                if (cache.Count <= maximum) break;
             }
         }
         return region;
+    }
+
+    private sealed class AtlasSamplingContext(long id)
+    {
+        public long Id { get; } = id;
+        public ConcurrentDictionary<(long Seed, int X, int Y), Lazy<Region>>
+            Cache { get; } = [];
+    }
+
+    private sealed class AtlasSamplingScope(
+        AtlasSamplingContext context,
+        AtlasSamplingContext? previous) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            CurrentAtlasContext.Value = previous;
+            ActiveAtlasContexts.TryRemove(context.Id, out _);
+            context.Cache.Clear();
+            _disposed = true;
+        }
     }
 
     private static Region Generate(long seed, int regionX, int regionY)
