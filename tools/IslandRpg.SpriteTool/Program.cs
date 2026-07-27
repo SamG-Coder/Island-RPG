@@ -76,6 +76,25 @@ internal static class SpriteSheetTool
                     continue;
                 }
 
+                if (options.BottomFadeStart is { } fadeStart)
+                {
+                    var normalizedY = outputHeight <= 1
+                        ? 1f
+                        : y / (float)(outputHeight - 1);
+                    var fade = Math.Clamp(
+                        (normalizedY - fadeStart) /
+                        Math.Max(.001f, 1f - fadeStart),
+                        0f, 1f);
+                    var brightness = 1f -
+                        fade * options.BottomFadeStrength;
+                    blue = (byte)Math.Clamp(
+                        MathF.Round(blue * brightness), 0, 255);
+                    green = (byte)Math.Clamp(
+                        MathF.Round(green * brightness), 0, 255);
+                    red = (byte)Math.Clamp(
+                        MathF.Round(red * brightness), 0, 255);
+                }
+
                 outputPixels[outputOffset] = blue;
                 outputPixels[outputOffset + 1] = green;
                 outputPixels[outputOffset + 2] = red;
@@ -161,7 +180,9 @@ internal static class SpriteSheetTool
         int Rows,
         int CellSize,
         Rgb Chroma,
-        int ChromaTolerance)
+        int ChromaTolerance,
+        float? BottomFadeStart,
+        float BottomFadeStrength)
     {
         public static Options Parse(string[] args)
         {
@@ -175,6 +196,8 @@ internal static class SpriteSheetTool
             var cellSize = 32;
             var chroma = new Rgb(255, 0, 255);
             var tolerance = 32;
+            float? bottomFadeStart = null;
+            var bottomFadeStrength = .94f;
 
             for (var index = 2; index < args.Length; index++)
             {
@@ -202,6 +225,12 @@ internal static class SpriteSheetTool
                             throw new ArgumentException(
                                 "--tolerance must be between 0 and 255.");
                         break;
+                    case "--bottom-fade-start":
+                        bottomFadeStart = UnitFloat(option, value);
+                        break;
+                    case "--bottom-fade-strength":
+                        bottomFadeStrength = UnitFloat(option, value);
+                        break;
                     default:
                         throw new ArgumentException($"Unknown option: {option}");
                 }
@@ -210,7 +239,8 @@ internal static class SpriteSheetTool
             return new(
                 Path.GetFullPath(args[0]),
                 Path.GetFullPath(args[1]),
-                columns, rows, cellSize, chroma, tolerance);
+                columns, rows, cellSize, chroma, tolerance,
+                bottomFadeStart, bottomFadeStrength);
         }
 
         private static int PositiveInteger(string option, string value)
@@ -218,6 +248,17 @@ internal static class SpriteSheetTool
             if (!int.TryParse(value, out var result) || result <= 0)
                 throw new ArgumentException(
                     $"{option} must be a positive whole number.");
+            return result;
+        }
+
+        private static float UnitFloat(string option, string value)
+        {
+            if (!float.TryParse(
+                    value, NumberStyles.Float,
+                    CultureInfo.InvariantCulture, out var result) ||
+                result is < 0 or > 1)
+                throw new ArgumentException(
+                    $"{option} must be between 0 and 1.");
             return result;
         }
 
@@ -231,6 +272,10 @@ internal static class SpriteSheetTool
             Console.Error.WriteLine("  --cell-size <px>   Square cell size (default: 32)");
             Console.Error.WriteLine("  --chroma <#RRGGBB> Transparent colour (default: #FF00FF)");
             Console.Error.WriteLine("  --tolerance <0-255> Chroma tolerance (default: 32)");
+            Console.Error.WriteLine(
+                "  --bottom-fade-start <0-1> Darken pixels below this height");
+            Console.Error.WriteLine(
+                "  --bottom-fade-strength <0-1> Maximum darkening (default: .94)");
         }
     }
 }

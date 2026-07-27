@@ -50,7 +50,7 @@ internal sealed partial class GameHostWindow
             _caveEntranceLightWorld is not null)
             return;
         foreach (var value in chunk.GroundObjects)
-            if (CaveEntranceService.IsEntrance(value))
+            if (CaveEntranceService.IsCaveShaft(value))
             {
                 _caveEntranceLightWorld = new(value.X, value.Y);
                 return;
@@ -222,14 +222,17 @@ internal sealed partial class GameHostWindow
         var terrain = DiggingSkill.Terrain(tile.Biome);
         var cave = CaveEntranceService.CaveBelow(
             _worldSeed, site.X, site.Y);
+        var completed = site with
+        {
+            ItemId = cave
+                ? ItemIds.CaveHole
+                : ItemIds.ShallowHole,
+            Health = 0
+        };
         location.Value.Chunk.GroundObjects[location.Value.Index] =
-            site with
-            {
-                ItemId = cave
-                    ? ItemIds.CaveHole
-                    : ItemIds.ShallowHole,
-                Health = 0
-            };
+            completed;
+        if (cave)
+            SynchronizeUndergroundShaft(completed);
         QueueChunkSave(location.Value.Chunk);
         AwardDiggingExperience(damage + site.MaxHealth / 5);
         AddExcavatedMaterial(
@@ -424,25 +427,7 @@ internal sealed partial class GameHostWindow
         _saves.SavePlayer(_activePlayer);
         QueueChunkSave(location.Chunk);
 
-        var coordinate = new ChunkCoordinate(
-            FloorDiv((int)MathF.Floor(entrance.X), WorldChunk.Size),
-            FloorDiv((int)MathF.Floor(entrance.Y), WorldChunk.Size),
-            (int)WorldLevel.Underground);
-        if (_worldChunks.TryGetValue(coordinate, out var loaded))
-        {
-            if (!loaded.Chunk.GroundObjects.Any(value =>
-                    value.Id == entrance.Id))
-                loaded.Chunk.GroundObjects.Add(entrance);
-            _worldStore?.Save(loaded.Chunk);
-        }
-        else if (_worldStore is not null)
-        {
-            var underground = _worldStore.LoadOrGenerate(coordinate);
-            if (!underground.GroundObjects.Any(value =>
-                    value.Id == entrance.Id))
-                underground.GroundObjects.Add(entrance);
-            _worldStore.Save(underground);
-        }
+        SynchronizeUndergroundShaft(entrance);
         _chatUi.AddMessage(
             "You secure the rope. The cave can now be entered.",
             ChatMessageStyle.Action);
@@ -464,8 +449,9 @@ internal sealed partial class GameHostWindow
             return;
         }
 
-        location.Chunk.GroundObjects[location.Index] =
+        var openShaft =
             location.Object with { ItemId = ItemIds.CaveHole };
+        location.Chunk.GroundObjects[location.Index] = openShaft;
         _activePlayer = _activePlayer with
         {
             Inventory = inventory,
@@ -473,31 +459,66 @@ internal sealed partial class GameHostWindow
         };
         _saves.SavePlayer(_activePlayer);
         QueueChunkSave(location.Chunk);
-        RemoveUndergroundEntranceReference(location.Object);
+        SynchronizeUndergroundShaft(openShaft);
         _chatUi.AddMessage(
             "You recover the rope. The cave is no longer accessible.",
             ChatMessageStyle.Action);
     }
 
-    private void RemoveUndergroundEntranceReference(
-        WorldGroundObject entrance)
+    private void SynchronizeUndergroundShaft(
+        WorldGroundObject shaft)
     {
         var coordinate = new ChunkCoordinate(
-            FloorDiv((int)MathF.Floor(entrance.X), WorldChunk.Size),
-            FloorDiv((int)MathF.Floor(entrance.Y), WorldChunk.Size),
+            FloorDiv((int)MathF.Floor(shaft.X), WorldChunk.Size),
+            FloorDiv((int)MathF.Floor(shaft.Y), WorldChunk.Size),
             (int)WorldLevel.Underground);
         if (_worldChunks.TryGetValue(coordinate, out var loaded))
         {
-            loaded.Chunk.GroundObjects.RemoveAll(
-                value => value.Id == entrance.Id);
+            Upsert(loaded.Chunk, shaft);
             _worldStore?.Save(loaded.Chunk);
             return;
         }
         if (_worldStore is null) return;
         var underground = _worldStore.LoadOrGenerate(coordinate);
-        underground.GroundObjects.RemoveAll(
-            value => value.Id == entrance.Id);
+        Upsert(underground, shaft);
         _worldStore.Save(underground);
+
+        static void Upsert(
+            WorldChunk chunk,
+            WorldGroundObject value)
+        {
+            var index = chunk.GroundObjects.FindIndex(
+                existing => existing.Id == value.Id);
+            if (index >= 0)
+                chunk.GroundObjects[index] = value;
+            else
+                chunk.GroundObjects.Add(value);
+        }
+    }
+
+    private void RemoveUndergroundShaft(WorldGroundObject shaft)
+    {
+        var coordinate = new ChunkCoordinate(
+            FloorDiv((int)MathF.Floor(shaft.X), WorldChunk.Size),
+            FloorDiv((int)MathF.Floor(shaft.Y), WorldChunk.Size),
+            (int)WorldLevel.Underground);
+        if (_worldChunks.TryGetValue(coordinate, out var loaded))
+        {
+            loaded.Chunk.GroundObjects.RemoveAll(
+                value => value.Id == shaft.Id);
+            _worldStore?.Save(loaded.Chunk);
+        }
+        else if (_worldStore is not null)
+        {
+            var underground = _worldStore.LoadOrGenerate(coordinate);
+            underground.GroundObjects.RemoveAll(
+                value => value.Id == shaft.Id);
+            _worldStore.Save(underground);
+        }
+        if (_caveEntranceLightWorld is { } light &&
+            MathF.Abs(light.X - shaft.X) < .01f &&
+            MathF.Abs(light.Y - shaft.Y) < .01f)
+            _caveEntranceLightWorld = null;
     }
 
     private bool CanFillExcavation(
@@ -542,7 +563,10 @@ internal sealed partial class GameHostWindow
                 _activePlayer.Inventory, materialSlot, out var inventory))
             return;
 
+        var filled = location.Object;
         location.Chunk.GroundObjects.RemoveAt(location.Index);
+        if (CaveEntranceService.IsHole(filled))
+            RemoveUndergroundShaft(filled);
         RefreshExcavationVegetation(location.Chunk);
         _activePlayer = _activePlayer with
         {

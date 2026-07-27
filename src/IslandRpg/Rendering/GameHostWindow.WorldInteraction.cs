@@ -629,6 +629,15 @@ internal sealed partial class GameHostWindow
         out string atlasKey,
         out string? shadowKey)
     {
+        if (itemId == ItemIds.CaveHole &&
+            _activeWorldLevel == (int)WorldLevel.Underground)
+        {
+            frame = null!;
+            texture = 0;
+            atlasKey = "";
+            shadowKey = null;
+            return false;
+        }
         var item = ItemCatalog.Get(itemId);
         if (item.SpriteCell is not { } sourceCell)
         {

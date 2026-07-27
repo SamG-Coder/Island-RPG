@@ -306,11 +306,14 @@ var freshDigSite = new WorldGroundObject(
 var advancedDigSite = freshDigSite with { Health = 25 };
 Require(
     CaveEntranceService.IsHole(caveProbe) &&
+    CaveEntranceService.IsCaveShaft(caveProbe) &&
     CaveEntranceService.CanFill(caveProbe) &&
     CaveEntranceService.Opacity(freshDigSite) <
         CaveEntranceService.Opacity(advancedDigSite) &&
     CaveEntranceService.Opacity(caveProbe) == 1 &&
     CaveEntranceService.IsEntrance(
+        CaveEntranceService.InstallRope(caveProbe)) &&
+    CaveEntranceService.IsCaveShaft(
         CaveEntranceService.InstallRope(caveProbe)) &&
     CraftingSkill.Recipes.Any(recipe =>
         recipe.ResultItemId == ItemIds.StoneShovel) &&
@@ -1925,6 +1928,17 @@ try
             value.Id == persistedEntrance.Id &&
             CaveEntranceService.IsEntrance(value)),
         "rope-secured entrances must persist on the matching cave tile");
+    undergroundWithEntrance.GroundObjects[0] =
+        persistedEntrance with { ItemId = ItemIds.CaveHole };
+    store.Save(undergroundWithEntrance);
+    var undergroundWithOpenShaft =
+        store.LoadOrGenerate(undergroundCoordinate);
+    Require(
+        undergroundWithOpenShaft.GroundObjects.Any(value =>
+            value.Id == persistedEntrance.Id &&
+            CaveEntranceService.IsHole(value) &&
+            CaveEntranceService.IsCaveShaft(value)),
+        "open cave shafts must persist for underground light without a rope");
     var undergroundReloaded =
         store.LoadOrGenerate(undergroundCoordinate);
     Require(

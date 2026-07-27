@@ -16,6 +16,9 @@ internal static class CaveEntranceService
     public static bool IsEntrance(WorldGroundObject value) =>
         value.ItemId == ItemIds.CaveEntrance;
 
+    public static bool IsCaveShaft(WorldGroundObject value) =>
+        IsHole(value) || IsEntrance(value);
+
     public static bool IsExcavation(WorldGroundObject value) =>
         IsDigSite(value) ||
         IsShallowHole(value) ||

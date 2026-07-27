@@ -5363,7 +5363,9 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         LoadStandaloneStoneSlot("shallow-hole.png", 8, 48);
         LoadStandaloneStoneSlot("cave-hole.png", 9, 48);
-        LoadStandaloneStoneSlot("cave-rope-overlay.png", 10, 48);
+        LoadStandaloneStoneSlot(
+            "cave-rope-overlay.png", 10, 48,
+            hotspotXOffset: 15, hotspotYOffset: 10);
         LoadStandaloneStoneSlot("hanging-rope.png", 11, 88);
         LoadStandaloneStoneSlot("dirt-item.png", 12, 28);
         LoadStandaloneStoneSlot("sand-item.png", 13, 28);
@@ -5385,7 +5387,11 @@ internal sealed partial class GameHostWindow : GameWindow
         }
 
         void LoadStandaloneStoneSlot(
-            string fileName, int cell, int hotspotY)
+            string fileName,
+            int cell,
+            int hotspotY,
+            int hotspotXOffset = 0,
+            int hotspotYOffset = 0)
         {
             var path = Path.Combine(
                 AppContext.BaseDirectory, "Resources", "Images",
@@ -5396,8 +5402,9 @@ internal sealed partial class GameHostWindow : GameWindow
                 stream, ColorComponents.RedGreenBlueAlpha);
             var frame = new SpriteFrame(
                 image.Width, image.Height,
-                image.Width / 2,
-                Math.Min(hotspotY, image.Height - 1),
+                image.Width / 2 + hotspotXOffset,
+                Math.Min(hotspotY, image.Height - 1) +
+                hotspotYOffset,
                 image.Data);
             _stoneToolFrames[cell] = frame;
             _stoneToolShadowFrames[cell] =
