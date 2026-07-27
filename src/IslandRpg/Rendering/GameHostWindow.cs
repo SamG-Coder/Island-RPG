@@ -276,7 +276,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _inventoryDraggingSlot => _inventoryInteraction.DraggingSlot;
     private FontSystem? _fontSystem;
     private DynamicSpriteFont? _chatFont;
-    private OpenGlFontRenderer? _fontRenderer;
+    private BatchedOpenGlFontRenderer? _fontRenderer;
     private float _chatLineHeight = 16;
     private float _uiOpacity = 1;
     private int _vao;
@@ -2398,6 +2398,7 @@ internal sealed partial class GameHostWindow : GameWindow
     protected override void OnRenderFrame(FrameEventArgs e)
     {
         base.OnRenderFrame(e);
+        _fontRenderer?.BeginFrame(ClientSize.X, ClientSize.Y);
         _performanceMetrics.RecordFrame(e.Time);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFramebuffer);
         GL.Viewport(0, 0, ReferenceWidth, ReferenceHeight);
@@ -2454,6 +2455,7 @@ internal sealed partial class GameHostWindow : GameWindow
             RenderDeveloperMapOverlay();
         }
         RenderPerformanceMetrics();
+        _fontRenderer?.Flush();
         SwapBuffers();
     }
 
@@ -4185,32 +4187,6 @@ internal sealed partial class GameHostWindow : GameWindow
         _chatFont.DrawText(_fontRenderer, text, position, color);
     }
 
-    private void DrawFontQuad(
-        int texture,
-        VertexPositionColorTexture topLeft,
-        VertexPositionColorTexture topRight,
-        VertexPositionColorTexture bottomLeft,
-        VertexPositionColorTexture bottomRight)
-    {
-        var left = MathF.Round(topLeft.Position.X);
-        var top = MathF.Round(topLeft.Position.Y);
-        var right = MathF.Round(bottomRight.Position.X);
-        var bottom = MathF.Round(bottomRight.Position.Y);
-        var color = topLeft.Color;
-        DrawUiSprite(
-            SolidUiFrame,
-            texture,
-            new(left, top, right - left, bottom - top),
-            uvRectangle: new(
-                topLeft.TextureCoordinate.X,
-                topLeft.TextureCoordinate.Y,
-                topRight.TextureCoordinate.X - topLeft.TextureCoordinate.X,
-                bottomLeft.TextureCoordinate.Y - topLeft.TextureCoordinate.Y),
-            tint: new(color.R / 255f, color.G / 255f, color.B / 255f),
-            tintAmount: 1,
-            drawOpacity: color.A / 255f);
-    }
-
     private void DrawAoEUiTile(TabControlState control)
     {
         if (_uiTabFrame is null || _uiTabTexture == 0) return;
@@ -4301,6 +4277,7 @@ internal sealed partial class GameHostWindow : GameWindow
         int teamColor = 0,
         Vector3? spriteOutline = null)
     {
+        _fontRenderer?.Flush();
         var viewportWidth = Math.Max(1, ClientSize.X);
         var viewportHeight = Math.Max(1, ClientSize.Y);
         var left = (rectangle.X - viewportWidth * .5f) * 2 / viewportWidth;
@@ -5268,7 +5245,7 @@ internal sealed partial class GameHostWindow : GameWindow
         var fontPath = Path.Combine(
             AppContext.BaseDirectory, "Resources", "Fonts",
             "Arimo-Variable.ttf");
-        _fontRenderer = new OpenGlFontRenderer(DrawFontQuad);
+        _fontRenderer = new BatchedOpenGlFontRenderer();
         _fontSystem = new FontSystem(new FontSystemSettings
         {
             TextureWidth = 512,
