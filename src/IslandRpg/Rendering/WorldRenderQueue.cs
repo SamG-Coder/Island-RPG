@@ -48,6 +48,7 @@ internal sealed class WorldRenderQueue
     public List<WorldRenderItem> Objects { get; } = [];
     public List<float> ShadowVertices { get; } = [];
     public List<float> AtlasVertices { get; } = [];
+    public List<float> GroundOutlineVertices { get; } = [];
     private readonly List<WorldRenderItem> _shadowPool = [];
     private readonly List<WorldRenderItem> _objectPool = [];
     private int _shadowCount;
@@ -60,12 +61,14 @@ internal sealed class WorldRenderQueue
         Objects.Clear();
         ShadowVertices.Clear();
         AtlasVertices.Clear();
+        GroundOutlineVertices.Clear();
         _shadowCount = 0;
         _objectCount = 0;
         EnsureCapacity(Shadows, estimatedItems);
         EnsureCapacity(Objects, estimatedItems);
         EnsureCapacity(ShadowVertices, estimatedItems * 30);
         EnsureCapacity(AtlasVertices, estimatedItems * 30);
+        EnsureCapacity(GroundOutlineVertices, estimatedItems * 30);
     }
 
     public void AddShadow(

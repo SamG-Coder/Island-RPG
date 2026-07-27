@@ -114,6 +114,15 @@ var renderItems = Enumerable.Range(0, 8_192)
 var expectedRenderOrder = WorldRenderQueue.LegacyOrder(renderItems);
 var reusableRenderQueue = new WorldRenderQueue();
 reusableRenderQueue.Reset(renderItems.Length);
+reusableRenderQueue.GroundOutlineVertices.AddRange(
+    Enumerable.Repeat(1f, renderItems.Length * 30));
+var outlineCapacity =
+    reusableRenderQueue.GroundOutlineVertices.Capacity;
+reusableRenderQueue.Reset(renderItems.Length);
+Require(
+    reusableRenderQueue.GroundOutlineVertices.Count == 0 &&
+    reusableRenderQueue.GroundOutlineVertices.Capacity == outlineCapacity,
+    "ground-item outline vertices must be cleared and reused without reallocating");
 foreach (var item in renderItems)
     reusableRenderQueue.AddObject(
         item.World, item.Opacity, item.StableKey, item.AtlasKey);

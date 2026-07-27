@@ -4341,6 +4341,10 @@ internal sealed partial class GameHostWindow : GameWindow
         _worldRenderQueue.Reset(vegetationCapacity);
         var shadows = _worldRenderQueue.Shadows;
         var objects = _worldRenderQueue.Objects;
+        var showGroundItemOutlines =
+            ShouldRenderGroundItemOutlines();
+        var groundOutlineVertices =
+            _worldRenderQueue.GroundOutlineVertices;
         var playerOccluded = false;
         foreach (var item in visibleChunks
                      .SelectMany(gpu => gpu.Chunk.Cliffs.Select(face => (Face: face, Gpu: gpu)))
@@ -4425,6 +4429,12 @@ internal sealed partial class GameHostWindow : GameWindow
                 item.Gpu.Opacity,
                 $"ground:{item.Object.Id:N}",
                 itemAtlasKey);
+            if (showGroundItemOutlines)
+                AddGroundItemOutline(
+                    itemAtlasKey,
+                    world,
+                    item.Gpu.Opacity,
+                    groundOutlineVertices);
         }
 
         foreach (var gpu in visibleChunks)
@@ -4492,9 +4502,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 mirror: player.Mirror, outlineOnly: true,
                 wading: player.Wading,
                 outlineColor: TeamColor(_activePlayer?.TeamColor ?? 0));
-        if (KeyboardState.IsKeyDown(Keys.LeftAlt) ||
-            KeyboardState.IsKeyDown(Keys.RightAlt))
-            RenderGroundItemOutlines();
+        if (showGroundItemOutlines)
+            DrawGroundItemOutlines(groundOutlineVertices);
         RenderGroundDropPreview();
 
         void FlushAtlas()
@@ -4526,36 +4535,6 @@ internal sealed partial class GameHostWindow : GameWindow
                top + entry.Frame.Height * scale >= 0 &&
                left <= ReferenceWidth &&
                top <= ReferenceHeight;
-    }
-
-    private void RenderGroundItemOutlines()
-    {
-        var color = TeamColor(_activePlayer?.TeamColor ?? 0);
-        var vertices = new List<float>();
-        foreach (var item in _worldChunks.Values
-                     .Where(IsChunkVisible)
-                     .SelectMany(gpu =>
-                         gpu.Chunk.GroundObjects.Select(
-                             groundObject => (Object: groundObject, Gpu: gpu)))
-                     .OrderBy(item => item.Object.X + item.Object.Y))
-        {
-            if (!TryGroundItemVisual(
-                    item.Object.ItemId,
-                    out _,
-                    out _,
-                    out var atlasKey,
-                    out _))
-                continue;
-            if (CampfireService.IsCampfire(item.Object))
-                atlasKey = CampfirePresentation.AtlasKey(
-                    item.Object, _worldGameSeconds, _clock);
-            var world = GroundObjectWorld(item.Object);
-            if (!IsAtlasItemVisible(atlasKey, world))
-                continue;
-            AddAtlasQuad(
-                atlasKey, world, item.Gpu.Opacity, vertices);
-        }
-        DrawTreeOutlineBatch(vertices, color);
     }
 
     private void DrawCliffBatch()
