@@ -1,9 +1,12 @@
+using IslandRpg.Gameplay;
 using IslandRpg.World;
 using OpenTK.Mathematics;
 
 namespace IslandRpg.Rendering;
 
 internal sealed record WorldVegetationRenderItem(
+    int TileX,
+    int TileY,
     Vector2 World,
     string StableKey,
     string AtlasKey,
@@ -17,12 +20,18 @@ internal static class WorldVegetationRenderCache
         IReadOnlyList<float> renderedHeights)
     {
         var vegetation = chunk.Vegetation;
-        var result = new WorldVegetationRenderItem[vegetation.Length];
+        var result = new List<WorldVegetationRenderItem>(
+            vegetation.Length);
         for (var index = 0; index < vegetation.Length; index++)
         {
             var item = vegetation[index];
             var tileX = (int)MathF.Floor(item.X);
             var tileY = (int)MathF.Floor(item.Y);
+            if (chunk.GroundObjects.Any(value =>
+                    CaveEntranceService.IsExcavation(value) &&
+                    (int)MathF.Floor(value.X) == tileX &&
+                    (int)MathF.Floor(value.Y) == tileY))
+                continue;
             var localX = PositiveMod(tileX, WorldChunk.Size);
             var localY = PositiveMod(tileY, WorldChunk.Size);
             var elevation = LoadedTerrainSampler.Interpolate(
@@ -37,7 +46,9 @@ internal static class WorldVegetationRenderCache
             var shadowName = ShadowName(item.GraphicName);
             var biome = chunk.Tiles[
                 localY * WorldChunk.Size + localX].Biome;
-            result[index] = new(
+            result.Add(new(
+                tileX,
+                tileY,
                 world,
                 $"vegetation:{item.X:0.000}:{item.Y:0.000}",
                 $"{item.GraphicName}#{item.FrameIndex}",
@@ -46,9 +57,9 @@ internal static class WorldVegetationRenderCache
                     : $"{shadowName}#{item.FrameIndex}",
                 item.CanBecomeInstance &&
                 item.Kind == WorldVegetationKind.Shrub &&
-                biome is not Biome.Snow and not Biome.Tundra);
+                biome is not Biome.Snow and not Biome.Tundra));
         }
-        return result;
+        return result.ToArray();
     }
 
     private static int PositiveMod(int value, int divisor)

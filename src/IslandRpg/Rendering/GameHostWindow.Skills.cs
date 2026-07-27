@@ -69,11 +69,15 @@ internal sealed partial class GameHostWindow
         var fishing = _selectedSkill == 3;
         var cooking = _selectedSkill == 4;
         var firemaking = _selectedSkill == 5;
-        var name = firemaking ? "Firemaking" :
+        var digging = _selectedSkill == 6;
+        var name = digging ? "Digging" :
+            firemaking ? "Firemaking" :
             cooking ? "Cooking" :
             fishing ? "Fishing" : crafting ? "Crafting" :
             farming ? "Farming" : "Woodcutting";
-        var experience = firemaking
+        var experience = digging
+            ? _activePlayer?.DiggingExperience ?? 0
+            : firemaking
             ? _activePlayer?.FiremakingExperience ?? 0
             : cooking
             ? _activePlayer?.CookingExperience ?? 0
@@ -84,7 +88,9 @@ internal sealed partial class GameHostWindow
             : farming
                 ? _activePlayer?.FarmingExperience ?? 0
                 : _activePlayer?.WoodcuttingExperience ?? 0;
-        var level = firemaking
+        var level = digging
+            ? DiggingSkill.LevelForExperience(experience)
+            : firemaking
             ? FiremakingSkill.LevelForExperience(experience)
             : cooking
             ? CookingSkill.LevelForExperience(experience)
@@ -95,7 +101,9 @@ internal sealed partial class GameHostWindow
             : farming
                 ? FarmingSkill.LevelForExperience(experience)
                 : WoodcuttingSkill.LevelForExperience(experience);
-        var maximumLevel = firemaking
+        var maximumLevel = digging
+            ? DiggingSkill.MaximumLevel
+            : firemaking
             ? FiremakingSkill.MaximumLevel
             : cooking
             ? CookingSkill.MaximumLevel
@@ -106,7 +114,9 @@ internal sealed partial class GameHostWindow
             : farming
                 ? FarmingSkill.MaximumLevel
                 : WoodcuttingSkill.MaximumLevel;
-        var currentFloor = firemaking
+        var currentFloor = digging
+            ? DiggingSkill.ExperienceForLevel(level)
+            : firemaking
             ? FiremakingSkill.ExperienceForLevel(level)
             : cooking
             ? CookingSkill.ExperienceForLevel(level)
@@ -119,7 +129,9 @@ internal sealed partial class GameHostWindow
                 : WoodcuttingSkill.ExperienceForLevel(level);
         var nextFloor = level >= maximumLevel
             ? currentFloor
-            : firemaking
+            : digging
+                ? DiggingSkill.ExperienceForLevel(level + 1)
+                : firemaking
                 ? FiremakingSkill.ExperienceForLevel(level + 1)
                 : cooking
                 ? CookingSkill.ExperienceForLevel(level + 1)
@@ -141,7 +153,7 @@ internal sealed partial class GameHostWindow
             panel, experience, level, maximumLevel,
             currentFloor, nextFloor, progress);
         RenderSkillInformation(
-            panel, farming, crafting, fishing, cooking, firemaking,
+            panel, farming, crafting, fishing, cooking, firemaking, digging,
             level, experience);
         if (crafting) RenderSkillAction(panel);
     }
@@ -219,13 +231,16 @@ internal sealed partial class GameHostWindow
         bool fishing,
         bool cooking,
         bool firemaking,
+        bool digging,
         int level,
         int experience)
     {
         var info = SkillPanelLayout.InformationBounds(panel);
         DrawUiColor(info, new(.052f, .047f, .035f, .96f));
         DrawPanelOutline(info, 1, new(.25f, .205f, .115f, 1));
-        var remaining = firemaking
+        var remaining = digging
+            ? DiggingSkill.ExperienceToNextLevel(experience)
+            : firemaking
             ? FiremakingSkill.ExperienceToNextLevel(experience)
             : cooking
             ? CookingSkill.ExperienceToNextLevel(experience)
@@ -242,6 +257,7 @@ internal sealed partial class GameHostWindow
             new(info.X + 9, info.Y + 9),
             new(194, 184, 151, 255));
         DrawUiText(
+            digging ? "Excavate tougher ground more quickly" :
             firemaking ? "Longer, larger and brighter fires" :
             cooking ? "Higher levels reduce burning" :
             fishing ? "Unlocks more fish" :
@@ -309,7 +325,12 @@ internal sealed partial class GameHostWindow
             SkillType.Firemaking,
             "Firemaking",
             FiremakingSkill.LevelForExperience(
-                _activePlayer?.FiremakingExperience ?? 0))
+                _activePlayer?.FiremakingExperience ?? 0)),
+        (
+            SkillType.Digging,
+            "Digging",
+            DiggingSkill.LevelForExperience(
+                _activePlayer?.DiggingExperience ?? 0))
     ];
 
     private void DrawSkillListItem(
@@ -323,6 +344,7 @@ internal sealed partial class GameHostWindow
             SkillType.Crafting => new Vector4(.63f, .38f, .14f, 1),
             SkillType.Fishing => new Vector4(.20f, .46f, .66f, 1),
             SkillType.Cooking => new Vector4(.72f, .32f, .12f, 1),
+            SkillType.Digging => new Vector4(.48f, .34f, .18f, 1),
             _ => new Vector4(.88f, .20f, .06f, 1)
         };
         DrawUiColor(

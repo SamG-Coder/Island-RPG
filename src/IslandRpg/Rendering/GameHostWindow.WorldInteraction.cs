@@ -294,6 +294,33 @@ internal sealed partial class GameHostWindow
             !TryGroundItemVisual(itemId, out _, out _, out _, out _))
             return;
 
+        if (itemId == ItemIds.Rope &&
+            TryGetGroundObjectUnderMouse(
+                SceneMousePosition(), out var caveHole, out _) &&
+            CaveEntranceService.IsHole(caveHole))
+        {
+            _groundDropPreview = new(
+                _inventoryDraggingSlot,
+                itemId,
+                new(caveHole.X, caveHole.Y),
+                true,
+                caveHole.Id);
+            return;
+        }
+        if (itemId is ItemIds.Dirt or ItemIds.Sand &&
+            TryGetGroundObjectUnderMouse(
+                SceneMousePosition(), out var fillableHole, out _) &&
+            CaveEntranceService.CanFill(fillableHole))
+        {
+            _groundDropPreview = new(
+                _inventoryDraggingSlot,
+                itemId,
+                new(fillableHole.X, fillableHole.Y),
+                CanFillExcavation(
+                    fillableHole, itemId, out _),
+                fillableHole.Id);
+            return;
+        }
         if (ItemCatalog.Get(itemId).HasTag(ItemTag.Log) &&
             TryGetGroundObjectUnderMouse(
                 SceneMousePosition(), out var campfire, out _) &&
@@ -463,10 +490,14 @@ internal sealed partial class GameHostWindow
         }
         if (targetObjectId is { } campfireId)
         {
-            var targetCampfire = FindGroundObject(campfireId);
-            if (targetCampfire is null ||
+            var targetObject = FindGroundObject(campfireId);
+            if (targetObject is null ||
+                !(itemId == ItemIds.Rope &&
+                  CaveEntranceService.IsHole(targetObject)) &&
+                !(itemId is ItemIds.Dirt or ItemIds.Sand &&
+                  CanFillExcavation(targetObject, itemId, out _)) &&
                 !CampfireService.CanAddFuel(
-                    targetCampfire, itemId, _worldGameSeconds))
+                    targetObject, itemId, _worldGameSeconds))
             {
                 ReportBlockedAction(
                     "campfire-fuel-blocked",
@@ -509,6 +540,25 @@ internal sealed partial class GameHostWindow
         }
         if (drop.TargetObjectId is { } campfireId)
         {
+            var targetObject = FindGroundObject(campfireId);
+            if (drop.ItemId == ItemIds.Rope &&
+                targetObject is not null &&
+                CaveEntranceService.IsHole(targetObject))
+            {
+                TryInstallCaveRope(
+                    campfireId, drop.InventorySlot);
+                _player.Stop();
+                return;
+            }
+            if (drop.ItemId is ItemIds.Dirt or ItemIds.Sand &&
+                targetObject is not null &&
+                CaveEntranceService.CanFill(targetObject))
+            {
+                TryFillExcavation(
+                    campfireId, drop.InventorySlot, drop.ItemId);
+                _player.Stop();
+                return;
+            }
             if (!TryAddCampfireFuel(
                     campfireId, drop.InventorySlot, drop.ItemId))
             {
@@ -580,7 +630,7 @@ internal sealed partial class GameHostWindow
         out string? shadowKey)
     {
         var item = ItemCatalog.Get(itemId);
-        if (item.SpriteCell is not { } cell)
+        if (item.SpriteCell is not { } sourceCell)
         {
             frame = null!;
             texture = 0;
@@ -588,6 +638,11 @@ internal sealed partial class GameHostWindow
             shadowKey = null;
             return false;
         }
+        var cell =
+            itemId == ItemIds.CaveEntrance &&
+            _activeWorldLevel == (int)WorldLevel.Underground
+                ? 11
+                : sourceCell;
 
         if (item.HasTag(ItemTag.PlaceableObject))
         {

@@ -42,6 +42,14 @@ internal static class CraftingSkill
     public static readonly IReadOnlyList<CraftingRecipe> Recipes =
     [
         new(
+            "rope", ItemIds.Rope,
+            CraftingCategory.Resources, 1, 15,
+            [new(ItemIds.PlantFibres, 3)],
+            [
+                "Separate the plant fibres into long strands.",
+                "Twist the strands together into a strong rope."
+            ]),
+        new(
             "primitive-fishing-net", ItemIds.PrimitiveFishingNet,
             CraftingCategory.Tools, 2, 25,
             [new(ItemIds.PlantFibres, 6)],
@@ -155,6 +163,18 @@ internal static class CraftingSkill
                         new(ItemIds.Sticks, 1)
                     ],
                     [new(ItemIds.StonePickaxe, 1)])
+            ]),
+        new(
+            "stone-shovel", ItemIds.StoneShovel,
+            CraftingCategory.Tools, 1, 45,
+            [
+                new(ItemIds.SharpenedRock, 1),
+                new(ItemIds.Sticks, 1),
+                new(ItemIds.PlantFibres, 1)
+            ],
+            [
+                "Chip the sharpened rock into a broad shovel blade.",
+                "Lash the blade firmly to the wooden shaft."
             ]),
         new(
             "campfire", ItemIds.Campfire,

@@ -77,7 +77,11 @@ internal sealed partial class GameHostWindow : GameWindow
         TakeCampfireFuel,
         CookOnCampfire,
         Fish,
-        GatherFibres
+        GatherFibres,
+        DigCave,
+        EnterCave,
+        RestoreExcavation,
+        TakeCaveRope
     }
     private sealed record QueuedWorldAction(
         WorldActionType Type, Vector2 Target, float Range,
@@ -188,12 +192,14 @@ internal sealed partial class GameHostWindow : GameWindow
     private MouseCursor? _cutNativeCursor;
     private MouseCursor? _pickupNativeCursor;
     private MouseCursor? _dropNativeCursor;
+    private MouseCursor? _digNativeCursor;
     private enum GameCursorKind
     {
         Default,
         CutTree,
         PickUpItem,
-        DropItem
+        DropItem,
+        Dig
     }
     private GameCursorKind _gameCursorKind;
     private int _uiPanelFillTexture;
@@ -215,9 +221,9 @@ internal sealed partial class GameHostWindow : GameWindow
         new SpriteFrame?[12];
     private readonly SpriteFrame?[] _supplementalShadowFrames =
         new SpriteFrame?[12];
-    private readonly int[] _stoneToolTextures = new int[4];
-    private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[4];
-    private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[4];
+    private readonly int[] _stoneToolTextures = new int[14];
+    private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[14];
+    private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[14];
     private readonly Dictionary<string, GroundToolSprite> _groundToolSprites =
         new(StringComparer.OrdinalIgnoreCase);
     private PlaceableObjectSprites _placeableObjectSprites = new();
@@ -373,6 +379,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 "VMBAS_WN", "VMBAS_AN", "VMBAS_DN",
                 "VFBAS_WN", "VFBAS_AN", "VFBAS_DN",
                 "VMLUM_AN", "VFLUM_AN",
+                "VMFAR_TN", "VFFAR_TN",
                 "VMFOR_TN", "VFFOR_TN",
                 "VMFIS_TN", "VFFIS_TN", "MOVEX_NN"
             })
@@ -389,7 +396,9 @@ internal sealed partial class GameHostWindow : GameWindow
         _waterTime = (_waterTime + (float)e.Time) % 10000f;
         if (KeyboardState.IsKeyPressed(Keys.Escape))
         {
-            if (_placeableObjectPlacement.Active)
+            if (_digTargetingSlot >= 0)
+                CancelCaveDigTargeting();
+            else if (_placeableObjectPlacement.Active)
                 CancelPlaceableObjectPlacement();
             else if (_screen == ScreenState.MainMenu &&
                 _frontendPage != FrontendPage.Main)
@@ -448,7 +457,10 @@ internal sealed partial class GameHostWindow : GameWindow
                     ])
                     .Concat(Enumerable.Range(1, 9).Select(index => $"CLF{index:00}_NN"))
                     .SelectMany(name => new[] { name, name[..^2] + "N0" })
-                    .Concat(["STUMP_NN", "STUMB_NN"])
+                    .Concat([
+                        "STUMP_NN", "STUMB_NN",
+                        "VMFAR_TN", "VFFAR_TN"
+                    ])
                     .Concat(WorldVegetationGenerator.RequiredGraphicNames)
                     .Concat(WorldFishGenerator.RequiredGraphicNames)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase)
@@ -907,6 +919,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 (int)WorldLevel.Overworld or
                 (int)WorldLevel.Underground))
             _activeWorldLevel = (int)WorldLevel.Overworld;
+        _caveEntranceLightWorld = null;
 
         FinishPendingMenuChunk();
         foreach (var coordinate in _worldChunks.Keys.ToArray())
@@ -1185,7 +1198,19 @@ internal sealed partial class GameHostWindow : GameWindow
                         out _, out _);
                 _groundObjectContext.Open(
                     MouseState.Position,
-                    canCookSelected
+                    CaveEntranceService.IsEntrance(contextObject)
+                        ? _activeWorldLevel == (int)WorldLevel.Overworld
+                            ? ["Climb down", "Take rope",
+                               "Walk Here", "Examine"]
+                            : ["Climb up", "Walk Here", "Examine"]
+                        : CaveEntranceService.IsHole(contextObject)
+                        ? ["Walk Here", "Examine"]
+                        : CaveEntranceService.IsDigSite(contextObject)
+                        ? ["Continue digging", "Restore ground",
+                           "Walk Here", "Examine"]
+                        : CaveEntranceService.IsShallowHole(contextObject)
+                        ? ["Walk Here", "Examine"]
+                        : canCookSelected
                         ? ["Cook", "Walk Here", "Examine"]
                         : campfireState == CampfireState.Fueled
                         ? ["Light", "Take log", "Walk Here", "Examine"]
@@ -1231,11 +1256,23 @@ internal sealed partial class GameHostWindow : GameWindow
             leftDown && !_gameLeftWasDown &&
             !IsPointerOverGameUi(MouseState.Position))
         {
+            if (TryTargetCaveDig(
+                    ScreenToTerrain(SceneMousePosition())))
+            {
+                _gameLeftWasDown = leftDown;
+                return;
+            }
             if (TryGetGroundObjectUnderMouse(
                     SceneMousePosition(), out var groundObject, out _))
             {
-                if (!PlaceableObjectCatalog.IsPlaceable(
-                        groundObject.ItemId))
+                if (CaveEntranceService.IsEntrance(groundObject))
+                    QueueCaveEntry(groundObject);
+                else if (CaveEntranceService.IsDigSite(groundObject))
+                    QueueContinueCaveDig(groundObject);
+                else if (!CaveEntranceService.IsHole(groundObject) &&
+                         !CaveEntranceService.IsShallowHole(groundObject) &&
+                         !PlaceableObjectCatalog.IsPlaceable(
+                             groundObject.ItemId))
                     QueueGroundObjectPickup(groundObject);
             }
             else if (TryGetFishUnderMouse(
@@ -2389,6 +2426,8 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.Uniform1(
             _shaderUniforms.Get(_program, "caveLighting"),
             caveLighting ? 1 : 0);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "caveEntranceLight"), 0);
         if (caveLighting)
         {
             var player = GetPlayerVisual();
@@ -2402,6 +2441,21 @@ internal sealed partial class GameHostWindow : GameWindow
             GL.Uniform1(
                 _shaderUniforms.Get(_program, "playerLightScale"),
                 _zoom);
+            if (_caveEntranceLightWorld is { } entrance)
+            {
+                var entranceAnchor = SpriteAnchor(
+                    GroundObjectWorld(new(
+                        Guid.Empty, ItemIds.CaveEntrance,
+                        entrance.X, entrance.Y)));
+                GL.Uniform1(
+                    _shaderUniforms.Get(
+                        _program, "caveEntranceLight"), 1);
+                GL.Uniform2(
+                    _shaderUniforms.Get(
+                        _program, "caveEntranceLightUv"),
+                    entranceAnchor.X / ReferenceWidth,
+                    1f - entranceAnchor.Y / ReferenceHeight);
+            }
         }
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, _sceneColor);
@@ -2418,6 +2472,8 @@ internal sealed partial class GameHostWindow : GameWindow
         // This program also renders sprites and UI. Keep the cave composite
         // strictly scoped to this one fullscreen draw.
         GL.Uniform1(_shaderUniforms.Get(_program, "caveLighting"), 0);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "caveEntranceLight"), 0);
     }
 
     protected override void OnRenderFrame(FrameEventArgs e)
@@ -3165,6 +3221,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _chatUi.Layout(scene);
         _minimapUi.Layout(scene);
         RenderTreeHealthBars(scene);
+        RenderDigSiteHealthBar(scene);
         RenderOverheadSpeech(scene);
         RenderMinimap();
         RenderChatUi();
@@ -3392,6 +3449,58 @@ internal sealed partial class GameHostWindow : GameWindow
         var groundObject = _groundObjectContextTarget;
         _groundObjectContextTarget = null;
         if (groundObject is null) return;
+        if (CaveEntranceService.IsEntrance(groundObject))
+        {
+            if (option == 0)
+                QueueCaveEntry(groundObject);
+            else if (option == 1 &&
+                     _activeWorldLevel == (int)WorldLevel.Overworld)
+                QueueTakeCaveRope(groundObject);
+            else if (option == (_activeWorldLevel ==
+                                (int)WorldLevel.Overworld ? 2 : 1))
+                QueueWalk(_groundObjectContextWalkTarget);
+            else if (option == (_activeWorldLevel ==
+                                (int)WorldLevel.Overworld ? 3 : 2))
+                _chatUi.AddMessage(
+                    ItemCatalog.Get(groundObject.ItemId).Examine,
+                    ChatMessageStyle.Normal);
+            return;
+        }
+        if (CaveEntranceService.IsHole(groundObject))
+        {
+            if (option == 0)
+                QueueWalk(_groundObjectContextWalkTarget);
+            else if (option == 1)
+                _chatUi.AddMessage(
+                    ItemCatalog.Get(groundObject.ItemId).Examine,
+                    ChatMessageStyle.Normal);
+            return;
+        }
+        if (CaveEntranceService.IsDigSite(groundObject))
+        {
+            if (option == 0)
+                QueueContinueCaveDig(groundObject);
+            else if (option == 1)
+                QueueRestoreExcavation(groundObject);
+            else if (option == 2)
+                QueueWalk(_groundObjectContextWalkTarget);
+            else if (option == 3)
+                _chatUi.AddMessage(
+                    $"{groundObject.Health}/{groundObject.MaxHealth} " +
+                    "excavation health remains.",
+                    ChatMessageStyle.Normal);
+            return;
+        }
+        if (CaveEntranceService.IsShallowHole(groundObject))
+        {
+            if (option == 0)
+                QueueWalk(_groundObjectContextWalkTarget);
+            else if (option == 1)
+                _chatUi.AddMessage(
+                    ItemCatalog.Get(groundObject.ItemId).Examine,
+                    ChatMessageStyle.Normal);
+            return;
+        }
         if (PlaceableObjectCatalog.IsPlaceable(
                 groundObject.ItemId))
         {
@@ -4591,6 +4700,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 itemAtlasKey = CampfirePresentation.AtlasKey(
                     item.Object, _worldGameSeconds, _clock);
             var world = GroundObjectWorld(item.Object);
+            var objectOpacity = item.Gpu.Opacity *
+                CaveEntranceService.Opacity(item.Object);
             if (!IsAtlasItemVisible(itemAtlasKey, world) &&
                 (shadowAtlasKey is null ||
                  !IsAtlasItemVisible(shadowAtlasKey, world)))
@@ -4598,19 +4709,30 @@ internal sealed partial class GameHostWindow : GameWindow
             if (shadowAtlasKey is not null)
                 _worldRenderQueue.AddShadow(
                     world,
-                    item.Gpu.Opacity,
+                    objectOpacity,
                     $"ground-shadow:{item.Object.Id:N}",
                     shadowAtlasKey);
             _worldRenderQueue.AddObject(
                 world,
-                item.Gpu.Opacity,
+                objectOpacity,
                 $"ground:{item.Object.Id:N}",
                 itemAtlasKey);
+            if (_activeWorldLevel == (int)WorldLevel.Overworld &&
+                CaveEntranceService.IsEntrance(item.Object))
+            {
+                var ropeAtlasKey = StoneToolAtlasKey(10, false);
+                if (IsAtlasItemVisible(ropeAtlasKey, world))
+                    _worldRenderQueue.AddObject(
+                        world,
+                        objectOpacity,
+                        $"ground:{item.Object.Id:N}:rope",
+                        ropeAtlasKey);
+            }
             if (showGroundItemOutlines)
                 AddGroundItemOutline(
                     itemAtlasKey,
                     world,
-                    item.Gpu.Opacity,
+                    objectOpacity,
                     groundOutlineVertices);
         }
 
@@ -4926,8 +5048,11 @@ internal sealed partial class GameHostWindow : GameWindow
                 var loaded = _pendingChunkTask.Result;
                 if (loaded.Coordinate.Level == _activeWorldLevel &&
                     !_worldChunks.ContainsKey(loaded.Coordinate))
+                {
                     _worldChunks.Add(
                         loaded.Coordinate, UploadWorldChunk(loaded));
+                    CacheCaveEntranceLight(loaded);
+                }
                 if (loaded.Coordinate.Level == _activeWorldLevel)
                     ClearFallbackCaveSampling();
                 _pendingChunkTask = null;
@@ -5006,6 +5131,7 @@ internal sealed partial class GameHostWindow : GameWindow
             [EntityAction.Attack] = "AN",
             [EntityAction.Work] = "AN",
             [EntityAction.Gather] = "TN",
+            [EntityAction.Dig] = "TN",
             [EntityAction.Fish] = "TN",
             [EntityAction.Die] = "DN"
         };
@@ -5020,6 +5146,8 @@ internal sealed partial class GameHostWindow : GameWindow
                     gender == EntityGender.Male ? "VMLUM_" : "VFLUM_",
                 EntityAction.Gather =>
                     gender == EntityGender.Male ? "VMFOR_" : "VFFOR_",
+                EntityAction.Dig =>
+                    gender == EntityGender.Male ? "VMFAR_" : "VFFAR_",
                 EntityAction.Fish =>
                     gender == EntityGender.Male ? "VMFIS_" : "VFFIS_",
                 _ => gender == EntityGender.Male ? "VMBAS_" : "VFBAS_"
@@ -5045,6 +5173,10 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         foreach (var gender in Enum.GetValues<EntityGender>())
         {
+            if (!_entityAnimations.ContainsKey((gender, EntityAction.Dig)) &&
+                _entityAnimations.TryGetValue(
+                    (gender, EntityAction.Work), out var work))
+                _entityAnimations[(gender, EntityAction.Dig)] = work;
             if (!_entityAnimations.ContainsKey((gender, EntityAction.Idle)) ||
                 !_entityAnimations.ContainsKey((gender, EntityAction.Move)) ||
                 !_entityAnimations.ContainsKey((gender, EntityAction.Gather)))
@@ -5212,6 +5344,65 @@ internal sealed partial class GameHostWindow : GameWindow
             _stoneToolShadowFrames[2] =
                 ItemShadowGenerator.Create(frame);
             _stoneToolTextures[2] = Upload(frame);
+        }
+        var stoneShovelPath = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Images",
+            "stone-shovel-item.png");
+        if (File.Exists(stoneShovelPath))
+        {
+            using var stream = File.OpenRead(stoneShovelPath);
+            var image = ImageResult.FromStream(
+                stream, ColorComponents.RedGreenBlueAlpha);
+            var frame = new SpriteFrame(
+                image.Width, image.Height,
+                image.Width / 2, image.Height - 4, image.Data);
+            _stoneToolFrames[4] = frame;
+            _stoneToolShadowFrames[4] =
+                ItemShadowGenerator.Create(frame);
+            _stoneToolTextures[4] = Upload(frame);
+        }
+        LoadStandaloneStoneSlot("shallow-hole.png", 8, 48);
+        LoadStandaloneStoneSlot("cave-hole.png", 9, 48);
+        LoadStandaloneStoneSlot("cave-rope-overlay.png", 10, 48);
+        LoadStandaloneStoneSlot("hanging-rope.png", 11, 88);
+        LoadStandaloneStoneSlot("dirt-item.png", 12, 28);
+        LoadStandaloneStoneSlot("sand-item.png", 13, 28);
+        var ropePath = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Images",
+            "rope-item.png");
+        if (File.Exists(ropePath))
+        {
+            using var stream = File.OpenRead(ropePath);
+            var image = ImageResult.FromStream(
+                stream, ColorComponents.RedGreenBlueAlpha);
+            var frame = new SpriteFrame(
+                image.Width, image.Height,
+                image.Width / 2, image.Height - 4, image.Data);
+            _stoneToolFrames[7] = frame;
+            _stoneToolShadowFrames[7] =
+                ItemShadowGenerator.Create(frame);
+            _stoneToolTextures[7] = Upload(frame);
+        }
+
+        void LoadStandaloneStoneSlot(
+            string fileName, int cell, int hotspotY)
+        {
+            var path = Path.Combine(
+                AppContext.BaseDirectory, "Resources", "Images",
+                fileName);
+            if (!File.Exists(path)) return;
+            using var stream = File.OpenRead(path);
+            var image = ImageResult.FromStream(
+                stream, ColorComponents.RedGreenBlueAlpha);
+            var frame = new SpriteFrame(
+                image.Width, image.Height,
+                image.Width / 2,
+                Math.Min(hotspotY, image.Height - 1),
+                image.Data);
+            _stoneToolFrames[cell] = frame;
+            _stoneToolShadowFrames[cell] =
+                ItemShadowGenerator.Create(frame);
+            _stoneToolTextures[cell] = Upload(frame);
         }
         var stoneKnifePath = Path.Combine(
             AppContext.BaseDirectory, "Resources", "Images",

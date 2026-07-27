@@ -20,12 +20,13 @@ internal sealed partial class GameHostWindow
 
         var palette = JascPalette.Load(Age2PaletteResolver.Resolve(_install, path).Path);
         var cursorSheet = SlpDecoder.Decode(path, palette);
-        if (cursorSheet.Frames.Count <= 8)
+        if (cursorSheet.Frames.Count <= 17)
             throw new InvalidDataException(
-                "The installed AoE cursor sheet does not contain the tree-cut cursor.");
+                "The installed AoE cursor sheet does not contain the required game cursors.");
 
         _defaultNativeCursor = CreateNativeCursor(cursorSheet.Frames[0]);
         _pickupNativeCursor = CreateNativeCursor(cursorSheet.Frames[3]);
+        _digNativeCursor = CreateNativeCursor(cursorSheet.Frames[17]);
         _dropNativeCursor = CreateNativeCursor(cursorSheet.Frames[7]);
         _cutNativeCursor = CreateNativeCursor(cursorSheet.Frames[8]);
         Cursor = _defaultNativeCursor;
@@ -73,7 +74,14 @@ internal sealed partial class GameHostWindow
             return;
         var next = GameCursorKind.Default;
         MouseCursor cursor = _defaultNativeCursor;
-        if ((IsWorldDropDragOutsideInventory() ||
+        if (_digTargetingSlot >= 0 &&
+            !pointerBlocked &&
+            _digNativeCursor is not null)
+        {
+            next = GameCursorKind.Dig;
+            cursor = _digNativeCursor;
+        }
+        else if ((IsWorldDropDragOutsideInventory() ||
              IsPlaceablePlacementActiveOverWorld()) &&
             _dropNativeCursor is not null)
         {

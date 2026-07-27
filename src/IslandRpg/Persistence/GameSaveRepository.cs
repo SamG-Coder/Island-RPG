@@ -28,7 +28,8 @@ internal sealed record PlayerProfile(
     int CraftingExperience = 0,
     int FishingExperience = 0,
     int CookingExperience = 0,
-    int FiremakingExperience = 0);
+    int FiremakingExperience = 0,
+    int DiggingExperience = 0);
 
 internal sealed record WorldPlayerState(
     string PlayerId,

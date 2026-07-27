@@ -21,7 +21,8 @@ internal enum ItemTag
     FibreNetSprite = 1 << 14,
     PlaceableObject = 1 << 15,
     Hammer = 1 << 16,
-    Knife = 1 << 17
+    Knife = 1 << 17,
+    Shovel = 1 << 18
 }
 
 internal sealed record ItemDefinition(
@@ -44,6 +45,7 @@ internal static class ItemIds
     public const string StoneAxe = "stone_axe";
     public const string StoneHammer = "stone_hammer";
     public const string StonePickaxe = "stone_pickaxe";
+    public const string StoneShovel = "stone_shovel";
     public const string StoneKnife = "stone_knife";
     public const string BluntStoneAxe = "blunt_stone_axe";
     public const string BluntStoneHammer = "blunt_stone_hammer";
@@ -96,9 +98,16 @@ internal static class ItemIds
     public const string BurntOceanMackerel = "burnt_ocean_mackerel";
     public const string BurntBluefinTuna = "burnt_bluefin_tuna";
     public const string PlantFibres = "plant_fibres";
+    public const string Rope = "rope";
+    public const string Dirt = "dirt";
+    public const string Sand = "sand";
     public const string PrimitiveFishingNet = "primitive_fishing_net";
     public const string Workbench = "workbench";
     public const string Campfire = "campfire";
+    public const string CaveHole = "cave_hole";
+    public const string CaveEntrance = "cave_entrance";
+    public const string DigSite = "dig_site";
+    public const string ShallowHole = "shallow_hole";
 }
 
 internal static class ItemCatalog
@@ -147,6 +156,11 @@ internal static class ItemCatalog
                 ItemIds.StonePickaxe, "stone pickaxe", "Stone pickaxe",
                 "A primitive pickaxe with a pointed stone head lashed to a wooden handle.",
                 2, Tags: ItemTag.Tool | ItemTag.StoneToolSprite),
+            [ItemIds.StoneShovel] = new(
+                ItemIds.StoneShovel, "stone shovel", "Stone shovel",
+                "A broad stone blade lashed to a wooden shaft for digging.",
+                4, Tags: ItemTag.Tool | ItemTag.Shovel |
+                         ItemTag.StoneToolSprite),
             [ItemIds.StoneKnife] = new(
                 ItemIds.StoneKnife, "stone knife", "Stone knife",
                 "A primitive cutting tool with a stone blade bound to a wooden grip.",
@@ -314,6 +328,21 @@ internal static class ItemCatalog
                 "Stripped plant fibres suitable for weaving.", 0,
                 Tags: ItemTag.NaturalMaterial |
                       ItemTag.FibreNetSprite),
+            [ItemIds.Rope] = new(
+                ItemIds.Rope, "rope", "Rope",
+                "A strong rope twisted from plant fibres.",
+                7, Tags: ItemTag.NaturalMaterial |
+                         ItemTag.StoneToolSprite),
+            [ItemIds.Dirt] = new(
+                ItemIds.Dirt, "dirt", "Dirt",
+                "Freshly excavated soil.",
+                12, Tags: ItemTag.NaturalMaterial |
+                          ItemTag.StoneToolSprite),
+            [ItemIds.Sand] = new(
+                ItemIds.Sand, "sand", "Sand",
+                "A mound of loose excavated sand.",
+                13, Tags: ItemTag.NaturalMaterial |
+                          ItemTag.StoneToolSprite),
             [ItemIds.PrimitiveFishingNet] = new(
                 ItemIds.PrimitiveFishingNet,
                 "primitive fishing net", "Fishing net",
@@ -332,6 +361,23 @@ internal static class ItemCatalog
                 "An unlit stone fire ring. Add a log before lighting it.",
                 0, Droppable: false,
                 Tags: ItemTag.PlaceableObject)
+            ,
+            [ItemIds.CaveHole] = new(
+                ItemIds.CaveHole, "dug hole", "Hole",
+                "A test hole opening into a cave below.",
+                9, Droppable: false, Tags: ItemTag.StoneToolSprite),
+            [ItemIds.CaveEntrance] = new(
+                ItemIds.CaveEntrance, "roped cave entrance", "Cave",
+                "A secured rope descends into the cave below.",
+                9, Droppable: false, Tags: ItemTag.StoneToolSprite),
+            [ItemIds.DigSite] = new(
+                ItemIds.DigSite, "excavation", "Dig site",
+                "A partially excavated hole.",
+                8, Droppable: false, Tags: ItemTag.StoneToolSprite),
+            [ItemIds.ShallowHole] = new(
+                ItemIds.ShallowHole, "shallow hole", "Hole",
+                "A completed hole with a visible bottom.",
+                8, Droppable: false, Tags: ItemTag.StoneToolSprite)
         };
 
     private static ItemDefinition Coastal(

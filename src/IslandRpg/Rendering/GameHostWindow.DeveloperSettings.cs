@@ -64,6 +64,7 @@ internal sealed partial class GameHostWindow
             _activeWorldLevel == (int)WorldLevel.Overworld
                 ? (int)WorldLevel.Underground
                 : (int)WorldLevel.Overworld;
+        _caveEntranceLightWorld = null;
         StreamWorld();
     }
 }

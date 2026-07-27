@@ -18,6 +18,14 @@
     <Content Include="Resources\Images\seeds-materials-items.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\stone-tools-items.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\stone-pickaxe-item.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\stone-shovel-item.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\rope-item.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\dirt-item.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\sand-item.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\shallow-hole.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\cave-hole.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\cave-rope-overlay.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\hanging-rope.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\stone-knife-item.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\coastal-collectibles.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\fish-items.png" CopyToOutputDirectory="PreserveNewest" />

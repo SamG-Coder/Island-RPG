@@ -358,6 +358,7 @@ internal static class GameShaderPrograms
             "uniform int spriteOutline;uniform vec3 spriteOutlineColor;" +
             "uniform int caveLighting;uniform vec2 playerLightUv;" +
             "uniform float playerLightScale;" +
+            "uniform int caveEntranceLight;uniform vec2 caveEntranceLightUv;" +
             "uniform float waterlineUv;uniform vec2 texelSize;" +
             "void main(){vec4 source=texture(image,uv);" +
             "if(outlineOnly==1){float around=0.0;" +
@@ -406,6 +407,11 @@ internal static class GameShaderPrograms
             "ground=ground*ground*(3.0-2.0*ground);" +
             "body=body*body*(3.0-2.0*body);" +
             "float localLight=max(ground*0.92,body*0.58);" +
+            "if(caveEntranceLight==1){" +
+            "vec2 openingDelta=(uv-caveEntranceLightUv)/(vec2(0.11,0.075)*playerLightScale);" +
+            "float opening=clamp(1.0-length(openingDelta),0.0,1.0);" +
+            "opening=opening*opening*(3.0-2.0*opening);" +
+            "localLight=max(localLight,opening*0.88);}" +
             "vec3 lightColor=vec3(0.96,0.98,1.0);" +
             "c.rgb*=clamp(vec3(0.16)+lightColor*localLight,0.0,1.08);" +
             "}" +

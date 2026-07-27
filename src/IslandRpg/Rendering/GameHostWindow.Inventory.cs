@@ -164,6 +164,8 @@ internal sealed partial class GameHostWindow
             pointer,
             ItemCatalog.Get(itemId) switch
             {
+                { } item when item.HasTag(ItemTag.Shovel) =>
+                    ["Dig", "Drop", "Examine"],
                 { } item when item.HasTag(ItemTag.Seed) =>
                     ["Plant", "Drop", "Examine"],
                 { } item when item.HasTag(ItemTag.PlaceableObject) =>
@@ -411,6 +413,11 @@ internal sealed partial class GameHostWindow
         }
         if (option == 0)
         {
+            if (item.HasTag(ItemTag.Shovel))
+            {
+                BeginCaveDigTargeting(slot);
+                return;
+            }
             if (item.HasTag(ItemTag.Seed))
             {
                 TryPlantSeed(slot, itemId);

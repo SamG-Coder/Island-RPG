@@ -230,6 +230,34 @@ internal sealed partial class GameHostWindow
                 window.BeginFibreGather(
                     vegetationKey, action.Target);
                 break;
+            case
+            {
+                Type: GameHostWindow.WorldActionType.DigCave,
+                InventorySlot: >= 0
+            }:
+                window.TryDigCave(action.Target, action.InventorySlot);
+                break;
+            case
+            {
+                Type: GameHostWindow.WorldActionType.EnterCave,
+                GroundObjectId: { } entranceId
+            }:
+                window.EnterCave(entranceId);
+                break;
+            case
+            {
+                Type: GameHostWindow.WorldActionType.RestoreExcavation,
+                GroundObjectId: { } excavationId
+            }:
+                window.RestoreExcavation(excavationId);
+                break;
+            case
+            {
+                Type: GameHostWindow.WorldActionType.TakeCaveRope,
+                GroundObjectId: { } entranceId
+            }:
+                window.TakeCaveRope(entranceId);
+                break;
         }
     }
 
@@ -249,6 +277,7 @@ internal sealed partial class GameHostWindow
         window.UpdateCooking();
         window.UpdateFishing();
         window.UpdateFibreGathering();
+        window.UpdateCaveDigging();
     }
 
     public void CancelPath()

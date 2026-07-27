@@ -37,7 +37,9 @@ internal sealed record WorldGroundObject(
     float Y,
     string? FuelItemId = null,
     double LitUntilGameSeconds = 0,
-    int FiremakingLevel = 1);
+    int FiremakingLevel = 1,
+    int Health = 0,
+    int MaxHealth = 0);
 internal enum WorldVegetationKind : byte
 {
     Plant,
@@ -699,7 +701,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 5;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 19;
+    private const int ChunkPayloadVersion = 20;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -776,10 +778,10 @@ internal sealed class WorldChunkStore
 
     public void Save(WorldChunk chunk)
     {
-        // Underground terrain is entirely deterministic and currently has no
-        // mutable entities. Persisting its large render payload only creates
-        // I/O that LoadOrGenerate intentionally never reads.
-        if (chunk.Coordinate.Level != (int)WorldLevel.Overworld)
+        // Empty underground terrain is deterministic. Only persist chunks
+        // carrying mutable entrance state.
+        if (chunk.Coordinate.Level != (int)WorldLevel.Overworld &&
+            chunk.GroundObjects.Count == 0)
             return;
         var uncompressed = SerializeChunk(chunk);
         var compressed = Compress(uncompressed);
@@ -946,6 +948,8 @@ internal sealed class WorldChunkStore
                     WorldChunk.Size);
                 writer.Write(groundObject.FuelItemId ?? "");
                 writer.Write(groundObject.LitUntilGameSeconds);
+                writer.Write(groundObject.Health);
+                writer.Write(groundObject.MaxHealth);
             }
             writer.Write(chunk.FishRemaining.Count);
             foreach (var school in chunk.FishRemaining)
@@ -1096,6 +1100,13 @@ internal sealed class WorldChunkStore
                             : null,
                         payloadVersion >= 18
                             ? reader.ReadDouble()
+                            : 0,
+                        1,
+                        payloadVersion >= 20
+                            ? reader.ReadInt32()
+                            : 0,
+                        payloadVersion >= 20
+                            ? reader.ReadInt32()
                             : 0);
                     if (string.IsNullOrWhiteSpace(groundObject.ItemId) ||
                         groundObject.ItemId.Length > 64 ||
@@ -1103,6 +1114,9 @@ internal sealed class WorldChunkStore
                         !double.IsFinite(
                             groundObject.LitUntilGameSeconds) ||
                         groundObject.LitUntilGameSeconds < 0 ||
+                        groundObject.Health < 0 ||
+                        groundObject.MaxHealth < 0 ||
+                        groundObject.Health > groundObject.MaxHealth ||
                         FloorDiv((int)MathF.Floor(groundObject.X), WorldChunk.Size) != coordinate.X ||
                         FloorDiv((int)MathF.Floor(groundObject.Y), WorldChunk.Size) != coordinate.Y)
                         throw new InvalidDataException(

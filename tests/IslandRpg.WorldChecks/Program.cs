@@ -298,6 +298,35 @@ Require(
     WorldLighting.Darkness(
         1, (int)WorldLevel.Underground) == 1,
     "underground lighting must remain dark regardless of surface daylight");
+var caveProbe = new WorldGroundObject(
+    Guid.NewGuid(), ItemIds.CaveHole, 4.5f, 8.5f);
+var freshDigSite = new WorldGroundObject(
+    Guid.NewGuid(), ItemIds.DigSite, 4.5f, 8.5f,
+    Health: 100, MaxHealth: 100);
+var advancedDigSite = freshDigSite with { Health = 25 };
+Require(
+    CaveEntranceService.IsHole(caveProbe) &&
+    CaveEntranceService.CanFill(caveProbe) &&
+    CaveEntranceService.Opacity(freshDigSite) <
+        CaveEntranceService.Opacity(advancedDigSite) &&
+    CaveEntranceService.Opacity(caveProbe) == 1 &&
+    CaveEntranceService.IsEntrance(
+        CaveEntranceService.InstallRope(caveProbe)) &&
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.StoneShovel) &&
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.Rope),
+    "cave access and excavation presentation must follow their authored states");
+var sandDigging = DiggingSkill.Terrain(Biome.Beach);
+var rockDigging = DiggingSkill.Terrain(Biome.Rock);
+Require(
+    sandDigging.RewardItemId == ItemIds.Sand &&
+    rockDigging.RewardItemId == ItemIds.Dirt &&
+    rockDigging.Health > sandDigging.Health &&
+    DiggingSkill.Damage(
+        DiggingSkill.ExperienceForLevel(20)) >
+    DiggingSkill.Damage(0),
+    "digging must reward terrain material and scale effort by terrain and skill");
 
 Require(WoodcuttingSkill.LevelForExperience(0) == 1,
     "woodcutting must begin at level one");
@@ -1054,7 +1083,7 @@ var ironAxeStrike = WoodcuttingSkill.Roll(0, 0, 0, 2);
 Require(ironAxeStrike.Damage > stoneAxeStrike.Damage,
     "an axe's woodcutting power must improve its chopping damage");
 Require(
-    Enum.GetValues<SkillType>().Length == 6 &&
+    Enum.GetValues<SkillType>().Length == 7 &&
     SkillService.LevelForExperience(
         SkillService.ExperienceForLevel(10)) == 10 &&
     WoodcuttingSkill.ExperienceForLevel(10) ==
@@ -1066,7 +1095,9 @@ Require(
     FishingSkill.ExperienceForLevel(10) ==
     CookingSkill.ExperienceForLevel(10) &&
     CookingSkill.ExperienceForLevel(10) ==
-    FiremakingSkill.ExperienceForLevel(10),
+    FiremakingSkill.ExperienceForLevel(10) &&
+    FiremakingSkill.ExperienceForLevel(10) ==
+    DiggingSkill.ExperienceForLevel(10),
     "all registered skills must reuse the shared level and experience progression service");
 Require(
     FishingSkill.CanCatch(WorldFishSpecies.ShoreMinnows, 1) &&
@@ -1745,6 +1776,9 @@ try
         Guid.NewGuid(), ItemIds.Axe, 20.25f, 20.65f));
     origin.GroundObjects.Add(new(
         Guid.NewGuid(), ItemIds.OakLogs, 21.25f, 21.65f));
+    origin.GroundObjects.Add(new(
+        Guid.NewGuid(), ItemIds.DigSite, 22.5f, 22.5f,
+        Health: 37, MaxHealth: 70));
     for (var regionY = 0; regionY < WorldChunkStore.RegionSize; regionY++)
     for (var regionX = 0; regionX < WorldChunkStore.RegionSize; regionX++)
         store.Save(CloneAt(origin, new(regionX, regionY)));
@@ -1880,6 +1914,17 @@ try
     store.Save(underground);
     Require(!File.Exists(store.RegionPathFor(undergroundCoordinate)),
         "deterministic underground chunks must not produce unused save files");
+    var persistedEntrance = new WorldGroundObject(
+        Guid.NewGuid(), ItemIds.CaveEntrance, .5f, .5f);
+    underground.GroundObjects.Add(persistedEntrance);
+    store.Save(underground);
+    var undergroundWithEntrance =
+        store.LoadOrGenerate(undergroundCoordinate);
+    Require(
+        undergroundWithEntrance.GroundObjects.Any(value =>
+            value.Id == persistedEntrance.Id &&
+            CaveEntranceService.IsEntrance(value)),
+        "rope-secured entrances must persist on the matching cave tile");
     var undergroundReloaded =
         store.LoadOrGenerate(undergroundCoordinate);
     Require(
