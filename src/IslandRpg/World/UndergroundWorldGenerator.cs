@@ -57,6 +57,20 @@ internal static class UndergroundWorldGenerator
 
         var weights = BuildWeights(
             seed, coordinate, context, cancellationToken);
+        var vegetation = UndergroundResourceGenerator.Generate(
+            seed, coordinate, tiles, renderable);
+        var reservedTiles = vegetation
+            .Select(value => (
+                X: (int)MathF.Floor(value.X),
+                Y: (int)MathF.Floor(value.Y)))
+            .ToHashSet();
+        var groundObjects = InfiniteWorldGenerator.GenerateGroundObjects(
+            seed,
+            tiles,
+            [],
+            InfiniteWorldGenerator.GroundObjectGenerationOptions.Underground,
+            renderable,
+            reservedTiles);
         var chunk = new WorldChunk
         {
             Coordinate = coordinate,
@@ -73,9 +87,10 @@ internal static class UndergroundWorldGenerator
             Cliffs = [],
             RenderableTiles = renderable,
             UndergroundDensity = density,
-            GroundObjects = [],
-            Vegetation = UndergroundResourceGenerator.Generate(
-                seed, coordinate, tiles, renderable),
+            GroundObjects = groundObjects,
+            InitialGroundObjectIds =
+                groundObjects.Select(value => value.Id).ToHashSet(),
+            Vegetation = vegetation,
             Fish = []
         };
         chunk.UndergroundMeshVertices =

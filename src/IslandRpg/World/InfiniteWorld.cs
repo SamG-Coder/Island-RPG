@@ -80,6 +80,7 @@ internal sealed class WorldChunk
     public Vector4 UndergroundProjectedBounds { get; set; }
     public List<WorldTreeInstance> TreeInstances { get; init; } = [];
     public List<WorldGroundObject> GroundObjects { get; init; } = [];
+    public HashSet<Guid> InitialGroundObjectIds { get; init; } = [];
     public WorldVegetation[] Vegetation { get; init; } = [];
     public WorldFish[] Fish { get; init; } = [];
     public List<WorldVegetationFibreState> VegetationFibreStates
@@ -210,15 +211,38 @@ internal static class InfiniteWorldGenerator
         };
     }
 
-    internal static List<WorldGroundObject> GenerateGroundObjects(
-        long seed, IslandTile[] tiles, IReadOnlyCollection<IslandTree> trees)
+    internal readonly record struct GroundObjectGenerationOptions(
+        bool IncludeSticks,
+        bool IncludeRocks,
+        bool IncludeCoastal)
     {
+        public static GroundObjectGenerationOptions Overworld =>
+            new(true, true, true);
+        public static GroundObjectGenerationOptions Underground =>
+            new(false, true, false);
+    }
+
+    internal static List<WorldGroundObject> GenerateGroundObjects(
+        long seed,
+        IslandTile[] tiles,
+        IReadOnlyCollection<IslandTree> trees,
+        GroundObjectGenerationOptions? options = null,
+        IReadOnlyList<bool>? renderable = null,
+        IReadOnlySet<(int X, int Y)>? reservedTiles = null)
+    {
+        var rules = options ?? GroundObjectGenerationOptions.Overworld;
         const int maximumPerChunk = 8;
         var occupied = trees.Select(tree => (tree.X, tree.Y)).ToHashSet();
         var candidates = new List<(float Score, WorldGroundObject Object)>();
-        foreach (var tile in tiles)
+        for (var tileIndex = 0; tileIndex < tiles.Length; tileIndex++)
         {
-            if (occupied.Contains((tile.X, tile.Y))) continue;
+            if (renderable is not null && !renderable[tileIndex]) continue;
+            var tile = tiles[tileIndex];
+            if (occupied.Contains((tile.X, tile.Y)) ||
+                reservedTiles?.Contains((tile.X, tile.Y)) == true ||
+                tile.Biome is Biome.DeepWater or Biome.ShallowWater or
+                    Biome.RiverWater or Biome.MangroveShallows)
+                continue;
             var relief = Math.Max(
                 Math.Max(tile.North, tile.East),
                 Math.Max(tile.South, tile.West)) -
@@ -233,6 +257,7 @@ internal static class InfiniteWorldGenerator
                 WorldBiome.Savanna => .012f,
                 _ => 0
             };
+            if (!rules.IncludeSticks) stickChance = 0;
             var rockChance = tile.Region switch
             {
                 WorldBiome.Alpine => .055f,
@@ -241,6 +266,7 @@ internal static class InfiniteWorldGenerator
                 WorldBiome.TemperateGrassland => .008f,
                 _ => 0
             };
+            if (!rules.IncludeRocks) rockChance = 0;
             var roll = UnitHash(seed, tile.X, tile.Y, 811);
             string? itemId = roll < stickChance
                 ? "sticks"
@@ -261,9 +287,10 @@ internal static class InfiniteWorldGenerator
             .Take(maximumPerChunk)
             .Select(candidate => candidate.Object)
             .ToList();
-        objects.AddRange(
-            CoastalCollectibleSpawner.GenerateInitial(
-                seed, tiles, trees, objects));
+        if (rules.IncludeCoastal)
+            objects.AddRange(
+                CoastalCollectibleSpawner.GenerateInitial(
+                    seed, tiles, trees, objects));
         return objects;
     }
 
@@ -701,7 +728,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 5;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 20;
+    private const int ChunkPayloadVersion = 21;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -778,10 +805,12 @@ internal sealed class WorldChunkStore
 
     public void Save(WorldChunk chunk)
     {
-        // Empty underground terrain is deterministic. Only persist chunks
-        // carrying mutable entrance state.
+        // Deterministic underground ground objects need no payload until the
+        // player removes one or introduces another mutable object.
         if (chunk.Coordinate.Level != (int)WorldLevel.Overworld &&
-            chunk.GroundObjects.Count == 0)
+            chunk.GroundObjects.Count == chunk.InitialGroundObjectIds.Count &&
+            chunk.GroundObjects.All(value =>
+                chunk.InitialGroundObjectIds.Contains(value.Id)))
             return;
         var uncompressed = SerializeChunk(chunk);
         var compressed = Compress(uncompressed);
@@ -1126,7 +1155,15 @@ internal sealed class WorldChunkStore
             }
             else
                 groundObjects = InfiniteWorldGenerator.GenerateGroundObjects(
-                    Seed, tiles, trees);
+                    Seed,
+                    tiles,
+                    trees,
+                    coordinate.Level == (int)WorldLevel.Underground
+                        ? InfiniteWorldGenerator
+                            .GroundObjectGenerationOptions.Underground
+                        : InfiniteWorldGenerator
+                            .GroundObjectGenerationOptions.Overworld,
+                    renderableTiles);
             var fishRemaining = new Dictionary<string, int>(
                 StringComparer.Ordinal);
             if (payloadVersion >= 16)
@@ -1171,6 +1208,8 @@ internal sealed class WorldChunkStore
                 // excluded from the payload.
                 var generated = UndergroundWorldGenerator.Generate(
                     Seed, coordinate);
+                if (payloadVersion >= 21)
+                    generated.GroundObjects.Clear();
                 generated.TreeInstances.AddRange(treeInstances);
                 generated.GroundObjects.AddRange(groundObjects);
                 foreach (var school in fishRemaining)

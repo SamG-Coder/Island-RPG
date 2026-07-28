@@ -1917,6 +1917,20 @@ try
     store.Save(underground);
     Require(!File.Exists(store.RegionPathFor(undergroundCoordinate)),
         "deterministic underground chunks must not produce unused save files");
+    Require(
+        underground.GroundObjects.Count > 0 &&
+        underground.GroundObjects.All(value =>
+            value.ItemId == ItemIds.LargeRock &&
+            underground.Tiles[
+                PositiveMod((int)MathF.Floor(value.Y), WorldChunk.Size) *
+                WorldChunk.Size +
+                PositiveMod((int)MathF.Floor(value.X), WorldChunk.Size)]
+                .Biome is not (
+                    Biome.DeepWater or Biome.ShallowWater or
+                    Biome.RiverWater or Biome.MangroveShallows)) &&
+        underground.InitialGroundObjectIds.SetEquals(
+            underground.GroundObjects.Select(value => value.Id)),
+        "underground natural generation must reuse rocks without spawning sticks");
     var persistedEntrance = new WorldGroundObject(
         Guid.NewGuid(), ItemIds.CaveEntrance, .5f, .5f);
     underground.GroundObjects.Add(persistedEntrance);
@@ -1928,7 +1942,9 @@ try
             value.Id == persistedEntrance.Id &&
             CaveEntranceService.IsEntrance(value)),
         "rope-secured entrances must persist on the matching cave tile");
-    undergroundWithEntrance.GroundObjects[0] =
+    var entranceIndex = undergroundWithEntrance.GroundObjects.FindIndex(
+        value => value.Id == persistedEntrance.Id);
+    undergroundWithEntrance.GroundObjects[entranceIndex] =
         persistedEntrance with { ItemId = ItemIds.CaveHole };
     store.Save(undergroundWithEntrance);
     var undergroundWithOpenShaft =
@@ -1939,8 +1955,19 @@ try
             CaveEntranceService.IsHole(value) &&
             CaveEntranceService.IsCaveShaft(value)),
         "open cave shafts must persist for underground light without a rope");
+    var collectedRock = undergroundWithOpenShaft.GroundObjects.First(
+        value => value.ItemId == ItemIds.LargeRock);
+    undergroundWithOpenShaft.GroundObjects.Remove(collectedRock);
+    store.Save(undergroundWithOpenShaft);
     var undergroundReloaded =
         store.LoadOrGenerate(undergroundCoordinate);
+    Require(
+        undergroundReloaded.GroundObjects.All(value =>
+            value.Id != collectedRock.Id) &&
+        undergroundReloaded.GroundObjects.Count(value =>
+            value.ItemId == ItemIds.LargeRock) ==
+        underground.InitialGroundObjectIds.Count - 1,
+        "collected underground rocks must remain absent after reloading");
     Require(
         underground.Coordinate.X == origin.Coordinate.X &&
         underground.Coordinate.Y == origin.Coordinate.Y &&
