@@ -1,82 +1,114 @@
 # Island RPG v0.2.0
 
-**Caves and connected progression — 28 July 2026**
+**Caves and Connected Progression — 29 July 2026**
 
-Island RPG `v0.2.0` expands the first playable prototype into a connected
-overworld-and-cave survival loop. Dig for cave passages, secure entrances with
-rope, explore persistent underground terrain, mine geological resources, and
-bring those materials back into Crafting progression.
+Version 0.2 transforms Island RPG from an overworld prototype into a connected
+survival and progression experience. Players can now excavate cave entrances,
+explore a persistent underground world, gather new resources, process them at
+crafting stations, cook food and store their supplies.
 
-## Highlights
+## Release highlights
 
-### Underground exploration
+### Discover and explore caves
 
-- Dig persistent holes with a stone shovel and discover matching cave space.
-- Install, retrieve and render ropes consistently across both world levels.
-- Traverse with dedicated climb cursors and retain exact entrance locations.
-- Explore blended cave materials, water, geological formations and rare ruins.
-- World-space darkness, player light, entrance light and merging local lights.
+- Use a stone shovel to excavate clear, non-water terrain.
+- Digging creates a persistent work site with material-dependent health.
+- Completed excavations reveal whether a natural cave exists below.
+- Attach a rope to a successful shaft to travel between world levels.
+- Retrieve the rope, refill unfinished excavations or permanently close a shaft.
+- Entrance position, rope state and light are synchronized above and below.
+- Dedicated cursor artwork clearly identifies digging and climbing actions.
 
-### Mining and tool progression
+The underground is procedurally generated with blended rock materials, natural
+boundaries, small waterways, ore deposits, vegetation, ruins and geological
+formations. Darkness is treated as a gameplay environment: the player, cave
+entrances, campfires and level-up effects provide local light, with nearby
+lights blending together naturally.
 
-- Mine coal, tin, copper, iron and stone with a dedicated miner animation.
-- Persistent node health, depletion, health bars and size-aware interaction.
-- Destroy large geological formations for Mining XP without item rewards.
-- Cast copper and tin into bronze bars before forging bronze tools.
-- Smelt iron ore into a bloom, then reheat and hammer out the slag to make bars.
-- Forge stronger bronze and iron pickaxes plus an iron woodcutting axe.
-- Unlock the workbench at Crafting level 3 and use it nearby to construct both
-  the clay bloomery and smithing anvil.
-- Smelt beside the bloomery, then forge bars and tools beside the anvil.
-- Forge bronze axes and sickles to improve woodcutting and berry harvesting.
-- Burn logs down into renewable charcoal for bloomery and smithing fuel.
-- Place a bronze cooking pot beside a lit campfire to prepare fish-and-berry
-  stew as a multi-skill Cooking recipe.
-- Craft persistent wooden chests and barrels, with scrolling stack-aware
-  deposit and withdrawal controls shared with the reusable container UI.
-- Automatically select the strongest available pickaxe.
+### Mining and metalworking
+
+- Mine stone, coal, tin, copper and iron deposits with a pickaxe.
+- Mining nodes have persistent health, accurate selection bounds and depletion.
+- Large rock formations can be destroyed for Mining XP.
+- The strongest available pickaxe is selected automatically.
+- Convert copper and tin into bronze bars.
+- Smelt iron ore into blooms, then reheat and hammer away the slag.
+- Forge bronze and iron pickaxes, axes and sickles.
+- Burn logs into renewable charcoal for smelting and smithing.
+
+Metalworking now has a connected station-based workflow. Reach Crafting level 3
+and work near a workbench to construct a clay bloomery and smithing anvil.
+Bloomery recipes are only shown at the bloomery, while forging recipes are
+filtered to the anvil.
 
 ### Farming, foraging and cooking
 
-- Gather wild berries from temperate forage bushes.
-- Gather tropical berries from warm-climate forage bushes.
-- Persistent berry regrowth using the shared vegetation cooldown system.
-- Earn Farming XP from foraging.
-- Roast berries over campfires through the existing Cooking pipeline.
+- Harvest wild and tropical berries from climate-appropriate bushes.
+- Berry bushes use persistent regrowth timers shared with world vegetation.
+- Foraging awards Farming XP and benefits from improved sickles.
+- Roast berries and fish over a lit campfire.
+- Craft a bronze cooking pot and place it beside a campfire.
+- Combine fish and berries into stew through the Cooking skill.
 
-### Lighting, interface and feedback
+### Persistent storage
 
-- Persistent underground campfires with level-scaled burn duration and radius.
-- Local lights merge rather than overwrite one another.
-- GPU-atlas-batched level-up fireworks with a short-lived light pulse.
-- Level-aware minimap and developer map presentation.
-- Dedicated interaction cursors for mining and cave traversal.
-- Improved batched font rendering and readable text treatment.
-- Version and project credits are identified directly on the main menu.
-- All eight skills now expose a shared level guide with unlocks or level effects.
+- Craft and place wooden chests and storage barrels.
+- Wooden chests provide 48 slots; barrels provide 40 slots.
+- Container contents persist independently in the world and underground.
+- Stack items and withdraw or deposit 1, 5, 10, 25, 100 or all.
+- Quickly deposit the entire player inventory when space permits.
+- Scroll large inventories and inspect items from the context menu.
+- Storage uses a dedicated interaction cursor and the reusable container UI.
 
-### Performance and persistence
+The developer item bank uses the same container system and can display every
+registered item, grouped by category, for testing.
 
-- Active-level filtering prevents overworld and cave simulation contamination.
-- Cached vegetation and mining hit tests avoid additional world scans.
-- Fixed particle pools and reusable render buffers avoid frame allocations.
-- Crafting category and availability data is cached and allocation-free while
-  the recipe window renders.
-- Shared scrolling lists iterate visible rows without per-frame range objects.
-- Underground campfires, mining state, entrances and mutable objects persist.
-- Unchanged deterministic cave chunks skip snapshot and save work.
+### Interface and presentation
+
+- Added a level-aware minimap and improved developer world map.
+- Reworked settings pages and long lists around reusable scrolling controls.
+- Added batched font rendering and a readability shader for UI text.
+- Added optimized fireworks and a light pulse when a skill level is gained.
+- Added persistent campfire lighting with larger skill-scaled radius and burn
+  duration.
+- Added skill guides describing unlocks and level effects for all eight skills.
+- Added version information and credits to the main menu.
+
+### Performance and reliability
+
+- Isolated overworld and underground simulation to the active world level.
+- Prevented inactive world interactions and UI state from leaking across level
+  transitions.
+- Added cached vegetation, mining and interaction hit tests.
+- Added reusable render buffers, fixed particle pools and GPU-atlas batching.
+- Cached crafting categories and recipe availability.
+- Limited scrolling controls to visible rows.
+- Avoided rewriting unchanged deterministic cave chunks.
+- Added versioned persistence for excavations, ropes, mining nodes, campfires,
+  storage containers and other mutable world objects.
 
 ## Compatibility
 
-Existing v0.1 player and world data remains loadable. Chunk payloads are
-versioned and older payloads receive safe defaults for newly persisted fields.
+Existing v0.1 player and world saves remain loadable. Older chunk payloads
+receive safe defaults for fields introduced in this release.
 
-As before, a legally owned Age of Empires II HD installation is required at
-runtime. No Age of Empires assets are included or distributed with Island RPG.
+Island RPG requires a legally owned Age of Empires II HD installation at
+runtime. Age of Empires assets are not included or distributed with the game.
 
 ## Validation
 
-The release is covered by the deterministic world-check suite, including
-generation seams, cross-level caching, cave persistence, campfire state,
-Mining progression, Farming forage rewards, Cooking profiles, cursor mappings,
-particle performance foundations and region storage.
+Version 0.2 is covered by the automated world-check suite, including:
+
+- deterministic overworld and cave generation;
+- terrain seams and cross-level isolation;
+- cave entrance, campfire, mining and storage persistence;
+- crafting, smithing, foraging and cooking progression;
+- interaction cursor mappings;
+- save compatibility and malformed-data safeguards;
+- render-buffer, particle and interaction-probe performance checks.
+
+## Thank you
+
+Thank you for playing and helping shape Island RPG. Version 0.2 establishes the
+core gathering, exploration, crafting and storage loop that future releases can
+build upon.
