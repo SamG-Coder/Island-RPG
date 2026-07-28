@@ -7,6 +7,11 @@ using IslandRpg.Rendering.Ui;
 using OpenTK.Mathematics;
 
 var defaultDisplaySettings = new GameSettings();
+Require(
+    GameCursorFrames.MineAndPickUp == 3 &&
+    GameCursorFrames.ClimbDown == 15 &&
+    GameCursorFrames.ClimbUp == 16,
+    "mining and cave traversal must retain their authored AoE cursor frames");
 Require(defaultDisplaySettings.VSyncMode ==
             DisplayVSyncMode.Adaptive &&
         defaultDisplaySettings.FrameRateLimit == 0,

@@ -195,13 +195,19 @@ internal sealed partial class GameHostWindow : GameWindow
     private MouseCursor? _pickupNativeCursor;
     private MouseCursor? _dropNativeCursor;
     private MouseCursor? _digNativeCursor;
+    private MouseCursor? _mineNativeCursor;
+    private MouseCursor? _climbDownNativeCursor;
+    private MouseCursor? _climbUpNativeCursor;
     private enum GameCursorKind
     {
         Default,
         CutTree,
         PickUpItem,
         DropItem,
-        Dig
+        Dig,
+        Mine,
+        ClimbDown,
+        ClimbUp
     }
     private GameCursorKind _gameCursorKind;
     private int _uiPanelFillTexture;

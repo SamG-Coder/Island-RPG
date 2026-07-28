@@ -1,6 +1,7 @@
 using IslandRpg.Assets;
 using IslandRpg.Gameplay;
 using IslandRpg.Rendering.Ui;
+using IslandRpg.World;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Common.Input;
 
@@ -24,11 +25,24 @@ internal sealed partial class GameHostWindow
             throw new InvalidDataException(
                 "The installed AoE cursor sheet does not contain the required game cursors.");
 
-        _defaultNativeCursor = CreateNativeCursor(cursorSheet.Frames[0]);
-        _pickupNativeCursor = CreateNativeCursor(cursorSheet.Frames[3]);
-        _digNativeCursor = CreateNativeCursor(cursorSheet.Frames[17]);
-        _dropNativeCursor = CreateNativeCursor(cursorSheet.Frames[7]);
-        _cutNativeCursor = CreateNativeCursor(cursorSheet.Frames[8]);
+        _defaultNativeCursor = CreateNativeCursor(
+            cursorSheet.Frames[GameCursorFrames.Default]);
+        _pickupNativeCursor = CreateNativeCursor(
+            cursorSheet.Frames[GameCursorFrames.MineAndPickUp]);
+        _mineNativeCursor = CreateNativeCursor(
+            cursorSheet.Frames[GameCursorFrames.MineAndPickUp]);
+        _climbDownNativeCursor =
+            CreateNativeCursor(
+                cursorSheet.Frames[GameCursorFrames.ClimbDown]);
+        _climbUpNativeCursor =
+            CreateNativeCursor(
+                cursorSheet.Frames[GameCursorFrames.ClimbUp]);
+        _digNativeCursor = CreateNativeCursor(
+            cursorSheet.Frames[GameCursorFrames.Dig]);
+        _dropNativeCursor = CreateNativeCursor(
+            cursorSheet.Frames[GameCursorFrames.Drop]);
+        _cutNativeCursor = CreateNativeCursor(
+            cursorSheet.Frames[GameCursorFrames.Cut]);
         Cursor = _defaultNativeCursor;
         CursorState = CursorState.Normal;
     }
@@ -91,13 +105,37 @@ internal sealed partial class GameHostWindow
         else if (!pointerBlocked)
         {
             if (TryGetGroundObjectUnderMouse(
-                    SceneMousePosition(), out var groundObject, out _) &&
-                !PlaceableObjectCatalog.IsPlaceable(
-                    groundObject.ItemId) &&
-                _pickupNativeCursor is not null)
+                    SceneMousePosition(), out var groundObject, out _))
             {
-                next = GameCursorKind.PickUpItem;
-                cursor = _pickupNativeCursor;
+                if (CaveEntranceService.IsEntrance(groundObject) &&
+                    _activeWorldLevel == (int)WorldLevel.Overworld &&
+                    _climbDownNativeCursor is not null)
+                {
+                    next = GameCursorKind.ClimbDown;
+                    cursor = _climbDownNativeCursor;
+                }
+                else if (CaveEntranceService.IsEntrance(groundObject) &&
+                         _activeWorldLevel ==
+                         (int)WorldLevel.Underground &&
+                         _climbUpNativeCursor is not null)
+                {
+                    next = GameCursorKind.ClimbUp;
+                    cursor = _climbUpNativeCursor;
+                }
+                else if (!PlaceableObjectCatalog.IsPlaceable(
+                             groundObject.ItemId) &&
+                         _pickupNativeCursor is not null)
+                {
+                    next = GameCursorKind.PickUpItem;
+                    cursor = _pickupNativeCursor;
+                }
+            }
+            else if (TryGetMiningNodeUnderMouse(
+                         SceneMousePosition(), out _, out _) &&
+                     _mineNativeCursor is not null)
+            {
+                next = GameCursorKind.Mine;
+                cursor = _mineNativeCursor;
             }
             else if (TryGetFishUnderMouse(
                          SceneMousePosition(), out _) &&
