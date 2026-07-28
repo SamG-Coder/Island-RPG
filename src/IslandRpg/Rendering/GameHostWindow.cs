@@ -5070,6 +5070,7 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, stride, 4 * sizeof(float));
         GL.DisableVertexAttribArray(3);
         GL.DisableVertexAttribArray(4);
+        GL.DisableVertexAttribArray(5);
         GL.DrawArrays(PrimitiveType.Triangles, 0, vertices.Count / 5);
 
         static Vector2 Project(float x, float y, float z) =>
@@ -5166,6 +5167,7 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, stride, 4 * sizeof(float));
         GL.DisableVertexAttribArray(3);
         GL.DisableVertexAttribArray(4);
+        GL.DisableVertexAttribArray(5);
         GL.DrawArrays(PrimitiveType.Triangles, 0, vertices.Count / 5);
     }
 
@@ -5210,6 +5212,7 @@ internal sealed partial class GameHostWindow : GameWindow
             4 * sizeof(float));
         GL.DisableVertexAttribArray(3);
         GL.DisableVertexAttribArray(4);
+        GL.DisableVertexAttribArray(5);
         GL.DrawArrays(
             PrimitiveType.Triangles, 0, vertices.Count / 5);
         GL.Uniform1(_shaderUniforms.Get(_program, "outlineOnly"), 0);
@@ -6697,6 +6700,7 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.VertexAttrib1(2, 1f);
         GL.DisableVertexAttribArray(3);
         GL.DisableVertexAttribArray(4);
+        GL.DisableVertexAttribArray(5);
         GL.DrawArrays(PrimitiveType.TriangleFan, 0, 4);
     }
 
