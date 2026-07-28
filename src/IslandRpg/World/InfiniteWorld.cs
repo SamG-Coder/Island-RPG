@@ -733,7 +733,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 5;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 22;
+    private const int ChunkPayloadVersion = 23;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -812,11 +812,7 @@ internal sealed class WorldChunkStore
     {
         // Deterministic underground ground objects need no payload until the
         // player removes one or introduces another mutable object.
-        if (chunk.Coordinate.Level != (int)WorldLevel.Overworld &&
-            chunk.GroundObjects.Count == chunk.InitialGroundObjectIds.Count &&
-            chunk.GroundObjects.All(value =>
-                chunk.InitialGroundObjectIds.Contains(value.Id)) &&
-            chunk.MiningStates.Count == 0)
+        if (!NeedsPersistence(chunk))
             return;
         var uncompressed = SerializeChunk(chunk);
         var compressed = Compress(uncompressed);
@@ -859,6 +855,13 @@ internal sealed class WorldChunkStore
             stream.Flush(flushToDisk: true);
         }
     }
+
+    internal static bool NeedsPersistence(WorldChunk chunk) =>
+        chunk.Coordinate.Level == (int)WorldLevel.Overworld ||
+        chunk.GroundObjects.Count != chunk.InitialGroundObjectIds.Count ||
+        chunk.GroundObjects.Any(value =>
+            !chunk.InitialGroundObjectIds.Contains(value.Id)) ||
+        chunk.MiningStates.Count != 0;
 
     internal string RegionPathFor(ChunkCoordinate coordinate)
     {
@@ -983,6 +986,7 @@ internal sealed class WorldChunkStore
                     WorldChunk.Size);
                 writer.Write(groundObject.FuelItemId ?? "");
                 writer.Write(groundObject.LitUntilGameSeconds);
+                writer.Write(groundObject.FiremakingLevel);
                 writer.Write(groundObject.Health);
                 writer.Write(groundObject.MaxHealth);
             }
@@ -1143,7 +1147,9 @@ internal sealed class WorldChunkStore
                         payloadVersion >= 18
                             ? reader.ReadDouble()
                             : 0,
-                        1,
+                        payloadVersion >= 23
+                            ? reader.ReadInt32()
+                            : 1,
                         payloadVersion >= 20
                             ? reader.ReadInt32()
                             : 0,
@@ -1156,6 +1162,7 @@ internal sealed class WorldChunkStore
                         !double.IsFinite(
                             groundObject.LitUntilGameSeconds) ||
                         groundObject.LitUntilGameSeconds < 0 ||
+                        groundObject.FiremakingLevel is < 1 or > 100 ||
                         groundObject.Health < 0 ||
                         groundObject.MaxHealth < 0 ||
                         groundObject.Health > groundObject.MaxHealth ||

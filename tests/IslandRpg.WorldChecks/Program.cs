@@ -550,11 +550,11 @@ var litCampfire = CampfireService.Light(fueledCampfire, 100);
 Require(CampfireService.State(litCampfire, 100) ==
             CampfireState.Lit &&
         litCampfire.LitUntilGameSeconds ==
-            100 + WorldTime.GameSecondsPerDay &&
+            100 + WorldTime.GameSecondsPerDay * 2 &&
         CampfireService.Expire(
             litCampfire,
-            100 + WorldTime.GameSecondsPerDay).FuelItemId is null,
-    "a lit campfire must burn for exactly one full game-day and then consume its fuel");
+            100 + WorldTime.GameSecondsPerDay * 2).FuelItemId is null,
+    "a lit campfire must burn for two full game-days and then consume its fuel");
 var masterFire = CampfireService.Light(
     fueledCampfire, 100, FiremakingSkill.MaximumLevel);
 Require(
@@ -565,6 +565,10 @@ Require(
         litCampfire.LitUntilGameSeconds &&
     FiremakingSkill.LightRadiusPixels(20) >
         FiremakingSkill.LightRadiusPixels(1) &&
+    FiremakingSkill.DurationGameSeconds(1) ==
+        WorldTime.GameSecondsPerDay * 2 &&
+    FiremakingSkill.LightRadiusPixels(1) ==
+        FiremakingSkill.BaseLightRadiusPixels * 2 &&
     FiremakingSkill.LightIntensity(20) >
         FiremakingSkill.LightIntensity(1) &&
     FiremakingSkill.FlameTier(1) == 0 &&
@@ -1176,8 +1180,8 @@ var firemakingGuide =
     SkillGuideService.Definition(SkillType.Firemaking);
 Require(
     firemakingGuide.Entries.Count == SkillService.MaximumLevel &&
-    firemakingGuide.Entries[0].Description.Contains("24.0 hours") &&
-    firemakingGuide.Entries[^1].Description.Contains("48.0 hours") &&
+    firemakingGuide.Entries[0].Description.Contains("48.0 hours") &&
+    firemakingGuide.Entries[^1].Description.Contains("96.0 hours") &&
     firemakingGuide.Entries.Single(entry => entry.Level == 16)
         .Description.Contains("Flame size 4") &&
     CampfirePresentation.LitAtlasKey(
@@ -1999,6 +2003,32 @@ try
             CaveEntranceService.IsHole(value) &&
             CaveEntranceService.IsCaveShaft(value)),
         "open cave shafts must persist for underground light without a rope");
+    var undergroundCampfire = CampfireService.Light(
+        CampfireService.AddFuel(
+            new(
+                Guid.NewGuid(),
+                ItemIds.Campfire,
+                undergroundCoordinate.X * WorldChunk.Size + 12.5f,
+                undergroundCoordinate.Y * WorldChunk.Size + 12.5f),
+            ItemIds.Logs,
+            120),
+        120,
+        8);
+    undergroundWithOpenShaft.GroundObjects.Add(undergroundCampfire);
+    store.Save(undergroundWithOpenShaft);
+    undergroundWithOpenShaft =
+        store.LoadOrGenerate(undergroundCoordinate);
+    var reloadedUndergroundCampfire =
+        undergroundWithOpenShaft.GroundObjects.Single(value =>
+            value.Id == undergroundCampfire.Id);
+    Require(
+        reloadedUndergroundCampfire.FuelItemId == ItemIds.Logs &&
+        reloadedUndergroundCampfire.LitUntilGameSeconds ==
+            undergroundCampfire.LitUntilGameSeconds &&
+        reloadedUndergroundCampfire.FiremakingLevel == 8 &&
+        CampfireService.State(
+            reloadedUndergroundCampfire, 121) == CampfireState.Lit,
+        "underground campfire fuel, expiry, and Firemaking level must survive a chunk reload");
     var collectedRock = undergroundWithOpenShaft.GroundObjects.First(
         value => value.ItemId == ItemIds.LargeRock);
     undergroundWithOpenShaft.GroundObjects.Remove(collectedRock);

@@ -8,6 +8,8 @@ internal static class FiremakingSkill
     public const int ExperiencePerFire = 60;
     public const int FlameTierCount = 4;
     public const float BaseLightRadiusPixels = 142;
+    public const float DurationMultiplier = 2;
+    public const float LightRadiusMultiplier = 2;
 
     public static int LevelForExperience(int experience) =>
         SkillService.LevelForExperience(experience);
@@ -26,13 +28,17 @@ internal static class FiremakingSkill
     public static double DurationGameSeconds(int level)
     {
         var progress = LevelProgress(level);
-        return WorldTime.GameSecondsPerDay * (1 + progress);
+        return WorldTime.GameSecondsPerDay *
+               DurationMultiplier *
+               (1 + progress);
     }
 
     public static float LightRadiusPixels(int level)
     {
         var progress = LevelProgress(level);
-        return BaseLightRadiusPixels * (1 + progress * .45f);
+        return BaseLightRadiusPixels *
+               LightRadiusMultiplier *
+               (1 + progress * .45f);
     }
 
     public static float LightIntensity(int level)

@@ -6172,8 +6172,8 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void QueueChunkSave(WorldChunk source)
     {
-        if (_worldStore is null) return;
-        if (source.Coordinate.Level != (int)WorldLevel.Overworld)
+        if (_worldStore is null ||
+            !WorldChunkStore.NeedsPersistence(source))
             return;
         var store = _worldStore;
         var snapshot = new WorldChunk
@@ -6195,7 +6195,10 @@ internal sealed partial class GameHostWindow : GameWindow
             FishRemaining = new(
                 source.FishRemaining, StringComparer.Ordinal),
             VegetationFibreStates =
-                source.VegetationFibreStates.ToList()
+                source.VegetationFibreStates.ToList(),
+            MiningStates = source.MiningStates.ToList(),
+            InitialGroundObjectIds =
+                new(source.InitialGroundObjectIds)
         };
         var previous = _saveTail;
         _saveTail = Task.Run(async () =>
