@@ -284,6 +284,7 @@ internal sealed partial class GameHostWindow
             _groundObjectContext.HitTest(pointer) ||
             _fishContext.HitTest(pointer) ||
             _vegetationContext.HitTest(pointer) ||
+            _miningContext.HitTest(pointer) ||
             _minimapUi.HitTest(pointer))
             return;
 
@@ -752,6 +753,27 @@ internal sealed partial class GameHostWindow
             shadowKey = _supplementalShadowFrames[cell] is null
                 ? null
                 : SupplementalAtlasKey(cell, shadow: true);
+            return true;
+        }
+
+        if (item.HasTag(ItemTag.MiningSprite))
+        {
+            if ((uint)cell >= (uint)_miningItemFrames.Length ||
+                _miningItemFrames[cell] is not { } miningFrame ||
+                _miningItemTextures[cell] == 0)
+            {
+                frame = null!;
+                texture = 0;
+                atlasKey = "";
+                shadowKey = null;
+                return false;
+            }
+            frame = miningFrame;
+            texture = _miningItemTextures[cell];
+            atlasKey = MiningAtlasKey(cell, false);
+            shadowKey = _miningShadowFrames[cell] is null
+                ? null
+                : MiningAtlasKey(cell, true);
             return true;
         }
 

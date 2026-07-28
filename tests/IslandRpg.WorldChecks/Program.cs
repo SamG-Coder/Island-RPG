@@ -88,6 +88,39 @@ for (var frame = 0; frame < 240; frame++)
 Require(
     movingCameraProbeCount is >= 9 and <= 11,
     "following a moving player must throttle stationary-cursor world probes");
+var miningItems = new[]
+{
+    ItemIds.Coal, ItemIds.TinOre, ItemIds.CopperOre, ItemIds.IronOre
+};
+Require(miningItems.All(id =>
+        ItemCatalog.Get(id).HasTag(ItemTag.MiningMaterial) &&
+        ItemCatalog.Get(id).HasTag(ItemTag.MiningSprite)) &&
+    miningItems.Select(id => ItemCatalog.Get(id).SpriteCell)
+        .SequenceEqual(new int?[] { 0, 1, 2, 3 }),
+    "mining rewards must use the four generated mining item cells");
+Require(PlayerInventory.BestPickaxe(
+            [ItemIds.StoneAxe, ItemIds.StonePickaxe])?.Id ==
+        ItemIds.StonePickaxe,
+    "mining must select a tagged pickaxe instead of another tool");
+var noviceMiningStrike = MiningSkill.Roll(0, 0, 0, 1);
+Require(noviceMiningStrike.Hit && noviceMiningStrike.Damage > 0 &&
+        !MiningSkill.Roll(0, .99f, 0, 1).Hit &&
+        MiningSkill.HitChance(20) > MiningSkill.HitChance(1),
+    "mining strikes must scale and retain a miss chance");
+Require(
+    MiningNodeCatalog.TryGet(
+        new(0, 0, UndergroundResourceGenerator.Coal, 0,
+            WorldVegetationKind.Plant, false),
+        out var coalNode) &&
+    coalNode.RewardItemId == ItemIds.Coal &&
+    MiningNodeCatalog.TryGet(
+        new(0, 0, "ROCKF3_NN", 0,
+            WorldVegetationKind.Plant, false),
+        out var staticNode) &&
+    staticNode.RewardItemId is null &&
+    staticNode.CompletionExperience > coalNode.CompletionExperience,
+    "ore nodes must reward items while large formations reward XP only");
+
 Console.WriteLine(
     "World-hover probe benchmark (1,000 stationary updates): " +
     $"legacy 1,000 scans, gated {hoverProbeCount} scan; " +
@@ -1086,7 +1119,7 @@ var ironAxeStrike = WoodcuttingSkill.Roll(0, 0, 0, 2);
 Require(ironAxeStrike.Damage > stoneAxeStrike.Damage,
     "an axe's woodcutting power must improve its chopping damage");
 Require(
-    Enum.GetValues<SkillType>().Length == 7 &&
+    Enum.GetValues<SkillType>().Length == 8 &&
     SkillService.LevelForExperience(
         SkillService.ExperienceForLevel(10)) == 10 &&
     WoodcuttingSkill.ExperienceForLevel(10) ==
@@ -1100,7 +1133,9 @@ Require(
     CookingSkill.ExperienceForLevel(10) ==
     FiremakingSkill.ExperienceForLevel(10) &&
     FiremakingSkill.ExperienceForLevel(10) ==
-    DiggingSkill.ExperienceForLevel(10),
+    DiggingSkill.ExperienceForLevel(10) &&
+    DiggingSkill.ExperienceForLevel(10) ==
+    MiningSkill.ExperienceForLevel(10),
     "all registered skills must reuse the shared level and experience progression service");
 Require(
     FishingSkill.CanCatch(WorldFishSpecies.ShoreMinnows, 1) &&

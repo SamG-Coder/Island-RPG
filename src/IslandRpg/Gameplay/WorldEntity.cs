@@ -12,6 +12,7 @@ internal enum EntityAction
     Work,
     Gather,
     Dig,
+    Mine,
     Fish,
     Die
 }
@@ -114,6 +115,16 @@ internal sealed class WorldEntity
         if (direction.LengthSquared > .0001f)
             Facing = direction.Normalized();
         SetAction(EntityAction.Dig);
+    }
+
+    public void MineAt(Vector2 target)
+    {
+        _path.Clear();
+        Target = Position;
+        var direction = target - Position;
+        if (direction.LengthSquared > .0001f)
+            Facing = direction.Normalized();
+        SetAction(EntityAction.Mine);
     }
 
     public void FishAt(Vector2 target)

@@ -12,5 +12,7 @@ internal sealed partial class GameHostWindow
         ClearFallbackCaveSampling();
         _queuedAction = null;
         _moveMarker = null;
+        _activeMiningKey = null;
+        _miningContext.Close();
     }
 }

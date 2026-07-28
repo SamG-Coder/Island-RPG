@@ -79,6 +79,14 @@ internal sealed partial class GameHostWindow
             clearTreeActions: true);
     }
 
+    public void QueueMining(WorldVegetation node, string stableKey) =>
+        QueuePath(
+            new Vector2(node.X, node.Y),
+            .82f,
+            GameHostWindow.WorldActionType.Mine,
+            vegetationKey: stableKey,
+            clearTreeActions: true);
+
     public void QueueWalk(Vector2 target)
     {
         if (window._player is null) return;
@@ -232,6 +240,13 @@ internal sealed partial class GameHostWindow
                 break;
             case
             {
+                Type: GameHostWindow.WorldActionType.Mine,
+                VegetationKey: { } vegetationKey
+            }:
+                window.BeginMining(vegetationKey, action.Target);
+                break;
+            case
+            {
                 Type: GameHostWindow.WorldActionType.DigCave,
                 InventorySlot: >= 0
             }:
@@ -277,6 +292,7 @@ internal sealed partial class GameHostWindow
         window.UpdateCooking();
         window.UpdateFishing();
         window.UpdateFibreGathering();
+        window.UpdateMining();
         window.UpdateCaveDigging();
     }
 

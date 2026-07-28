@@ -68,7 +68,8 @@ internal sealed class DeveloperSettingsController
                 player?.CookingExperience ?? 0,
             SkillType.Firemaking =>
                 player?.FiremakingExperience ?? 0,
-            _ => player?.DiggingExperience ?? 0
+            SkillType.Digging => player?.DiggingExperience ?? 0,
+            _ => player?.MiningExperience ?? 0
         };
 
     public static int ExperienceToNextLevel(
@@ -156,9 +157,13 @@ internal sealed class DeveloperSettingsController
             {
                 FiremakingExperience = experience
             },
-            _ => player with
+            SkillType.Digging => player with
             {
                 DiggingExperience = experience
+            },
+            _ => player with
+            {
+                MiningExperience = experience
             }
         };
         return updated with { UpdatedUtc = DateTime.UtcNow };

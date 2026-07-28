@@ -17,6 +17,8 @@ internal sealed partial class GameHostWindow
                 _activePlayer?.CookingExperience ?? 0,
             SkillType.Firemaking =>
                 _activePlayer?.FiremakingExperience ?? 0,
+            SkillType.Mining =>
+                _activePlayer?.MiningExperience ?? 0,
             _ => _activePlayer?.WoodcuttingExperience ?? 0
         };
         _skillGuideWindow.Open(

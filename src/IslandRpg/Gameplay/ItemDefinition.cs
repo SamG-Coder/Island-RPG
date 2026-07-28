@@ -22,7 +22,10 @@ internal enum ItemTag
     PlaceableObject = 1 << 15,
     Hammer = 1 << 16,
     Knife = 1 << 17,
-    Shovel = 1 << 18
+    Shovel = 1 << 18,
+    Pickaxe = 1 << 19,
+    MiningMaterial = 1 << 20,
+    MiningSprite = 1 << 21
 }
 
 internal sealed record ItemDefinition(
@@ -33,7 +36,8 @@ internal sealed record ItemDefinition(
     int? SpriteCell,
     bool Droppable = true,
     ItemTag Tags = ItemTag.None,
-    int WoodcuttingPower = 0)
+    int WoodcuttingPower = 0,
+    int MiningPower = 0)
 {
     public bool HasTag(ItemTag tag) => (Tags & tag) == tag;
 }
@@ -70,6 +74,9 @@ internal static class ItemIds
     public const string CactusSeeds = "cactus_seeds";
     public const string SharpenedRock = "sharpened_rock";
     public const string Coal = "coal";
+    public const string TinOre = "tin_ore";
+    public const string CopperOre = "copper_ore";
+    public const string IronOre = "iron_ore";
     public const string ClamShell = "clam_shell";
     public const string CockleShell = "cockle_shell";
     public const string SpiralShell = "spiral_shell";
@@ -155,7 +162,9 @@ internal static class ItemCatalog
             [ItemIds.StonePickaxe] = new(
                 ItemIds.StonePickaxe, "stone pickaxe", "Stone pickaxe",
                 "A primitive pickaxe with a pointed stone head lashed to a wooden handle.",
-                2, Tags: ItemTag.Tool | ItemTag.StoneToolSprite),
+                2, Tags: ItemTag.Tool | ItemTag.Pickaxe |
+                         ItemTag.StoneToolSprite,
+                MiningPower: 1),
             [ItemIds.StoneShovel] = new(
                 ItemIds.StoneShovel, "stone shovel", "Stone shovel",
                 "A broad stone blade lashed to a wooden shaft for digging.",
@@ -239,9 +248,24 @@ internal static class ItemCatalog
                       ItemTag.SupplementalSprite),
             [ItemIds.Coal] = new(
                 ItemIds.Coal, "coal", "Coal",
-                "Dense black coal that burns with strong heat.", 9,
+                "Dense black coal that burns with strong heat.", 0,
                 Tags: ItemTag.Mineral | ItemTag.NaturalMaterial |
-                      ItemTag.SupplementalSprite),
+                      ItemTag.MiningMaterial | ItemTag.MiningSprite),
+            [ItemIds.TinOre] = new(
+                ItemIds.TinOre, "tin ore", "Tin ore",
+                "Pale tin-bearing ore broken from an underground deposit.", 1,
+                Tags: ItemTag.Mineral | ItemTag.NaturalMaterial |
+                      ItemTag.MiningMaterial | ItemTag.MiningSprite),
+            [ItemIds.CopperOre] = new(
+                ItemIds.CopperOre, "copper ore", "Copper ore",
+                "Warm-coloured copper ore ready for future smelting.", 2,
+                Tags: ItemTag.Mineral | ItemTag.NaturalMaterial |
+                      ItemTag.MiningMaterial | ItemTag.MiningSprite),
+            [ItemIds.IronOre] = new(
+                ItemIds.IronOre, "iron ore", "Iron ore",
+                "Dense iron-rich ore with a rusty red surface.", 3,
+                Tags: ItemTag.Mineral | ItemTag.NaturalMaterial |
+                      ItemTag.MiningMaterial | ItemTag.MiningSprite),
             [ItemIds.ClamShell] = Coastal(
                 ItemIds.ClamShell, "clam shell", "Clam",
                 "A common shell washed smooth by the tide.", 0),

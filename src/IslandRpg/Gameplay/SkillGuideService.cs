@@ -15,7 +15,8 @@ internal static class SkillGuideService
         skill is SkillType.Woodcutting or
             SkillType.Fishing or
             SkillType.Cooking or
-            SkillType.Firemaking;
+            SkillType.Firemaking or
+            SkillType.Mining;
 
     public static SkillGuideDefinition Definition(SkillType skill) =>
         skill switch
@@ -24,9 +25,22 @@ internal static class SkillGuideService
             SkillType.Fishing => Fishing(),
             SkillType.Cooking => Cooking(),
             SkillType.Firemaking => Firemaking(),
+            SkillType.Mining => Mining(),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(skill), skill, "This skill has no level guide.")
         };
+
+    private static SkillGuideDefinition Mining() =>
+        new(
+            SkillType.Mining,
+            "Mining",
+            Enumerable.Range(1, MiningSkill.MaximumLevel)
+                .Select(level => new SkillGuideEntry(
+                    level,
+                    level == 1
+                        ? $"Mine cave deposits • {MiningSkill.HitChance(level) * 100:0}% hit"
+                        : $"Improved mining • {MiningSkill.HitChance(level) * 100:0}% hit"))
+                .ToArray());
 
     private static SkillGuideDefinition Firemaking() =>
         new(

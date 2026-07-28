@@ -79,6 +79,7 @@ internal sealed partial class GameHostWindow : GameWindow
         Fish,
         GatherFibres,
         DigCave,
+        Mine,
         EnterCave,
         RestoreExcavation,
         TakeCaveRope
@@ -221,6 +222,9 @@ internal sealed partial class GameHostWindow : GameWindow
         new SpriteFrame?[12];
     private readonly SpriteFrame?[] _supplementalShadowFrames =
         new SpriteFrame?[12];
+    private readonly int[] _miningItemTextures = new int[4];
+    private readonly SpriteFrame?[] _miningItemFrames = new SpriteFrame?[4];
+    private readonly SpriteFrame?[] _miningShadowFrames = new SpriteFrame?[4];
     private readonly int[] _stoneToolTextures = new int[14];
     private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[14];
     private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[14];
@@ -311,6 +315,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _worldActions = new(this);
         InitializeFishing();
         InitializeFibreGathering();
+        InitializeMining();
         _inventoryContext.Selected += HandleInventoryContextSelection;
         _treeContext.Selected += HandleTreeContextSelection;
         _groundObjectContext.Selected +=
@@ -383,6 +388,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 "VFBAS_WN", "VFBAS_AN", "VFBAS_DN",
                 "VMLUM_AN", "VFLUM_AN",
                 "VMFAR_TN", "VFFAR_TN",
+                "VMMIN_TN", "VFMIN_TN",
                 "VMFOR_TN", "VFFOR_TN",
                 "VMFIS_TN", "VFFIS_TN", "MOVEX_NN"
             })
@@ -462,7 +468,8 @@ internal sealed partial class GameHostWindow : GameWindow
                     .SelectMany(name => new[] { name, name[..^2] + "N0" })
                     .Concat([
                         "STUMP_NN", "STUMB_NN",
-                        "VMFAR_TN", "VFFAR_TN"
+                        "VMFAR_TN", "VFFAR_TN",
+                        "VMMIN_TN", "VFMIN_TN"
                     ])
                     .Concat(WorldVegetationGenerator.RequiredGraphicNames)
                     .Concat(WorldFishGenerator.RequiredGraphicNames)
@@ -1189,6 +1196,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 _treeContext.Close();
                 _fishContext.Close();
                 _vegetationContext.Close();
+                _miningContext.Close();
                 var fixedObject =
                     PlaceableObjectCatalog.IsPlaceable(
                         contextObject.ItemId);
@@ -1236,6 +1244,12 @@ internal sealed partial class GameHostWindow : GameWindow
                 OpenVegetationContext(
                     contextVegetation, vegetationKey, target);
             }
+            else if (TryGetMiningNodeUnderMouse(
+                         SceneMousePosition(),
+                         out var miningNode, out var miningKey))
+            {
+                OpenMiningContext(miningNode, miningKey, target);
+            }
             else if (TryGetTreeUnderMouse(
                     SceneMousePosition(), out var contextTree))
             {
@@ -1245,6 +1259,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 _groundObjectContext.Close();
                 _fishContext.Close();
                 _vegetationContext.Close();
+                _miningContext.Close();
                 _treeContext.Open(
                     MouseState.Position,
                     ["Chop tree", "Gather sticks", "Walk Here", "Examine"],
@@ -1288,6 +1303,11 @@ internal sealed partial class GameHostWindow : GameWindow
                          SceneMousePosition(), out _, out var vegetationKey))
             {
                 QueueFibreGather(vegetationKey);
+            }
+            else if (TryGetMiningNodeUnderMouse(
+                         SceneMousePosition(), out _, out var miningKey))
+            {
+                QueueMining(miningKey);
             }
             else if (!TryGetTreeUnderMouse(SceneMousePosition(), out var actionTree))
             {
@@ -1370,6 +1390,9 @@ internal sealed partial class GameHostWindow : GameWindow
         _vegetationContext.UpdatePointer(
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
+        _miningContext.UpdatePointer(
+            MouseState.Position,
+            MouseState.IsButtonDown(MouseButton.Left));
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         UpdateCraftingWindowInput(MouseState.Position, leftDown);
         UpdateSkillsPanelInput(MouseState.Position, leftDown);
@@ -1408,6 +1431,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _groundObjectContext.HitTest(mouse) ||
         _fishContext.HitTest(mouse) ||
         _vegetationContext.HitTest(mouse) ||
+        _miningContext.HitTest(mouse) ||
         _inventoryDraggingSlot >= 0 ||
         _modalScreen.CapturesAllInput ||
         _minimapUi.HitTest(mouse);
@@ -3310,6 +3334,7 @@ internal sealed partial class GameHostWindow : GameWindow
         RenderContextMenu(_groundObjectContext);
         RenderContextMenu(_fishContext);
         RenderContextMenu(_vegetationContext);
+        RenderContextMenu(_miningContext);
     }
 
     private void RenderContextMenu(
@@ -3667,6 +3692,11 @@ internal sealed partial class GameHostWindow : GameWindow
                    (uint)stoneCell < (uint)_stoneToolTextures.Length
                 ? _stoneToolTextures[stoneCell]
                 : 0;
+        if (item.HasTag(ItemTag.MiningSprite))
+            return item.SpriteCell is { } miningCell &&
+                   (uint)miningCell < (uint)_miningItemTextures.Length
+                ? _miningItemTextures[miningCell]
+                : 0;
         if (item.HasTag(ItemTag.CoastalSprite))
             return item.SpriteCell is { } coastalCell &&
                    (uint)coastalCell <
@@ -3711,6 +3741,9 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.HasTag(ItemTag.StoneToolSprite) &&
             (uint)cell < (uint)_stoneToolFrames.Length)
             return _stoneToolFrames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.MiningSprite) &&
+            (uint)cell < (uint)_miningItemFrames.Length)
+            return _miningItemFrames[cell] ?? WoodcuttingItemsFrame;
         if (item.HasTag(ItemTag.CoastalSprite) &&
             (uint)cell < (uint)_coastalSprites.Frames.Length)
             return _coastalSprites.Frames[cell] ?? WoodcuttingItemsFrame;
@@ -3739,7 +3772,9 @@ internal sealed partial class GameHostWindow : GameWindow
         var item = ItemCatalog.Get(itemId);
         if (item.SpriteCell is not { } cell ||
             item.HasTag(ItemTag.StoneToolSprite) ||
+            item.HasTag(ItemTag.MiningSprite) ||
             item.HasTag(ItemTag.SupplementalSprite) ||
+            item.HasTag(ItemTag.MiningSprite) ||
             item.HasTag(ItemTag.NaturalMaterial) ||
             item.HasTag(ItemTag.Fish) ||
             item.HasTag(ItemTag.FibreNetSprite) ||
@@ -5076,6 +5111,7 @@ internal sealed partial class GameHostWindow : GameWindow
             [EntityAction.Work] = "AN",
             [EntityAction.Gather] = "TN",
             [EntityAction.Dig] = "TN",
+            [EntityAction.Mine] = "TN",
             [EntityAction.Fish] = "TN",
             [EntityAction.Die] = "DN"
         };
@@ -5092,6 +5128,8 @@ internal sealed partial class GameHostWindow : GameWindow
                     gender == EntityGender.Male ? "VMFOR_" : "VFFOR_",
                 EntityAction.Dig =>
                     gender == EntityGender.Male ? "VMFAR_" : "VFFAR_",
+                EntityAction.Mine =>
+                    gender == EntityGender.Male ? "VMMIN_" : "VFMIN_",
                 EntityAction.Fish =>
                     gender == EntityGender.Male ? "VMFIS_" : "VFFIS_",
                 _ => gender == EntityGender.Male ? "VMBAS_" : "VFBAS_"
@@ -5245,6 +5283,33 @@ internal sealed partial class GameHostWindow : GameWindow
                 _supplementalShadowFrames[cell] =
                     ItemShadowGenerator.Create(frame);
                 _supplementalItemTextures[cell] = Upload(frame);
+            }
+        }
+        var miningSheetPath = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Images",
+            "mining-items.png");
+        if (File.Exists(miningSheetPath))
+        {
+            using var stream = File.OpenRead(miningSheetPath);
+            var sheet = ImageResult.FromStream(
+                stream, ColorComponents.RedGreenBlueAlpha);
+            const int cellSize = 32;
+            for (var cell = 0; cell < _miningItemTextures.Length; cell++)
+            {
+                var pixels = new byte[cellSize * cellSize * 4];
+                for (var row = 0; row < cellSize; row++)
+                    System.Buffer.BlockCopy(
+                        sheet.Data,
+                        (row * sheet.Width + cell * cellSize) * 4,
+                        pixels,
+                        row * cellSize * 4,
+                        cellSize * 4);
+                var frame = new SpriteFrame(
+                    cellSize, cellSize, cellSize / 2, 28, pixels);
+                _miningItemFrames[cell] = frame;
+                _miningShadowFrames[cell] =
+                    ItemShadowGenerator.Create(frame);
+                _miningItemTextures[cell] = Upload(frame);
             }
         }
         var stoneToolSheetPath = Path.Combine(
@@ -5669,6 +5734,13 @@ internal sealed partial class GameHostWindow : GameWindow
                     SupplementalAtlasKey(cell, shadow: true),
                     null, shadowFrame);
         }
+        for (var cell = 0; cell < _miningItemFrames.Length; cell++)
+        {
+            if (_miningItemFrames[cell] is { } itemFrame)
+                Place(MiningAtlasKey(cell, false), null, itemFrame);
+            if (_miningShadowFrames[cell] is { } shadowFrame)
+                Place(MiningAtlasKey(cell, true), null, shadowFrame);
+        }
         for (var cell = 0; cell < _stoneToolFrames.Length; cell++)
         {
             if (_stoneToolFrames[cell] is { } itemFrame)
@@ -5788,6 +5860,9 @@ internal sealed partial class GameHostWindow : GameWindow
         shadow
             ? $"SUPPLEMENTAL_SHADOW#{cell}"
             : $"SUPPLEMENTAL#{cell}";
+
+    private static string MiningAtlasKey(int cell, bool shadow) =>
+        shadow ? $"MINING_SHADOW#{cell}" : $"MINING#{cell}";
 
     private static string StoneToolAtlasKey(int cell, bool shadow) =>
         shadow ? $"STONE_TOOL_SHADOW#{cell}" : $"STONE_TOOL#{cell}";
@@ -6585,6 +6660,10 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var texture in _woodcuttingItemTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _naturalItemTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _supplementalItemTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _miningItemTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _stoneToolTextures)
             if (texture != 0) GL.DeleteTexture(texture);

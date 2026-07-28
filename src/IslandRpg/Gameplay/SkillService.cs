@@ -8,7 +8,8 @@ internal enum SkillType
     Fishing,
     Cooking,
     Firemaking,
-    Digging
+    Digging,
+    Mining
 }
 
 internal static class SkillService

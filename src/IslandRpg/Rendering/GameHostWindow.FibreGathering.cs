@@ -33,7 +33,9 @@ internal sealed partial class GameHostWindow
              index--)
         {
             var cached = gpu.VegetationRenderItems[index];
-            var candidate = gpu.Chunk.Vegetation[index];
+            if (cached.VegetationIndex < 0) continue;
+            var candidate =
+                gpu.Chunk.Vegetation[cached.VegetationIndex];
             if (!cached.CanGatherFibre ||
                 !_treeAtlas.TryGetValue(
                     cached.AtlasKey, out var entry))
@@ -223,7 +225,10 @@ internal sealed partial class GameHostWindow
              index++)
             if (gpu.VegetationRenderItems[index].StableKey.Equals(
                     stableKey, StringComparison.Ordinal))
-                return (gpu.Chunk.Vegetation[index], gpu);
+                return (
+                    gpu.Chunk.Vegetation[
+                        gpu.VegetationRenderItems[index].VegetationIndex],
+                    gpu);
         }
         return null;
     }

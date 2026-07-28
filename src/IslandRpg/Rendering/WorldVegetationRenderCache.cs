@@ -5,6 +5,7 @@ using OpenTK.Mathematics;
 namespace IslandRpg.Rendering;
 
 internal sealed record WorldVegetationRenderItem(
+    int VegetationIndex,
     int TileX,
     int TileY,
     Vector2 World,
@@ -20,6 +21,10 @@ internal static class WorldVegetationRenderCache
         IReadOnlyList<float> renderedHeights)
     {
         var vegetation = chunk.Vegetation;
+        var depletedMiningNodes = chunk.MiningStates
+            .Where(state => state.Health == 0)
+            .Select(state => state.StableKey)
+            .ToHashSet(StringComparer.Ordinal);
         var excavationTiles = new HashSet<(int X, int Y)>();
         var shafts = new List<WorldGroundObject>();
         foreach (var value in chunk.GroundObjects)
@@ -41,7 +46,12 @@ internal static class WorldVegetationRenderCache
             var tileY = (int)MathF.Floor(item.Y);
             if (excavationTiles.Contains((tileX, tileY)))
                 continue;
-            result.Add(Create(chunk, renderedHeights, item));
+            var stableKey =
+                $"vegetation:{item.X:0.000}:{item.Y:0.000}";
+            if (depletedMiningNodes.Contains(stableKey))
+                continue;
+            result.Add(Create(
+                chunk, renderedHeights, item, index, stableKey));
         }
         foreach (var shaft in shafts)
             {
@@ -70,6 +80,7 @@ internal static class WorldVegetationRenderCache
                     frame,
                     WorldVegetationKind.Plant,
                     false),
+                -1,
                 $"shaft-growth:{shaftId}:{frame}"));
         }
     }
@@ -78,6 +89,7 @@ internal static class WorldVegetationRenderCache
         WorldChunk chunk,
         IReadOnlyList<float> renderedHeights,
         WorldVegetation item,
+        int vegetationIndex,
         string? stableKey = null)
     {
             var tileX = (int)MathF.Floor(item.X);
@@ -101,6 +113,7 @@ internal static class WorldVegetationRenderCache
             var biome = chunk.Tiles[
                 localY * WorldChunk.Size + localX].Biome;
             return new(
+                vegetationIndex,
                 tileX,
                 tileY,
                 world,

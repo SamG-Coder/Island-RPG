@@ -57,6 +57,10 @@ internal sealed record WorldVegetation(
 internal sealed record WorldVegetationFibreState(
     string StableKey,
     double ReadyAtGameSeconds);
+internal sealed record WorldMiningState(
+    string StableKey,
+    int Health,
+    int MaxHealth);
 
 internal sealed class WorldChunk
 {
@@ -85,6 +89,7 @@ internal sealed class WorldChunk
     public WorldFish[] Fish { get; init; } = [];
     public List<WorldVegetationFibreState> VegetationFibreStates
         { get; init; } = [];
+    public List<WorldMiningState> MiningStates { get; init; } = [];
     public Dictionary<string, int> FishRemaining { get; init; } =
         new(StringComparer.Ordinal);
 
@@ -728,7 +733,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 5;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 21;
+    private const int ChunkPayloadVersion = 22;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -810,7 +815,8 @@ internal sealed class WorldChunkStore
         if (chunk.Coordinate.Level != (int)WorldLevel.Overworld &&
             chunk.GroundObjects.Count == chunk.InitialGroundObjectIds.Count &&
             chunk.GroundObjects.All(value =>
-                chunk.InitialGroundObjectIds.Contains(value.Id)))
+                chunk.InitialGroundObjectIds.Contains(value.Id)) &&
+            chunk.MiningStates.Count == 0)
             return;
         var uncompressed = SerializeChunk(chunk);
         var compressed = Compress(uncompressed);
@@ -991,6 +997,13 @@ internal sealed class WorldChunkStore
             {
                 writer.Write(state.StableKey);
                 writer.Write(state.ReadyAtGameSeconds);
+            }
+            writer.Write(chunk.MiningStates.Count);
+            foreach (var state in chunk.MiningStates)
+            {
+                writer.Write(state.StableKey);
+                writer.Write(state.Health);
+                writer.Write(state.MaxHealth);
             }
         }
         return stream.ToArray();
@@ -1202,6 +1215,26 @@ internal sealed class WorldChunkStore
                     fibreStates.Add(new(stableKey, readyAt));
                 }
             }
+            var miningStates = new List<WorldMiningState>();
+            if (payloadVersion >= 22)
+            {
+                var stateCount = reader.ReadInt32();
+                if (stateCount is < 0 or > 128)
+                    throw new InvalidDataException(
+                        "Chunk mining-state count is invalid.");
+                for (var i = 0; i < stateCount; i++)
+                {
+                    var stableKey = reader.ReadString();
+                    var health = reader.ReadInt32();
+                    var maxHealth = reader.ReadInt32();
+                    if (string.IsNullOrWhiteSpace(stableKey) ||
+                        stableKey.Length > 96 ||
+                        maxHealth <= 0 || health < 0 || health > maxHealth)
+                        throw new InvalidDataException(
+                            "Chunk mining state is invalid.");
+                    miningStates.Add(new(stableKey, health, maxHealth));
+                }
+            }
             if (coordinate.Level == (int)WorldLevel.Underground)
             {
                 // Derived presentation data is deterministic and deliberately
@@ -1215,6 +1248,7 @@ internal sealed class WorldChunkStore
                 foreach (var school in fishRemaining)
                     generated.FishRemaining[school.Key] = school.Value;
                 generated.VegetationFibreStates.AddRange(fibreStates);
+                generated.MiningStates.AddRange(miningStates);
                 return generated;
             }
             var weights = InfiniteWorldGenerator.GenerateBiomeWeights(
@@ -1233,7 +1267,8 @@ internal sealed class WorldChunkStore
                     Seed, tiles, trees),
                 Fish = WorldFishGenerator.Generate(Seed, tiles),
                 FishRemaining = fishRemaining,
-                VegetationFibreStates = fibreStates
+                VegetationFibreStates = fibreStates,
+                MiningStates = miningStates
             };
         }
         catch (EndOfStreamException ex)

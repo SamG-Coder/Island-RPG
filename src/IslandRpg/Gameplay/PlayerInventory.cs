@@ -43,6 +43,17 @@ internal static class PlayerInventory
                 item.HasTag(ItemTag.Tool) &&
                 item.HasTag(ItemTag.Axe)) ?? false;
 
+    public static ItemDefinition? BestPickaxe(string?[]? items) =>
+        items?
+            .Where(item => item is not null)
+            .Select(item => ItemCatalog.Get(item!))
+            .Where(item =>
+                item.HasTag(ItemTag.Tool) &&
+                item.HasTag(ItemTag.Pickaxe) &&
+                item.MiningPower > 0)
+            .OrderByDescending(item => item.MiningPower)
+            .FirstOrDefault();
+
     public static ItemDefinition? BestFishingNet(string?[]? items) =>
         items?
             .Where(item => item is not null)
