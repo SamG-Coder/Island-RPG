@@ -14,6 +14,7 @@
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
+  <canvas class="world-background" data-world-background aria-hidden="true"></canvas>
 
   <header class="site-header" data-header>
     <a class="brand" href="#top" aria-label="Island RPG home">
@@ -38,13 +39,6 @@
       <div class="hero-glow" aria-hidden="true"></div>
       <div class="terrain terrain-one" aria-hidden="true"></div>
       <div class="terrain terrain-two" aria-hidden="true"></div>
-      <div class="island-demo" aria-hidden="true">
-        <canvas data-island-demo></canvas>
-        <div class="island-demo-label">
-          <span>Generated island</span>
-          <b>Seed 2187</b>
-        </div>
-      </div>
       <div class="hero-content">
         <p class="eyebrow"><span></span> Version 0.2 available now</p>
         <h1>Build above.<br><em>Discover<span class="mobile-break"><br></span> below.</em></h1>
@@ -60,6 +54,10 @@
         </dl>
       </div>
 
+      <div class="world-renderer-label" aria-hidden="true">
+        <span>Live procedural world</span>
+        <b>Seed 2187</b>
+      </div>
       <a class="scroll-cue" href="#world"><span></span>Scroll to explore</a>
     </section>
 
