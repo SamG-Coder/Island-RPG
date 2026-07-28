@@ -15,6 +15,14 @@ internal static class CraftingStationService
     public static bool IsStation(string itemId) =>
         StationItemIds.Contains(itemId);
 
+    public static string ActionLabel(string itemId) =>
+        itemId switch
+        {
+            ItemIds.Bloomery => "Smelt",
+            ItemIds.SmithingAnvil => "Smith",
+            _ => "Craft"
+        };
+
     public static bool IsWithinRange(
         IReadOnlyList<WorldGroundObject> groundObjects,
         string stationItemId,

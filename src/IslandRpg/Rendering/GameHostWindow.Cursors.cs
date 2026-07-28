@@ -41,6 +41,7 @@ internal sealed partial class GameHostWindow
             cursorSheet.Frames[GameCursorFrames.Dig]);
         _dropNativeCursor = CreateNativeCursor(
             cursorSheet.Frames[GameCursorFrames.Drop]);
+        _craftingStationNativeCursor = _dropNativeCursor;
         _cutNativeCursor = CreateNativeCursor(
             cursorSheet.Frames[GameCursorFrames.Cut]);
         Cursor = _defaultNativeCursor;
@@ -121,6 +122,13 @@ internal sealed partial class GameHostWindow
                 {
                     next = GameCursorKind.ClimbUp;
                     cursor = _climbUpNativeCursor;
+                }
+                else if (CraftingStationService.IsStation(
+                             groundObject.ItemId) &&
+                         _craftingStationNativeCursor is not null)
+                {
+                    next = GameCursorKind.CraftingStation;
+                    cursor = _craftingStationNativeCursor;
                 }
                 else if (!PlaceableObjectCatalog.IsPlaceable(
                              groundObject.ItemId) &&

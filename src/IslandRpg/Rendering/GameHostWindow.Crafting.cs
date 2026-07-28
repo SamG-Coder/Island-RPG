@@ -15,11 +15,11 @@ internal sealed partial class GameHostWindow
         new(StringComparer.OrdinalIgnoreCase);
     private bool _craftingWindowOpen => _craftingWindow.Visible;
 
-    private void OpenCraftingWindow()
+    private void OpenCraftingWindow(string? stationItemId = null)
     {
         CancelPlaceableObjectPlacement();
         RefreshNearbyCraftingStations();
-        _craftingWindow.Open();
+        _craftingWindow.Open(stationItemId);
         _modalScreen.Open(ModalScreenKind.Crafting);
         _chatUi.BlurInput();
         _inventoryContext.Close();
@@ -49,7 +49,7 @@ internal sealed partial class GameHostWindow
         if (station is null ||
             !CraftingStationService.IsStation(station.ItemId))
             return;
-        OpenCraftingWindow();
+        OpenCraftingWindow(station.ItemId);
     }
 
     private void CloseCraftingWindow()

@@ -25,8 +25,9 @@ bring those materials back into Crafting progression.
 - Cast copper and tin into bronze bars before forging bronze tools.
 - Smelt iron ore into a bloom, then reheat and hammer out the slag to make bars.
 - Forge stronger bronze and iron pickaxes plus an iron woodcutting axe.
-- Craft and place a clay bloomery; smelting recipes only work while nearby.
-- Build a smithing anvil from early bronze and forge bars and tools beside it.
+- Unlock the workbench at Crafting level 3 and use it nearby to construct both
+  the clay bloomery and smithing anvil.
+- Smelt beside the bloomery, then forge bars and tools beside the anvil.
 - Automatically select the strongest available pickaxe.
 
 ### Farming, foraging and cooking

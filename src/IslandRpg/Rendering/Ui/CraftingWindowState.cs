@@ -14,17 +14,25 @@ internal sealed class CraftingWindowState
     public CraftingCategory Category { get; private set; } =
         CraftingCategory.All;
     public CraftingRecipe? SelectedRecipe { get; private set; }
+    public string? StationItemId { get; private set; }
 
-    public void Open()
+    public void Open(string? stationItemId = null)
     {
         Visible = true;
-        SelectedRecipe ??= VisibleRecipes().FirstOrDefault();
+        StationItemId = stationItemId;
+        SelectedRecipe = VisibleRecipes().FirstOrDefault();
     }
 
-    public void Close() => Visible = false;
+    public void Close()
+    {
+        Visible = false;
+        StationItemId = null;
+    }
 
     public IReadOnlyList<CraftingRecipe> VisibleRecipes() =>
-        CraftingSkill.RecipesFor(Category);
+        StationItemId is null
+            ? CraftingSkill.RecipesFor(Category)
+            : CraftingSkill.RecipesFor(Category, StationItemId);
 
     public CraftingRecipe? UpdatePointer(
         Vector4 viewport, Vector2 pointer, bool leftDown)

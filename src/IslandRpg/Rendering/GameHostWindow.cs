@@ -196,6 +196,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private MouseCursor? _cutNativeCursor;
     private MouseCursor? _pickupNativeCursor;
     private MouseCursor? _dropNativeCursor;
+    private MouseCursor? _craftingStationNativeCursor;
     private MouseCursor? _digNativeCursor;
     private MouseCursor? _mineNativeCursor;
     private MouseCursor? _climbDownNativeCursor;
@@ -206,6 +207,7 @@ internal sealed partial class GameHostWindow : GameWindow
         CutTree,
         PickUpItem,
         DropItem,
+        CraftingStation,
         Dig,
         Mine,
         ClimbDown,
@@ -1276,9 +1278,8 @@ internal sealed partial class GameHostWindow : GameWindow
                         : CraftingStationService.IsStation(
                             contextObject.ItemId)
                         ? [
-                            contextObject.ItemId == ItemIds.Bloomery
-                                ? "Smelt"
-                                : "Smith",
+                            CraftingStationService.ActionLabel(
+                                contextObject.ItemId),
                             "Walk Here", "Examine"
                         ]
                         : fixedObject

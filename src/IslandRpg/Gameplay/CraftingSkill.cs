@@ -178,7 +178,8 @@ internal static class CraftingSkill
                 "Mix damp earth around a stable stone furnace base.",
                 "Build a narrow shaft with a lower opening for air and slag.",
                 "Dry the clay bloomery before placing it on level ground."
-            ]),
+            ],
+            RequiredStationItemId: ItemIds.Workbench),
         new(
             "bronze-bar", ItemIds.BronzeBar,
             CraftingCategory.Resources, 6, 70,
@@ -209,7 +210,7 @@ internal static class CraftingSkill
             [
                 new(ItemTag.Hammer, "hammer")
             ],
-            RequiredStationItemId: ItemIds.Bloomery),
+            RequiredStationItemId: ItemIds.Workbench),
         new(
             "iron-bloom", ItemIds.IronBloom,
             CraftingCategory.Resources, 10, 100,
@@ -308,7 +309,7 @@ internal static class CraftingSkill
             ]),
         new(
             "workbench", ItemIds.Workbench,
-            CraftingCategory.Furniture, 5, 75,
+            CraftingCategory.Furniture, 3, 75,
             [
                 new(ItemIds.Plank, 4),
                 new(ItemIds.Sticks, 2)
@@ -336,10 +337,41 @@ internal static class CraftingSkill
                             : Recipes.Where(recipe =>
                                     recipe.Category == category)
                                 .ToArray()));
+    private static readonly IReadOnlyDictionary<
+        (CraftingCategory Category, string StationItemId),
+        IReadOnlyList<CraftingRecipe>> RecipesByStationAndCategory =
+            Recipes
+                .Where(recipe => recipe.RequiredStationItemId is not null)
+                .Select(recipe => recipe.RequiredStationItemId!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .SelectMany(stationItemId =>
+                    Enum.GetValues<CraftingCategory>().Select(category =>
+                        new
+                        {
+                            Key = (category, stationItemId),
+                            Recipes = (IReadOnlyList<CraftingRecipe>)Recipes
+                                .Where(recipe =>
+                                    string.Equals(
+                                        recipe.RequiredStationItemId,
+                                        stationItemId,
+                                        StringComparison.OrdinalIgnoreCase) &&
+                                    (category == CraftingCategory.All ||
+                                     recipe.Category == category))
+                                .ToArray()
+                        }))
+                .ToDictionary(entry => entry.Key, entry => entry.Recipes);
 
     public static IReadOnlyList<CraftingRecipe> RecipesFor(
         CraftingCategory category) =>
         RecipesByCategory[category];
+
+    public static IReadOnlyList<CraftingRecipe> RecipesFor(
+        CraftingCategory category,
+        string stationItemId) =>
+        RecipesByStationAndCategory.TryGetValue(
+            (category, stationItemId), out var recipes)
+            ? recipes
+            : [];
 
     public static int LevelForExperience(int experience) =>
         SkillService.LevelForExperience(experience);

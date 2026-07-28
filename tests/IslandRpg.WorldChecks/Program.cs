@@ -9,9 +9,10 @@ using OpenTK.Mathematics;
 var defaultDisplaySettings = new GameSettings();
 Require(
     GameCursorFrames.MineAndPickUp == 3 &&
+    GameCursorFrames.CraftingStation == 7 &&
     GameCursorFrames.ClimbDown == 15 &&
     GameCursorFrames.ClimbUp == 16,
-    "mining and cave traversal must retain their authored AoE cursor frames");
+    "mining, crafting stations, and cave traversal must retain their authored AoE cursor frames");
 Require(defaultDisplaySettings.VSyncMode ==
             DisplayVSyncMode.Adaptive &&
         defaultDisplaySettings.FrameRateLimit == 0,
@@ -114,10 +115,16 @@ Require(
     ItemCatalog.Get(ItemIds.BronzePickaxe).MiningPower == 2 &&
     ItemCatalog.Get(ItemIds.IronPickaxe).MiningPower == 3 &&
     CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.Bloomery &&
+        recipe.RequiredStationItemId == ItemIds.Workbench) &&
+    CraftingSkill.Recipes.Any(recipe =>
         recipe.ResultItemId == ItemIds.BronzeBar &&
         recipe.RequiredStationItemId == ItemIds.Bloomery &&
         recipe.Ingredients.Any(ingredient =>
             ingredient.ItemId == ItemIds.TinOre)) &&
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.SmithingAnvil &&
+        recipe.RequiredStationItemId == ItemIds.Workbench) &&
     CraftingSkill.Recipes.Any(recipe =>
         recipe.ResultItemId == ItemIds.IronBloom &&
         recipe.RequiredStationItemId == ItemIds.Bloomery &&
@@ -140,7 +147,7 @@ Require(
         recipe.ResultItemId == ItemIds.IronAxe &&
         recipe.Ingredients.Any(ingredient =>
             ingredient.ItemId == ItemIds.IronBar)),
-    "ores must progress through bronze casting and bloomery iron before metal tools");
+    "metalworking stations must be built at a workbench before processing ores and forging tools");
 Require(
     new[] { ItemIds.BronzeBar, ItemIds.IronBloom, ItemIds.IronBar }
         .Select(ItemCatalog.Get)
@@ -525,7 +532,7 @@ Require(CraftingSkill.Availability(
 var workbenchRecipe = CraftingSkill.Recipes.Single(
     recipe => recipe.ResultItemId == ItemIds.Workbench);
 Require(workbenchRecipe.Category == CraftingCategory.Furniture &&
-        workbenchRecipe.RequiredLevel == 5 &&
+        workbenchRecipe.RequiredLevel == 3 &&
         workbenchRecipe.Experience == 75 &&
         workbenchRecipe.Ingredients.SequenceEqual(
         [
@@ -536,23 +543,23 @@ Require(workbenchRecipe.Category == CraftingCategory.Furniture &&
             [new CraftingToolRequirement(ItemTag.Hammer, "hammer")]) ==
         true &&
         CraftingSkill.Availability(
-            workbenchRecipe, 5,
+            workbenchRecipe, 3,
             [
                 ItemIds.Plank, ItemIds.Plank,
                 ItemIds.Plank, ItemIds.Plank,
                 ItemIds.Sticks, ItemIds.Sticks,
                 ItemIds.StoneHammer
             ]) == RecipeAvailability.Ready,
-    "the workbench must be a level-five Furniture recipe made with a stone hammer");
+    "the workbench must be a level-three Furniture recipe made with a stone hammer");
 Require(CraftingSkill.Availability(
-            workbenchRecipe, 5,
+            workbenchRecipe, 3,
             [
                 ItemIds.Plank, ItemIds.Plank,
                 ItemIds.Plank, ItemIds.Plank,
                 ItemIds.Sticks, ItemIds.Sticks
             ]) == RecipeAvailability.MissingResources &&
         CraftingService.TryCraft(
-            workbenchRecipe, 5,
+            workbenchRecipe, 3,
             [
                 ItemIds.Plank, ItemIds.Plank,
                 ItemIds.Plank, ItemIds.Plank,
@@ -564,7 +571,7 @@ Require(CraftingSkill.Availability(
         craftedWorkbenchInventory.Contains(ItemIds.StoneHammer),
     "crafting a workbench must require but not consume its stone hammer");
 Require(CraftingSkill.Availability(
-            workbenchRecipe, 5,
+            workbenchRecipe, 3,
             [
                 ItemIds.Plank, ItemIds.Plank,
                 ItemIds.Plank, ItemIds.Plank,
@@ -701,15 +708,23 @@ Require(
 var nearbyStations = new[]
 {
     new WorldGroundObject(
+        Guid.NewGuid(), ItemIds.Workbench, 11, 10),
+    new WorldGroundObject(
         Guid.NewGuid(), ItemIds.Bloomery, 12, 10),
     new WorldGroundObject(
         Guid.NewGuid(), ItemIds.SmithingAnvil, 30, 30)
 };
 Require(
+    CraftingStationService.IsStation(ItemIds.Workbench) &&
+    CraftingStationService.IsWithinRange(
+        nearbyStations, ItemIds.Workbench, new(10, 10)) &&
     CraftingStationService.IsWithinRange(
         nearbyStations, ItemIds.Bloomery, new(10, 10)) &&
     !CraftingStationService.IsWithinRange(
-        nearbyStations, ItemIds.SmithingAnvil, new(10, 10)),
+        nearbyStations, ItemIds.SmithingAnvil, new(10, 10)) &&
+    CraftingStationService.ActionLabel(ItemIds.Workbench) == "Craft" &&
+    CraftingStationService.ActionLabel(ItemIds.Bloomery) == "Smelt" &&
+    CraftingStationService.ActionLabel(ItemIds.SmithingAnvil) == "Smith",
     "crafting stations must require the matching placed object within local interaction range");
 var modalScreen = new ModalScreenState();
 modalScreen.Open(ModalScreenKind.Crafting);
@@ -780,6 +795,36 @@ Require(
     CraftingSkill.RecipesFor(CraftingCategory.Tools)
         .All(recipe => recipe.Category == CraftingCategory.Tools),
     "crafting category views must reuse cached recipe lists instead of allocating every frame");
+var workbenchRecipes = CraftingSkill.RecipesFor(
+    CraftingCategory.All, ItemIds.Workbench);
+var bloomeryRecipes = CraftingSkill.RecipesFor(
+    CraftingCategory.All, ItemIds.Bloomery);
+var anvilRecipes = CraftingSkill.RecipesFor(
+    CraftingCategory.All, ItemIds.SmithingAnvil);
+Require(
+    ReferenceEquals(
+        workbenchRecipes,
+        CraftingSkill.RecipesFor(
+            CraftingCategory.All, ItemIds.Workbench)) &&
+    workbenchRecipes.Count == 2 &&
+    workbenchRecipes.All(recipe =>
+        recipe.RequiredStationItemId == ItemIds.Workbench) &&
+    bloomeryRecipes.Count == 2 &&
+    bloomeryRecipes.All(recipe =>
+        recipe.RequiredStationItemId == ItemIds.Bloomery) &&
+    anvilRecipes.Count == 4 &&
+    anvilRecipes.All(recipe =>
+        recipe.RequiredStationItemId == ItemIds.SmithingAnvil),
+    "station recipe views must be cached and contain only recipes for the station used");
+var stationCraftingWindow = new CraftingWindowState();
+stationCraftingWindow.Open(ItemIds.Bloomery);
+Require(
+    stationCraftingWindow.VisibleRecipes().SequenceEqual(
+        bloomeryRecipes) &&
+    stationCraftingWindow.SelectedRecipe ==
+        bloomeryRecipes.FirstOrDefault(),
+    "opening a crafting station must select from only that station's recipes");
+stationCraftingWindow.Close();
 var availabilityInventory = PlayerInventory.Normalize(
     [
         ItemIds.CopperOre, ItemIds.CopperOre, ItemIds.TinOre,

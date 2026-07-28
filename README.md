@@ -110,10 +110,10 @@ Click any skill name inside its detail panel to open its level guide.
    create a traversable entrance; use the climb cursor to travel between levels.
 3. Mine underground deposits with a pickaxe. Larger and denser deposits take
    more strikes, and the strongest carried pickaxe is selected automatically.
-4. Craft and place a clay bloomery, then stand beside it to alloy copper and
-   tin or reduce iron ore into a bloom. Coal is consumed by each smelt.
-5. Use bronze bars to craft and place a smithing anvil. Stand beside the anvil
-   with a hammer to consolidate iron blooms into bars and forge metal tools.
+4. Reach Crafting level 3, craft and place a workbench, then remain nearby to
+   construct a clay bloomery and smithing anvil.
+5. Stand beside the bloomery to alloy copper and tin or reduce iron ore into a
+   bloom. Use the nearby anvil and a hammer to forge bars and metal tools.
 6. Forage berry bushes for Farming XP and drag berries onto a lit campfire to
    cook them through the same interaction used for fish.
 
