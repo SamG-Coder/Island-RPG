@@ -1236,6 +1236,12 @@ internal sealed partial class GameHostWindow : GameWindow
             {
                 OpenFishContext(contextFish, target);
             }
+            else if (TryGetMiningNodeUnderMouse(
+                         SceneMousePosition(),
+                         out var miningNode, out var miningKey))
+            {
+                OpenMiningContext(miningNode, miningKey, target);
+            }
             else if (TryGetFibreShrubUnderMouse(
                          SceneMousePosition(),
                          out var contextVegetation,
@@ -1243,12 +1249,6 @@ internal sealed partial class GameHostWindow : GameWindow
             {
                 OpenVegetationContext(
                     contextVegetation, vegetationKey, target);
-            }
-            else if (TryGetMiningNodeUnderMouse(
-                         SceneMousePosition(),
-                         out var miningNode, out var miningKey))
-            {
-                OpenMiningContext(miningNode, miningKey, target);
             }
             else if (TryGetTreeUnderMouse(
                     SceneMousePosition(), out var contextTree))
@@ -1299,15 +1299,15 @@ internal sealed partial class GameHostWindow : GameWindow
             {
                 QueueFishing(fish);
             }
-            else if (TryGetFibreShrubUnderMouse(
-                         SceneMousePosition(), out _, out var vegetationKey))
-            {
-                QueueFibreGather(vegetationKey);
-            }
             else if (TryGetMiningNodeUnderMouse(
                          SceneMousePosition(), out _, out var miningKey))
             {
                 QueueMining(miningKey);
+            }
+            else if (TryGetFibreShrubUnderMouse(
+                         SceneMousePosition(), out _, out var vegetationKey))
+            {
+                QueueFibreGather(vegetationKey);
             }
             else if (!TryGetTreeUnderMouse(SceneMousePosition(), out var actionTree))
             {
@@ -3203,6 +3203,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _chatUi.Layout(scene);
         _minimapUi.Layout(scene);
         RenderTreeHealthBars(scene);
+        RenderMiningHealthBars(scene);
         RenderDigSiteHealthBar(scene);
         RenderOverheadSpeech(scene);
         RenderMinimap();
@@ -3793,7 +3794,6 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void RenderTreeHealthBars(Vector4 scene)
     {
-        var scale = scene.Z / ReferenceWidth;
         foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible))
         foreach (var instance in gpu.Chunk.TreeInstances)
         {
@@ -3814,30 +3814,40 @@ internal sealed partial class GameHostWindow : GameWindow
                 (instance.X - instance.Y) * 48,
                 (instance.X + instance.Y + 1) * 24 - elevation * 20);
             var bounds = SpriteBounds(entry.Frame, world);
-            var top = bounds.Top - 9;
-            var width = Math.Clamp(42 * _zoom, 28, 64);
-            var bar = new Vector4(
-                scene.X + ((bounds.Left + bounds.Right) * .5f -
-                           width * .5f) * scale,
-                scene.Y + top * scale,
-                width * scale,
-                Math.Max(5, 7 * scale));
-            if (bar.X + bar.Z < scene.X || bar.X > scene.X + scene.Z ||
-                bar.Y + bar.W < scene.Y || bar.Y > scene.Y + scene.W)
-                continue;
-            DrawUiColor(bar, new(.035f, .028f, .022f, .96f));
-            var ratio = instance.Health / (float)instance.MaxHealth;
-            DrawUiColor(
-                new(bar.X + 2, bar.Y + 2,
-                    Math.Max(0, (bar.Z - 4) * ratio),
-                    Math.Max(1, bar.W - 4)),
-                ratio > .5f
-                    ? new(.24f, .62f, .18f, 1)
-                    : ratio > .25f
-                        ? new(.74f, .55f, .12f, 1)
-                        : new(.70f, .14f, .09f, 1));
-            DrawPanelOutline(bar, 0, new(.10f, .08f, .05f, 1));
+            DrawWorldHealthBar(
+                scene, bounds,
+                instance.Health / (float)instance.MaxHealth);
         }
+    }
+
+    private void DrawWorldHealthBar(
+        Vector4 scene,
+        (float Left, float Top, float Right, float Bottom) bounds,
+        float ratio)
+    {
+        var scale = scene.Z / ReferenceWidth;
+        var width = Math.Clamp(42 * _zoom, 28, 64);
+        var bar = new Vector4(
+            scene.X + ((bounds.Left + bounds.Right) * .5f -
+                       width * .5f) * scale,
+            scene.Y + (bounds.Top - 9) * scale,
+            width * scale,
+            Math.Max(5, 7 * scale));
+        if (bar.X + bar.Z < scene.X || bar.X > scene.X + scene.Z ||
+            bar.Y + bar.W < scene.Y || bar.Y > scene.Y + scene.W)
+            return;
+        DrawUiColor(bar, new(.035f, .028f, .022f, .96f));
+        ratio = Math.Clamp(ratio, 0, 1);
+        DrawUiColor(
+            new(bar.X + 2, bar.Y + 2,
+                Math.Max(0, (bar.Z - 4) * ratio),
+                Math.Max(1, bar.W - 4)),
+            ratio > .5f
+                ? new(.24f, .62f, .18f, 1)
+                : ratio > .25f
+                    ? new(.74f, .55f, .12f, 1)
+                    : new(.70f, .14f, .09f, 1));
+        DrawPanelOutline(bar, 0, new(.10f, .08f, .05f, 1));
     }
 
     private void DrawUiButtonCaption(string caption, Vector4 bounds)

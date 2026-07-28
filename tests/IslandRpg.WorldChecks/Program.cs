@@ -120,6 +120,15 @@ Require(
     staticNode.RewardItemId is null &&
     staticNode.CompletionExperience > coalNode.CompletionExperience,
     "ore nodes must reward items while large formations reward XP only");
+var miningHitPixels = new byte[32 * 32 * 4];
+miningHitPixels[(16 * 32 + 16) * 4 + 3] = 255;
+var miningHitFrame = new SpriteFrame(32, 32, 16, 28, miningHitPixels);
+Require(
+    SpriteHitTesting.Contains(
+        miningHitFrame, (0, 0, 32, 32), new(20, 16), 1, 4) &&
+    !SpriteHitTesting.Contains(
+        miningHitFrame, (0, 0, 32, 32), new(25, 16), 1, 4),
+    "mining sprite selection must allow size-aware edge tolerance without selecting distant empty space");
 
 Console.WriteLine(
     "World-hover probe benchmark (1,000 stationary updates): " +

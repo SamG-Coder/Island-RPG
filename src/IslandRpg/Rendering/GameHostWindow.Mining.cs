@@ -35,15 +35,10 @@ internal sealed partial class GameHostWindow
                     !_treeAtlas.TryGetValue(cached.AtlasKey, out var entry))
                     continue;
                 var bounds = SpriteBounds(entry.Frame, cached.World);
-                if (mouse.X < bounds.Left || mouse.X >= bounds.Right ||
-                    mouse.Y < bounds.Top || mouse.Y >= bounds.Bottom)
-                    continue;
                 var scale = Math.Max(SpritePixelScale(), .001f);
-                var x = (int)((mouse.X - bounds.Left) / scale);
-                var y = (int)((mouse.Y - bounds.Top) / scale);
-                if ((uint)x >= (uint)entry.Frame.Width ||
-                    (uint)y >= (uint)entry.Frame.Height ||
-                    entry.Frame.Rgba[(y * entry.Frame.Width + x) * 4 + 3] <= 24 ||
+                if (!SpriteHitTesting.Contains(
+                        entry.Frame, bounds, mouse, scale,
+                        SpriteHitTesting.SizeAwareTolerance(entry.Frame)) ||
                     !WorldHoverSelection.Prefer(cached.World.Y, ref selectedDepth))
                     continue;
                 node = gpu.Chunk.Vegetation[cached.VegetationIndex];
@@ -56,7 +51,7 @@ internal sealed partial class GameHostWindow
     private void OpenMiningContext(
         WorldVegetation node, string stableKey, Vector2 walkTarget)
     {
-        if (!MiningNodeCatalog.TryGet(node, out var definition)) return;
+        if (!MiningNodeCatalog.TryGet(node, out _)) return;
         _miningContextKey = stableKey;
         _miningContextWalkTarget = walkTarget;
         _inventoryContext.Close();
@@ -66,7 +61,7 @@ internal sealed partial class GameHostWindow
         _vegetationContext.Close();
         _miningContext.Open(
             MouseState.Position,
-            ["Mine", "Walk Here", $"Examine {definition.DisplayName}"],
+            ["Mine", "Walk Here", "Examine"],
             SceneClientBounds(), 174);
     }
 
@@ -176,6 +171,43 @@ internal sealed partial class GameHostWindow
                 : $"You mine some {ItemCatalog.Get(value.Definition.RewardItemId).Caption.ToLowerInvariant()}.",
             ChatMessageStyle.Action);
         StopMining();
+    }
+
+    private void RenderMiningHealthBars(Vector4 scene)
+    {
+        if (_activeWorldLevel != (int)WorldLevel.Underground)
+            return;
+        foreach (var gpu in _worldChunks.Values)
+        {
+            if (!IsChunkVisible(gpu) ||
+                _activeMiningKey is null &&
+                gpu.Chunk.MiningStates.Count == 0)
+                continue;
+            foreach (var cached in gpu.VegetationRenderItems)
+            {
+                if (cached.VegetationIndex < 0) continue;
+                var node = gpu.Chunk.Vegetation[cached.VegetationIndex];
+                if (!MiningNodeCatalog.TryGet(node, out var definition))
+                    continue;
+                var active = cached.StableKey.Equals(
+                    _activeMiningKey, StringComparison.Ordinal);
+                var state = gpu.Chunk.MiningStates.Find(candidate =>
+                    candidate.StableKey.Equals(
+                        cached.StableKey, StringComparison.Ordinal));
+                if (!active && state is null ||
+                    state is { Health: <= 0 })
+                    continue;
+                if (!_treeAtlas.TryGetValue(
+                        cached.AtlasKey, out var entry))
+                    continue;
+                DrawWorldHealthBar(
+                    scene,
+                    SpriteBounds(entry.Frame, cached.World),
+                    (state?.Health ?? definition.MaximumHealth) /
+                    (float)(state?.MaxHealth ??
+                            definition.MaximumHealth));
+            }
+        }
     }
 
     private void StopMining()
