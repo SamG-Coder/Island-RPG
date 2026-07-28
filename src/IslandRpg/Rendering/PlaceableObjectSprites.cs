@@ -7,7 +7,7 @@ namespace IslandRpg.Rendering;
 internal sealed record PlaceableObjectSprite(
     SpriteFrame Frame,
     int Texture,
-    SpriteFrame Shadow);
+    SpriteFrame? Shadow);
 
 internal sealed class PlaceableObjectSprites
 {
@@ -71,7 +71,7 @@ internal sealed class PlaceableObjectSprites
             result._sprites[definition.ItemId] = new(
                 frame,
                 upload(frame),
-                ItemShadowGenerator.Create(frame));
+                null);
         }
         result.LoadCampfireStates(imageDirectory, upload);
         return result;
@@ -117,7 +117,9 @@ internal sealed class PlaceableObjectSprites
                 itemSheet,
                 fuelCell);
             _campfireFueled[fuel.Id] =
-                CreateSprite(fueledPixels, frameWidth, fireSheet.Height, upload);
+                CreateSprite(
+                    fueledPixels, frameWidth, fireSheet.Height,
+                    campfireBase.Shadow, upload);
             for (var flameTier = 0;
                  flameTier < FiremakingSkill.FlameTierCount;
                  flameTier++)
@@ -136,7 +138,8 @@ internal sealed class PlaceableObjectSprites
                     flameTier);
                 _campfireLit[(fuel.Id, flameTier, frameIndex)] =
                     CreateSprite(
-                        litPixels, frameWidth, fireSheet.Height, upload);
+                        litPixels, frameWidth, fireSheet.Height,
+                        campfireBase.Shadow, upload);
             }
         }
     }
@@ -219,11 +222,12 @@ internal sealed class PlaceableObjectSprites
 
     private static PlaceableObjectSprite CreateSprite(
         byte[] pixels, int width, int height,
+        SpriteFrame? shadow,
         Func<SpriteFrame, int> upload)
     {
         var frame = new SpriteFrame(width, height, 29, 54, pixels);
         return new(
-            frame, upload(frame), ItemShadowGenerator.Create(frame));
+            frame, upload(frame), shadow);
     }
 
     private static void BlendCell(

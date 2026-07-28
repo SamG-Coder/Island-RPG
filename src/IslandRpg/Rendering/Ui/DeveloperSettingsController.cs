@@ -7,6 +7,8 @@ namespace IslandRpg.Rendering.Ui;
 internal sealed class DeveloperSettingsController
 {
     private static readonly int[] Multipliers = [1, 10, 100];
+    public static readonly SkillType[] Skills =
+        Enum.GetValues<SkillType>();
     private int _multiplierIndex;
 
     public int ExperienceMultiplier => Multipliers[_multiplierIndex];
@@ -14,12 +16,12 @@ internal sealed class DeveloperSettingsController
 
     public bool TryUpdate(
         Vector2 pointer,
-        Vector4 panel,
+        ListControlState list,
         PlayerProfile? player,
         out PlayerProfile? updated)
     {
         updated = player;
-        if (MultiplierBounds(panel).Contains(pointer))
+        if (MultiplierBounds(list).Contains(pointer))
         {
             _multiplierIndex =
                 (_multiplierIndex + 1) % Multipliers.Length;
@@ -27,9 +29,11 @@ internal sealed class DeveloperSettingsController
         }
         if (player is null) return false;
 
-        foreach (var skill in Enum.GetValues<SkillType>())
+        foreach (var skill in Skills)
         {
-            if (GrantBounds(panel, skill).Contains(pointer))
+            if (!list.VisibleIndices.Contains(3 + (int)skill))
+                continue;
+            if (GrantBounds(list, skill).Contains(pointer))
             {
                 updated = SetExperience(
                     player,
@@ -39,7 +43,7 @@ internal sealed class DeveloperSettingsController
                         ExperienceGrant).Experience);
                 return true;
             }
-            if (MaxBounds(panel, skill).Contains(pointer))
+            if (MaxBounds(list, skill).Contains(pointer))
             {
                 updated = SetExperience(
                     player, skill, MaximumExperience());
@@ -76,53 +80,59 @@ internal sealed class DeveloperSettingsController
         PlayerProfile? player, SkillType skill) =>
         SkillService.ExperienceToNextLevel(Experience(player, skill));
 
-    public static Vector4 MultiplierBounds(Vector4 panel)
+    public static Vector4 MultiplierBounds(ListControlState list)
     {
-        var content = SettingsMenuState.ContentBounds(panel);
-        return new(content.X + 16, content.Y + 14, 150, 34);
+        return RowColumnBounds(list.RowBounds(0), 0);
     }
 
-    public static Vector4 MapToolBounds(Vector4 panel)
+    public static Vector4 MapToolBounds(ListControlState list)
     {
-        var content = SettingsMenuState.ContentBounds(panel);
-        return new(content.X + 182, content.Y + 14, 150, 34);
+        return RowColumnBounds(list.RowBounds(0), 1);
     }
 
-    public static Vector4 AdvanceTimeBounds(Vector4 panel)
+    public static Vector4 AdvanceTimeBounds(ListControlState list)
     {
-        var content = SettingsMenuState.ContentBounds(panel);
-        return new(content.X + 348, content.Y + 14, 150, 34);
+        return RowColumnBounds(list.RowBounds(1), 0);
     }
 
-    public static Vector4 WorldLevelBounds(Vector4 panel)
+    public static Vector4 WorldLevelBounds(ListControlState list)
     {
-        var content = SettingsMenuState.ContentBounds(panel);
-        return new(content.X + 514, content.Y + 14, 150, 34);
+        return RowColumnBounds(list.RowBounds(1), 1);
+    }
+
+    public static Vector4 ItemBankBounds(ListControlState list)
+    {
+        var row = list.RowBounds(2);
+        return new(row.X, row.Y + 7, row.Z, row.W - 14);
     }
 
     public static Vector4 SkillRowBounds(
-        Vector4 panel, SkillType skill)
-    {
-        var content = SettingsMenuState.ContentBounds(panel);
-        return new(
-            content.X + 16,
-            content.Y + 58 + (int)skill * 72,
-            content.Z - 32,
-            62);
-    }
+        ListControlState list, SkillType skill) =>
+        list.RowBounds(3 + (int)skill);
 
     public static Vector4 GrantBounds(
-        Vector4 panel, SkillType skill)
+        ListControlState list, SkillType skill)
     {
-        var row = SkillRowBounds(panel, skill);
+        var row = SkillRowBounds(list, skill);
         return new(row.X + row.Z - 196, row.Y + 15, 98, 32);
     }
 
     public static Vector4 MaxBounds(
-        Vector4 panel, SkillType skill)
+        ListControlState list, SkillType skill)
     {
-        var row = SkillRowBounds(panel, skill);
+        var row = SkillRowBounds(list, skill);
         return new(row.X + row.Z - 90, row.Y + 15, 82, 32);
+    }
+
+    private static Vector4 RowColumnBounds(Vector4 row, int column)
+    {
+        const float gap = 10;
+        var width = (row.Z - gap) * .5f;
+        return new(
+            row.X + column * (width + gap),
+            row.Y + 7,
+            width,
+            row.W - 14);
     }
 
     private static int MaximumExperience() =>

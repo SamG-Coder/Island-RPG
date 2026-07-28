@@ -156,67 +156,81 @@ internal sealed partial class GameHostWindow
     {
         var content = SettingsMenuState.ContentBounds(panel);
         DrawAoEPanelBorder(content);
+        _settingsMenu.LayoutContent(panel);
         switch (_settingsMenu.SelectedTab)
         {
             case SettingsTab.Display:
                 var settings = _saves.LoadSettings();
-                DrawMenuButton(
-                    SettingsMenuState.OptionBounds(panel, 0),
-                    $"Fullscreen: {(settings.Fullscreen ? "On" : "Off")}");
-                DrawMenuButton(
-                    SettingsMenuState.OptionBounds(panel, 1),
-                    $"VSync: {settings.VSyncMode}");
-                DrawMenuButton(
-                    SettingsMenuState.OptionBounds(panel, 2),
-                    "Frame limit: " +
-                    DisplaySettingsController.FrameRateLabel(
-                        settings.FrameRateLimit));
-                DrawMenuButton(
-                    SettingsMenuState.OptionBounds(panel, 3),
-                    "Performance metrics: " +
-                    $"{(settings.PerformanceMetrics ? "On" : "Off")}");
+                foreach (var option in _settingsMenu.ContentList.VisibleIndices)
+                {
+                    var caption = option switch
+                    {
+                        0 => $"Fullscreen: {(settings.Fullscreen ? "On" : "Off")}",
+                        1 => $"VSync: {settings.VSyncMode}",
+                        2 => "Frame limit: " +
+                             DisplaySettingsController.FrameRateLabel(
+                                 settings.FrameRateLimit),
+                        _ => "Performance metrics: " +
+                             $"{(settings.PerformanceMetrics ? "On" : "Off")}"
+                    };
+                    DrawMenuButton(
+                        _settingsMenu.OptionBounds(option), caption);
+                }
                 break;
             case SettingsTab.Game:
                 DrawCenteredUiText(
                     "Gameplay settings will appear here.",
-                    content, new(174, 164, 134, 255));
+                    _settingsMenu.OptionBounds(0),
+                    new(174, 164, 134, 255));
                 break;
             case SettingsTab.Sound:
                 DrawCenteredUiText(
                     "Sound settings will appear here.",
-                    content, new(174, 164, 134, 255));
+                    _settingsMenu.OptionBounds(0),
+                    new(174, 164, 134, 255));
                 break;
             case SettingsTab.Dev:
-                RenderDeveloperSettings(panel);
+                RenderDeveloperSettings();
                 break;
         }
+        RenderListScrollbar(_settingsMenu.ContentList);
     }
 
-    private void RenderDeveloperSettings(Vector4 panel)
+    private void RenderDeveloperSettings()
     {
         if (!_settingsMenu.DeveloperModeEnabled) return;
-        DrawMenuButton(
-            DeveloperSettingsController.MultiplierBounds(panel),
-            $"XP multiplier: x{_developerSettings.ExperienceMultiplier}");
-        if (_activePlayer is not null)
-            DrawMenuButton(
-                DeveloperSettingsController.MapToolBounds(panel),
-                "Map tool");
-        if (_activeWorld is not null)
+        var list = _settingsMenu.ContentList;
+        if (list.VisibleIndices.Contains(0))
         {
             DrawMenuButton(
-                DeveloperSettingsController.AdvanceTimeBounds(panel),
-                "+12 Hours");
+                DeveloperSettingsController.MultiplierBounds(list),
+                $"XP multiplier: x{_developerSettings.ExperienceMultiplier}");
+            if (_activePlayer is not null)
+                DrawMenuButton(
+                    DeveloperSettingsController.MapToolBounds(list),
+                    "Open map tool");
+        }
+        if (list.VisibleIndices.Contains(1) && _activeWorld is not null)
+        {
             DrawMenuButton(
-                DeveloperSettingsController.WorldLevelBounds(panel),
+                DeveloperSettingsController.AdvanceTimeBounds(list),
+                "Advance 12 hours");
+            DrawMenuButton(
+                DeveloperSettingsController.WorldLevelBounds(list),
                 _activeWorldLevel == (int)WorldLevel.Overworld
                     ? "Enter underground"
                     : "Return overworld");
         }
-        foreach (var skill in Enum.GetValues<SkillType>())
+        if (list.VisibleIndices.Contains(2))
+            DrawMenuButton(
+                DeveloperSettingsController.ItemBankBounds(list),
+                "Open all-items bank");
+        foreach (var skill in DeveloperSettingsController.Skills)
         {
+            if (!list.VisibleIndices.Contains(3 + (int)skill))
+                continue;
             var row = DeveloperSettingsController.SkillRowBounds(
-                panel, skill);
+                list, skill);
             DrawUiColor(row, new(.055f, .048f, .034f, .96f));
             DrawPanelOutline(row, 1, new(.28f, .23f, .13f, 1));
             var level = DeveloperSettingsController.Level(
@@ -237,10 +251,10 @@ internal sealed partial class GameHostWindow
                 new(row.X + 10, row.Y + 34),
                 new(174, 164, 134, 255));
             DrawMenuButton(
-                DeveloperSettingsController.GrantBounds(panel, skill),
+                DeveloperSettingsController.GrantBounds(list, skill),
                 $"+{_developerSettings.ExperienceGrant}");
             DrawMenuButton(
-                DeveloperSettingsController.MaxBounds(panel, skill),
+                DeveloperSettingsController.MaxBounds(list, skill),
                 "Max");
         }
     }

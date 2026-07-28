@@ -11,29 +11,41 @@ internal sealed partial class GameHostWindow
     {
         if (!_settingsMenu.DeveloperModeEnabled)
             return false;
+        _settingsMenu.LayoutContent(panel);
+        var list = _settingsMenu.ContentList;
         if (_activePlayer is not null &&
-            DeveloperSettingsController.MapToolBounds(panel)
+            list.VisibleIndices.Contains(0) &&
+            DeveloperSettingsController.MapToolBounds(list)
                 .Contains(pointer))
         {
             OpenDeveloperMap();
             return true;
         }
         if (_activeWorld is not null &&
-            DeveloperSettingsController.AdvanceTimeBounds(panel)
+            list.VisibleIndices.Contains(1) &&
+            DeveloperSettingsController.AdvanceTimeBounds(list)
                 .Contains(pointer))
         {
             AdvanceWorldTimeForDeveloper();
             return true;
         }
         if (_activeWorld is not null &&
-            DeveloperSettingsController.WorldLevelBounds(panel)
+            list.VisibleIndices.Contains(1) &&
+            DeveloperSettingsController.WorldLevelBounds(list)
                 .Contains(pointer))
         {
             SwitchWorldLevelForDeveloper();
             return true;
         }
+        if (list.VisibleIndices.Contains(2) &&
+            DeveloperSettingsController.ItemBankBounds(list)
+                .Contains(pointer))
+        {
+            OpenDeveloperItemBank();
+            return true;
+        }
         var changed = _developerSettings.TryUpdate(
-            pointer, panel, _activePlayer, out var updated);
+            pointer, list, _activePlayer, out var updated);
         if (!changed || updated is null) return false;
         _activePlayer = updated;
         _saves.SavePlayer(_activePlayer);

@@ -24,16 +24,20 @@ internal sealed partial class GameHostWindow
     {
         var panel = inventoryPanel.Bounds;
         var inventory = inventoryPanel.Inventory;
-        var count = PlayerInventory.Count(inventory);
-        DrawPanelCaption("Bag", panel);
-        DrawUiText(
-            $"{count}/{PlayerInventory.Capacity}",
-            new System.Numerics.Vector2(panel.X + panel.Z - 48, panel.Y + 13),
-            count >= PlayerInventory.Capacity
-                ? new(228, 135, 108, 255)
-                : new(184, 177, 149, 255));
+        var count = inventory
+            .Take(inventoryPanel.Capacity)
+            .Count(item => item is not null);
+        DrawPanelCaption(inventoryPanel.Title, panel);
+        if (inventoryPanel.ShowCount)
+            DrawUiText(
+                $"{count}/{inventoryPanel.Capacity}",
+                new System.Numerics.Vector2(
+                    panel.X + panel.Z - 48, panel.Y + 13),
+                count >= inventoryPanel.Capacity
+                    ? new(228, 135, 108, 255)
+                    : new(184, 177, 149, 255));
 
-        for (var slot = 0; slot < PlayerInventory.Capacity; slot++)
+        foreach (var slot in inventoryPanel.VisibleSlots)
         {
             var bounds = inventoryPanel.SlotBounds(slot);
             if (slot >= inventory.Length ||
@@ -64,7 +68,33 @@ internal sealed partial class GameHostWindow
             if (slot == inventoryPanel.ActiveSlot && !hasSprite)
             {
                 DrawPanelOutline(bounds, 0, new(.96f, .95f, .88f, 1));
-                DrawPanelOutline(bounds, 1, new(.74f, .72f, .65f, 1));
+                    DrawPanelOutline(bounds, 1, new(.74f, .72f, .65f, 1));
+            }
+            var quantity = inventoryPanel.QuantityAt(slot);
+            if (quantity > 1)
+            {
+                var text = quantity.ToString();
+                var width =
+                    _quantityFont?.MeasureString(text).X ??
+                    MeasureUiText(text);
+                var position = new System.Numerics.Vector2(
+                    bounds.X + bounds.Z - width - 3,
+                    bounds.Y + 2);
+                if (_quantityFont is not null &&
+                    _fontRenderer is not null)
+                {
+                    _quantityFont.DrawText(
+                        _fontRenderer,
+                        text,
+                        position + System.Numerics.Vector2.One,
+                        new FontStashSharp.FSColor(0, 0, 0, 120));
+                    _quantityFont.DrawText(
+                        _fontRenderer,
+                        text,
+                        position,
+                        new FontStashSharp.FSColor(
+                            255, 255, 255, 205));
+                }
             }
         }
 

@@ -54,6 +54,13 @@ internal sealed partial class GameHostWindow
         {
             var leftDown =
                 window.MouseState.IsButtonDown(MouseButton.Left);
+            if (Page == PausePage.Settings)
+            {
+                window._settingsMenu.LayoutContent(
+                    window.PauseSubmenuPanel());
+                window._settingsMenu.ContentList.UpdatePointer(
+                    window.MouseState.Position, leftDown);
+            }
             var clicked = leftDown && !_leftWasDown;
             _leftWasDown = leftDown;
             if (!clicked) return;

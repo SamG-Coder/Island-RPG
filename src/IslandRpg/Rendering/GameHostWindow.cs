@@ -312,6 +312,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _inventoryDraggingSlot => _inventoryInteraction.DraggingSlot;
     private FontSystem? _fontSystem;
     private DynamicSpriteFont? _chatFont;
+    private DynamicSpriteFont? _quantityFont;
     private BatchedOpenGlFontRenderer? _fontRenderer;
     private float _chatLineHeight = 16;
     private float _uiOpacity = 1;
@@ -343,6 +344,8 @@ internal sealed partial class GameHostWindow : GameWindow
         InitializeFibreGathering();
         InitializeMining();
         _inventoryContext.Selected += HandleInventoryContextSelection;
+        _itemContainerContext.Selected +=
+            HandleItemContainerContextSelection;
         _treeContext.Selected += HandleTreeContextSelection;
         _groundObjectContext.Selected +=
             HandleGroundObjectContextSelection;
@@ -447,6 +450,8 @@ internal sealed partial class GameHostWindow : GameWindow
             {
                 if (_chatUi.Input.Focused)
                     _chatUi.BlurInput();
+                else if (_itemContainerWindow.Visible)
+                    CloseItemContainer();
                 else if (_developerMap.IsOpen)
                     CloseDeveloperMap();
                 else if (_skillGuideWindow.Visible)
@@ -579,6 +584,15 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_screen == ScreenState.WorldPreview)
         {
             if (_mode == PreviewMode.Game &&
+                _itemContainerWindow.Visible)
+            {
+                UpdateItemContainerInput(
+                    MouseState.Position,
+                    MouseState.IsButtonDown(MouseButton.Left));
+                if (!_pauseMenu.IsPaused)
+                    UpdateGame((float)e.Time);
+            }
+            else if (_mode == PreviewMode.Game &&
                 _modalScreen.PausesSimulation)
                 _pauseMenu.Update();
             else if (_mode == PreviewMode.Game &&
@@ -693,6 +707,12 @@ internal sealed partial class GameHostWindow : GameWindow
             var worlds = _saves.ListWorlds().ToArray();
             LayoutWorldList(worlds);
             _worldList.UpdatePointer(
+                MouseState.Position, leftDown);
+        }
+        else if (_frontendPage == FrontendPage.Settings)
+        {
+            _settingsMenu.LayoutContent(SettingsPanel());
+            _settingsMenu.ContentList.UpdatePointer(
                 MouseState.Position, leftDown);
         }
         textBox?.UpdatePointer(
@@ -2389,10 +2409,34 @@ internal sealed partial class GameHostWindow : GameWindow
                 _worldList.Scroll(
                     MouseState.Position, e.OffsetY);
             }
+            else if (_frontendPage == FrontendPage.Settings)
+            {
+                _settingsMenu.LayoutContent(SettingsPanel());
+                _settingsMenu.ContentList.Scroll(
+                    MouseState.Position, e.OffsetY);
+            }
             return;
         }
         if (_screen != ScreenState.WorldPreview || e.OffsetY == 0) return;
-        if (_mode == PreviewMode.Game && _pauseMenu.IsPaused) return;
+        if (_mode == PreviewMode.Game &&
+            _itemContainerWindow.Visible)
+        {
+            _itemContainerWindow.Scroll(
+                SceneClientBounds(),
+                MouseState.Position,
+                e.OffsetY);
+            return;
+        }
+        if (_mode == PreviewMode.Game && _pauseMenu.IsPaused)
+        {
+            if (_pauseMenu.Page == PausePage.Settings)
+            {
+                _settingsMenu.LayoutContent(PauseSubmenuPanel());
+                _settingsMenu.ContentList.Scroll(
+                    MouseState.Position, e.OffsetY);
+            }
+            return;
+        }
         if (_mode == PreviewMode.Game && _skillGuideWindow.Visible)
         {
             _skillGuideWindow.Scroll(
@@ -2551,7 +2595,9 @@ internal sealed partial class GameHostWindow : GameWindow
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
             if (_modalScreen.BlursBackground) BlurComposedFrame();
             if (!_modalScreen.HidesGameUi) RenderGameUi();
-            if (_pauseMenu.IsPaused) RenderPauseMenu();
+            if (_itemContainerWindow.Visible)
+                RenderItemContainerWindow();
+            else if (_pauseMenu.IsPaused) RenderPauseMenu();
             else if (_craftingWindowOpen) RenderCraftingWindow();
             else if (_skillGuideWindow.Visible) RenderSkillGuideWindow();
         }
@@ -2992,9 +3038,7 @@ internal sealed partial class GameHostWindow : GameWindow
             width, height);
 
     private Vector4 SettingsPanel() =>
-        FrontendPanel(
-            560,
-            _settingsMenu.DeveloperModeEnabled ? 690 : 500);
+        FrontendPanel(560, 560);
 
     private Vector4 FrontendCloseButtonBounds()
     {
@@ -5461,12 +5505,16 @@ internal sealed partial class GameHostWindow : GameWindow
                 ItemShadowGenerator.Create(frame);
             _stoneToolTextures[4] = Upload(frame);
         }
-        LoadStandaloneStoneSlot("shallow-hole.png", 8, 48);
-        LoadStandaloneStoneSlot("cave-hole.png", 9, 48);
+        LoadStandaloneStoneSlot(
+            "shallow-hole.png", 8, 48, castsShadow: false);
+        LoadStandaloneStoneSlot(
+            "cave-hole.png", 9, 48, castsShadow: false);
         LoadStandaloneStoneSlot(
             "cave-rope-overlay.png", 10, 48,
-            hotspotXOffset: 15, hotspotYOffset: 10);
-        LoadStandaloneStoneSlot("hanging-rope.png", 11, 88);
+            hotspotXOffset: 15, hotspotYOffset: 10,
+            castsShadow: false);
+        LoadStandaloneStoneSlot(
+            "hanging-rope.png", 11, 88, castsShadow: false);
         LoadStandaloneStoneSlot("dirt-item.png", 12, 28);
         LoadStandaloneStoneSlot("sand-item.png", 13, 28);
         var ropePath = Path.Combine(
@@ -5491,7 +5539,8 @@ internal sealed partial class GameHostWindow : GameWindow
             int cell,
             int hotspotY,
             int hotspotXOffset = 0,
-            int hotspotYOffset = 0)
+            int hotspotYOffset = 0,
+            bool castsShadow = true)
         {
             var path = Path.Combine(
                 AppContext.BaseDirectory, "Resources", "Images",
@@ -5507,8 +5556,9 @@ internal sealed partial class GameHostWindow : GameWindow
                 hotspotYOffset,
                 image.Data);
             _stoneToolFrames[cell] = frame;
-            _stoneToolShadowFrames[cell] =
-                ItemShadowGenerator.Create(frame);
+            _stoneToolShadowFrames[cell] = castsShadow
+                ? ItemShadowGenerator.Create(frame)
+                : null;
             _stoneToolTextures[cell] = Upload(frame);
         }
         var stoneKnifePath = Path.Combine(
@@ -5584,6 +5634,7 @@ internal sealed partial class GameHostWindow : GameWindow
         });
         _fontSystem.AddFont(File.ReadAllBytes(fontPath));
         _chatFont = _fontSystem.GetFont(14);
+        _quantityFont = _fontSystem.GetFont(11);
         _chatLineHeight = MathF.Ceiling(
             Math.Max(16, _chatFont.MeasureString("Ag").Y));
     }
@@ -5956,10 +6007,11 @@ internal sealed partial class GameHostWindow : GameWindow
                 PlaceableObjectAtlasKey(
                     placeable.Key, shadow: false),
                 null, placeable.Value.Frame);
-            Place(
-                PlaceableObjectAtlasKey(
-                    placeable.Key, shadow: true),
-                null, placeable.Value.Shadow);
+            if (placeable.Value.Shadow is { } shadow)
+                Place(
+                    PlaceableObjectAtlasKey(
+                        placeable.Key, shadow: true),
+                    null, shadow);
         }
         foreach (var campfire in
                  _placeableObjectSprites.CampfireAtlasFrames)

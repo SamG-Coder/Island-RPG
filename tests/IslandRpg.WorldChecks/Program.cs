@@ -889,6 +889,152 @@ Require(skillBack.X + skillBack.Z < skillTitle.X &&
 var reusableInventory = new InventoryPanelState(
     gameUi.Panel.Bounds, [ItemIds.Logs],
     allowDragOutsideToGame: false);
+var configurableInventory = new InventoryPanelState(
+    new(0, 0, 420, 260),
+    new string?[12],
+    title: "Chest",
+    columns: 6,
+    rows: 2,
+    quantities: Enumerable.Repeat(100, 12).ToArray());
+Require(
+    configurableInventory.Title == "Chest" &&
+    configurableInventory.Capacity == 12 &&
+    configurableInventory.QuantityAt(0) == 100 &&
+    configurableInventory.SlotBounds(6).Y >
+        configurableInventory.SlotBounds(0).Y,
+    "the reusable inventory panel must support custom titles, dimensions, and stack quantities");
+var stackingContainer = new ItemContainerState(
+    new(
+        Guid.NewGuid(), "Test bank", 2, 1,
+        AllowStacking: true));
+Require(
+    stackingContainer.TryAdd(ItemIds.Logs, 99) &&
+    stackingContainer.TryAdd(ItemIds.Logs) &&
+    stackingContainer.Quantities[0] == 100,
+    "stacking containers must merge equal item IDs and retain their quantity");
+var restoredStackingContainer = new ItemContainerState(
+    stackingContainer.Definition,
+    stackingContainer.Save());
+Require(
+    restoredStackingContainer.Definition.Id ==
+        stackingContainer.Definition.Id &&
+    restoredStackingContainer.Items[0] == ItemIds.Logs &&
+    restoredStackingContainer.Quantities[0] == 100,
+    "container snapshots must reload quantities against their stable container ID");
+var individualContainer = new ItemContainerState(
+    new(
+        Guid.NewGuid(), "Test chest", 2, 1,
+        AllowStacking: false));
+Require(
+    individualContainer.TryAdd(ItemIds.Logs, 2) &&
+    !individualContainer.TryAdd(ItemIds.Sticks) &&
+    individualContainer.Quantities.SequenceEqual([1, 1]),
+    "non-stacking containers must use one slot per unit and reject over-capacity transfers atomically");
+var transferInventory =
+    new string?[] { ItemIds.Logs, ItemIds.Sticks, ItemIds.Coal };
+var limitedContainer = new ItemContainerState(
+    new(
+        Guid.NewGuid(), "Limited chest", 2, 1,
+        AllowStacking: false));
+Require(
+    limitedContainer.TransferAllFrom(transferInventory) == 2 &&
+    transferInventory[0] is null &&
+    transferInventory[1] is null &&
+    transferInventory[2] == ItemIds.Coal,
+    "deposit-all must stop safely when a container fills and leave unmoved bag items intact");
+var matchingInventory = new string?[]
+{
+    ItemIds.Logs, ItemIds.Coal, ItemIds.Logs,
+    ItemIds.Logs, ItemIds.Sticks
+};
+var quantityContainer = new ItemContainerState(
+    new(
+        Guid.NewGuid(), "Quantity bank", 2, 1,
+        AllowStacking: true));
+Require(
+    quantityContainer.TransferMatchingFrom(
+        matchingInventory, ItemIds.Logs, 2) == 2 &&
+    quantityContainer.Quantities[0] == 2 &&
+    matchingInventory.Count(item => item == ItemIds.Logs) == 1 &&
+    quantityContainer.TryTake(
+        0, 2, out var withdrawnItemId) &&
+    withdrawnItemId == ItemIds.Logs &&
+    quantityContainer.Items[0] is null,
+    "amount menus must deposit matching bag items and withdraw the requested stack quantity");
+var allItemsContainer = ItemContainerState.CreateAllItemsTest();
+Require(
+    ItemCatalog.All.All(item =>
+    {
+        var slot = Array.IndexOf(allItemsContainer.Items, item.Id);
+        return slot >= 0 && allItemsContainer.Quantities[slot] == 100;
+    }) &&
+    Enumerable.Range(
+            0,
+            allItemsContainer.Definition.Capacity -
+            allItemsContainer.Definition.ColumnCount + 1)
+        .Any(start => Enumerable.Range(
+                start, allItemsContainer.Definition.ColumnCount)
+            .All(allItemsContainer.IsSpacer)),
+    "the developer item bank must contain every catalog item at quantity 100 with category spacing");
+var itemBankWindow = ItemContainerWindowState.WindowBounds(
+    new(0, 0, 1280, 720), allItemsContainer.Definition);
+var itemBankPanel = ItemContainerWindowState.ContainerBounds(
+    itemBankWindow, allItemsContainer.Definition);
+var itemBankState = new ItemContainerWindowState();
+itemBankState.Open(allItemsContainer);
+itemBankState.LayoutRows(itemBankWindow);
+Require(
+    itemBankState.Rows.ScrollTrack.Visible &&
+    itemBankState.Rows.VisibleRows <
+        allItemsContainer.Definition.RowCount,
+    "item containers must enable the shared row scrollbar when their grid exceeds the viewport");
+itemBankState.Rows.ScrollToIndex(
+    allItemsContainer.Definition.RowCount - 1);
+var itemBankGrid = new InventoryPanelState(
+    itemBankPanel,
+    allItemsContainer.Items,
+    columns: allItemsContainer.Definition.ColumnCount,
+    rows: allItemsContainer.Definition.RowCount,
+    quantities: allItemsContainer.Quantities,
+    firstVisibleRow: itemBankState.Rows.FirstVisibleIndex,
+    visibleRows: itemBankState.Rows.VisibleRows);
+var finalBankSlot = itemBankGrid.SlotBounds(
+    allItemsContainer.Definition.Capacity - 1);
+Require(
+    itemBankGrid.VisibleSlots.Contains(
+        allItemsContainer.Definition.Capacity - 1) &&
+    finalBankSlot.Y + finalBankSlot.W <=
+        itemBankWindow.Y + itemBankWindow.W - 54,
+    "scrolling to the final container row must keep its slots above the footer");
+var clickThroughState = new ItemContainerWindowState();
+clickThroughState.Open(
+    allItemsContainer, leftDown: true);
+var bagPanel = ItemContainerWindowState.PlayerInventoryBounds(
+    itemBankWindow);
+var bagSlot = new InventoryPanelState(
+    bagPanel, new string?[PlayerInventory.Capacity]).SlotBounds(0);
+var bagPointer = bagSlot.Xy + new Vector2(4, 4);
+Require(
+    clickThroughState.UpdatePointer(
+        new(0, 0, 1280, 720),
+        bagPointer,
+        leftDown: true,
+        rightDown: false).Type ==
+        ItemContainerActionType.None,
+    "the click that opens a container must not pass through into an overlapping bag slot");
+clickThroughState.UpdatePointer(
+    new(0, 0, 1280, 720),
+    bagPointer,
+    leftDown: false,
+    rightDown: false);
+Require(
+    clickThroughState.UpdatePointer(
+        new(0, 0, 1280, 720),
+        bagPointer,
+        leftDown: true,
+        rightDown: false).Type ==
+        ItemContainerActionType.DepositOne,
+    "container slots must accept a fresh click after the opening press is released");
 var offCenterPixels = new byte[4 * 4 * 4];
 offCenterPixels[(0 * 4 + 0) * 4 + 3] = 255;
 var centeredOpaqueSprite = SpritePixelLayout.CenterOpaquePixels(
@@ -954,14 +1100,19 @@ settingsMenu.EnableDeveloperMode();
 Require(settingsMenu.DeveloperModeEnabled &&
         settingsMenu.VisibleTabs.Contains(SettingsTab.Dev),
     "the hidden chat command must be able to enable the Dev settings tab");
-var settingsPanel = new Vector4(360, 110, 560, 500);
+var settingsPanel = new Vector4(360, 80, 560, 560);
+settingsMenu.SelectAt(
+    settingsPanel,
+    SettingsMenuState.TabBounds(settingsPanel, 3, 4).Xy);
+settingsMenu.LayoutContent(settingsPanel);
+var settingsList = settingsMenu.ContentList;
 Require(
     DeveloperSettingsController.GrantBounds(
-        settingsPanel, SkillType.Woodcutting).X +
+        settingsList, SkillType.Woodcutting).X +
     DeveloperSettingsController.GrantBounds(
-        settingsPanel, SkillType.Woodcutting).Z <=
+        settingsList, SkillType.Woodcutting).Z <=
     DeveloperSettingsController.MaxBounds(
-        settingsPanel, SkillType.Woodcutting).X,
+        settingsList, SkillType.Woodcutting).X,
     "developer XP grant and max-level buttons must not overlap");
 var settingsContent = SettingsMenuState.ContentBounds(settingsPanel);
 var settingsBack = SettingsMenuState.BackButtonBounds(settingsPanel);
@@ -982,16 +1133,23 @@ Require(
          settingsBack.Y - settingsBack.W)) < .001f,
     "the settings Back button must remain anchored to a resized panel footer");
 Require(
-    !DeveloperSettingsController.MapToolBounds(settingsPanel)
+    settingsList.ScrollTrack.Visible &&
+    settingsList.Count == 3 + DeveloperSettingsController.Skills.Length,
+    "the developer page must use the shared scroll control for all tool and skill rows");
+Require(
+    !DeveloperSettingsController.MapToolBounds(settingsList)
         .Contains(settingsBack.Xy),
     "the developer map-tool button must not overlap settings navigation");
 Require(
-    DeveloperSettingsController.MapToolBounds(settingsPanel).X +
-        DeveloperSettingsController.MapToolBounds(settingsPanel).Z <=
-    DeveloperSettingsController.AdvanceTimeBounds(settingsPanel).X &&
-    !DeveloperSettingsController.AdvanceTimeBounds(settingsPanel)
+    DeveloperSettingsController.MultiplierBounds(settingsList).X +
+        DeveloperSettingsController.MultiplierBounds(settingsList).Z <=
+    DeveloperSettingsController.MapToolBounds(settingsList).X &&
+    DeveloperSettingsController.AdvanceTimeBounds(settingsList).X +
+        DeveloperSettingsController.AdvanceTimeBounds(settingsList).Z <=
+    DeveloperSettingsController.WorldLevelBounds(settingsList).X &&
+    !DeveloperSettingsController.AdvanceTimeBounds(settingsList)
         .Contains(settingsBack.Xy),
-    "the developer time button must align beside the map tool without overlapping navigation");
+    "developer tools must form non-overlapping two-column rows above the skill list");
 var developerMap = new DeveloperMapWindow();
 developerMap.Open();
 Require(developerMap.IsOpen,
