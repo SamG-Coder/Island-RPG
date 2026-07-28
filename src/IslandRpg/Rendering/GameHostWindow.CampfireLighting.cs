@@ -37,7 +37,8 @@ internal sealed partial class GameHostWindow
         var darkness = active ? SceneDarkness() : 0f;
         GL.Uniform1(
             _shaderUniforms.Get(_program, "sceneLighting"),
-            active && (underground || darkness > .01f) ? 1 : 0);
+            active && (underground || darkness > .01f ||
+                       _levelUpFireworks.Active) ? 1 : 0);
         GL.Uniform1(
             _shaderUniforms.Get(_program, "sceneDarkness"),
             darkness);
@@ -46,6 +47,17 @@ internal sealed partial class GameHostWindow
             underground ? 1 : 0);
 
         var count = 0;
+        if (active && _levelUpFireworks.Active)
+        {
+            var radius = 92f * _zoom;
+            AddLight(
+                SpriteAnchor(_levelUpFireworks.LightWorld),
+                new(
+                    radius / ReferenceWidth,
+                    radius * .78f / ReferenceHeight),
+                _levelUpFireworks.LightColor,
+                _levelUpFireworks.LightIntensity);
+        }
         if (active && underground && _player is not null)
         {
             var player = GetPlayerVisual();

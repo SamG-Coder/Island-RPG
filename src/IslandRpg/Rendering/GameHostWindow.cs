@@ -273,6 +273,10 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly DeveloperMapWindow _developerMap = new();
     private readonly SkillGuideWindowState _skillGuideWindow = new();
     private readonly WorldActionController _worldActions;
+    private readonly LevelUpFireworks _levelUpFireworks = new();
+    private readonly Action<string, Vector2, float> _levelUpParticleAdder;
+    private readonly int[] _observedSkillLevels = new int[8];
+    private bool _skillLevelsObserved;
     private string? _overheadSpeech;
     private double _overheadSpeechExpiresAt;
     private readonly ContextMenuControlState _inventoryContext = new();
@@ -313,6 +317,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _worldSeed = worldSeed;
         _pauseMenu = new(this);
         _worldActions = new(this);
+        _levelUpParticleAdder = AddLevelUpParticle;
         InitializeFishing();
         InitializeFibreGathering();
         InitializeMining();
@@ -964,6 +969,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
         _activeWorld = null;
         _activePlayer = null;
+        _skillLevelsObserved = false;
         _player = null;
         _queuedAction = null;
         _activeTreeId = null;
@@ -1337,6 +1343,7 @@ internal sealed partial class GameHostWindow : GameWindow
         UpdateNativeCursor();
         _worldActions.CompleteQueuedAction();
         _worldActions.Update();
+        UpdateLevelUpFireworks(elapsed);
         UpdateWaterRipples(wading);
         _activeWorldChunkBuffer.Clear();
         foreach (var gpu in _worldChunks.Values)
@@ -4792,6 +4799,12 @@ internal sealed partial class GameHostWindow : GameWindow
                 outlineColor: TeamColor(_activePlayer?.TeamColor ?? 0));
         if (showGroundItemOutlines)
             DrawGroundItemOutlines(groundOutlineVertices);
+        if (_levelUpFireworks.Active)
+        {
+            _levelUpFireworks.AddTo(_levelUpParticleAdder);
+            DrawTreeBatch(atlasVertices);
+            atlasVertices.Clear();
+        }
         RenderGroundDropPreview();
 
         void FlushAtlas()
@@ -5719,6 +5732,8 @@ internal sealed partial class GameHostWindow : GameWindow
                          goldOre.Sprite.Frames))
                 Place(variant.Key, null, variant.Frame);
         }
+        foreach (var sparkle in LevelUpFireworks.Frames())
+            Place(sparkle.Key, null, sparkle.Frame);
         for (var cell = 0; cell < _naturalItemFrames.Length; cell++)
         {
             if (_naturalItemFrames[cell] is { } itemFrame)

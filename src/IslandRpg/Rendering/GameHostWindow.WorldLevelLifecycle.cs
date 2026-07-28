@@ -14,5 +14,6 @@ internal sealed partial class GameHostWindow
         _moveMarker = null;
         _activeMiningKey = null;
         _miningContext.Close();
+        _levelUpFireworks.Clear();
     }
 }
