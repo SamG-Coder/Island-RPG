@@ -1,6 +1,7 @@
 using FontStashSharp;
 using IslandRpg.Gameplay;
 using IslandRpg.Rendering.Ui;
+using IslandRpg.World;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common.Input;
 using OpenTK.Windowing.GraphicsLibraryFramework;
@@ -10,11 +11,14 @@ namespace IslandRpg.Rendering;
 internal sealed partial class GameHostWindow
 {
     private readonly CraftingWindowState _craftingWindow = new();
+    private readonly HashSet<string> _nearbyCraftingStations =
+        new(StringComparer.OrdinalIgnoreCase);
     private bool _craftingWindowOpen => _craftingWindow.Visible;
 
     private void OpenCraftingWindow()
     {
         CancelPlaceableObjectPlacement();
+        RefreshNearbyCraftingStations();
         _craftingWindow.Open();
         _modalScreen.Open(ModalScreenKind.Crafting);
         _chatUi.BlurInput();
@@ -27,9 +31,31 @@ internal sealed partial class GameHostWindow
         UseDefaultGameCursor();
     }
 
+    private void QueueCraftingStation(WorldGroundObject station)
+    {
+        if (!CraftingStationService.IsStation(station.ItemId))
+            return;
+        _worldActions.QueuePath(
+            new Vector2(station.X, station.Y),
+            1.15f,
+            WorldActionType.UseCraftingStation,
+            groundObjectId: station.Id,
+            clearTreeActions: true);
+    }
+
+    internal void UseCraftingStation(Guid stationId)
+    {
+        var station = FindGroundObject(stationId);
+        if (station is null ||
+            !CraftingStationService.IsStation(station.ItemId))
+            return;
+        OpenCraftingWindow();
+    }
+
     private void CloseCraftingWindow()
     {
         _craftingWindow.Close();
+        _nearbyCraftingStations.Clear();
         _modalScreen.Close(ModalScreenKind.Crafting);
         if (_defaultNativeCursor is not null)
             Cursor = _defaultNativeCursor;
@@ -114,7 +140,8 @@ internal sealed partial class GameHostWindow
         var level = CraftingSkill.LevelForExperience(
             _activePlayer.CraftingExperience);
         var availability = CraftingSkill.Availability(
-            recipe, level, _activePlayer.Inventory);
+            recipe, level, _activePlayer.Inventory,
+            HasRequiredCraftingStation(recipe));
         if (availability == RecipeAvailability.Locked)
         {
             CanCraftRecipe(recipe.Id);
@@ -128,6 +155,16 @@ internal sealed partial class GameHostWindow
                 $"{ItemCatalog.Get(recipe.ResultItemId).Name}.");
             return;
         }
+        if (availability == RecipeAvailability.MissingStation)
+        {
+            var station = ItemCatalog.Get(
+                recipe.RequiredStationItemId!).Name;
+            ReportBlockedAction(
+                $"crafting-station-{recipe.Id}",
+                $"Stand near a placed {station} to make " +
+                $"{ItemCatalog.Get(recipe.ResultItemId).Name}.");
+            return;
+        }
         if (availability == RecipeAvailability.InventoryFull)
         {
             ReportBlockedAction(
@@ -137,7 +174,8 @@ internal sealed partial class GameHostWindow
         }
         var result = CraftingService.TryCraftDetailed(
             recipe, level, _activePlayer.Inventory,
-            out var inventory);
+            out var inventory,
+            HasRequiredCraftingStation(recipe));
         if (result == CraftingService.CraftResult.InventoryFull)
         {
             ReportBlockedAction(
@@ -166,7 +204,31 @@ internal sealed partial class GameHostWindow
             recipe,
             CraftingSkill.LevelForExperience(
                 _activePlayer?.CraftingExperience ?? 0),
-            _activePlayer?.Inventory);
+            _activePlayer?.Inventory,
+            HasRequiredCraftingStation(recipe));
+
+    private bool HasRequiredCraftingStation(
+        CraftingRecipe recipe)
+    {
+        if (recipe.RequiredStationItemId is not { } stationItemId)
+            return true;
+        return _nearbyCraftingStations.Contains(stationItemId);
+    }
+
+    private void RefreshNearbyCraftingStations()
+    {
+        _nearbyCraftingStations.Clear();
+        if (_player is null) return;
+        foreach (var gpu in _worldChunks.Values)
+        {
+            if (IsActiveWorldChunk(gpu) &&
+                gpu.Chunk.GroundObjects.Count > 0)
+                CraftingStationService.CollectWithinRange(
+                    gpu.Chunk.GroundObjects,
+                    _player.Position,
+                    _nearbyCraftingStations);
+        }
+    }
 
     private void RenderCraftingWindow()
     {
@@ -208,7 +270,8 @@ internal sealed partial class GameHostWindow
             var bounds = CraftingWindowState.RecipeBounds(window, index);
             var selected = recipe == _craftingWindow.SelectedRecipe;
             var availability = CraftingSkill.Availability(
-                recipe, level, inventory);
+                recipe, level, inventory,
+                HasRequiredCraftingStation(recipe));
             DrawUiColor(bounds, new(.055f, .048f, .034f, .98f));
             DrawPanelOutline(
                 bounds, 1,
@@ -220,6 +283,7 @@ internal sealed partial class GameHostWindow
                 DrawUiColor(bounds, new(0, 0, 0, .72f));
             else if (availability is
                      RecipeAvailability.MissingResources or
+                     RecipeAvailability.MissingStation or
                      RecipeAvailability.InventoryFull)
                 DrawUiColor(bounds, new(.55f, .025f, .018f, .46f));
             if (availability == RecipeAvailability.Locked)
@@ -309,7 +373,8 @@ internal sealed partial class GameHostWindow
 
         var item = ItemCatalog.Get(recipe.ResultItemId);
         var availability = CraftingSkill.Availability(
-            recipe, level, inventory);
+            recipe, level, inventory,
+            HasRequiredCraftingStation(recipe));
         DrawUiText(
             item.Name,
             new(details.X + 14, details.Y + 14),
@@ -335,6 +400,25 @@ internal sealed partial class GameHostWindow
                 $" ({held}/{ingredient.Count})",
                 new(details.X + 14, y),
                 held >= ingredient.Count
+                    ? new(175, 207, 132, 255)
+                    : new(226, 121, 103, 255));
+            y += 23;
+        }
+
+        if (recipe.RequiredStationItemId is { } stationItemId)
+        {
+            var available = HasRequiredCraftingStation(recipe);
+            y += 8;
+            DrawUiText(
+                "Required nearby station",
+                new(details.X + 14, y),
+                new(224, 210, 168, 255));
+            y += 25;
+            DrawUiText(
+                $"- {ItemCatalog.Get(stationItemId).Name} " +
+                (available ? "(nearby)" : "(not nearby)"),
+                new(details.X + 14, y),
+                available
                     ? new(175, 207, 132, 255)
                     : new(226, 121, 103, 255));
             y += 23;

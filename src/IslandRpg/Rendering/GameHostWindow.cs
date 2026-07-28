@@ -23,6 +23,7 @@ internal sealed partial class GameHostWindow : GameWindow
 {
     private const int ReferenceWidth = 1280;
     private const int ReferenceHeight = 720;
+    private const string ReleaseVersion = "v0.2.0";
     internal enum PreviewMode { Assets, Island, World, Game }
     private enum ScreenState { LoadingAssets, PreparingGpu, MainMenu, WorldPreview }
     private enum FrontendPage
@@ -83,7 +84,8 @@ internal sealed partial class GameHostWindow : GameWindow
         Mine,
         EnterCave,
         RestoreExcavation,
-        TakeCaveRope
+        TakeCaveRope,
+        UseCraftingStation
     }
     private sealed record QueuedWorldAction(
         WorldActionType Type, Vector2 Target, float Range,
@@ -235,6 +237,15 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly int[] _berryItemTextures = new int[2];
     private readonly SpriteFrame?[] _berryItemFrames = new SpriteFrame?[2];
     private readonly SpriteFrame?[] _berryShadowFrames = new SpriteFrame?[2];
+    private readonly int[] _metalToolTextures = new int[2];
+    private readonly SpriteFrame?[] _metalToolFrames = new SpriteFrame?[2];
+    private readonly SpriteFrame?[] _metalToolShadowFrames =
+        new SpriteFrame?[2];
+    private readonly int[] _metalMaterialTextures = new int[3];
+    private readonly SpriteFrame?[] _metalMaterialFrames =
+        new SpriteFrame?[3];
+    private readonly SpriteFrame?[] _metalMaterialShadowFrames =
+        new SpriteFrame?[3];
     private readonly int[] _stoneToolTextures = new int[14];
     private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[14];
     private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[14];
@@ -319,7 +330,7 @@ internal sealed partial class GameHostWindow : GameWindow
         new NativeWindowSettings
         {
             ClientSize = new Vector2i(1280, 720),
-            Title = "Island RPG"
+            Title = $"Island RPG {ReleaseVersion}"
         })
     {
         _install = install;
@@ -1242,6 +1253,14 @@ internal sealed partial class GameHostWindow : GameWindow
                         ? ["Cook", "Walk Here", "Examine"]
                         : campfireState == CampfireState.Fueled
                         ? ["Light", "Take log", "Walk Here", "Examine"]
+                        : CraftingStationService.IsStation(
+                            contextObject.ItemId)
+                        ? [
+                            contextObject.ItemId == ItemIds.Bloomery
+                                ? "Smelt"
+                                : "Smith",
+                            "Walk Here", "Examine"
+                        ]
                         : fixedObject
                         ? ["Walk Here", "Examine"]
                         : ["Pick up", "Walk Here", "Examine"],
@@ -1304,6 +1323,11 @@ internal sealed partial class GameHostWindow : GameWindow
                     QueueCaveEntry(groundObject);
                 else if (CaveEntranceService.IsDigSite(groundObject))
                     QueueContinueCaveDig(groundObject);
+                else if (!CaveEntranceService.IsHole(groundObject) &&
+                         !CaveEntranceService.IsShallowHole(groundObject) &&
+                         CraftingStationService.IsStation(
+                             groundObject.ItemId))
+                    QueueCraftingStation(groundObject);
                 else if (!CaveEntranceService.IsHole(groundObject) &&
                          !CaveEntranceService.IsShallowHole(groundObject) &&
                          !PlaceableObjectCatalog.IsPlaceable(
@@ -2622,6 +2646,10 @@ internal sealed partial class GameHostWindow : GameWindow
         };
         for (var index = 0; index < captions.Length; index++)
             DrawMenuButton(MenuButton(index), captions[index]);
+        DrawCenteredUiText(
+            $"{ReleaseVersion}  |  Credits: Joana is the best",
+            new(panel.X + 20, panel.Y + panel.W - 38, panel.Z - 40, 22),
+            new(151, 143, 119, 255));
     }
 
     private void RenderCharacterCreateMenu()
@@ -3495,6 +3523,19 @@ internal sealed partial class GameHostWindow : GameWindow
         if (PlaceableObjectCatalog.IsPlaceable(
                 groundObject.ItemId))
         {
+            if (CraftingStationService.IsStation(
+                    groundObject.ItemId))
+            {
+                if (option == 0)
+                    QueueCraftingStation(groundObject);
+                else if (option == 1)
+                    QueueWalk(_groundObjectContextWalkTarget);
+                else if (option == 2)
+                    _chatUi.AddMessage(
+                        ItemCatalog.Get(groundObject.ItemId).Examine,
+                        ChatMessageStyle.Normal);
+                return;
+            }
             if (CampfireService.IsCampfire(groundObject) &&
                 CampfireService.State(
                     groundObject, _worldGameSeconds) ==
@@ -3694,6 +3735,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.HasTag(ItemTag.NaturalMaterial) ||
             item.HasTag(ItemTag.SupplementalSprite) ||
             item.HasTag(ItemTag.StoneToolSprite) ||
+            item.HasTag(ItemTag.MetalToolSprite) ||
+            item.HasTag(ItemTag.MetalMaterialSprite) ||
             item.HasTag(ItemTag.Fish) ||
             item.HasTag(ItemTag.FibreNetSprite) ||
             item.HasTag(ItemTag.PlaceableObject))
@@ -3723,6 +3766,16 @@ internal sealed partial class GameHostWindow : GameWindow
             return item.SpriteCell is { } berryCell &&
                    (uint)berryCell < (uint)_berryItemTextures.Length
                 ? _berryItemTextures[berryCell]
+                : 0;
+        if (item.HasTag(ItemTag.MetalToolSprite))
+            return item.SpriteCell is { } metalCell &&
+                   (uint)metalCell < (uint)_metalToolTextures.Length
+                ? _metalToolTextures[metalCell]
+                : 0;
+        if (item.HasTag(ItemTag.MetalMaterialSprite))
+            return item.SpriteCell is { } metalCell &&
+                   (uint)metalCell < (uint)_metalMaterialTextures.Length
+                ? _metalMaterialTextures[metalCell]
                 : 0;
         if (item.HasTag(ItemTag.CoastalSprite))
             return item.SpriteCell is { } coastalCell &&
@@ -3774,6 +3827,12 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.HasTag(ItemTag.BerrySprite) &&
             (uint)cell < (uint)_berryItemFrames.Length)
             return _berryItemFrames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.MetalToolSprite) &&
+            (uint)cell < (uint)_metalToolFrames.Length)
+            return _metalToolFrames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.MetalMaterialSprite) &&
+            (uint)cell < (uint)_metalMaterialFrames.Length)
+            return _metalMaterialFrames[cell] ?? WoodcuttingItemsFrame;
         if (item.HasTag(ItemTag.CoastalSprite) &&
             (uint)cell < (uint)_coastalSprites.Frames.Length)
             return _coastalSprites.Frames[cell] ?? WoodcuttingItemsFrame;
@@ -3804,8 +3863,9 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.StoneToolSprite) ||
             item.HasTag(ItemTag.MiningSprite) ||
             item.HasTag(ItemTag.BerrySprite) ||
+            item.HasTag(ItemTag.MetalToolSprite) ||
+            item.HasTag(ItemTag.MetalMaterialSprite) ||
             item.HasTag(ItemTag.SupplementalSprite) ||
-            item.HasTag(ItemTag.MiningSprite) ||
             item.HasTag(ItemTag.NaturalMaterial) ||
             item.HasTag(ItemTag.Fish) ||
             item.HasTag(ItemTag.FibreNetSprite) ||
@@ -3817,10 +3877,10 @@ internal sealed partial class GameHostWindow : GameWindow
     }
 
     private static float InventoryItemBrightness(string itemId) =>
-        ItemCatalog.Get(itemId).HasTag(ItemTag.BurntFish) ? -.48f : 0f;
+        ItemCatalog.Get(itemId).HasTag(ItemTag.BurntFood) ? -.48f : 0f;
 
     private static float InventoryItemGrayscale(string itemId) =>
-        ItemCatalog.Get(itemId).HasTag(ItemTag.BurntFish) ? .92f : 0f;
+        ItemCatalog.Get(itemId).HasTag(ItemTag.BurntFood) ? .92f : 0f;
 
     private void RenderTreeHealthBars(Vector4 scene)
     {
@@ -5331,60 +5391,18 @@ internal sealed partial class GameHostWindow : GameWindow
                 _supplementalItemTextures[cell] = Upload(frame);
             }
         }
-        var miningSheetPath = Path.Combine(
-            AppContext.BaseDirectory, "Resources", "Images",
-            "mining-items.png");
-        if (File.Exists(miningSheetPath))
-        {
-            using var stream = File.OpenRead(miningSheetPath);
-            var sheet = ImageResult.FromStream(
-                stream, ColorComponents.RedGreenBlueAlpha);
-            const int cellSize = 32;
-            for (var cell = 0; cell < _miningItemTextures.Length; cell++)
-            {
-                var pixels = new byte[cellSize * cellSize * 4];
-                for (var row = 0; row < cellSize; row++)
-                    System.Buffer.BlockCopy(
-                        sheet.Data,
-                        (row * sheet.Width + cell * cellSize) * 4,
-                        pixels,
-                        row * cellSize * 4,
-                        cellSize * 4);
-                var frame = new SpriteFrame(
-                    cellSize, cellSize, cellSize / 2, 28, pixels);
-                _miningItemFrames[cell] = frame;
-                _miningShadowFrames[cell] =
-                    ItemShadowGenerator.Create(frame);
-                _miningItemTextures[cell] = Upload(frame);
-            }
-        }
-        var berrySheetPath = Path.Combine(
-            AppContext.BaseDirectory, "Resources", "Images",
-            "berry-items.png");
-        if (File.Exists(berrySheetPath))
-        {
-            using var stream = File.OpenRead(berrySheetPath);
-            var sheet = ImageResult.FromStream(
-                stream, ColorComponents.RedGreenBlueAlpha);
-            const int cellSize = 32;
-            for (var cell = 0; cell < _berryItemTextures.Length; cell++)
-            {
-                var pixels = new byte[cellSize * cellSize * 4];
-                for (var row = 0; row < cellSize; row++)
-                    System.Buffer.BlockCopy(
-                        sheet.Data,
-                        (row * sheet.Width + cell * cellSize) * 4,
-                        pixels,
-                        row * cellSize * 4,
-                        cellSize * 4);
-                var frame = new SpriteFrame(
-                    cellSize, cellSize, cellSize / 2, 28, pixels);
-                _berryItemFrames[cell] = frame;
-                _berryShadowFrames[cell] =
-                    ItemShadowGenerator.Create(frame);
-                _berryItemTextures[cell] = Upload(frame);
-            }
-        }
+        LoadHorizontalItemSheet(
+            "mining-items.png", _miningItemFrames,
+            _miningShadowFrames, _miningItemTextures);
+        LoadHorizontalItemSheet(
+            "berry-items.png", _berryItemFrames,
+            _berryShadowFrames, _berryItemTextures);
+        LoadHorizontalItemSheet(
+            "metal-pickaxes.png", _metalToolFrames,
+            _metalToolShadowFrames, _metalToolTextures);
+        LoadHorizontalItemSheet(
+            "metal-materials.png", _metalMaterialFrames,
+            _metalMaterialShadowFrames, _metalMaterialTextures);
         var stoneToolSheetPath = Path.Combine(
             AppContext.BaseDirectory, "Resources", "Images",
             "stone-tools-items.png");
@@ -5568,6 +5586,49 @@ internal sealed partial class GameHostWindow : GameWindow
         _chatFont = _fontSystem.GetFont(14);
         _chatLineHeight = MathF.Ceiling(
             Math.Max(16, _chatFont.MeasureString("Ag").Y));
+    }
+
+    private void LoadHorizontalItemSheet(
+        string fileName,
+        SpriteFrame?[] frames,
+        SpriteFrame?[] shadowFrames,
+        int[] textures)
+    {
+        if (frames.Length != textures.Length ||
+            shadowFrames.Length != textures.Length)
+            throw new ArgumentException(
+                "Item sprite arrays must have matching lengths.");
+
+        var path = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Images", fileName);
+        if (!File.Exists(path)) return;
+
+        using var stream = File.OpenRead(path);
+        var sheet = ImageResult.FromStream(
+            stream, ColorComponents.RedGreenBlueAlpha);
+        const int cellSize = 32;
+        if (sheet.Width < textures.Length * cellSize ||
+            sheet.Height < cellSize)
+            throw new InvalidDataException(
+                $"{fileName} does not contain {textures.Length} " +
+                $"{cellSize}x{cellSize} cells.");
+
+        for (var cell = 0; cell < textures.Length; cell++)
+        {
+            var pixels = new byte[cellSize * cellSize * 4];
+            for (var row = 0; row < cellSize; row++)
+                System.Buffer.BlockCopy(
+                    sheet.Data,
+                    (row * sheet.Width + cell * cellSize) * 4,
+                    pixels,
+                    row * cellSize * 4,
+                    cellSize * 4);
+            var frame = new SpriteFrame(
+                cellSize, cellSize, cellSize / 2, 28, pixels);
+            frames[cell] = frame;
+            shadowFrames[cell] = ItemShadowGenerator.Create(frame);
+            textures[cell] = Upload(frame);
+        }
     }
 
     private void PrepareGroundToolSprites()
@@ -5823,6 +5884,20 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_berryShadowFrames[cell] is { } shadowFrame)
                 Place(BerryAtlasKey(cell, true), null, shadowFrame);
         }
+        for (var cell = 0; cell < _metalToolFrames.Length; cell++)
+        {
+            if (_metalToolFrames[cell] is { } itemFrame)
+                Place(MetalToolAtlasKey(cell, false), null, itemFrame);
+            if (_metalToolShadowFrames[cell] is { } shadowFrame)
+                Place(MetalToolAtlasKey(cell, true), null, shadowFrame);
+        }
+        for (var cell = 0; cell < _metalMaterialFrames.Length; cell++)
+        {
+            if (_metalMaterialFrames[cell] is { } itemFrame)
+                Place(MetalMaterialAtlasKey(cell, false), null, itemFrame);
+            if (_metalMaterialShadowFrames[cell] is { } shadowFrame)
+                Place(MetalMaterialAtlasKey(cell, true), null, shadowFrame);
+        }
         for (var cell = 0; cell < _stoneToolFrames.Length; cell++)
         {
             if (_stoneToolFrames[cell] is { } itemFrame)
@@ -5948,6 +6023,12 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static string BerryAtlasKey(int cell, bool shadow) =>
         shadow ? $"BERRY_SHADOW#{cell}" : $"BERRY#{cell}";
+
+    private static string MetalToolAtlasKey(int cell, bool shadow) =>
+        shadow ? $"METAL_TOOL_SHADOW#{cell}" : $"METAL_TOOL#{cell}";
+
+    private static string MetalMaterialAtlasKey(int cell, bool shadow) =>
+        shadow ? $"METAL_MATERIAL_SHADOW#{cell}" : $"METAL_MATERIAL#{cell}";
 
     private static string StoneToolAtlasKey(int cell, bool shadow) =>
         shadow ? $"STONE_TOOL_SHADOW#{cell}" : $"STONE_TOOL#{cell}";
@@ -6754,6 +6835,10 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var texture in _miningItemTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _berryItemTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _metalToolTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _metalMaterialTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _stoneToolTextures)
             if (texture != 0) GL.DeleteTexture(texture);

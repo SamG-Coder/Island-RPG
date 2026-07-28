@@ -4,6 +4,16 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <Version>0.2.0</Version>
+    <AssemblyVersion>0.2.0.0</AssemblyVersion>
+    <FileVersion>0.2.0.0</FileVersion>
+    <InformationalVersion>0.2.0</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <AssemblyTitle>Island RPG</AssemblyTitle>
+    <Product>Island RPG</Product>
+    <Description>Persistent isometric survival and skilling RPG.</Description>
+    <Authors>Samuel Grahame</Authors>
+    <RepositoryUrl>https://github.com/samuelGrahame/AoeRpg</RepositoryUrl>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FontStashSharp.PlatformAgnostic" Version="1.5.6" />
@@ -11,6 +21,9 @@
     <PackageReference Include="StbImageSharp" Version="2.30.15" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="..\..\README.md" Link="README.md" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\RELEASE_NOTES_0.2.md" Link="RELEASE_NOTES_0.2.md" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\LICENSE" Link="LICENSE" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Resources\Fonts\Arimo-Variable.ttf" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Fonts\OFL-Arimo.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\woodcutting-items.png" CopyToOutputDirectory="PreserveNewest" />
@@ -20,6 +33,8 @@
     <Content Include="Resources\Images\stone-pickaxe-item.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\mining-items.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\berry-items.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\metal-pickaxes.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\metal-materials.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\stone-shovel-item.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\rope-item.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\dirt-item.png" CopyToOutputDirectory="PreserveNewest" />
@@ -34,6 +49,8 @@
     <Content Include="Resources\Images\fibre-net-items.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\workbench.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\campfire.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\bloomery.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\anvil.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\campfire-fire-16.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\CaveGrowth\cave-growth-sprites.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

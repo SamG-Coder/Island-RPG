@@ -12,23 +12,68 @@ internal sealed record SkillGuideDefinition(
 internal static class SkillGuideService
 {
     public static bool IsSupported(SkillType skill) =>
-        skill is SkillType.Woodcutting or
-            SkillType.Fishing or
-            SkillType.Cooking or
-            SkillType.Firemaking or
-            SkillType.Mining;
+        Enum.IsDefined(skill);
 
     public static SkillGuideDefinition Definition(SkillType skill) =>
         skill switch
         {
             SkillType.Woodcutting => Woodcutting(),
+            SkillType.Farming => Farming(),
+            SkillType.Crafting => Crafting(),
             SkillType.Fishing => Fishing(),
             SkillType.Cooking => Cooking(),
             SkillType.Firemaking => Firemaking(),
+            SkillType.Digging => Digging(),
             SkillType.Mining => Mining(),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(skill), skill, "This skill has no level guide.")
         };
+
+    private static SkillGuideDefinition Farming() =>
+        new(
+            SkillType.Farming,
+            "Farming",
+            [
+                new(
+                    1,
+                    "Plant gathered tree seeds \u2022 " +
+                    "Forage wild and tropical berry bushes")
+            ]);
+
+    private static SkillGuideDefinition Crafting()
+    {
+        var entries = CraftingSkill.Recipes
+            .OrderBy(recipe => recipe.RequiredLevel)
+            .ThenBy(recipe =>
+                ItemCatalog.Get(recipe.ResultItemId).Name)
+            .Select(recipe => new SkillGuideEntry(
+                recipe.RequiredLevel,
+                $"Craft {ItemCatalog.Get(recipe.ResultItemId).Name}"))
+            .ToArray();
+        return new(
+            SkillType.Crafting,
+            "Crafting",
+            entries);
+    }
+
+    private static SkillGuideDefinition Digging() =>
+        new(
+            SkillType.Digging,
+            "Digging",
+            Enumerable.Range(1, DiggingSkill.MaximumLevel)
+                .Select(level =>
+                {
+                    var experience =
+                        DiggingSkill.ExperienceForLevel(level);
+                    return new SkillGuideEntry(
+                        level,
+                        level == 1
+                            ? $"Excavate clear non-water ground \u2022 " +
+                              $"{DiggingSkill.Damage(experience)} damage"
+                            : $"Improved excavation \u2022 " +
+                              $"{DiggingSkill.Damage(experience)} damage");
+                })
+                .ToArray());
 
     private static SkillGuideDefinition Mining() =>
         new(

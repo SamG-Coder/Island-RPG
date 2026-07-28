@@ -23,6 +23,16 @@ internal static class CookingSkill
         Profiles = new Dictionary<string, CookingProfile>(
             StringComparer.OrdinalIgnoreCase)
         {
+            [ItemIds.WildBerries] = new(
+                ItemIds.WildBerries,
+                ItemIds.RoastedWildBerries,
+                ItemIds.BurntWildBerries,
+                1, 8, .18f),
+            [ItemIds.TropicalBerries] = new(
+                ItemIds.TropicalBerries,
+                ItemIds.RoastedTropicalBerries,
+                ItemIds.BurntTropicalBerries,
+                3, 12, .22f),
             [ItemIds.RawMinnows] = new(
                 ItemIds.RawMinnows,
                 ItemIds.CookedMinnows,

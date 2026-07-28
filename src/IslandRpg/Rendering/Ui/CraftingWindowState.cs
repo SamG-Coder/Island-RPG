@@ -24,11 +24,7 @@ internal sealed class CraftingWindowState
     public void Close() => Visible = false;
 
     public IReadOnlyList<CraftingRecipe> VisibleRecipes() =>
-        CraftingSkill.Recipes
-            .Where(recipe =>
-                Category == CraftingCategory.All ||
-                recipe.Category == Category)
-            .ToArray();
+        CraftingSkill.RecipesFor(Category);
 
     public CraftingRecipe? UpdatePointer(
         Vector4 viewport, Vector2 pointer, bool leftDown)

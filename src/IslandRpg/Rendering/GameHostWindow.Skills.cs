@@ -6,6 +6,15 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
+    private static readonly (SkillType Skill, string Name)[] SkillListEntries =
+        Enum.GetValues<SkillType>()
+            .Select(skill => (skill, skill.ToString()))
+            .ToArray();
+    private static readonly string[] SkillListIds =
+        SkillListEntries
+            .Select(entry => entry.Skill.ToString())
+            .ToArray();
+
     private void UpdateSkillsPanelInput(Vector2 pointer, bool leftDown)
     {
         if (_craftingWindowOpen ||
@@ -53,106 +62,36 @@ internal sealed partial class GameHostWindow
         if (_selectedSkill < 0)
         {
             LayoutSkillsList();
-            var skills = SkillOverview();
             foreach (var index in _skillsList.VisibleIndices)
+            {
+                var entry = SkillListEntries[index];
                 DrawSkillListItem(
                     _skillsList.RowBounds(index),
-                    skills[index].Skill,
-                    skills[index].Name,
-                    skills[index].Level);
+                    entry.Skill,
+                    entry.Name,
+                    SkillService.LevelForExperience(
+                        SkillExperience(entry.Skill)));
+            }
             RenderListScrollbar(_skillsList);
             return;
         }
 
-        var farming = _selectedSkill == 1;
-        var crafting = _selectedSkill == 2;
-        var fishing = _selectedSkill == 3;
-        var cooking = _selectedSkill == 4;
-        var firemaking = _selectedSkill == 5;
-        var digging = _selectedSkill == 6;
-        var mining = _selectedSkill == 7;
-        var name = mining ? "Mining" : digging ? "Digging" :
-            firemaking ? "Firemaking" :
-            cooking ? "Cooking" :
-            fishing ? "Fishing" : crafting ? "Crafting" :
-            farming ? "Farming" : "Woodcutting";
-        var experience = mining
-            ? _activePlayer?.MiningExperience ?? 0
-            : digging
-            ? _activePlayer?.DiggingExperience ?? 0
-            : firemaking
-            ? _activePlayer?.FiremakingExperience ?? 0
-            : cooking
-            ? _activePlayer?.CookingExperience ?? 0
-            : fishing
-            ? _activePlayer?.FishingExperience ?? 0
-            : crafting
-            ? _activePlayer?.CraftingExperience ?? 0
-            : farming
-                ? _activePlayer?.FarmingExperience ?? 0
-                : _activePlayer?.WoodcuttingExperience ?? 0;
-        var level = mining
-            ? MiningSkill.LevelForExperience(experience)
-            : digging
-            ? DiggingSkill.LevelForExperience(experience)
-            : firemaking
-            ? FiremakingSkill.LevelForExperience(experience)
-            : cooking
-            ? CookingSkill.LevelForExperience(experience)
-            : fishing
-            ? FishingSkill.LevelForExperience(experience)
-            : crafting
-            ? CraftingSkill.LevelForExperience(experience)
-            : farming
-                ? FarmingSkill.LevelForExperience(experience)
-                : WoodcuttingSkill.LevelForExperience(experience);
-        var maximumLevel = mining
-            ? MiningSkill.MaximumLevel
-            : digging
-            ? DiggingSkill.MaximumLevel
-            : firemaking
-            ? FiremakingSkill.MaximumLevel
-            : cooking
-            ? CookingSkill.MaximumLevel
-            : fishing
-            ? FishingSkill.MaximumLevel
-            : crafting
-            ? CraftingSkill.MaximumLevel
-            : farming
-                ? FarmingSkill.MaximumLevel
-                : WoodcuttingSkill.MaximumLevel;
-        var currentFloor = mining
-            ? MiningSkill.ExperienceForLevel(level)
-            : digging
-            ? DiggingSkill.ExperienceForLevel(level)
-            : firemaking
-            ? FiremakingSkill.ExperienceForLevel(level)
-            : cooking
-            ? CookingSkill.ExperienceForLevel(level)
-            : fishing
-            ? FishingSkill.ExperienceForLevel(level)
-            : crafting
-            ? CraftingSkill.ExperienceForLevel(level)
-            : farming
-                ? FarmingSkill.ExperienceForLevel(level)
-                : WoodcuttingSkill.ExperienceForLevel(level);
+        var skill = (SkillType)_selectedSkill;
+        var farming = skill == SkillType.Farming;
+        var crafting = skill == SkillType.Crafting;
+        var fishing = skill == SkillType.Fishing;
+        var cooking = skill == SkillType.Cooking;
+        var firemaking = skill == SkillType.Firemaking;
+        var digging = skill == SkillType.Digging;
+        var mining = skill == SkillType.Mining;
+        var name = skill.ToString();
+        var experience = SkillExperience(skill);
+        var level = SkillService.LevelForExperience(experience);
+        var maximumLevel = SkillService.MaximumLevel;
+        var currentFloor = SkillService.ExperienceForLevel(level);
         var nextFloor = level >= maximumLevel
             ? currentFloor
-            : mining
-                ? MiningSkill.ExperienceForLevel(level + 1)
-                : digging
-                ? DiggingSkill.ExperienceForLevel(level + 1)
-                : firemaking
-                ? FiremakingSkill.ExperienceForLevel(level + 1)
-                : cooking
-                ? CookingSkill.ExperienceForLevel(level + 1)
-                : fishing
-                ? FishingSkill.ExperienceForLevel(level + 1)
-                : crafting
-                ? CraftingSkill.ExperienceForLevel(level + 1)
-                : farming
-                    ? FarmingSkill.ExperienceForLevel(level + 1)
-                    : WoodcuttingSkill.ExperienceForLevel(level + 1);
+            : SkillService.ExperienceForLevel(level + 1);
         var progress = level >= maximumLevel
             ? 1f
             : (experience - currentFloor) /
@@ -251,21 +190,7 @@ internal sealed partial class GameHostWindow
         var info = SkillPanelLayout.InformationBounds(panel);
         DrawUiColor(info, new(.052f, .047f, .035f, .96f));
         DrawPanelOutline(info, 1, new(.25f, .205f, .115f, 1));
-        var remaining = mining
-            ? MiningSkill.ExperienceToNextLevel(experience)
-            : digging
-            ? DiggingSkill.ExperienceToNextLevel(experience)
-            : firemaking
-            ? FiremakingSkill.ExperienceToNextLevel(experience)
-            : cooking
-            ? CookingSkill.ExperienceToNextLevel(experience)
-            : fishing
-            ? FishingSkill.ExperienceToNextLevel(experience)
-            : crafting
-            ? CraftingSkill.ExperienceToNextLevel(experience)
-            : farming
-                ? FarmingSkill.ExperienceToNextLevel(experience)
-                : WoodcuttingSkill.ExperienceToNextLevel(experience);
+        var remaining = SkillService.ExperienceToNextLevel(experience);
         DrawUiText(
             remaining == 0 ? $"Total XP: {experience}" :
             $"{remaining} XP to next level",
@@ -300,59 +225,35 @@ internal sealed partial class GameHostWindow
 
     private void LayoutSkillsList()
     {
-        var skills = SkillOverview();
         _skillsList.Layout(
             SkillPanelLayout.ListBounds(_gameUi.Panel.Bounds),
-            skills.Select(skill => skill.Skill.ToString()).ToArray(),
+            SkillListIds,
             rowHeight: 54,
             rowGap: 6,
             deleteWidth: 0,
             actionGap: 0);
     }
 
-    private (SkillType Skill, string Name, int Level)[] SkillOverview() =>
-    [
-        (
-            SkillType.Woodcutting,
-            "Woodcutting",
-            WoodcuttingSkill.LevelForExperience(
-                _activePlayer?.WoodcuttingExperience ?? 0)),
-        (
-            SkillType.Farming,
-            "Farming",
-            FarmingSkill.LevelForExperience(
-                _activePlayer?.FarmingExperience ?? 0)),
-        (
-            SkillType.Crafting,
-            "Crafting",
-            CraftingSkill.LevelForExperience(
-                _activePlayer?.CraftingExperience ?? 0)),
-        (
-            SkillType.Fishing,
-            "Fishing",
-            FishingSkill.LevelForExperience(
-                _activePlayer?.FishingExperience ?? 0)),
-        (
-            SkillType.Cooking,
-            "Cooking",
-            CookingSkill.LevelForExperience(
-                _activePlayer?.CookingExperience ?? 0)),
-        (
-            SkillType.Firemaking,
-            "Firemaking",
-            FiremakingSkill.LevelForExperience(
-                _activePlayer?.FiremakingExperience ?? 0)),
-        (
-            SkillType.Digging,
-            "Digging",
-            DiggingSkill.LevelForExperience(
-                _activePlayer?.DiggingExperience ?? 0)),
-        (
-            SkillType.Mining,
-            "Mining",
-            MiningSkill.LevelForExperience(
-                _activePlayer?.MiningExperience ?? 0))
-    ];
+    private int SkillExperience(SkillType skill) => skill switch
+    {
+        SkillType.Woodcutting =>
+            _activePlayer?.WoodcuttingExperience ?? 0,
+        SkillType.Farming =>
+            _activePlayer?.FarmingExperience ?? 0,
+        SkillType.Crafting =>
+            _activePlayer?.CraftingExperience ?? 0,
+        SkillType.Fishing =>
+            _activePlayer?.FishingExperience ?? 0,
+        SkillType.Cooking =>
+            _activePlayer?.CookingExperience ?? 0,
+        SkillType.Firemaking =>
+            _activePlayer?.FiremakingExperience ?? 0,
+        SkillType.Digging =>
+            _activePlayer?.DiggingExperience ?? 0,
+        SkillType.Mining =>
+            _activePlayer?.MiningExperience ?? 0,
+        _ => 0
+    };
 
     private void DrawSkillListItem(
         Vector4 bounds, SkillType skill, string name, int level)

@@ -1,0 +1,12 @@
+{
+  "Preset": "bloomery",
+  "FootprintWidth": 1.5,
+  "FootprintDepth": 1.5,
+  "Height": 1.5,
+  "PixelWidth": 116,
+  "PixelHeight": 104,
+  "HotspotX": 58,
+  "HotspotY": 98,
+  "TileWidthPixels": 96,
+  "TileHeightPixels": 48
+}

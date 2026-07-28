@@ -15,8 +15,8 @@ internal enum ItemTag
     StoneToolSprite = 1 << 8,
     CoastalSprite = 1 << 9,
     Fish = 1 << 10,
-    CookedFish = 1 << 11,
-    BurntFish = 1 << 12,
+    CookedFood = 1 << 11,
+    BurntFood = 1 << 12,
     FishingNet = 1 << 13,
     FibreNetSprite = 1 << 14,
     PlaceableObject = 1 << 15,
@@ -27,7 +27,9 @@ internal enum ItemTag
     MiningMaterial = 1 << 20,
     MiningSprite = 1 << 21,
     Berry = 1 << 22,
-    BerrySprite = 1 << 23
+    BerrySprite = 1 << 23,
+    MetalToolSprite = 1 << 24,
+    MetalMaterialSprite = 1 << 25
 }
 
 internal sealed record ItemDefinition(
@@ -51,6 +53,8 @@ internal static class ItemIds
     public const string StoneAxe = "stone_axe";
     public const string StoneHammer = "stone_hammer";
     public const string StonePickaxe = "stone_pickaxe";
+    public const string BronzePickaxe = "bronze_pickaxe";
+    public const string IronPickaxe = "iron_pickaxe";
     public const string StoneShovel = "stone_shovel";
     public const string StoneKnife = "stone_knife";
     public const string BluntStoneAxe = "blunt_stone_axe";
@@ -79,8 +83,15 @@ internal static class ItemIds
     public const string TinOre = "tin_ore";
     public const string CopperOre = "copper_ore";
     public const string IronOre = "iron_ore";
+    public const string BronzeBar = "bronze_bar";
+    public const string IronBloom = "iron_bloom";
+    public const string IronBar = "iron_bar";
     public const string WildBerries = "wild_berries";
     public const string TropicalBerries = "tropical_berries";
+    public const string RoastedWildBerries = "roasted_wild_berries";
+    public const string RoastedTropicalBerries = "roasted_tropical_berries";
+    public const string BurntWildBerries = "burnt_wild_berries";
+    public const string BurntTropicalBerries = "burnt_tropical_berries";
     public const string ClamShell = "clam_shell";
     public const string CockleShell = "cockle_shell";
     public const string SpiralShell = "spiral_shell";
@@ -115,6 +126,8 @@ internal static class ItemIds
     public const string PrimitiveFishingNet = "primitive_fishing_net";
     public const string Workbench = "workbench";
     public const string Campfire = "campfire";
+    public const string Bloomery = "bloomery";
+    public const string SmithingAnvil = "smithing_anvil";
     public const string CaveHole = "cave_hole";
     public const string CaveEntrance = "cave_entrance";
     public const string DigSite = "dig_site";
@@ -169,6 +182,19 @@ internal static class ItemCatalog
                 2, Tags: ItemTag.Tool | ItemTag.Pickaxe |
                          ItemTag.StoneToolSprite,
                 MiningPower: 1),
+            [ItemIds.BronzePickaxe] = new(
+                ItemIds.BronzePickaxe, "bronze pickaxe",
+                "Bronze pickaxe",
+                "A bronze-alloy pickaxe made from copper and tin.",
+                0, Tags: ItemTag.Tool | ItemTag.Pickaxe |
+                         ItemTag.MetalToolSprite,
+                MiningPower: 2),
+            [ItemIds.IronPickaxe] = new(
+                ItemIds.IronPickaxe, "iron pickaxe", "Iron pickaxe",
+                "A strong forged iron pickaxe for breaking dense ore.",
+                1, Tags: ItemTag.Tool | ItemTag.Pickaxe |
+                         ItemTag.MetalToolSprite,
+                MiningPower: 3),
             [ItemIds.StoneShovel] = new(
                 ItemIds.StoneShovel, "stone shovel", "Stone shovel",
                 "A broad stone blade lashed to a wooden shaft for digging.",
@@ -262,7 +288,7 @@ internal static class ItemCatalog
                       ItemTag.MiningMaterial | ItemTag.MiningSprite),
             [ItemIds.CopperOre] = new(
                 ItemIds.CopperOre, "copper ore", "Copper ore",
-                "Warm-coloured copper ore ready for future smelting.", 2,
+                "Warm-coloured copper ore ready to smelt with tin.", 2,
                 Tags: ItemTag.Mineral | ItemTag.NaturalMaterial |
                       ItemTag.MiningMaterial | ItemTag.MiningSprite),
             [ItemIds.IronOre] = new(
@@ -270,6 +296,18 @@ internal static class ItemCatalog
                 "Dense iron-rich ore with a rusty red surface.", 3,
                 Tags: ItemTag.Mineral | ItemTag.NaturalMaterial |
                       ItemTag.MiningMaterial | ItemTag.MiningSprite),
+            [ItemIds.BronzeBar] = new(
+                ItemIds.BronzeBar, "bronze bar", "Bronze bar",
+                "Copper and tin alloy cast into a workable bronze bar.", 0,
+                Tags: ItemTag.Mineral | ItemTag.MetalMaterialSprite),
+            [ItemIds.IronBloom] = new(
+                ItemIds.IronBloom, "iron bloom", "Iron bloom",
+                "A porous mass of iron and slag fresh from a charcoal smelt.", 1,
+                Tags: ItemTag.Mineral | ItemTag.MetalMaterialSprite),
+            [ItemIds.IronBar] = new(
+                ItemIds.IronBar, "iron bar", "Iron bar",
+                "An iron bloom reheated and hammered into a clean billet.", 2,
+                Tags: ItemTag.Mineral | ItemTag.MetalMaterialSprite),
             [ItemIds.WildBerries] = new(
                 ItemIds.WildBerries, "wild berries", "Wild berries",
                 "A fresh handful of tart berries gathered from a temperate bush.",
@@ -281,6 +319,29 @@ internal static class ItemCatalog
                 "A sweet handful of golden berries gathered in a warm climate.",
                 1, Tags: ItemTag.NaturalMaterial |
                          ItemTag.Berry | ItemTag.BerrySprite),
+            [ItemIds.RoastedWildBerries] = new(
+                ItemIds.RoastedWildBerries, "roasted wild berries",
+                "Roasted berries",
+                "Wild berries softened and sweetened over a campfire.",
+                0, Tags: ItemTag.Berry | ItemTag.BerrySprite |
+                         ItemTag.CookedFood),
+            [ItemIds.RoastedTropicalBerries] = new(
+                ItemIds.RoastedTropicalBerries,
+                "roasted tropical berries", "Roasted berries",
+                "Golden berries caramelised over a campfire.",
+                1, Tags: ItemTag.Berry | ItemTag.BerrySprite |
+                         ItemTag.CookedFood),
+            [ItemIds.BurntWildBerries] = new(
+                ItemIds.BurntWildBerries, "burnt wild berries",
+                "Burnt berries", "A bitter, blackened handful of berries.",
+                0, Tags: ItemTag.Berry | ItemTag.BerrySprite |
+                         ItemTag.CookedFood | ItemTag.BurntFood),
+            [ItemIds.BurntTropicalBerries] = new(
+                ItemIds.BurntTropicalBerries,
+                "burnt tropical berries", "Burnt berries",
+                "Golden berries scorched beyond usefulness.",
+                1, Tags: ItemTag.Berry | ItemTag.BerrySprite |
+                         ItemTag.CookedFood | ItemTag.BurntFood),
             [ItemIds.ClamShell] = Coastal(
                 ItemIds.ClamShell, "clam shell", "Clam",
                 "A common shell washed smooth by the tide.", 0),
@@ -401,6 +462,18 @@ internal static class ItemCatalog
                 0, Droppable: false,
                 Tags: ItemTag.PlaceableObject)
             ,
+            [ItemIds.Bloomery] = new(
+                ItemIds.Bloomery,
+                "bloomery", "Bloomery",
+                "A charcoal-fired clay shaft furnace for smelting metal.",
+                0, Droppable: false,
+                Tags: ItemTag.PlaceableObject),
+            [ItemIds.SmithingAnvil] = new(
+                ItemIds.SmithingAnvil,
+                "smithing anvil", "Anvil",
+                "A heavy bronze-faced anvil for consolidating and forging metal.",
+                0, Droppable: false,
+                Tags: ItemTag.PlaceableObject),
             [ItemIds.CaveHole] = new(
                 ItemIds.CaveHole, "dug hole", "Hole",
                 "A test hole opening into a cave below.",
@@ -433,13 +506,13 @@ internal static class ItemCatalog
         string id, string name, string caption, string examine, int cell) =>
         new(
             id, name, caption, examine, cell,
-            Tags: ItemTag.Fish | ItemTag.CookedFish);
+            Tags: ItemTag.Fish | ItemTag.CookedFood);
 
     private static ItemDefinition BurntFish(
         string id, string name, string caption, string examine, int cell) =>
         new(
             id, name, caption, examine, cell,
-            Tags: ItemTag.Fish | ItemTag.CookedFish | ItemTag.BurntFish);
+            Tags: ItemTag.Fish | ItemTag.CookedFood | ItemTag.BurntFood);
 
     public static IReadOnlyCollection<ItemDefinition> All =>
         Items.Values;

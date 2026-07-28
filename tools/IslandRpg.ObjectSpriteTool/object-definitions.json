@@ -21,6 +21,22 @@
       "padding": 4,
       "description": "Low circular stone fire ring; fuel and flame are separate overlays."
     },
+    "bloomery": {
+      "footprintWidth": 1.5,
+      "footprintDepth": 1.5,
+      "height": 1.5,
+      "visualScale": 0.72,
+      "padding": 6,
+      "description": "Compact clay shaft furnace with room for its air tuyere."
+    },
+    "anvil": {
+      "footprintWidth": 1.0,
+      "footprintDepth": 1.0,
+      "height": 0.9,
+      "visualScale": 0.72,
+      "padding": 5,
+      "description": "Low blacksmith anvil mounted on a working stump."
+    },
     "chair": {
       "footprintWidth": 0.5,
       "footprintDepth": 0.5,

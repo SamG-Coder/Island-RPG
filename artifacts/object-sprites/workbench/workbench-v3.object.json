@@ -1,0 +1,12 @@
+{
+  "Preset": "workbench",
+  "FootprintWidth": 2,
+  "FootprintDepth": 1,
+  "Height": 1,
+  "PixelWidth": 102,
+  "PixelHeight": 50,
+  "HotspotX": 51,
+  "HotspotY": 44,
+  "TileWidthPixels": 96,
+  "TileHeightPixels": 48
+}

@@ -7,6 +7,7 @@ internal static class CraftingService
         Success,
         Locked,
         MissingResources,
+        MissingStation,
         InventoryFull
     }
 
@@ -14,10 +15,12 @@ internal static class CraftingService
         CraftingRecipe recipe,
         int craftingLevel,
         string?[]? items,
-        out string?[] updated)
+        out string?[] updated,
+        bool requiredStationAvailable = true)
     {
         return TryCraftDetailed(
-            recipe, craftingLevel, items, out updated) ==
+            recipe, craftingLevel, items, out updated,
+            requiredStationAvailable) ==
                CraftResult.Success;
     }
 
@@ -25,11 +28,15 @@ internal static class CraftingService
         CraftingRecipe recipe,
         int craftingLevel,
         string?[]? items,
-        out string?[] updated)
+        out string?[] updated,
+        bool requiredStationAvailable = true)
     {
         updated = PlayerInventory.Normalize(items);
         if (craftingLevel < recipe.RequiredLevel)
             return CraftResult.Locked;
+        if (recipe.RequiredStationItemId is not null &&
+            !requiredStationAvailable)
+            return CraftResult.MissingStation;
         var working = PlayerInventory.Normalize(updated);
         foreach (var tool in recipe.RequiredTools ?? [])
         {

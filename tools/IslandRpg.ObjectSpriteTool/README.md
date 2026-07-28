@@ -26,6 +26,8 @@ Initial definitions:
 |---|---:|---:|---|
 | Workbench | 2 x 1 | 1 | 0.62; waist-high and about two character spaces long |
 | Campfire | 1 x 1 | 0.3 | 0.78; low stone ring with separate fuel and flame overlays |
+| Bloomery | 1.5 x 1.5 | 1.5 | 0.72; compact clay shaft furnace and air tuyere |
+| Anvil | 1 x 1 | 0.9 | 0.72; low smithing station on a timber base |
 | Chair | 0.5 x 0.5 | 1 | 0.70; one seated character |
 | Door | 0.5 x 1 | 2 | 0.75; full character clearance |
 

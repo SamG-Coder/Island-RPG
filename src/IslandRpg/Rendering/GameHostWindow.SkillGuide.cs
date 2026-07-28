@@ -9,18 +9,7 @@ internal sealed partial class GameHostWindow
     private void OpenSkillGuideWindow(SkillType skill)
     {
         if (!SkillGuideService.IsSupported(skill)) return;
-        var experience = skill switch
-        {
-            SkillType.Fishing =>
-                _activePlayer?.FishingExperience ?? 0,
-            SkillType.Cooking =>
-                _activePlayer?.CookingExperience ?? 0,
-            SkillType.Firemaking =>
-                _activePlayer?.FiremakingExperience ?? 0,
-            SkillType.Mining =>
-                _activePlayer?.MiningExperience ?? 0,
-            _ => _activePlayer?.WoodcuttingExperience ?? 0
-        };
+        var experience = SkillExperience(skill);
         _skillGuideWindow.Open(
             SkillGuideService.Definition(skill),
             SkillService.LevelForExperience(experience));

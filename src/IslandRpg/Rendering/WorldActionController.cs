@@ -287,6 +287,13 @@ internal sealed partial class GameHostWindow
                 break;
             case
             {
+                Type: GameHostWindow.WorldActionType.UseCraftingStation,
+                GroundObjectId: { } stationId
+            }:
+                window.UseCraftingStation(stationId);
+                break;
+            case
+            {
                 Type: GameHostWindow.WorldActionType.TakeCaveRope,
                 GroundObjectId: { } entranceId
             }:

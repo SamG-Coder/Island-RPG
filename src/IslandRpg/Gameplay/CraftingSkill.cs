@@ -12,6 +12,7 @@ internal enum RecipeAvailability
 {
     Locked,
     MissingResources,
+    MissingStation,
     InventoryFull,
     Ready
 }
@@ -33,7 +34,8 @@ internal sealed record CraftingRecipe(
     IReadOnlyList<CraftingIngredient> Ingredients,
     IReadOnlyList<string> Steps,
     IReadOnlyList<CraftingInventoryStep>? InventorySteps = null,
-    IReadOnlyList<CraftingToolRequirement>? RequiredTools = null);
+    IReadOnlyList<CraftingToolRequirement>? RequiredTools = null,
+    string? RequiredStationItemId = null);
 
 internal static class CraftingSkill
 {
@@ -165,6 +167,125 @@ internal static class CraftingSkill
                     [new(ItemIds.StonePickaxe, 1)])
             ]),
         new(
+            "bloomery", ItemIds.Bloomery,
+            CraftingCategory.Furniture, 5, 90,
+            [
+                new(ItemIds.Dirt, 6),
+                new(ItemIds.SmallRocks, 4),
+                new(ItemIds.Sticks, 2)
+            ],
+            [
+                "Mix damp earth around a stable stone furnace base.",
+                "Build a narrow shaft with a lower opening for air and slag.",
+                "Dry the clay bloomery before placing it on level ground."
+            ]),
+        new(
+            "bronze-bar", ItemIds.BronzeBar,
+            CraftingCategory.Resources, 6, 70,
+            [
+                new(ItemIds.CopperOre, 2),
+                new(ItemIds.TinOre, 1),
+                new(ItemIds.Coal, 1)
+            ],
+            [
+                "Heat copper and tin together with coal in a crucible.",
+                "Stir the molten alloy and skim away the waste.",
+                "Pour the bronze into a bar mould and let it cool."
+            ],
+            RequiredStationItemId: ItemIds.Bloomery),
+        new(
+            "smithing-anvil", ItemIds.SmithingAnvil,
+            CraftingCategory.Furniture, 7, 110,
+            [
+                new(ItemIds.BronzeBar, 2),
+                new(ItemIds.Plank, 2)
+            ],
+            [
+                "Cast the bronze into a broad, heavy hammering block.",
+                "Fit the metal securely onto a thick timber base.",
+                "Place the smithing anvil on clear, level ground."
+            ],
+            RequiredTools:
+            [
+                new(ItemTag.Hammer, "hammer")
+            ],
+            RequiredStationItemId: ItemIds.Bloomery),
+        new(
+            "iron-bloom", ItemIds.IronBloom,
+            CraftingCategory.Resources, 10, 100,
+            [
+                new(ItemIds.IronOre, 3),
+                new(ItemIds.Coal, 2)
+            ],
+            [
+                "Feed iron ore and coal into a forced-air clay furnace.",
+                "Keep the furnace hot while the ore reduces to metallic iron.",
+                "Extract the porous iron bloom from the surrounding slag."
+            ],
+            RequiredStationItemId: ItemIds.Bloomery),
+        new(
+            "iron-bar", ItemIds.IronBar,
+            CraftingCategory.Resources, 11, 80,
+            [new(ItemIds.IronBloom, 1), new(ItemIds.Coal, 1)],
+            [
+                "Reheat the iron bloom in a charcoal hearth.",
+                "Hammer the bloom repeatedly to drive out trapped slag.",
+                "Consolidate the clean iron into a workable bar."
+            ],
+            RequiredTools:
+            [
+                new(ItemTag.Hammer, "hammer")
+            ],
+            RequiredStationItemId: ItemIds.SmithingAnvil),
+        new(
+            "bronze-pickaxe", ItemIds.BronzePickaxe,
+            CraftingCategory.Tools, 8, 110,
+            [
+                new(ItemIds.BronzeBar, 1),
+                new(ItemIds.Sticks, 1)
+            ],
+            [
+                "Reheat the bronze bar and shape it into a curved pick head.",
+                "Fit and secure the bronze head to the wooden handle."
+            ],
+            RequiredTools:
+            [
+                new(ItemTag.Hammer, "hammer")
+            ],
+            RequiredStationItemId: ItemIds.SmithingAnvil),
+        new(
+            "iron-pickaxe", ItemIds.IronPickaxe,
+            CraftingCategory.Tools, 12, 180,
+            [
+                new(ItemIds.IronBar, 1),
+                new(ItemIds.Sticks, 1)
+            ],
+            [
+                "Reheat and hammer the iron bar into a strong pick head.",
+                "Fit and secure the iron head to the wooden handle."
+            ],
+            RequiredTools:
+            [
+                new(ItemTag.Hammer, "hammer")
+            ],
+            RequiredStationItemId: ItemIds.SmithingAnvil),
+        new(
+            "iron-axe", ItemIds.IronAxe,
+            CraftingCategory.Tools, 12, 165,
+            [
+                new(ItemIds.IronBar, 1),
+                new(ItemIds.Sticks, 1)
+            ],
+            [
+                "Reheat, hammer and sharpen the iron bar into an axe head.",
+                "Fit and secure the iron head to the wooden handle."
+            ],
+            RequiredTools:
+            [
+                new(ItemTag.Hammer, "hammer")
+            ],
+            RequiredStationItemId: ItemIds.SmithingAnvil),
+        new(
             "stone-shovel", ItemIds.StoneShovel,
             CraftingCategory.Tools, 1, 45,
             [
@@ -203,6 +324,23 @@ internal static class CraftingSkill
             ])
     ];
 
+    private static readonly IReadOnlyDictionary<
+        CraftingCategory, IReadOnlyList<CraftingRecipe>>
+        RecipesByCategory =
+            Enum.GetValues<CraftingCategory>()
+                .ToDictionary(
+                    category => category,
+                    category => (IReadOnlyList<CraftingRecipe>)
+                        (category == CraftingCategory.All
+                            ? Recipes
+                            : Recipes.Where(recipe =>
+                                    recipe.Category == category)
+                                .ToArray()));
+
+    public static IReadOnlyList<CraftingRecipe> RecipesFor(
+        CraftingCategory category) =>
+        RecipesByCategory[category];
+
     public static int LevelForExperience(int experience) =>
         SkillService.LevelForExperience(experience);
 
@@ -218,18 +356,97 @@ internal static class CraftingSkill
             currentExperience, recipe.Experience);
 
     public static RecipeAvailability Availability(
-        CraftingRecipe recipe, int level, string?[]? inventory)
+        CraftingRecipe recipe, int level, string?[]? inventory,
+        bool requiredStationAvailable = true)
     {
-        return CraftingService.TryCraftDetailed(
-            recipe, level, inventory, out _) switch
+        if (level < recipe.RequiredLevel)
+            return RecipeAvailability.Locked;
+
+        var tools = recipe.RequiredTools;
+        if (tools is not null)
+            for (var index = 0; index < tools.Count; index++)
+            {
+                var tool = tools[index];
+                if (CountItemsWithTag(inventory, tool.Tag) < tool.Count)
+                    return RecipeAvailability.MissingResources;
+            }
+
+        for (var index = 0; index < recipe.Ingredients.Count; index++)
         {
-            CraftingService.CraftResult.Success =>
-                RecipeAvailability.Ready,
-            CraftingService.CraftResult.Locked =>
-                RecipeAvailability.Locked,
-            CraftingService.CraftResult.InventoryFull =>
-                RecipeAvailability.InventoryFull,
-            _ => RecipeAvailability.MissingResources
-        };
+            var ingredient = recipe.Ingredients[index];
+            if (CountItem(inventory, ingredient.ItemId) <
+                ingredient.Count)
+                return RecipeAvailability.MissingResources;
+        }
+        if (recipe.RequiredStationItemId is not null &&
+            !requiredStationAvailable)
+            return RecipeAvailability.MissingStation;
+
+        var occupied = OccupiedSlots(inventory);
+        var steps = recipe.InventorySteps;
+        if (steps is null)
+            occupied += 1 - IngredientTotal(recipe.Ingredients);
+        else
+            for (var index = 0; index < steps.Count; index++)
+            {
+                var step = steps[index];
+                occupied -= IngredientTotal(step.Consumes);
+                occupied += IngredientTotal(step.Produces);
+                if (occupied > PlayerInventory.Capacity)
+                    return RecipeAvailability.InventoryFull;
+            }
+
+        return occupied > PlayerInventory.Capacity
+            ? RecipeAvailability.InventoryFull
+            : RecipeAvailability.Ready;
+    }
+
+    private static int OccupiedSlots(string?[]? inventory)
+    {
+        if (inventory is null) return 0;
+        var count = 0;
+        var length = Math.Min(inventory.Length, PlayerInventory.Capacity);
+        for (var slot = 0; slot < length; slot++)
+            if (inventory[slot] is not null)
+                count++;
+        return count;
+    }
+
+    private static int IngredientTotal(
+        IReadOnlyList<CraftingIngredient> ingredients)
+    {
+        var count = 0;
+        for (var index = 0; index < ingredients.Count; index++)
+            count += ingredients[index].Count;
+        return count;
+    }
+
+    private static int CountItem(string?[]? inventory, string itemId)
+    {
+        if (inventory is null) return 0;
+        var count = 0;
+        var length = Math.Min(inventory.Length, PlayerInventory.Capacity);
+        for (var slot = 0; slot < length; slot++)
+            if (string.Equals(
+                    inventory[slot], itemId,
+                    StringComparison.OrdinalIgnoreCase))
+                count++;
+        return count;
+    }
+
+    private static int CountItemsWithTag(
+        string?[]? inventory, ItemTag tag)
+    {
+        if (inventory is null) return 0;
+        var count = 0;
+        var length = Math.Min(inventory.Length, PlayerInventory.Capacity);
+        for (var slot = 0; slot < length; slot++)
+        {
+            var itemId = inventory[slot];
+            if (itemId is not null &&
+                ItemCatalog.Get(itemId).HasTag(tag))
+                count++;
+        }
+        return count;
     }
 }

@@ -107,6 +107,48 @@ Require(PlayerInventory.BestPickaxe(
             [ItemIds.StoneAxe, ItemIds.StonePickaxe])?.Id ==
         ItemIds.StonePickaxe,
     "mining must select a tagged pickaxe instead of another tool");
+Require(
+    PlayerInventory.BestPickaxe(
+        [ItemIds.StonePickaxe, ItemIds.BronzePickaxe,
+         ItemIds.IronPickaxe])?.Id == ItemIds.IronPickaxe &&
+    ItemCatalog.Get(ItemIds.BronzePickaxe).MiningPower == 2 &&
+    ItemCatalog.Get(ItemIds.IronPickaxe).MiningPower == 3 &&
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.BronzeBar &&
+        recipe.RequiredStationItemId == ItemIds.Bloomery &&
+        recipe.Ingredients.Any(ingredient =>
+            ingredient.ItemId == ItemIds.TinOre)) &&
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.IronBloom &&
+        recipe.RequiredStationItemId == ItemIds.Bloomery &&
+        recipe.Ingredients.Any(ingredient =>
+            ingredient.ItemId == ItemIds.Coal)) &&
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.IronBar &&
+        recipe.RequiredStationItemId == ItemIds.SmithingAnvil &&
+        recipe.Ingredients.Any(ingredient =>
+            ingredient.ItemId == ItemIds.IronBloom)) &&
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.BronzePickaxe &&
+        recipe.Ingredients.Any(ingredient =>
+            ingredient.ItemId == ItemIds.BronzeBar)) &&
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.IronPickaxe &&
+        recipe.Ingredients.Any(ingredient =>
+            ingredient.ItemId == ItemIds.IronBar)) &&
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.IronAxe &&
+        recipe.Ingredients.Any(ingredient =>
+            ingredient.ItemId == ItemIds.IronBar)),
+    "ores must progress through bronze casting and bloomery iron before metal tools");
+Require(
+    new[] { ItemIds.BronzeBar, ItemIds.IronBloom, ItemIds.IronBar }
+        .Select(ItemCatalog.Get)
+        .All(item => item.HasTag(ItemTag.MetalMaterialSprite)) &&
+    new[] { ItemIds.BronzeBar, ItemIds.IronBloom, ItemIds.IronBar }
+        .Select(id => ItemCatalog.Get(id).SpriteCell)
+        .SequenceEqual(new int?[] { 0, 1, 2 }),
+    "metalworking intermediates must use the generated material sprite sheet");
 var noviceMiningStrike = MiningSkill.Roll(0, 0, 0, 1);
 Require(noviceMiningStrike.Hit && noviceMiningStrike.Damage > 0 &&
         !MiningSkill.Roll(0, .99f, 0, 1).Hit &&
@@ -640,6 +682,35 @@ Require(PlaceableObjectCatalog.TryGet(
         campfireDefinition.HotspotX == 29 &&
         campfireDefinition.HotspotY == 54,
     "the campfire must be registered as a compact one-tile placeable");
+Require(
+    PlaceableObjectCatalog.TryGet(
+        ItemIds.Bloomery, out var bloomeryDefinition) &&
+    bloomeryDefinition.FootprintWidth == 1.5f &&
+    bloomeryDefinition.HotspotX == 58 &&
+    bloomeryDefinition.HotspotY == 98 &&
+    PlaceableObjectCatalog.TryGet(
+        ItemIds.SmithingAnvil, out var anvilDefinition) &&
+    anvilDefinition.FootprintWidth == 1 &&
+    anvilDefinition.HotspotX == 40 &&
+    anvilDefinition.HotspotY == 65 &&
+    ItemCatalog.Get(ItemIds.Bloomery)
+        .HasTag(ItemTag.PlaceableObject) &&
+    ItemCatalog.Get(ItemIds.SmithingAnvil)
+        .HasTag(ItemTag.PlaceableObject),
+    "the bloomery and smithing anvil must use generated placeable-object footprints");
+var nearbyStations = new[]
+{
+    new WorldGroundObject(
+        Guid.NewGuid(), ItemIds.Bloomery, 12, 10),
+    new WorldGroundObject(
+        Guid.NewGuid(), ItemIds.SmithingAnvil, 30, 30)
+};
+Require(
+    CraftingStationService.IsWithinRange(
+        nearbyStations, ItemIds.Bloomery, new(10, 10)) &&
+    !CraftingStationService.IsWithinRange(
+        nearbyStations, ItemIds.SmithingAnvil, new(10, 10)),
+    "crafting stations must require the matching placed object within local interaction range");
 var modalScreen = new ModalScreenState();
 modalScreen.Open(ModalScreenKind.Crafting);
 Require(modalScreen.IsOpen &&
@@ -689,6 +760,76 @@ Require(ItemCatalog.Get(ItemIds.StonePickaxe) is var pickaxeDefinition &&
         pickaxeDefinition.HasTag(ItemTag.StoneToolSprite) &&
         !pickaxeDefinition.HasTag(ItemTag.Axe),
     "the stone pickaxe must use the third stone-tool sprite without acting as an axe");
+var catalogItemIds = ItemCatalog.All
+    .Select(item => item.Id)
+    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+Require(
+    CraftingSkill.Recipes.Select(recipe => recipe.Id)
+        .Distinct(StringComparer.OrdinalIgnoreCase).Count() ==
+    CraftingSkill.Recipes.Count &&
+    CraftingSkill.Recipes.All(recipe =>
+        catalogItemIds.Contains(recipe.ResultItemId) &&
+        recipe.Ingredients.All(ingredient =>
+            ingredient.Count > 0 &&
+            catalogItemIds.Contains(ingredient.ItemId))),
+    "every crafting recipe must have a unique id and reference registered positive-count items");
+Require(
+    ReferenceEquals(
+        CraftingSkill.RecipesFor(CraftingCategory.All),
+        CraftingSkill.RecipesFor(CraftingCategory.All)) &&
+    CraftingSkill.RecipesFor(CraftingCategory.Tools)
+        .All(recipe => recipe.Category == CraftingCategory.Tools),
+    "crafting category views must reuse cached recipe lists instead of allocating every frame");
+var availabilityInventory = PlayerInventory.Normalize(
+    [
+        ItemIds.CopperOre, ItemIds.CopperOre, ItemIds.TinOre,
+        ItemIds.IronOre, ItemIds.IronOre, ItemIds.IronOre,
+        ItemIds.Coal, ItemIds.Coal, ItemIds.Sticks,
+        ItemIds.StoneHammer
+    ]);
+_ = CraftingSkill.Availability(
+    CraftingSkill.Recipes[0], SkillService.MaximumLevel,
+    availabilityInventory);
+var availabilityAllocationsBefore =
+    GC.GetAllocatedBytesForCurrentThread();
+var availabilityChecksum = 0;
+for (var iteration = 0; iteration < 1_000; iteration++)
+    for (var recipeIndex = 0;
+         recipeIndex < CraftingSkill.Recipes.Count;
+         recipeIndex++)
+        availabilityChecksum += (int)CraftingSkill.Availability(
+            CraftingSkill.Recipes[recipeIndex],
+            SkillService.MaximumLevel,
+            availabilityInventory);
+var availabilityAllocated =
+    GC.GetAllocatedBytesForCurrentThread() -
+    availabilityAllocationsBefore;
+Require(
+    availabilityChecksum > 0 && availabilityAllocated <= 256,
+    "render-time crafting availability checks must not clone or allocate inventory state");
+foreach (var recipe in CraftingSkill.Recipes)
+{
+    var exactIngredients = new List<string?>();
+    foreach (var ingredient in recipe.Ingredients)
+        for (var count = 0; count < ingredient.Count; count++)
+            exactIngredients.Add(ingredient.ItemId);
+    foreach (var tool in recipe.RequiredTools ?? [])
+    {
+        var toolItem = ItemCatalog.All.First(item =>
+            item.HasTag(tool.Tag));
+        for (var count = 0; count < tool.Count; count++)
+            exactIngredients.Add(toolItem.Id);
+    }
+    var exactInventory = PlayerInventory.Normalize(
+        exactIngredients.ToArray());
+    Require(
+        CraftingSkill.Availability(
+            recipe, recipe.RequiredLevel, exactInventory) ==
+        RecipeAvailability.Ready &&
+        CraftingService.TryCraft(
+            recipe, recipe.RequiredLevel, exactInventory, out _),
+        $"recipe {recipe.Id} must be craftable from its displayed ingredients and required tools");
+}
 Require(ItemCatalog.Get(ItemIds.StoneKnife) is var knifeDefinition &&
         knifeDefinition.SpriteCell == 3 &&
         knifeDefinition.HasTag(ItemTag.Tool) &&
@@ -1125,6 +1266,71 @@ Require(CraftingService.TryCraft(
             item => item == ItemIds.StonePickaxe) == 1 &&
         !menuCraftedPickaxe.Contains("stone_pickaxe_head"),
     "stone pickaxe crafting must consume its temporary head during the next inventory step");
+var bronzeBarRecipe = CraftingSkill.Recipes.First(
+    recipe => recipe.Id == "bronze-bar");
+var bronzePickaxeRecipe = CraftingSkill.Recipes.First(
+    recipe => recipe.Id == "bronze-pickaxe");
+var bronzeBarIngredients = PlayerInventory.Normalize(
+    [
+        ItemIds.CopperOre, ItemIds.CopperOre,
+        ItemIds.TinOre, ItemIds.Coal
+    ]);
+Require(
+    CraftingSkill.Availability(
+        bronzeBarRecipe, bronzeBarRecipe.RequiredLevel,
+        bronzeBarIngredients,
+        requiredStationAvailable: false) ==
+    RecipeAvailability.MissingStation &&
+    CraftingService.TryCraftDetailed(
+        bronzeBarRecipe, bronzeBarRecipe.RequiredLevel,
+        bronzeBarIngredients,
+        out var blockedBronzeSmelt,
+        requiredStationAvailable: false) ==
+    CraftingService.CraftResult.MissingStation &&
+    blockedBronzeSmelt.SequenceEqual(bronzeBarIngredients),
+    "bronze cannot be smelted without a nearby placed bloomery");
+Require(
+    CraftingService.TryCraft(
+        bronzeBarRecipe, bronzeBarRecipe.RequiredLevel,
+        [
+            ItemIds.CopperOre, ItemIds.CopperOre,
+            ItemIds.TinOre, ItemIds.Coal,
+            ItemIds.Sticks, ItemIds.StoneHammer
+        ],
+        out var castBronze) &&
+    CraftingService.TryCraft(
+        bronzePickaxeRecipe, bronzePickaxeRecipe.RequiredLevel,
+        castBronze, out var forgedBronzePickaxe) &&
+    forgedBronzePickaxe.Contains(ItemIds.BronzePickaxe) &&
+    forgedBronzePickaxe.Contains(ItemIds.StoneHammer) &&
+    !forgedBronzePickaxe.Contains(ItemIds.BronzeBar),
+    "bronze ore must cast into a bar and then forge into a pickaxe without consuming the hammer");
+var ironBloomRecipe = CraftingSkill.Recipes.First(
+    recipe => recipe.Id == "iron-bloom");
+var ironBarRecipe = CraftingSkill.Recipes.First(
+    recipe => recipe.Id == "iron-bar");
+var ironPickaxeRecipe = CraftingSkill.Recipes.First(
+    recipe => recipe.Id == "iron-pickaxe");
+Require(
+    CraftingService.TryCraft(
+        ironBloomRecipe, ironBloomRecipe.RequiredLevel,
+        [
+            ItemIds.IronOre, ItemIds.IronOre, ItemIds.IronOre,
+            ItemIds.Coal, ItemIds.Coal, ItemIds.Coal,
+            ItemIds.Sticks, ItemIds.StoneHammer
+        ],
+        out var smeltedBloom) &&
+    CraftingService.TryCraft(
+        ironBarRecipe, ironBarRecipe.RequiredLevel,
+        smeltedBloom, out var forgedIronBar) &&
+    CraftingService.TryCraft(
+        ironPickaxeRecipe, ironPickaxeRecipe.RequiredLevel,
+        forgedIronBar, out var forgedIronPickaxe) &&
+    forgedIronPickaxe.Contains(ItemIds.IronPickaxe) &&
+    forgedIronPickaxe.Contains(ItemIds.StoneHammer) &&
+    !forgedIronPickaxe.Contains(ItemIds.IronBloom) &&
+    !forgedIronPickaxe.Contains(ItemIds.IronBar),
+    "bloomery iron must be consolidated into a bar and then forged into a pickaxe without consuming the hammer");
 var overflowingRecipe = new CraftingRecipe(
     "overflow-test",
     ItemIds.StonePickaxe,
@@ -1188,14 +1394,21 @@ Require(
 var cookingGuide = SkillGuideService.Definition(SkillType.Cooking);
 Require(
     CookingSkill.CookProfiles.Select(profile => profile.RequiredLevel)
-        .SequenceEqual([1, 1, 5, 9, 13, 17]) &&
+        .SequenceEqual([1, 1, 1, 3, 5, 9, 13, 17]) &&
     cookingGuide.Entries.Select(entry => entry.Level)
-        .SequenceEqual([1, 5, 9, 13, 17]) &&
+        .SequenceEqual([1, 3, 5, 9, 13, 17]) &&
     cookingGuide.Entries.Single(entry => entry.Level == 1)
         .Description.Contains("raw minnows") &&
     cookingGuide.Entries.Single(entry => entry.Level == 17)
         .Description.Contains("raw bluefin tuna"),
-    "cooking unlocks must follow the fish progression and omit levels without a new recipe");
+    "cooking unlocks must connect forage rewards and fish while omitting levels without a new recipe");
+var roastedBerries = CookingSkill.Roll(
+    ItemIds.WildBerries, 1, .99f);
+Require(
+    roastedBerries.ItemId == ItemIds.RoastedWildBerries &&
+    !roastedBerries.Burnt &&
+    CookingSkill.CanCook(ItemIds.TropicalBerries, 3),
+    "foraged berries must connect to the reusable campfire cooking pipeline");
 var firemakingGuide =
     SkillGuideService.Definition(SkillType.Firemaking);
 Require(
@@ -1237,6 +1450,27 @@ Require(
     WoodcuttingSkill.MinimumDamage(20) >
     WoodcuttingSkill.MinimumDamage(1),
     "the woodcutting guide must show the shared accuracy and damage effects at every level");
+var farmingGuide =
+    SkillGuideService.Definition(SkillType.Farming);
+var craftingGuide =
+    SkillGuideService.Definition(SkillType.Crafting);
+var diggingGuide =
+    SkillGuideService.Definition(SkillType.Digging);
+Require(
+    Enum.GetValues<SkillType>().All(SkillGuideService.IsSupported) &&
+    farmingGuide.Entries.Single().Description.Contains("berry") &&
+    craftingGuide.Entries.Any(entry =>
+        entry.Level == 6 &&
+        entry.Description.Contains("bronze bar")) &&
+    craftingGuide.Entries.Any(entry =>
+        entry.Level == 10 &&
+        entry.Description.Contains("iron bloom")) &&
+    diggingGuide.Entries.Count == DiggingSkill.MaximumLevel &&
+    diggingGuide.Entries[^1].Description.Contains(
+        DiggingSkill.Damage(
+            DiggingSkill.ExperienceForLevel(
+                DiggingSkill.MaximumLevel)).ToString()),
+    "all eight skills must expose data-driven guides for their rewards and level effects");
 var skillGuideWindow = new SkillGuideWindowState();
 skillGuideWindow.Open(fishingGuide, 20);
 skillGuideWindow.Layout(new(0, 0, 1280, 720));
@@ -1290,10 +1524,10 @@ Require(
     ItemCatalog.Get(ItemIds.RawRedSnapper).SpriteCell == 6 &&
     ItemCatalog.Get(ItemIds.CookedRedSnapper).SpriteCell == 7 &&
     ItemCatalog.Get(ItemIds.CookedRedSnapper)
-        .HasTag(ItemTag.CookedFish) &&
+        .HasTag(ItemTag.CookedFood) &&
     ItemCatalog.Get(ItemIds.BurntRedSnapper).SpriteCell == 7 &&
     ItemCatalog.Get(ItemIds.BurntRedSnapper)
-        .HasTag(ItemTag.BurntFish),
+        .HasTag(ItemTag.BurntFood),
     "fish states must use authored raw/cooked pairs and reuse the cooked icon for shader-derived burnt fish");
 Require(PlayerInventory.TryCarvePlank(
         [ItemIds.StoneKnife, ItemIds.Logs],
@@ -1367,6 +1601,21 @@ Require(scrollingList.Scroll(new(30, 40), -1) &&
         scrollingList.VisibleIndices.First() == 3 &&
         scrollingList.ScrollTrack.Visible,
     "list controls must wheel-scroll their visible row window");
+var visibleRowsWarmup = 0;
+foreach (var index in scrollingList.VisibleIndices)
+    visibleRowsWarmup += index;
+var visibleRowsAllocationsBefore =
+    GC.GetAllocatedBytesForCurrentThread();
+var visibleRowsChecksum = visibleRowsWarmup;
+for (var iteration = 0; iteration < 10_000; iteration++)
+    foreach (var index in scrollingList.VisibleIndices)
+        visibleRowsChecksum += index;
+var visibleRowsAllocated =
+    GC.GetAllocatedBytesForCurrentThread() -
+    visibleRowsAllocationsBefore;
+Require(
+    visibleRowsChecksum > 0 && visibleRowsAllocated <= 128,
+    "render-time visible list iteration must not allocate range iterators");
 
 var boundedChat = new ChatUiControlState();
 boundedChat.Layout(new(0, 0, 1280, 720));

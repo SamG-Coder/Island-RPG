@@ -1,9 +1,42 @@
+using System.Collections;
 using OpenTK.Mathematics;
 
 namespace IslandRpg.Rendering.Ui;
 
 internal sealed class ListControlState
 {
+    public readonly struct VisibleIndexRange(
+        int start, int count) : IEnumerable<int>
+    {
+        public Enumerator GetEnumerator() => new(start, count);
+
+        IEnumerator<int> IEnumerable<int>.GetEnumerator() =>
+            new Enumerator(start, count);
+
+        IEnumerator IEnumerable.GetEnumerator() =>
+            new Enumerator(start, count);
+
+        public struct Enumerator(
+            int start, int count) : IEnumerator<int>
+        {
+            private readonly int _end = start + count;
+            private int _current = start - 1;
+
+            public int Current => _current;
+            object IEnumerator.Current => Current;
+
+            public bool MoveNext()
+            {
+                if (_current + 1 >= _end) return false;
+                _current++;
+                return true;
+            }
+
+            public void Reset() => _current = start - 1;
+            public void Dispose() { }
+        }
+    }
+
     private IReadOnlyList<string> _itemIds = [];
     private bool _leftWasDown;
     private bool _draggingThumb;
@@ -25,8 +58,8 @@ internal sealed class ListControlState
             (Bounds.W + RowGap) / (RowHeight + RowGap)));
     public int MaximumFirstIndex =>
         Math.Max(0, Count - VisibleRows);
-    public IEnumerable<int> VisibleIndices =>
-        Enumerable.Range(
+    public VisibleIndexRange VisibleIndices =>
+        new(
             FirstVisibleIndex,
             Math.Min(VisibleRows, Count - FirstVisibleIndex));
 

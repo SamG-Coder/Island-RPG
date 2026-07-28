@@ -5,10 +5,10 @@ C#, .NET and OpenTK. It combines a persistent procedurally generated world with
 classic point-and-click interactions, gathering, crafting, fishing, cooking and
 placeable objects.
 
-The project is currently at **v0.1.0**. It is playable, but it remains an early
+The project is currently at **v0.2.0**. It is playable, but it remains an early
 prototype and its systems, balance and save format may continue to evolve.
 
-See [the v0.1.0 release notes](RELEASE_NOTES_0.1.md) for the complete feature
+See [the v0.2.0 release notes](RELEASE_NOTES_0.2.md) for the complete feature
 summary.
 
 ## Important asset requirement
@@ -35,8 +35,11 @@ third-party content.
 - Biome-aware trees, vegetation, coastal collectibles and animated fish.
 - Character creation, pathfinding and eight-direction character animation.
 - Inventory use, dragging, dropping and context-sensitive interactions.
-- Day and night, shadows, animated water and campfire lighting.
-- Woodcutting, Farming, Crafting, Fishing, Cooking and Firemaking skills.
+- Day and night, shadows, animated water, merged local lights and campfires.
+- Connected overworld and underground cave layers with persistent entrances.
+- Woodcutting, Farming, Crafting, Fishing, Cooking, Firemaking, Digging and
+  Mining skills.
+- Berry foraging and cooking, ore deposits, mining tools and level-up effects.
 - Level-based recipes, primitive tools, workbenches and campfires.
 - Reusable skill guides, crafting screens, pause menus and settings.
 - Optional performance metrics and developer world tools.
@@ -97,8 +100,26 @@ The default command opens the playable game and its character/world menus.
 | `Escape` | Close the active screen or open the pause menu |
 
 Use the on-screen **Skills** and **Bag** buttons for progression and inventory.
-Click the name of a supported skill inside its detail panel to open its level
-guide.
+Click any skill name inside its detail panel to open its level guide.
+
+### v0.2 progression loop
+
+1. Right-click the stone shovel, select **Excavate**, and choose a clear,
+   non-water tile. Left-click the dig site to continue excavating.
+2. A completed dark hole has connected to cave terrain. Drag rope onto it to
+   create a traversable entrance; use the climb cursor to travel between levels.
+3. Mine underground deposits with a pickaxe. Larger and denser deposits take
+   more strikes, and the strongest carried pickaxe is selected automatically.
+4. Craft and place a clay bloomery, then stand beside it to alloy copper and
+   tin or reduce iron ore into a bloom. Coal is consumed by each smelt.
+5. Use bronze bars to craft and place a smithing anvil. Stand beside the anvil
+   with a hammer to consolidate iron blooms into bars and forge metal tools.
+6. Forage berry bushes for Farming XP and drag berries onto a lit campfire to
+   cook them through the same interaction used for fish.
+
+Unfinished excavations can be restored. Completed holes can be filled using
+matching dirt or sand, and installed rope can be recovered from the context
+menu. Changes remain synchronized between the overworld and underground.
 
 Developer mode is intended for testing. Enter `/imahacker` in chat, then open
 **Pause → Settings → Dev** to access XP controls, time advancement and the
@@ -266,9 +287,10 @@ Before submitting a change:
 ## Status and limitations
 
 This is an early playable prototype. Combat, health, hunger, NPC simulation,
-building construction and audio are not implemented. Farming currently focuses
-on trees, Cooking currently uses the available fish, and placeable furniture is
-limited. See the [v0.1.0 release notes](RELEASE_NOTES_0.1.md) for more detail.
+building construction and audio are not implemented. Farming covers tree
+planting and berry foraging, Cooking supports fish and berries, and placeable
+furniture remains limited. See the
+[v0.2.0 release notes](RELEASE_NOTES_0.2.md) for more detail.
 
 ## License and acknowledgements
 
