@@ -1,0 +1,12 @@
+{
+  "Preset": "storage-chest",
+  "FootprintWidth": 1.25,
+  "FootprintDepth": 0.75,
+  "Height": 0.8,
+  "PixelWidth": 84,
+  "PixelHeight": 62,
+  "HotspotX": 42,
+  "HotspotY": 57,
+  "TileWidthPixels": 96,
+  "TileHeightPixels": 48
+}

@@ -37,7 +37,11 @@ internal static class SkillGuideService
                 new(
                     1,
                     "Plant gathered tree seeds \u2022 " +
-                    "Forage wild and tropical berry bushes")
+                    "Forage wild and tropical berry bushes"),
+                new(
+                    9,
+                    "Use a bronze sickle for faster harvesting " +
+                    "and bonus berries")
             ]);
 
     private static SkillGuideDefinition Crafting()
@@ -104,10 +108,14 @@ internal static class SkillGuideService
                         level == 1 || FiremakingSkill.FlameTier(level - 1) != tier
                             ? $" • Flame size {tier + 1}"
                             : "";
+                    var charcoalNote = level == 1
+                        ? " \u2022 Burn spent log fuel into charcoal"
+                        : "";
                     return new SkillGuideEntry(
                         level,
                         $"Fire lasts {hours:0.0} hours • " +
-                        $"Light radius {radius:0} px{flameNote}");
+                        $"Light radius {radius:0} px" +
+                        $"{flameNote}{charcoalNote}");
                 })
                 .ToArray());
 
@@ -121,7 +129,11 @@ internal static class SkillGuideService
                 string.Join(
                     " • ",
                     group.Select(profile =>
-                        $"Cook {ItemCatalog.Get(profile.RawItemId).Name}"))))
+                        $"Cook {ItemCatalog.Get(profile.RawItemId).Name}")) +
+                (group.Key == StewCookingService.RequiredLevel
+                    ? " \u2022 Cook fish and berry stew in a pot beside a lit fire"
+                    : "")))
+            .OrderBy(entry => entry.Level)
             .ToArray();
         return new(
             SkillType.Cooking,

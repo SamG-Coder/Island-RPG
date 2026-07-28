@@ -392,11 +392,19 @@ internal sealed partial class GameHostWindow
         var y = details.Y + 96;
         foreach (var ingredient in recipe.Ingredients)
         {
-            var held = inventory.Count(value =>
-                value == ingredient.ItemId);
+            var held = CraftingSkill.CountIngredient(
+                inventory, ingredient);
+            var ingredientName =
+                ItemCatalog.Get(ingredient.ItemId).Name;
+            if (ingredient.AlternativeItemIds is { Count: > 0 })
+                ingredientName += " or " +
+                    string.Join(
+                        "/",
+                        ingredient.AlternativeItemIds.Select(id =>
+                            ItemCatalog.Get(id).Name));
             DrawUiText(
                 $"- {ingredient.Count} x " +
-                ItemCatalog.Get(ingredient.ItemId).Name +
+                ingredientName +
                 $" ({held}/{ingredient.Count})",
                 new(details.X + 14, y),
                 held >= ingredient.Count

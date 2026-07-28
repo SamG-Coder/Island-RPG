@@ -39,7 +39,11 @@ internal sealed record WorldGroundObject(
     double LitUntilGameSeconds = 0,
     int FiremakingLevel = 1,
     int Health = 0,
-    int MaxHealth = 0);
+    int MaxHealth = 0,
+    WorldContainerContents? Container = null);
+internal sealed record WorldContainerContents(
+    string?[] Items,
+    int[] Quantities);
 internal enum WorldVegetationKind : byte
 {
     Plant,
@@ -733,7 +737,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 5;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 23;
+    private const int ChunkPayloadVersion = 24;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -989,6 +993,25 @@ internal sealed class WorldChunkStore
                 writer.Write(groundObject.FiremakingLevel);
                 writer.Write(groundObject.Health);
                 writer.Write(groundObject.MaxHealth);
+                var container = groundObject.Container;
+                if (container is not null &&
+                    (container.Items.Length !=
+                         container.Quantities.Length ||
+                     container.Items.Length > 256))
+                    throw new InvalidDataException(
+                        "Ground-object container state is invalid.");
+                writer.Write(container?.Items.Length ?? 0);
+                if (container is not null)
+                    for (var slot = 0;
+                         slot < container.Items.Length;
+                         slot++)
+                    {
+                        writer.Write(container.Items[slot] ?? "");
+                        writer.Write(
+                            slot < container.Quantities.Length
+                                ? container.Quantities[slot]
+                                : 0);
+                    }
             }
             writer.Write(chunk.FishRemaining.Count);
             foreach (var school in chunk.FishRemaining)
@@ -1156,6 +1179,36 @@ internal sealed class WorldChunkStore
                         payloadVersion >= 20
                             ? reader.ReadInt32()
                             : 0);
+                    if (payloadVersion >= 24)
+                    {
+                        var containerSlots = reader.ReadInt32();
+                        if (containerSlots is < 0 or > 256)
+                            throw new InvalidDataException(
+                                "Chunk container capacity is invalid.");
+                        if (containerSlots > 0)
+                        {
+                            var items = new string?[containerSlots];
+                            var quantities = new int[containerSlots];
+                            for (var slot = 0;
+                                 slot < containerSlots;
+                                 slot++)
+                            {
+                                items[slot] =
+                                    NullIfEmpty(reader.ReadString());
+                                quantities[slot] = reader.ReadInt32();
+                                if (items[slot]?.Length > 64 ||
+                                    quantities[slot] < 0 ||
+                                    (items[slot] is null) !=
+                                    (quantities[slot] == 0))
+                                    throw new InvalidDataException(
+                                        "Chunk container slot is invalid.");
+                            }
+                            groundObject = groundObject with
+                            {
+                                Container = new(items, quantities)
+                            };
+                        }
+                    }
                     if (string.IsNullOrWhiteSpace(groundObject.ItemId) ||
                         groundObject.ItemId.Length > 64 ||
                         groundObject.FuelItemId?.Length > 64 ||

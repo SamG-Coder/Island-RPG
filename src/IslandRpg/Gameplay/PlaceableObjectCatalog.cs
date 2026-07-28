@@ -47,7 +47,31 @@ internal static class PlaceableObjectCatalog
                 FootprintDepth: 1,
                 Height: .9f,
                 HotspotX: 40,
-                HotspotY: 65)
+                HotspotY: 65),
+            [ItemIds.CookingPot] = new(
+                ItemIds.CookingPot,
+                "cooking-pot.png",
+                FootprintWidth: .9f,
+                FootprintDepth: .9f,
+                Height: .65f,
+                HotspotX: 36,
+                HotspotY: 63),
+            [ItemIds.StorageChest] = new(
+                ItemIds.StorageChest,
+                "storage-chest.png",
+                FootprintWidth: 1.25f,
+                FootprintDepth: .75f,
+                Height: .8f,
+                HotspotX: 42,
+                HotspotY: 57),
+            [ItemIds.StorageBarrel] = new(
+                ItemIds.StorageBarrel,
+                "storage-barrel.png",
+                FootprintWidth: .75f,
+                FootprintDepth: .75f,
+                Height: 1,
+                HotspotX: 31,
+                HotspotY: 53)
         };
 
     public static IReadOnlyCollection<PlaceableObjectDefinition> All =>

@@ -229,6 +229,32 @@ internal sealed partial class GameHostWindow
                     current.LitUntilGameSeconds <= 0 ||
                     current.LitUntilGameSeconds > _worldGameSeconds)
                     continue;
+                if (CharcoalService.IsReady(
+                        current, _worldGameSeconds))
+                {
+                    var origin = new Vector2(current.X, current.Y);
+                    var dropChunk = gpu.Chunk;
+                    var dropPosition = origin + new Vector2(.8f, .35f);
+                    if (TryFindGroundObjectDrop(
+                            origin,
+                            out var dropGpu,
+                            out var clearPosition,
+                            out _))
+                    {
+                        dropChunk = dropGpu.Chunk;
+                        dropPosition = clearPosition;
+                    }
+                    dropChunk.GroundObjects.Add(new(
+                        Guid.NewGuid(),
+                        ItemIds.Charcoal,
+                        dropPosition.X,
+                        dropPosition.Y));
+                    if (!ReferenceEquals(dropChunk, gpu.Chunk))
+                        QueueChunkSave(dropChunk);
+                    _chatUi.AddMessage(
+                        "The spent log fuel has burned down into charcoal.",
+                        ChatMessageStyle.Action);
+                }
                 gpu.Chunk.GroundObjects[index] =
                     CampfireService.Expire(
                         current, _worldGameSeconds);

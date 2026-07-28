@@ -116,6 +116,13 @@ Click any skill name inside its detail panel to open its level guide.
    bloom. Use the nearby anvil and a hammer to forge bars and metal tools.
 6. Forage berry bushes for Farming XP and drag berries onto a lit campfire to
    cook them through the same interaction used for fish.
+7. Forge a bronze axe for faster woodcutting and a bronze sickle for quicker,
+   higher-yield berry harvesting.
+8. Let a log burn down to charcoal as a renewable bloomery fuel. Forge and
+   place a cooking pot beside a lit campfire to turn raw fish and berries into
+   stew.
+9. Build wooden chests and barrels at a nearby workbench. Open placed storage
+   to deposit, stack, withdraw, and preserve supplies with the world.
 
 Unfinished excavations can be restored. Completed holes can be filled using
 matching dirt or sand, and installed rope can be recovered from the context

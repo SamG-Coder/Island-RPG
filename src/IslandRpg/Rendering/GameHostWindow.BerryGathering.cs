@@ -10,6 +10,7 @@ internal sealed partial class GameHostWindow
     private const double BerryBushCooldownSeconds = 12 * 60;
     private const int BerryFarmingExperience = 18;
     private string? _activeBerryVegetationKey;
+    private ItemDefinition? _activeBerrySickle;
 
     private void QueueBerryGather(string stableKey)
     {
@@ -43,6 +44,8 @@ internal sealed partial class GameHostWindow
             !VegetationReady(located.Value.Gpu.Chunk, stableKey))
             return;
         _activeBerryVegetationKey = stableKey;
+        _activeBerrySickle = PlayerInventory.BestSickle(
+            _activePlayer.Inventory);
         _player.GatherAt(target);
     }
 
@@ -54,12 +57,17 @@ internal sealed partial class GameHostWindow
         if (_player.Action != EntityAction.Gather)
         {
             _activeBerryVegetationKey = null;
+            _activeBerrySickle = null;
             return;
         }
-        if (_player.ActionTime < GroundItemActionSeconds) return;
+        var sickle = _activeBerrySickle;
+        if (_player.ActionTime <
+            FarmingSkill.GatherSeconds(sickle))
+            return;
 
         var key = _activeBerryVegetationKey;
         _activeBerryVegetationKey = null;
+        _activeBerrySickle = null;
         var located = FindVegetation(key);
         if (located is not { } target ||
             target.Vegetation.Kind != WorldVegetationKind.BerryBush ||
@@ -73,7 +81,12 @@ internal sealed partial class GameHostWindow
             "FORAGM_NN", StringComparison.OrdinalIgnoreCase)
             ? ItemIds.TropicalBerries
             : ItemIds.WildBerries;
-        var requested = Random.Shared.Next(1, 4);
+        var farmingLevel = FarmingSkill.LevelForExperience(
+            _activePlayer.FarmingExperience);
+        var requested = Random.Shared.Next(1, 4) +
+                        FarmingSkill.BonusBerryCount(
+                            farmingLevel, sickle,
+                            Random.Shared.NextSingle());
         var inventory = _activePlayer.Inventory;
         var gathered = 0;
         for (var index = 0; index < requested; index++)
@@ -111,8 +124,12 @@ internal sealed partial class GameHostWindow
             $"{ItemCatalog.Get(itemId).Name}.",
             ChatMessageStyle.Action);
         _chatUi.AddMessage(
-            $"+{award.Gained} Farming XP.",
+            FarmingSkill.ExperienceMessage(award.Gained),
             ChatMessageStyle.Experience);
+        if (award.LevelledUp)
+            _chatUi.AddMessage(
+                FarmingSkill.LevelUpMessage(award.Level),
+                ChatMessageStyle.LevelUp);
         _player.Stop();
     }
 }

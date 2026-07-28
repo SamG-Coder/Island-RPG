@@ -6,13 +6,16 @@ using IslandRpg.Rendering;
 using IslandRpg.Rendering.Ui;
 using OpenTK.Mathematics;
 
+WorldCheckProcess.DisableWindowsCrashDialogs();
+
 var defaultDisplaySettings = new GameSettings();
 Require(
     GameCursorFrames.MineAndPickUp == 3 &&
+    GameCursorFrames.OpenStorage == 6 &&
     GameCursorFrames.CraftingStation == 7 &&
     GameCursorFrames.ClimbDown == 15 &&
     GameCursorFrames.ClimbUp == 16,
-    "mining, crafting stations, and cave traversal must retain their authored AoE cursor frames");
+    "mining, storage, crafting stations, and cave traversal must retain their authored AoE cursor frames");
 Require(defaultDisplaySettings.VSyncMode ==
             DisplayVSyncMode.Adaptive &&
         defaultDisplaySettings.FrameRateLimit == 0,
@@ -656,8 +659,18 @@ Require(
     logTypeCount *
     (1 + FiremakingSkill.FlameTierCount *
         CampfireService.AnimationFrameCount) &&
+    placeableSprites.TryGet(
+        ItemIds.CookingPot, out var cookingPotSprite) &&
+    cookingPotSprite.Frame.Width == 72 &&
+    cookingPotSprite.Frame.Height == 72 &&
+    placeableSprites.TryGet(
+        ItemIds.StorageChest, out var storageChestSprite) &&
+    storageChestSprite.Frame.Width == 84 &&
+    placeableSprites.TryGet(
+        ItemIds.StorageBarrel, out var storageBarrelSprite) &&
+    storageBarrelSprite.Frame.Height == 58 &&
     placeableUploadCount > 0,
-    "campfire sprite composition must generate every fuel, animation frame, and Firemaking flame tier");
+    "placeable sprites must include the cooking pot and every campfire fuel, animation frame, and Firemaking flame tier");
 var returnedFuelCampfire = CampfireService.RemoveFuel(
     fueledCampfire, 100);
 Require(returnedFuelCampfire.FuelItemId is null &&
@@ -703,8 +716,14 @@ Require(
     ItemCatalog.Get(ItemIds.Bloomery)
         .HasTag(ItemTag.PlaceableObject) &&
     ItemCatalog.Get(ItemIds.SmithingAnvil)
+        .HasTag(ItemTag.PlaceableObject) &&
+    PlaceableObjectCatalog.TryGet(
+        ItemIds.CookingPot, out var cookingPotDefinition) &&
+    cookingPotDefinition.SpriteFile == "cooking-pot.png" &&
+    cookingPotDefinition.FootprintWidth < 1 &&
+    ItemCatalog.Get(ItemIds.CookingPot)
         .HasTag(ItemTag.PlaceableObject),
-    "the bloomery and smithing anvil must use generated placeable-object footprints");
+    "metalworking and cooking stations must use generated placeable-object footprints");
 var nearbyStations = new[]
 {
     new WorldGroundObject(
@@ -761,8 +780,12 @@ Require(ItemCatalog.Get(ItemIds.IronAxe) is var axeDefinition &&
         axeDefinition.SpriteCell == 5 &&
         axeDefinition.HasTag(ItemTag.Axe) &&
         axeDefinition.HasTag(ItemTag.Tool) &&
-        axeDefinition.WoodcuttingPower == 2 &&
+        axeDefinition.WoodcuttingPower == 3 &&
+        ItemCatalog.Get(ItemIds.BronzeAxe).WoodcuttingPower == 2 &&
         ItemCatalog.Get(ItemIds.StoneAxe).WoodcuttingPower == 1 &&
+        PlayerInventory.BestAxe(
+            [ItemIds.StoneAxe, ItemIds.BronzeAxe, ItemIds.IronAxe])?.Id ==
+        ItemIds.IronAxe &&
         axeDefinition.Droppable &&
         ItemCatalog.Get(ItemIds.OakLogs).HasTag(ItemTag.Log) &&
         ItemCatalog.All.Select(item => item.Id).Distinct().Count() ==
@@ -786,7 +809,9 @@ Require(
         catalogItemIds.Contains(recipe.ResultItemId) &&
         recipe.Ingredients.All(ingredient =>
             ingredient.Count > 0 &&
-            catalogItemIds.Contains(ingredient.ItemId))),
+            catalogItemIds.Contains(ingredient.ItemId) &&
+            (ingredient.AlternativeItemIds?.All(
+                catalogItemIds.Contains) ?? true))),
     "every crafting recipe must have a unique id and reference registered positive-count items");
 Require(
     ReferenceEquals(
@@ -806,16 +831,25 @@ Require(
         workbenchRecipes,
         CraftingSkill.RecipesFor(
             CraftingCategory.All, ItemIds.Workbench)) &&
-    workbenchRecipes.Count == 2 &&
+    workbenchRecipes.Count == 4 &&
     workbenchRecipes.All(recipe =>
         recipe.RequiredStationItemId == ItemIds.Workbench) &&
     bloomeryRecipes.Count == 2 &&
     bloomeryRecipes.All(recipe =>
         recipe.RequiredStationItemId == ItemIds.Bloomery) &&
-    anvilRecipes.Count == 4 &&
+    anvilRecipes.Count == 7 &&
     anvilRecipes.All(recipe =>
         recipe.RequiredStationItemId == ItemIds.SmithingAnvil),
     "station recipe views must be cached and contain only recipes for the station used");
+Require(
+    new[] { ItemIds.StorageChest, ItemIds.StorageBarrel }
+        .Select(itemId => CraftingSkill.Recipes.Single(recipe =>
+            recipe.ResultItemId == itemId))
+        .All(recipe =>
+            recipe.RequiredStationItemId == ItemIds.Workbench &&
+            recipe.RequiredTools?.Any(tool =>
+                tool.Tag == ItemTag.Hammer) == true),
+    "storage furniture must be built at the workbench with a hammer");
 var stationCraftingWindow = new CraftingWindowState();
 stationCraftingWindow.Open(ItemIds.Bloomery);
 Require(
@@ -825,6 +859,89 @@ Require(
         bloomeryRecipes.FirstOrDefault(),
     "opening a crafting station must select from only that station's recipes");
 stationCraftingWindow.Close();
+var bronzeSickle = ItemCatalog.Get(ItemIds.BronzeSickle);
+Require(
+    PlayerInventory.BestSickle(
+        [ItemIds.StoneAxe, ItemIds.BronzeSickle])?.Id ==
+    ItemIds.BronzeSickle &&
+    FarmingSkill.GatherSeconds(bronzeSickle) <
+    FarmingSkill.GatherSeconds(null) &&
+    FarmingSkill.BonusBerryCount(
+        9, bronzeSickle, 0) == 1 &&
+    FarmingSkill.BonusBerryCount(
+        9, null, 0) == 0,
+    "the bronze sickle must speed berry harvesting and enable bonus yield");
+Require(
+    new[]
+    {
+        ItemIds.BronzeAxe,
+        ItemIds.BronzeSickle,
+        ItemIds.Charcoal,
+        ItemIds.FishBerryStew
+    }.Select(ItemCatalog.Get)
+        .All(item => item.HasTag(ItemTag.ProgressionSprite)) &&
+    ItemCatalog.Get(ItemIds.BronzeAxe).SpriteCell == 0 &&
+    ItemCatalog.Get(ItemIds.FishBerryStew).SpriteCell == 2 &&
+    ItemCatalog.Get(ItemIds.Charcoal).SpriteCell == 3 &&
+    ItemCatalog.Get(ItemIds.BronzeSickle).SpriteCell == 4,
+    "new progression items must map to their authored atlas icons");
+Require(
+    new[]
+    {
+        ItemIds.BronzeAxe,
+        ItemIds.BronzeSickle,
+        ItemIds.CookingPot
+    }.Select(itemId => CraftingSkill.Recipes.Single(recipe =>
+        recipe.ResultItemId == itemId))
+        .All(recipe =>
+            recipe.RequiredStationItemId == ItemIds.SmithingAnvil &&
+            recipe.RequiredTools?.Any(tool =>
+                tool.Tag == ItemTag.Hammer) == true),
+    "bronze tools and the cooking pot must follow the anvil-and-hammer recipe design");
+Require(
+    StewCookingService.HasIngredients(
+        [ItemIds.RawRiverPerch, ItemIds.WildBerries]) &&
+    StewCookingService.TryPrepare(
+        [ItemIds.RawRiverPerch, ItemIds.WildBerries],
+        out var stewInventory,
+        out var stewFish,
+        out var stewBerries) &&
+    stewFish == ItemIds.RawRiverPerch &&
+    stewBerries == ItemIds.WildBerries &&
+    stewInventory.Count(item =>
+        item == ItemIds.FishBerryStew) == 1 &&
+    !StewCookingService.HasIngredients(
+        [ItemIds.CookedRiverPerch, ItemIds.WildBerries]),
+    "pot cooking must consume one raw fish and one raw berry item into stew");
+var expiredLogFire = new WorldGroundObject(
+    Guid.NewGuid(), ItemIds.Campfire, 4, 5,
+    ItemIds.OakLogs, LitUntilGameSeconds: 10);
+Require(
+    CharcoalService.IsReady(expiredLogFire, 10) &&
+    !CharcoalService.IsReady(expiredLogFire, 9) &&
+    ItemCatalog.Get(ItemIds.Charcoal)
+        .HasTag(ItemTag.MiningMaterial),
+    "an expired log-fueled campfire must produce usable charcoal");
+var ironBloomWithCharcoal = CraftingSkill.Recipes.Single(
+    recipe => recipe.ResultItemId == ItemIds.IronBloom);
+Require(
+    CraftingSkill.Availability(
+        ironBloomWithCharcoal,
+        ironBloomWithCharcoal.RequiredLevel,
+        [
+            ItemIds.IronOre, ItemIds.IronOre, ItemIds.IronOre,
+            ItemIds.Charcoal, ItemIds.Charcoal
+        ]) == RecipeAvailability.Ready &&
+    CraftingService.TryCraft(
+        ironBloomWithCharcoal,
+        ironBloomWithCharcoal.RequiredLevel,
+        [
+            ItemIds.IronOre, ItemIds.IronOre, ItemIds.IronOre,
+            ItemIds.Coal, ItemIds.Charcoal
+        ],
+        out var charcoalSmelt) &&
+    charcoalSmelt.Contains(ItemIds.IronBloom),
+    "bloomery recipes must accept mined coal, charcoal, or a mixture");
 var availabilityInventory = PlayerInventory.Normalize(
     [
         ItemIds.CopperOre, ItemIds.CopperOre, ItemIds.TinOre,
@@ -966,6 +1083,24 @@ Require(
     restoredStackingContainer.Items[0] == ItemIds.Logs &&
     restoredStackingContainer.Quantities[0] == 100,
     "container snapshots must reload quantities against their stable container ID");
+var chestObject = new WorldGroundObject(
+    Guid.NewGuid(), ItemIds.StorageChest, 8.5f, 9.5f);
+var chestContainer = StorageContainerService.Open(chestObject);
+Require(
+    chestContainer.Definition.Id == chestObject.Id &&
+    chestContainer.Definition.Title == "Wooden Chest" &&
+    chestContainer.Definition.Capacity == 48 &&
+    chestContainer.TryAdd(ItemIds.OakLogs, 25),
+    "a placed wooden chest must create a 48-slot stacking container");
+var storedChest = StorageContainerService.Save(
+    chestObject, chestContainer);
+var reopenedChest = StorageContainerService.Open(storedChest);
+Require(
+    reopenedChest.Items[0] == ItemIds.OakLogs &&
+    reopenedChest.Quantities[0] == 25 &&
+    StorageContainerService.Definition(
+        Guid.NewGuid(), ItemIds.StorageBarrel).Capacity == 40,
+    "world storage snapshots must reopen by object ID while barrels retain their smaller layout");
 var individualContainer = new ItemContainerState(
     new(
         Guid.NewGuid(), "Test chest", 2, 1,
@@ -1602,9 +1737,20 @@ Require(
         .SequenceEqual([1, 3, 5, 9, 13, 17]) &&
     cookingGuide.Entries.Single(entry => entry.Level == 1)
         .Description.Contains("raw minnows") &&
+    cookingGuide.Entries.Single(entry => entry.Level == 5)
+        .Description.Contains("fish and berry stew") &&
     cookingGuide.Entries.Single(entry => entry.Level == 17)
         .Description.Contains("raw bluefin tuna"),
     "cooking unlocks must connect forage rewards and fish while omitting levels without a new recipe");
+var firemakingGuide =
+    SkillGuideService.Definition(SkillType.Firemaking);
+Require(
+    firemakingGuide.Entries[0].Description.Contains("charcoal") &&
+    FarmingSkill.ExperienceMessage(18) ==
+        "+18 Farming XP." &&
+    FarmingSkill.LevelUpMessage(9) ==
+        "Your Farming level is now 9.",
+    "skill guides and feedback must explain the new cross-skill progression");
 var roastedBerries = CookingSkill.Roll(
     ItemIds.WildBerries, 1, .99f);
 Require(
@@ -1612,8 +1758,6 @@ Require(
     !roastedBerries.Burnt &&
     CookingSkill.CanCook(ItemIds.TropicalBerries, 3),
     "foraged berries must connect to the reusable campfire cooking pipeline");
-var firemakingGuide =
-    SkillGuideService.Definition(SkillType.Firemaking);
 Require(
     firemakingGuide.Entries.Count == SkillService.MaximumLevel &&
     firemakingGuide.Entries[0].Description.Contains("48.0 hours") &&
@@ -1661,7 +1805,12 @@ var diggingGuide =
     SkillGuideService.Definition(SkillType.Digging);
 Require(
     Enum.GetValues<SkillType>().All(SkillGuideService.IsSupported) &&
-    farmingGuide.Entries.Single().Description.Contains("berry") &&
+    farmingGuide.Entries.Any(entry =>
+        entry.Level == 1 &&
+        entry.Description.Contains("berry")) &&
+    farmingGuide.Entries.Any(entry =>
+        entry.Level == 9 &&
+        entry.Description.Contains("bronze sickle")) &&
     craftingGuide.Entries.Any(entry =>
         entry.Level == 6 &&
         entry.Description.Contains("bronze bar")) &&
@@ -2501,6 +2650,36 @@ try
         CampfireService.State(
             reloadedUndergroundCampfire, 121) == CampfireState.Lit,
         "underground campfire fuel, expiry, and Firemaking level must survive a chunk reload");
+    var persistentChest = new WorldGroundObject(
+        Guid.NewGuid(),
+        ItemIds.StorageChest,
+        undergroundCoordinate.X * WorldChunk.Size + 14.5f,
+        undergroundCoordinate.Y * WorldChunk.Size + 14.5f);
+    var persistentChestState =
+        StorageContainerService.Open(persistentChest);
+    Require(
+        persistentChestState.TryAdd(ItemIds.Coal, 100) &&
+        persistentChestState.TryAdd(ItemIds.BronzeBar, 4),
+        "the persistence fixture must populate a storage chest");
+    persistentChest = StorageContainerService.Save(
+        persistentChest, persistentChestState);
+    undergroundWithOpenShaft.GroundObjects.Add(persistentChest);
+    store.Save(undergroundWithOpenShaft);
+    undergroundWithOpenShaft =
+        store.LoadOrGenerate(undergroundCoordinate);
+    var reloadedChest =
+        undergroundWithOpenShaft.GroundObjects.Single(value =>
+            value.Id == persistentChest.Id);
+    var reloadedChestState =
+        StorageContainerService.Open(reloadedChest);
+    Require(
+        reloadedChestState.Quantities[
+            Array.IndexOf(
+                reloadedChestState.Items, ItemIds.Coal)] == 100 &&
+        reloadedChestState.Quantities[
+            Array.IndexOf(
+                reloadedChestState.Items, ItemIds.BronzeBar)] == 4,
+        "container item IDs and stack quantities must survive a chunk reload");
     var collectedRock = undergroundWithOpenShaft.GroundObjects.First(
         value => value.ItemId == ItemIds.LargeRock);
     undergroundWithOpenShaft.GroundObjects.Remove(collectedRock);
@@ -2793,3 +2972,19 @@ static WorldChunk CloneAt(WorldChunk source, ChunkCoordinate coordinate) => new(
     Vegetation = source.Vegetation,
     Fish = source.Fish
 };
+
+static class WorldCheckProcess
+{
+    private const uint SemNoGpFaultErrorBox = 0x0002;
+    private const uint SemFailCriticalErrors = 0x0001;
+
+    public static void DisableWindowsCrashDialogs()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        _ = SetErrorMode(
+            SemNoGpFaultErrorBox | SemFailCriticalErrors);
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern uint SetErrorMode(uint mode);
+}

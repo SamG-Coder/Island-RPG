@@ -60,9 +60,7 @@ internal static class CraftingService
                 {
                     var slot = Array.FindIndex(
                         working,
-                        item => string.Equals(
-                            item, ingredient.ItemId,
-                            StringComparison.OrdinalIgnoreCase));
+                        ingredient.Accepts);
                     if (slot < 0) return CraftResult.MissingResources;
                     working[slot] = null;
                 }

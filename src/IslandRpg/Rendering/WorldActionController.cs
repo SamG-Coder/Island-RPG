@@ -243,6 +243,13 @@ internal sealed partial class GameHostWindow
                 break;
             case
             {
+                Type: GameHostWindow.WorldActionType.CookStew,
+                GroundObjectId: { } potId
+            }:
+                window.BeginPotCooking(potId, action.Target);
+                break;
+            case
+            {
                 Type: GameHostWindow.WorldActionType.GatherFibres,
                 VegetationKey: { } vegetationKey
             }:
@@ -294,6 +301,13 @@ internal sealed partial class GameHostWindow
                 break;
             case
             {
+                Type: GameHostWindow.WorldActionType.OpenStorage,
+                GroundObjectId: { } storageId
+            }:
+                window.OpenWorldStorage(storageId);
+                break;
+            case
+            {
                 Type: GameHostWindow.WorldActionType.TakeCaveRope,
                 GroundObjectId: { } entranceId
             }:
@@ -316,6 +330,7 @@ internal sealed partial class GameHostWindow
         window.UpdateGroundObjectDrop();
         window.UpdateCampfireFuelPickup();
         window.UpdateCooking();
+        window.UpdatePotCooking();
         window.UpdateFishing();
         window.UpdateFibreGathering();
         window.UpdateBerryGathering();

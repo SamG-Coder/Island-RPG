@@ -1,0 +1,12 @@
+{
+  "Preset": "storage-barrel",
+  "FootprintWidth": 0.75,
+  "FootprintDepth": 0.75,
+  "Height": 1,
+  "PixelWidth": 62,
+  "PixelHeight": 58,
+  "HotspotX": 31,
+  "HotspotY": 53,
+  "TileWidthPixels": 96,
+  "TileHeightPixels": 48
+}

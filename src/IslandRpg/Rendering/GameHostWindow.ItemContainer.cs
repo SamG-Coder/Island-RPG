@@ -1,5 +1,6 @@
 using IslandRpg.Gameplay;
 using IslandRpg.Rendering.Ui;
+using IslandRpg.World;
 using OpenTK.Mathematics;
 
 namespace IslandRpg.Rendering;
@@ -39,8 +40,11 @@ internal sealed partial class GameHostWindow
     private readonly ContextMenuControlState _itemContainerContext = new();
     private ItemContainerContextSource _itemContainerContextSource;
     private int _itemContainerContextSlot = -1;
+    private Guid? _openWorldStorageId;
 
-    private void OpenItemContainer(ItemContainerState container)
+    private void OpenItemContainer(
+        ItemContainerState container,
+        Guid? worldStorageId = null)
     {
         CancelPlaceableObjectPlacement();
         _itemContainerWindow.Open(
@@ -49,6 +53,7 @@ internal sealed partial class GameHostWindow
                 OpenTK.Windowing.GraphicsLibraryFramework.MouseButton.Left),
             MouseState.IsButtonDown(
                 OpenTK.Windowing.GraphicsLibraryFramework.MouseButton.Right));
+        _openWorldStorageId = worldStorageId;
         _modalScreen.Open(ModalScreenKind.ItemContainer);
         _chatUi.BlurInput();
         _inventoryContext.Close();
@@ -59,7 +64,9 @@ internal sealed partial class GameHostWindow
 
     private void CloseItemContainer()
     {
+        SaveOpenWorldStorage();
         _itemContainerWindow.Close();
+        _openWorldStorageId = null;
         _itemContainerContext.Close();
         _itemContainerContextSource = ItemContainerContextSource.None;
         _itemContainerContextSlot = -1;
@@ -250,6 +257,46 @@ internal sealed partial class GameHostWindow
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
+        SaveOpenWorldStorage();
+    }
+
+    private void SaveOpenWorldStorage()
+    {
+        if (_openWorldStorageId is not { } storageId ||
+            _itemContainerWindow.Container is not { } container)
+            return;
+        var location = FindGroundObjectLocation(storageId);
+        if (location is null ||
+            !StorageContainerService.IsStorage(
+                location.Value.Object.ItemId))
+            return;
+        location.Value.Chunk.GroundObjects[location.Value.Index] =
+            StorageContainerService.Save(
+                location.Value.Object, container);
+        QueueChunkSave(location.Value.Chunk);
+    }
+
+    private void QueueWorldStorage(WorldGroundObject storage)
+    {
+        if (!StorageContainerService.IsStorage(storage.ItemId))
+            return;
+        _worldActions.QueuePath(
+            new Vector2(storage.X, storage.Y),
+            .9f,
+            WorldActionType.OpenStorage,
+            groundObjectId: storage.Id,
+            clearTreeActions: true);
+    }
+
+    internal void OpenWorldStorage(Guid storageId)
+    {
+        var storage = FindGroundObject(storageId);
+        if (storage is null ||
+            !StorageContainerService.IsStorage(storage.ItemId))
+            return;
+        OpenItemContainer(
+            StorageContainerService.Open(storage),
+            storage.Id);
     }
 
     private void RenderItemContainerWindow()

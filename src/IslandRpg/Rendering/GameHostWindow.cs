@@ -77,6 +77,7 @@ internal sealed partial class GameHostWindow : GameWindow
         LightCampfire,
         TakeCampfireFuel,
         CookOnCampfire,
+        CookStew,
         Fish,
         GatherFibres,
         GatherBerries,
@@ -85,7 +86,8 @@ internal sealed partial class GameHostWindow : GameWindow
         EnterCave,
         RestoreExcavation,
         TakeCaveRope,
-        UseCraftingStation
+        UseCraftingStation,
+        OpenStorage
     }
     private sealed record QueuedWorldAction(
         WorldActionType Type, Vector2 Target, float Range,
@@ -196,6 +198,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private MouseCursor? _cutNativeCursor;
     private MouseCursor? _pickupNativeCursor;
     private MouseCursor? _dropNativeCursor;
+    private MouseCursor? _openStorageNativeCursor;
     private MouseCursor? _craftingStationNativeCursor;
     private MouseCursor? _digNativeCursor;
     private MouseCursor? _mineNativeCursor;
@@ -207,6 +210,7 @@ internal sealed partial class GameHostWindow : GameWindow
         CutTree,
         PickUpItem,
         DropItem,
+        OpenStorage,
         CraftingStation,
         Dig,
         Mine,
@@ -248,6 +252,11 @@ internal sealed partial class GameHostWindow : GameWindow
         new SpriteFrame?[3];
     private readonly SpriteFrame?[] _metalMaterialShadowFrames =
         new SpriteFrame?[3];
+    private readonly int[] _progressionItemTextures = new int[5];
+    private readonly SpriteFrame?[] _progressionItemFrames =
+        new SpriteFrame?[5];
+    private readonly SpriteFrame?[] _progressionItemShadowFrames =
+        new SpriteFrame?[5];
     private readonly int[] _stoneToolTextures = new int[14];
     private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[14];
     private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[14];
@@ -1275,6 +1284,11 @@ internal sealed partial class GameHostWindow : GameWindow
                         ? ["Cook", "Walk Here", "Examine"]
                         : campfireState == CampfireState.Fueled
                         ? ["Light", "Take log", "Walk Here", "Examine"]
+                        : StorageContainerService.IsStorage(
+                            contextObject.ItemId)
+                        ? ["Open", "Walk Here", "Examine"]
+                        : contextObject.ItemId == ItemIds.CookingPot
+                        ? ["Cook stew", "Walk Here", "Examine"]
                         : CraftingStationService.IsStation(
                             contextObject.ItemId)
                         ? [
@@ -1344,6 +1358,15 @@ internal sealed partial class GameHostWindow : GameWindow
                     QueueCaveEntry(groundObject);
                 else if (CaveEntranceService.IsDigSite(groundObject))
                     QueueContinueCaveDig(groundObject);
+                else if (!CaveEntranceService.IsHole(groundObject) &&
+                         !CaveEntranceService.IsShallowHole(groundObject) &&
+                         StorageContainerService.IsStorage(
+                             groundObject.ItemId))
+                    QueueWorldStorage(groundObject);
+                else if (!CaveEntranceService.IsHole(groundObject) &&
+                         !CaveEntranceService.IsShallowHole(groundObject) &&
+                         groundObject.ItemId == ItemIds.CookingPot)
+                    QueuePotCooking(groundObject);
                 else if (!CaveEntranceService.IsHole(groundObject) &&
                          !CaveEntranceService.IsShallowHole(groundObject) &&
                          CraftingStationService.IsStation(
@@ -3568,6 +3591,31 @@ internal sealed partial class GameHostWindow : GameWindow
         if (PlaceableObjectCatalog.IsPlaceable(
                 groundObject.ItemId))
         {
+            if (StorageContainerService.IsStorage(
+                    groundObject.ItemId))
+            {
+                if (option == 0)
+                    QueueWorldStorage(groundObject);
+                else if (option == 1)
+                    QueueWalk(_groundObjectContextWalkTarget);
+                else if (option == 2)
+                    _chatUi.AddMessage(
+                        ItemCatalog.Get(groundObject.ItemId).Examine,
+                        ChatMessageStyle.Normal);
+                return;
+            }
+            if (groundObject.ItemId == ItemIds.CookingPot)
+            {
+                if (option == 0)
+                    QueuePotCooking(groundObject);
+                else if (option == 1)
+                    QueueWalk(_groundObjectContextWalkTarget);
+                else if (option == 2)
+                    _chatUi.AddMessage(
+                        ItemCatalog.Get(groundObject.ItemId).Examine,
+                        ChatMessageStyle.Normal);
+                return;
+            }
             if (CraftingStationService.IsStation(
                     groundObject.ItemId))
             {
@@ -3782,6 +3830,7 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.StoneToolSprite) ||
             item.HasTag(ItemTag.MetalToolSprite) ||
             item.HasTag(ItemTag.MetalMaterialSprite) ||
+            item.HasTag(ItemTag.ProgressionSprite) ||
             item.HasTag(ItemTag.Fish) ||
             item.HasTag(ItemTag.FibreNetSprite) ||
             item.HasTag(ItemTag.PlaceableObject))
@@ -3821,6 +3870,12 @@ internal sealed partial class GameHostWindow : GameWindow
             return item.SpriteCell is { } metalCell &&
                    (uint)metalCell < (uint)_metalMaterialTextures.Length
                 ? _metalMaterialTextures[metalCell]
+                : 0;
+        if (item.HasTag(ItemTag.ProgressionSprite))
+            return item.SpriteCell is { } progressionCell &&
+                   (uint)progressionCell <
+                   (uint)_progressionItemTextures.Length
+                ? _progressionItemTextures[progressionCell]
                 : 0;
         if (item.HasTag(ItemTag.CoastalSprite))
             return item.SpriteCell is { } coastalCell &&
@@ -3878,6 +3933,10 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.HasTag(ItemTag.MetalMaterialSprite) &&
             (uint)cell < (uint)_metalMaterialFrames.Length)
             return _metalMaterialFrames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.ProgressionSprite) &&
+            (uint)cell < (uint)_progressionItemFrames.Length)
+            return _progressionItemFrames[cell] ??
+                   WoodcuttingItemsFrame;
         if (item.HasTag(ItemTag.CoastalSprite) &&
             (uint)cell < (uint)_coastalSprites.Frames.Length)
             return _coastalSprites.Frames[cell] ?? WoodcuttingItemsFrame;
@@ -3910,6 +3969,7 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.BerrySprite) ||
             item.HasTag(ItemTag.MetalToolSprite) ||
             item.HasTag(ItemTag.MetalMaterialSprite) ||
+            item.HasTag(ItemTag.ProgressionSprite) ||
             item.HasTag(ItemTag.SupplementalSprite) ||
             item.HasTag(ItemTag.NaturalMaterial) ||
             item.HasTag(ItemTag.Fish) ||
@@ -5448,6 +5508,9 @@ internal sealed partial class GameHostWindow : GameWindow
         LoadHorizontalItemSheet(
             "metal-materials.png", _metalMaterialFrames,
             _metalMaterialShadowFrames, _metalMaterialTextures);
+        LoadHorizontalItemSheet(
+            "progression-items.png", _progressionItemFrames,
+            _progressionItemShadowFrames, _progressionItemTextures);
         var stoneToolSheetPath = Path.Combine(
             AppContext.BaseDirectory, "Resources", "Images",
             "stone-tools-items.png");
@@ -5950,6 +6013,13 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_metalMaterialShadowFrames[cell] is { } shadowFrame)
                 Place(MetalMaterialAtlasKey(cell, true), null, shadowFrame);
         }
+        for (var cell = 0; cell < _progressionItemFrames.Length; cell++)
+        {
+            if (_progressionItemFrames[cell] is { } itemFrame)
+                Place(ProgressionAtlasKey(cell, false), null, itemFrame);
+            if (_progressionItemShadowFrames[cell] is { } shadowFrame)
+                Place(ProgressionAtlasKey(cell, true), null, shadowFrame);
+        }
         for (var cell = 0; cell < _stoneToolFrames.Length; cell++)
         {
             if (_stoneToolFrames[cell] is { } itemFrame)
@@ -6082,6 +6152,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static string MetalMaterialAtlasKey(int cell, bool shadow) =>
         shadow ? $"METAL_MATERIAL_SHADOW#{cell}" : $"METAL_MATERIAL#{cell}";
+
+    private static string ProgressionAtlasKey(int cell, bool shadow) =>
+        shadow ? $"PROGRESSION_SHADOW#{cell}" : $"PROGRESSION#{cell}";
 
     private static string StoneToolAtlasKey(int cell, bool shadow) =>
         shadow ? $"STONE_TOOL_SHADOW#{cell}" : $"STONE_TOOL#{cell}";
@@ -6892,6 +6965,8 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var texture in _metalToolTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _metalMaterialTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _progressionItemTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _stoneToolTextures)
             if (texture != 0) GL.DeleteTexture(texture);

@@ -28,6 +28,12 @@ bring those materials back into Crafting progression.
 - Unlock the workbench at Crafting level 3 and use it nearby to construct both
   the clay bloomery and smithing anvil.
 - Smelt beside the bloomery, then forge bars and tools beside the anvil.
+- Forge bronze axes and sickles to improve woodcutting and berry harvesting.
+- Burn logs down into renewable charcoal for bloomery and smithing fuel.
+- Place a bronze cooking pot beside a lit campfire to prepare fish-and-berry
+  stew as a multi-skill Cooking recipe.
+- Craft persistent wooden chests and barrels, with scrolling stack-aware
+  deposit and withdrawal controls shared with the reusable container UI.
 - Automatically select the strongest available pickaxe.
 
 ### Farming, foraging and cooking

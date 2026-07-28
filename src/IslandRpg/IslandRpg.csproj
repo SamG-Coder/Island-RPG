@@ -35,6 +35,7 @@
     <Content Include="Resources\Images\berry-items.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\metal-pickaxes.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\metal-materials.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\progression-items.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\stone-shovel-item.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\rope-item.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\dirt-item.png" CopyToOutputDirectory="PreserveNewest" />
@@ -51,6 +52,9 @@
     <Content Include="Resources\Images\campfire.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\bloomery.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\anvil.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\cooking-pot.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\storage-chest.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\storage-barrel.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\campfire-fire-16.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\CaveGrowth\cave-growth-sprites.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

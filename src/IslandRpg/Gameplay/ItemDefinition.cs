@@ -29,7 +29,9 @@ internal enum ItemTag
     Berry = 1 << 22,
     BerrySprite = 1 << 23,
     MetalToolSprite = 1 << 24,
-    MetalMaterialSprite = 1 << 25
+    MetalMaterialSprite = 1 << 25,
+    ProgressionSprite = 1 << 26,
+    Sickle = 1 << 27
 }
 
 internal sealed record ItemDefinition(
@@ -41,7 +43,8 @@ internal sealed record ItemDefinition(
     bool Droppable = true,
     ItemTag Tags = ItemTag.None,
     int WoodcuttingPower = 0,
-    int MiningPower = 0)
+    int MiningPower = 0,
+    int FarmingPower = 0)
 {
     public bool HasTag(ItemTag tag) => (Tags & tag) == tag;
 }
@@ -54,6 +57,8 @@ internal static class ItemIds
     public const string StoneHammer = "stone_hammer";
     public const string StonePickaxe = "stone_pickaxe";
     public const string BronzePickaxe = "bronze_pickaxe";
+    public const string BronzeAxe = "bronze_axe";
+    public const string BronzeSickle = "bronze_sickle";
     public const string IronPickaxe = "iron_pickaxe";
     public const string StoneShovel = "stone_shovel";
     public const string StoneKnife = "stone_knife";
@@ -86,6 +91,8 @@ internal static class ItemIds
     public const string BronzeBar = "bronze_bar";
     public const string IronBloom = "iron_bloom";
     public const string IronBar = "iron_bar";
+    public const string Charcoal = "charcoal";
+    public const string FishBerryStew = "fish_berry_stew";
     public const string WildBerries = "wild_berries";
     public const string TropicalBerries = "tropical_berries";
     public const string RoastedWildBerries = "roasted_wild_berries";
@@ -128,6 +135,9 @@ internal static class ItemIds
     public const string Campfire = "campfire";
     public const string Bloomery = "bloomery";
     public const string SmithingAnvil = "smithing_anvil";
+    public const string CookingPot = "cooking_pot";
+    public const string StorageChest = "storage_chest";
+    public const string StorageBarrel = "storage_barrel";
     public const string CaveHole = "cave_hole";
     public const string CaveEntrance = "cave_entrance";
     public const string DigSite = "dig_site";
@@ -164,7 +174,7 @@ internal static class ItemCatalog
                 ItemIds.IronAxe, "iron axe", "Iron axe",
                 "A sturdy iron axe for chopping down trees.", 5,
                 Tags: ItemTag.Axe | ItemTag.Tool,
-                WoodcuttingPower: 2),
+                WoodcuttingPower: 3),
             [ItemIds.StoneHammer] = new(
                 ItemIds.StoneHammer, "stone hammer", "Stone hammer",
                 "A primitive hammer with a stone head lashed to a wooden handle.",
@@ -189,6 +199,18 @@ internal static class ItemCatalog
                 0, Tags: ItemTag.Tool | ItemTag.Pickaxe |
                          ItemTag.MetalToolSprite,
                 MiningPower: 2),
+            [ItemIds.BronzeAxe] = new(
+                ItemIds.BronzeAxe, "bronze axe", "Bronze axe",
+                "A balanced bronze axe that cuts more effectively than stone.",
+                0, Tags: ItemTag.Tool | ItemTag.Axe |
+                         ItemTag.ProgressionSprite,
+                WoodcuttingPower: 2),
+            [ItemIds.BronzeSickle] = new(
+                ItemIds.BronzeSickle, "bronze sickle", "Bronze sickle",
+                "A curved bronze harvesting blade for gathering berries.",
+                4, Tags: ItemTag.Tool | ItemTag.Sickle |
+                         ItemTag.ProgressionSprite,
+                FarmingPower: 1),
             [ItemIds.IronPickaxe] = new(
                 ItemIds.IronPickaxe, "iron pickaxe", "Iron pickaxe",
                 "A strong forged iron pickaxe for breaking dense ore.",
@@ -308,6 +330,16 @@ internal static class ItemCatalog
                 ItemIds.IronBar, "iron bar", "Iron bar",
                 "An iron bloom reheated and hammered into a clean billet.", 2,
                 Tags: ItemTag.Mineral | ItemTag.MetalMaterialSprite),
+            [ItemIds.Charcoal] = new(
+                ItemIds.Charcoal, "charcoal", "Charcoal",
+                "Slow-burned wood carbon suitable for a bloomery.",
+                3, Tags: ItemTag.MiningMaterial |
+                         ItemTag.ProgressionSprite),
+            [ItemIds.FishBerryStew] = new(
+                ItemIds.FishBerryStew, "fish and berry stew", "Stew",
+                "A nourishing stew of fresh fish and tart berries.",
+                2, Tags: ItemTag.CookedFood |
+                         ItemTag.ProgressionSprite),
             [ItemIds.WildBerries] = new(
                 ItemIds.WildBerries, "wild berries", "Wild berries",
                 "A fresh handful of tart berries gathered from a temperate bush.",
@@ -472,6 +504,24 @@ internal static class ItemCatalog
                 ItemIds.SmithingAnvil,
                 "smithing anvil", "Anvil",
                 "A heavy bronze-faced anvil for consolidating and forging metal.",
+                0, Droppable: false,
+                Tags: ItemTag.PlaceableObject),
+            [ItemIds.CookingPot] = new(
+                ItemIds.CookingPot,
+                "cooking pot", "Cooking pot",
+                "A heavy bronze cooking pot. Place it close to a campfire.",
+                0, Droppable: false,
+                Tags: ItemTag.PlaceableObject),
+            [ItemIds.StorageChest] = new(
+                ItemIds.StorageChest,
+                "wooden chest", "Chest",
+                "A reinforced wooden chest with room for many stored items.",
+                0, Droppable: false,
+                Tags: ItemTag.PlaceableObject),
+            [ItemIds.StorageBarrel] = new(
+                ItemIds.StorageBarrel,
+                "storage barrel", "Barrel",
+                "A compact wooden barrel for persistent item storage.",
                 0, Droppable: false,
                 Tags: ItemTag.PlaceableObject),
             [ItemIds.CaveHole] = new(

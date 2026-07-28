@@ -63,6 +63,24 @@ internal static class PlayerInventory
                 item.HasTag(ItemTag.FishingNet))
             .FirstOrDefault();
 
+    public static ItemDefinition? BestSickle(string?[]? items)
+    {
+        ItemDefinition? best = null;
+        if (items is null) return null;
+        var length = Math.Min(items.Length, Capacity);
+        for (var slot = 0; slot < length; slot++)
+        {
+            if (items[slot] is not { } itemId) continue;
+            var item = ItemCatalog.Get(itemId);
+            if (!item.HasTag(ItemTag.Tool) ||
+                !item.HasTag(ItemTag.Sickle) ||
+                item.FarmingPower <= (best?.FarmingPower ?? 0))
+                continue;
+            best = item;
+        }
+        return best;
+    }
+
     public static bool CanDrop(string itemId) =>
         ItemCatalog.Get(itemId).Droppable;
 

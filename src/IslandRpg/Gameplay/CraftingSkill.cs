@@ -17,7 +17,29 @@ internal enum RecipeAvailability
     Ready
 }
 
-internal sealed record CraftingIngredient(string ItemId, int Count);
+internal sealed record CraftingIngredient(
+    string ItemId,
+    int Count,
+    IReadOnlyList<string>? AlternativeItemIds = null)
+{
+    public bool Accepts(string? candidate)
+    {
+        if (string.Equals(
+                candidate, ItemId,
+                StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (AlternativeItemIds is null) return false;
+        for (var index = 0;
+             index < AlternativeItemIds.Count;
+             index++)
+            if (string.Equals(
+                    candidate,
+                    AlternativeItemIds[index],
+                    StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+}
 internal sealed record CraftingToolRequirement(
     ItemTag Tag, string Name, int Count = 1);
 
@@ -186,7 +208,7 @@ internal static class CraftingSkill
             [
                 new(ItemIds.CopperOre, 2),
                 new(ItemIds.TinOre, 1),
-                new(ItemIds.Coal, 1)
+                new(ItemIds.Coal, 1, [ItemIds.Charcoal])
             ],
             [
                 "Heat copper and tin together with coal in a crucible.",
@@ -216,7 +238,7 @@ internal static class CraftingSkill
             CraftingCategory.Resources, 10, 100,
             [
                 new(ItemIds.IronOre, 3),
-                new(ItemIds.Coal, 2)
+                new(ItemIds.Coal, 2, [ItemIds.Charcoal])
             ],
             [
                 "Feed iron ore and coal into a forced-air clay furnace.",
@@ -227,7 +249,10 @@ internal static class CraftingSkill
         new(
             "iron-bar", ItemIds.IronBar,
             CraftingCategory.Resources, 11, 80,
-            [new(ItemIds.IronBloom, 1), new(ItemIds.Coal, 1)],
+            [
+                new(ItemIds.IronBloom, 1),
+                new(ItemIds.Coal, 1, [ItemIds.Charcoal])
+            ],
             [
                 "Reheat the iron bloom in a charcoal hearth.",
                 "Hammer the bloom repeatedly to drive out trapped slag.",
@@ -254,6 +279,81 @@ internal static class CraftingSkill
                 new(ItemTag.Hammer, "hammer")
             ],
             RequiredStationItemId: ItemIds.SmithingAnvil),
+        new(
+            "bronze-axe", ItemIds.BronzeAxe,
+            CraftingCategory.Tools, 8, 95,
+            [new(ItemIds.BronzeBar, 1), new(ItemIds.Sticks, 1)],
+            [
+                "Hammer the bronze into a broad cutting edge.",
+                "Fit the axe head securely onto a straight wooden handle."
+            ],
+            RequiredTools:
+            [
+                new(ItemTag.Hammer, "hammer")
+            ],
+            RequiredStationItemId: ItemIds.SmithingAnvil),
+        new(
+            "bronze-sickle", ItemIds.BronzeSickle,
+            CraftingCategory.Tools, 9, 100,
+            [new(ItemIds.BronzeBar, 1), new(ItemIds.Sticks, 1)],
+            [
+                "Draw the bronze into a curved harvesting blade.",
+                "Fasten the blade to a short wooden grip."
+            ],
+            RequiredTools:
+            [
+                new(ItemTag.Hammer, "hammer")
+            ],
+            RequiredStationItemId: ItemIds.SmithingAnvil),
+        new(
+            "cooking-pot", ItemIds.CookingPot,
+            CraftingCategory.Furniture, 10, 120,
+            [new(ItemIds.BronzeBar, 2)],
+            [
+                "Hammer two bronze bars into a deep cooking vessel.",
+                "Form a sturdy handle and three stable feet.",
+                "Place the pot close to a campfire before cooking."
+            ],
+            RequiredTools:
+            [
+                new(ItemTag.Hammer, "hammer")
+            ],
+            RequiredStationItemId: ItemIds.SmithingAnvil),
+        new(
+            "storage-chest", ItemIds.StorageChest,
+            CraftingCategory.Furniture, 5, 85,
+            [
+                new(ItemIds.Plank, 6),
+                new(ItemIds.Sticks, 2),
+                new(ItemIds.Rope, 1)
+            ],
+            [
+                "Join six planks into a deep rectangular box.",
+                "Brace the corners and fit a curved wooden lid.",
+                "Bind the chest securely before placing it."
+            ],
+            RequiredTools:
+            [
+                new(ItemTag.Hammer, "hammer")
+            ],
+            RequiredStationItemId: ItemIds.Workbench),
+        new(
+            "storage-barrel", ItemIds.StorageBarrel,
+            CraftingCategory.Furniture, 6, 95,
+            [
+                new(ItemIds.Plank, 5),
+                new(ItemIds.Rope, 2)
+            ],
+            [
+                "Shape the planks into narrow barrel staves.",
+                "Draw the staves tightly together with rope hoops.",
+                "Fit a wooden base and lid before placing it."
+            ],
+            RequiredTools:
+            [
+                new(ItemTag.Hammer, "hammer")
+            ],
+            RequiredStationItemId: ItemIds.Workbench),
         new(
             "iron-pickaxe", ItemIds.IronPickaxe,
             CraftingCategory.Tools, 12, 180,
@@ -406,7 +506,7 @@ internal static class CraftingSkill
         for (var index = 0; index < recipe.Ingredients.Count; index++)
         {
             var ingredient = recipe.Ingredients[index];
-            if (CountItem(inventory, ingredient.ItemId) <
+            if (CountIngredient(inventory, ingredient) <
                 ingredient.Count)
                 return RecipeAvailability.MissingResources;
         }
@@ -453,15 +553,15 @@ internal static class CraftingSkill
         return count;
     }
 
-    private static int CountItem(string?[]? inventory, string itemId)
+    public static int CountIngredient(
+        string?[]? inventory,
+        CraftingIngredient ingredient)
     {
         if (inventory is null) return 0;
         var count = 0;
         var length = Math.Min(inventory.Length, PlayerInventory.Capacity);
         for (var slot = 0; slot < length; slot++)
-            if (string.Equals(
-                    inventory[slot], itemId,
-                    StringComparison.OrdinalIgnoreCase))
+            if (ingredient.Accepts(inventory[slot]))
                 count++;
         return count;
     }

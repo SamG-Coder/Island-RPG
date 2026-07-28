@@ -37,6 +37,22 @@
       "padding": 5,
       "description": "Low blacksmith anvil mounted on a working stump."
     },
+    "storage-chest": {
+      "footprintWidth": 1.25,
+      "footprintDepth": 0.75,
+      "height": 0.8,
+      "visualScale": 0.76,
+      "padding": 5,
+      "description": "Low reinforced wooden chest with a broad front."
+    },
+    "storage-barrel": {
+      "footprintWidth": 0.75,
+      "footprintDepth": 0.75,
+      "height": 1.0,
+      "visualScale": 0.72,
+      "padding": 5,
+      "description": "Upright storage barrel bound with metal hoops."
+    },
     "chair": {
       "footprintWidth": 0.5,
       "footprintDepth": 0.5,
