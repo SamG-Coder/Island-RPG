@@ -8,6 +8,9 @@ placeable objects.
 The project is currently at **v0.2.0**. It is playable, but it remains an early
 prototype and its systems, balance and save format may continue to evolve.
 
+Visit the [Island RPG website](https://samuelgrahame.github.io/AoeRpg/) for a
+visual overview, release history and installation links.
+
 See [the v0.2.0 release notes](release-notes/RELEASE_NOTES_0.2.md) for the complete feature
 summary.
 

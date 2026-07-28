@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Island RPG is an experimental isometric survival and skilling RPG with persistent worlds, caves, crafting, mining and exploration.">
+  <meta name="theme-color" content="#10150f">
+  <meta property="og:title" content="Island RPG">
+  <meta property="og:description" content="Explore a persistent isometric world. Dig deeper. Build your own story.">
+  <meta property="og:type" content="website">
+  <title>Island RPG — Explore. Gather. Descend.</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header" data-header>
+    <a class="brand" href="#top" aria-label="Island RPG home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>Island RPG</span>
+    </a>
+    <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav" data-menu>
+      <span></span><span></span><span></span>
+      <span class="sr-only">Open navigation</span>
+    </button>
+    <nav id="site-nav" class="site-nav" aria-label="Main navigation" data-nav>
+      <a href="#world">The world</a>
+      <a href="#skills">Skills</a>
+      <a href="#releases">Releases</a>
+      <a href="#install">Install</a>
+      <a class="nav-cta" href="https://github.com/samuelGrahame/AoeRpg">View repository</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="hero-glow" aria-hidden="true"></div>
+      <div class="terrain terrain-one" aria-hidden="true"></div>
+      <div class="terrain terrain-two" aria-hidden="true"></div>
+      <div class="hero-content">
+        <p class="eyebrow"><span></span> Version 0.2 available now</p>
+        <h1>Build above.<br><em>Discover<span class="mobile-break"><br></span> below.</em></h1>
+        <p class="hero-copy">A persistent isometric survival RPG where every tree, tunnel and tool becomes part of your story.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="https://github.com/samuelGrahame/AoeRpg/releases">Explore releases <span aria-hidden="true">→</span></a>
+          <a class="button button-ghost" href="#world">Discover the world</a>
+        </div>
+        <dl class="hero-stats" aria-label="Game highlights">
+          <div><dt>8</dt><dd>skills</dd></div>
+          <div><dt>∞</dt><dd>world seeds</dd></div>
+          <div><dt>2</dt><dd>world layers</dd></div>
+        </dl>
+      </div>
+
+      <div class="hero-scene" aria-hidden="true">
+        <div class="scene-island">
+          <span class="tile tile-a"></span>
+          <span class="tile tile-b"></span>
+          <span class="tile tile-c"></span>
+          <span class="tile tile-d"></span>
+          <span class="tile tile-e"></span>
+        </div>
+        <div class="campfire-light"></div>
+        <img class="scene-object campfire" src="assets/campfire.png" alt="">
+        <img class="scene-object workbench" src="assets/workbench.png" alt="">
+        <img class="scene-object chest" src="assets/storage-chest.png" alt="">
+        <span class="scene-label label-surface">Overworld <b>0</b></span>
+        <span class="scene-label label-depth">Underground <b>−1</b></span>
+      </div>
+      <a class="scroll-cue" href="#world"><span></span>Scroll to explore</a>
+    </section>
+
+    <section class="section world-section" id="world">
+      <div class="section-heading reveal">
+        <p class="eyebrow"><span></span> One world, two layers</p>
+        <h2>The island remembers<br><em>what you change.</em></h2>
+        <p>Cross wild coastlines, settle among changing biomes and carve your own route into the darkness beneath.</p>
+      </div>
+
+      <div class="world-grid">
+        <article class="world-card world-card-surface reveal">
+          <div class="card-number">01</div>
+          <div class="world-art surface-art" aria-hidden="true">
+            <div class="sun"></div>
+            <div class="ridge ridge-back"></div>
+            <div class="ridge ridge-front"></div>
+            <img src="assets/workbench.png" alt="">
+          </div>
+          <div class="world-card-copy">
+            <p class="card-kicker">The overworld</p>
+            <h3>Find your ground</h3>
+            <p>Follow rivers to the coast, gather from distinct climates and turn a wild landscape into somewhere worth returning to.</p>
+          </div>
+        </article>
+
+        <article class="world-card world-card-cave reveal">
+          <div class="card-number">02</div>
+          <div class="world-art cave-art" aria-hidden="true">
+            <div class="cave-light"></div>
+            <div class="cave-wall"></div>
+            <img src="assets/bloomery.png" alt="">
+          </div>
+          <div class="world-card-copy">
+            <p class="card-kicker">The underground</p>
+            <h3>Make your own entrance</h3>
+            <p>Excavate promising ground, secure a discovered shaft with rope and descend into persistent caves rich with ore and ruins.</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section loop-section" id="skills">
+      <div class="loop-intro reveal">
+        <p class="eyebrow"><span></span> A connected game loop</p>
+        <h2>Nothing gathered<br><em>goes to waste.</em></h2>
+      </div>
+      <div class="loop-track reveal">
+        <article>
+          <span class="loop-index">01</span>
+          <div class="loop-icon"><img src="assets/stone-pickaxe-item.png" alt=""></div>
+          <h3>Gather</h3>
+          <p>Fish, forage, chop and mine resources shaped by the world around you.</p>
+        </article>
+        <div class="loop-arrow" aria-hidden="true">→</div>
+        <article>
+          <span class="loop-index">02</span>
+          <div class="loop-icon"><img src="assets/bloomery.png" alt=""></div>
+          <h3>Refine</h3>
+          <p>Turn raw finds into charcoal, blooms, metal bars, meals and materials.</p>
+        </article>
+        <div class="loop-arrow" aria-hidden="true">→</div>
+        <article>
+          <span class="loop-index">03</span>
+          <div class="loop-icon"><img src="assets/anvil.png" alt=""></div>
+          <h3>Craft</h3>
+          <p>Forge better tools and build stations that unlock the next stage.</p>
+        </article>
+        <div class="loop-arrow" aria-hidden="true">→</div>
+        <article>
+          <span class="loop-index">04</span>
+          <div class="loop-icon"><img src="assets/storage-chest.png" alt=""></div>
+          <h3>Expand</h3>
+          <p>Store what matters, range farther and prepare for deeper expeditions.</p>
+        </article>
+      </div>
+
+      <div class="skill-list reveal">
+        <span>Woodcutting</span><span>Farming</span><span>Crafting</span><span>Fishing</span>
+        <span>Cooking</span><span>Firemaking</span><span>Digging</span><span>Mining</span>
+      </div>
+    </section>
+
+    <section class="section features-section">
+      <div class="feature-panel reveal">
+        <div>
+          <p class="eyebrow"><span></span> Built to feel alive</p>
+          <h2>A world with<br><em>long memory.</em></h2>
+        </div>
+        <div class="feature-columns">
+          <article>
+            <span class="feature-symbol">◇</span>
+            <h3>Persistent changes</h3>
+            <p>Entrances, fires, mining progress, storage and placed stations remain where you left them.</p>
+          </article>
+          <article>
+            <span class="feature-symbol">◌</span>
+            <h3>Living atmosphere</h3>
+            <p>Day and night, animated water, cave darkness and merging local lights shape every journey.</p>
+          </article>
+          <article>
+            <span class="feature-symbol">⌁</span>
+            <h3>Endless geography</h3>
+            <p>Deterministic seeds create streamed terrain, rivers, coasts, caves and distinct biomes.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section releases-section" id="releases">
+      <div class="section-heading release-heading reveal">
+        <p class="eyebrow"><span></span> Development journey</p>
+        <h2>Release history</h2>
+      </div>
+      <div class="release-list">
+        <article class="release-card current reveal">
+          <div class="release-version">
+            <span>Latest release</span>
+            <strong>0.2</strong>
+          </div>
+          <div class="release-copy">
+            <p class="release-date">29 July 2026</p>
+            <h3>Caves &amp; Connected Progression</h3>
+            <p>Underground exploration, mining, metalworking, foraging, cooking, persistent storage and a faster, cleaner world renderer.</p>
+            <div class="release-tags"><span>Caves</span><span>Mining</span><span>Storage</span><span>Lighting</span></div>
+          </div>
+          <a class="release-link" href="https://github.com/samuelGrahame/AoeRpg/blob/master/release-notes/RELEASE_NOTES_0.2.md" aria-label="Read version 0.2 release notes">Read notes <span>↗</span></a>
+        </article>
+
+        <article class="release-card reveal">
+          <div class="release-version">
+            <span>First playable</span>
+            <strong>0.1</strong>
+          </div>
+          <div class="release-copy">
+            <p class="release-date">27 July 2026</p>
+            <h3>The First Island</h3>
+            <p>The original playable foundation: procedural islands, survival skills, crafting, fishing and persistent saves.</p>
+            <div class="release-tags"><span>World generation</span><span>Skills</span><span>Crafting</span></div>
+          </div>
+          <a class="release-link" href="https://github.com/samuelGrahame/AoeRpg/blob/master/release-notes/RELEASE_NOTES_0.1.md" aria-label="Read version 0.1 release notes">Read notes <span>↗</span></a>
+        </article>
+      </div>
+      <a class="text-link reveal" href="https://github.com/samuelGrahame/AoeRpg/releases">View all releases on GitHub <span>→</span></a>
+    </section>
+
+    <section class="section install-section" id="install">
+      <div class="install-panel reveal">
+        <div class="install-copy">
+          <p class="eyebrow"><span></span> Play the prototype</p>
+          <h2>Your island is<br><em>waiting.</em></h2>
+          <p>Island RPG currently targets Windows and is built with C#, .NET 10 and OpenTK.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/samuelGrahame/AoeRpg/releases">Get the latest release <span>→</span></a>
+            <a class="button button-ghost" href="https://github.com/samuelGrahame/AoeRpg#quick-start">Build from source</a>
+          </div>
+        </div>
+        <div class="requirements">
+          <p>Requirements</p>
+          <ul>
+            <li><span>01</span> Windows 10 or later</li>
+            <li><span>02</span> .NET 10 runtime or SDK</li>
+            <li><span>03</span> OpenGL 3.3 graphics support</li>
+            <li><span>04</span> A legally owned Age of Empires II HD installation</li>
+          </ul>
+        </div>
+      </div>
+      <p class="legal reveal">Island RPG is an unofficial, non-commercial project. Age of Empires assets are not included or distributed. Age of Empires is a trademark of Microsoft.</p>
+    </section>
+  </main>
+
+  <footer>
+    <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span><span>Island RPG</span></a>
+    <p>Made with curiosity, campfires and far too many rocks.</p>
+    <nav aria-label="Footer navigation">
+      <a href="https://github.com/samuelGrahame/AoeRpg">GitHub</a>
+      <a href="https://github.com/samuelGrahame/AoeRpg/releases">Releases</a>
+      <a href="https://github.com/samuelGrahame/AoeRpg/blob/master/LICENSE">License</a>
+    </nav>
+  </footer>
+</body>
+</html>
