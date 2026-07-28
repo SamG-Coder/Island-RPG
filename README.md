@@ -8,7 +8,7 @@ placeable objects.
 The project is currently at **v0.2.0**. It is playable, but it remains an early
 prototype and its systems, balance and save format may continue to evolve.
 
-Visit the [Island RPG website](https://samuelgrahame.github.io/AoeRpg/) for a
+Visit the [Island RPG website](https://samuelgrahame.github.io/Island-RPG/) for a
 visual overview, release history and installation links.
 
 See [the v0.2.0 release notes](release-notes/RELEASE_NOTES_0.2.md) for the complete feature
@@ -64,7 +64,7 @@ installation because its data and asset layout differs.
 Clone the repository, restore dependencies and run the Release configuration:
 
 ```powershell
-git clone https://github.com/samuelGrahame/AoeRpg.git
+git clone https://github.com/samuelGrahame/Island-RPG.git
 cd AoeRpg
 dotnet restore IslandRpg.slnx
 dotnet run --project src/IslandRpg -c Release
