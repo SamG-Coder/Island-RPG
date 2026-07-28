@@ -12,7 +12,8 @@ internal sealed record WorldVegetationRenderItem(
     string StableKey,
     string AtlasKey,
     string? ShadowAtlasKey,
-    bool CanGatherFibre);
+    bool CanGatherFibre,
+    bool CanGatherBerries);
 
 internal static class WorldVegetationRenderCache
 {
@@ -125,7 +126,9 @@ internal static class WorldVegetationRenderCache
                     : $"{shadowName}#{item.FrameIndex}",
                 item.CanBecomeInstance &&
                 item.Kind == WorldVegetationKind.Shrub &&
-                biome is not Biome.Snow and not Biome.Tundra);
+                biome is not Biome.Snow and not Biome.Tundra,
+                item.CanBecomeInstance &&
+                item.Kind == WorldVegetationKind.BerryBush);
     }
 
     private static int PositiveMod(int value, int divisor)

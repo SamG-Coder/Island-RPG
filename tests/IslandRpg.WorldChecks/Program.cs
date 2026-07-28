@@ -129,6 +129,21 @@ Require(
     !SpriteHitTesting.Contains(
         miningHitFrame, (0, 0, 32, 32), new(25, 16), 1, 4),
     "mining sprite selection must allow size-aware edge tolerance without selecting distant empty space");
+Require(
+    ItemCatalog.Get(ItemIds.WildBerries) is var wildBerries &&
+    wildBerries.HasTag(ItemTag.Berry) &&
+    wildBerries.HasTag(ItemTag.BerrySprite) &&
+    wildBerries.SpriteCell == 0 &&
+    ItemCatalog.Get(ItemIds.TropicalBerries) is var tropicalBerries &&
+    tropicalBerries.HasTag(ItemTag.Berry) &&
+    tropicalBerries.HasTag(ItemTag.BerrySprite) &&
+    tropicalBerries.SpriteCell == 1,
+    "both forage bush families must have dedicated generated berry rewards");
+var berryFarmingAward = FarmingSkill.AwardExperience(0, 36);
+Require(
+    berryFarmingAward.Experience == 36 &&
+    berryFarmingAward.Gained == 36,
+    "berry harvesting XP must use the shared Farming progression");
 
 Console.WriteLine(
     "World-hover probe benchmark (1,000 stationary updates): " +

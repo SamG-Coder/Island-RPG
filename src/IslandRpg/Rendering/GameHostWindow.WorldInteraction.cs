@@ -777,6 +777,27 @@ internal sealed partial class GameHostWindow
             return true;
         }
 
+        if (item.HasTag(ItemTag.BerrySprite))
+        {
+            if ((uint)cell >= (uint)_berryItemFrames.Length ||
+                _berryItemFrames[cell] is not { } berryFrame ||
+                _berryItemTextures[cell] == 0)
+            {
+                frame = null!;
+                texture = 0;
+                atlasKey = "";
+                shadowKey = null;
+                return false;
+            }
+            frame = berryFrame;
+            texture = _berryItemTextures[cell];
+            atlasKey = BerryAtlasKey(cell, false);
+            shadowKey = _berryShadowFrames[cell] is null
+                ? null
+                : BerryAtlasKey(cell, true);
+            return true;
+        }
+
         if (item.HasTag(ItemTag.CoastalSprite))
         {
             if ((uint)cell >= (uint)_coastalSprites.GroundFrames.Length ||

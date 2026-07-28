@@ -78,6 +78,7 @@ internal sealed partial class GameHostWindow : GameWindow
         CookOnCampfire,
         Fish,
         GatherFibres,
+        GatherBerries,
         DigCave,
         Mine,
         EnterCave,
@@ -225,6 +226,9 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly int[] _miningItemTextures = new int[4];
     private readonly SpriteFrame?[] _miningItemFrames = new SpriteFrame?[4];
     private readonly SpriteFrame?[] _miningShadowFrames = new SpriteFrame?[4];
+    private readonly int[] _berryItemTextures = new int[2];
+    private readonly SpriteFrame?[] _berryItemFrames = new SpriteFrame?[2];
+    private readonly SpriteFrame?[] _berryShadowFrames = new SpriteFrame?[2];
     private readonly int[] _stoneToolTextures = new int[14];
     private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[14];
     private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[14];
@@ -1248,7 +1252,7 @@ internal sealed partial class GameHostWindow : GameWindow
             {
                 OpenMiningContext(miningNode, miningKey, target);
             }
-            else if (TryGetFibreShrubUnderMouse(
+            else if (TryGetGatherableVegetationUnderMouse(
                          SceneMousePosition(),
                          out var contextVegetation,
                          out var vegetationKey))
@@ -1310,10 +1314,14 @@ internal sealed partial class GameHostWindow : GameWindow
             {
                 QueueMining(miningKey);
             }
-            else if (TryGetFibreShrubUnderMouse(
-                         SceneMousePosition(), out _, out var vegetationKey))
+            else if (TryGetGatherableVegetationUnderMouse(
+                         SceneMousePosition(), out var vegetation,
+                         out var vegetationKey))
             {
-                QueueFibreGather(vegetationKey);
+                if (vegetation.Kind == WorldVegetationKind.BerryBush)
+                    QueueBerryGather(vegetationKey);
+                else
+                    QueueFibreGather(vegetationKey);
             }
             else if (!TryGetTreeUnderMouse(SceneMousePosition(), out var actionTree))
             {
@@ -3705,6 +3713,11 @@ internal sealed partial class GameHostWindow : GameWindow
                    (uint)miningCell < (uint)_miningItemTextures.Length
                 ? _miningItemTextures[miningCell]
                 : 0;
+        if (item.HasTag(ItemTag.BerrySprite))
+            return item.SpriteCell is { } berryCell &&
+                   (uint)berryCell < (uint)_berryItemTextures.Length
+                ? _berryItemTextures[berryCell]
+                : 0;
         if (item.HasTag(ItemTag.CoastalSprite))
             return item.SpriteCell is { } coastalCell &&
                    (uint)coastalCell <
@@ -3752,6 +3765,9 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.HasTag(ItemTag.MiningSprite) &&
             (uint)cell < (uint)_miningItemFrames.Length)
             return _miningItemFrames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.BerrySprite) &&
+            (uint)cell < (uint)_berryItemFrames.Length)
+            return _berryItemFrames[cell] ?? WoodcuttingItemsFrame;
         if (item.HasTag(ItemTag.CoastalSprite) &&
             (uint)cell < (uint)_coastalSprites.Frames.Length)
             return _coastalSprites.Frames[cell] ?? WoodcuttingItemsFrame;
@@ -3781,6 +3797,7 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.SpriteCell is not { } cell ||
             item.HasTag(ItemTag.StoneToolSprite) ||
             item.HasTag(ItemTag.MiningSprite) ||
+            item.HasTag(ItemTag.BerrySprite) ||
             item.HasTag(ItemTag.SupplementalSprite) ||
             item.HasTag(ItemTag.MiningSprite) ||
             item.HasTag(ItemTag.NaturalMaterial) ||
@@ -5335,6 +5352,33 @@ internal sealed partial class GameHostWindow : GameWindow
                 _miningItemTextures[cell] = Upload(frame);
             }
         }
+        var berrySheetPath = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Images",
+            "berry-items.png");
+        if (File.Exists(berrySheetPath))
+        {
+            using var stream = File.OpenRead(berrySheetPath);
+            var sheet = ImageResult.FromStream(
+                stream, ColorComponents.RedGreenBlueAlpha);
+            const int cellSize = 32;
+            for (var cell = 0; cell < _berryItemTextures.Length; cell++)
+            {
+                var pixels = new byte[cellSize * cellSize * 4];
+                for (var row = 0; row < cellSize; row++)
+                    System.Buffer.BlockCopy(
+                        sheet.Data,
+                        (row * sheet.Width + cell * cellSize) * 4,
+                        pixels,
+                        row * cellSize * 4,
+                        cellSize * 4);
+                var frame = new SpriteFrame(
+                    cellSize, cellSize, cellSize / 2, 28, pixels);
+                _berryItemFrames[cell] = frame;
+                _berryShadowFrames[cell] =
+                    ItemShadowGenerator.Create(frame);
+                _berryItemTextures[cell] = Upload(frame);
+            }
+        }
         var stoneToolSheetPath = Path.Combine(
             AppContext.BaseDirectory, "Resources", "Images",
             "stone-tools-items.png");
@@ -5766,6 +5810,13 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_miningShadowFrames[cell] is { } shadowFrame)
                 Place(MiningAtlasKey(cell, true), null, shadowFrame);
         }
+        for (var cell = 0; cell < _berryItemFrames.Length; cell++)
+        {
+            if (_berryItemFrames[cell] is { } itemFrame)
+                Place(BerryAtlasKey(cell, false), null, itemFrame);
+            if (_berryShadowFrames[cell] is { } shadowFrame)
+                Place(BerryAtlasKey(cell, true), null, shadowFrame);
+        }
         for (var cell = 0; cell < _stoneToolFrames.Length; cell++)
         {
             if (_stoneToolFrames[cell] is { } itemFrame)
@@ -5888,6 +5939,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static string MiningAtlasKey(int cell, bool shadow) =>
         shadow ? $"MINING_SHADOW#{cell}" : $"MINING#{cell}";
+
+    private static string BerryAtlasKey(int cell, bool shadow) =>
+        shadow ? $"BERRY_SHADOW#{cell}" : $"BERRY#{cell}";
 
     private static string StoneToolAtlasKey(int cell, bool shadow) =>
         shadow ? $"STONE_TOOL_SHADOW#{cell}" : $"STONE_TOOL#{cell}";
@@ -6692,6 +6746,8 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var texture in _supplementalItemTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _miningItemTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _berryItemTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _stoneToolTextures)
             if (texture != 0) GL.DeleteTexture(texture);

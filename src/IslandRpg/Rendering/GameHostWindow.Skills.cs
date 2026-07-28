@@ -278,7 +278,7 @@ internal sealed partial class GameHostWindow
             cooking ? "Higher levels reduce burning" :
             fishing ? "Unlocks more fish" :
             crafting ? "Browse learned recipes" :
-            farming ? "Plant seeds to gain XP" :
+            farming ? "Plant seeds and forage berries to gain XP" :
             $"Hit chance: {WoodcuttingSkill.HitChance(level) * 100:0}%",
             new(info.X + 9, info.Y + 31),
             new(184, 175, 145, 255));

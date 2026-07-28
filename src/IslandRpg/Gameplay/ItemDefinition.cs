@@ -25,7 +25,9 @@ internal enum ItemTag
     Shovel = 1 << 18,
     Pickaxe = 1 << 19,
     MiningMaterial = 1 << 20,
-    MiningSprite = 1 << 21
+    MiningSprite = 1 << 21,
+    Berry = 1 << 22,
+    BerrySprite = 1 << 23
 }
 
 internal sealed record ItemDefinition(
@@ -77,6 +79,8 @@ internal static class ItemIds
     public const string TinOre = "tin_ore";
     public const string CopperOre = "copper_ore";
     public const string IronOre = "iron_ore";
+    public const string WildBerries = "wild_berries";
+    public const string TropicalBerries = "tropical_berries";
     public const string ClamShell = "clam_shell";
     public const string CockleShell = "cockle_shell";
     public const string SpiralShell = "spiral_shell";
@@ -266,6 +270,17 @@ internal static class ItemCatalog
                 "Dense iron-rich ore with a rusty red surface.", 3,
                 Tags: ItemTag.Mineral | ItemTag.NaturalMaterial |
                       ItemTag.MiningMaterial | ItemTag.MiningSprite),
+            [ItemIds.WildBerries] = new(
+                ItemIds.WildBerries, "wild berries", "Wild berries",
+                "A fresh handful of tart berries gathered from a temperate bush.",
+                0, Tags: ItemTag.NaturalMaterial |
+                         ItemTag.Berry | ItemTag.BerrySprite),
+            [ItemIds.TropicalBerries] = new(
+                ItemIds.TropicalBerries, "tropical berries",
+                "Tropical berries",
+                "A sweet handful of golden berries gathered in a warm climate.",
+                1, Tags: ItemTag.NaturalMaterial |
+                         ItemTag.Berry | ItemTag.BerrySprite),
             [ItemIds.ClamShell] = Coastal(
                 ItemIds.ClamShell, "clam shell", "Clam",
                 "A common shell washed smooth by the tide.", 0),

@@ -106,7 +106,7 @@ internal sealed partial class GameHostWindow
                 next = GameCursorKind.PickUpItem;
                 cursor = _pickupNativeCursor;
             }
-            else if (TryGetFibreShrubUnderMouse(
+            else if (TryGetGatherableVegetationUnderMouse(
                          SceneMousePosition(), out _, out _) &&
                      _pickupNativeCursor is not null)
             {

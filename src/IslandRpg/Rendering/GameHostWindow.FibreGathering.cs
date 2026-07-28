@@ -11,13 +11,14 @@ internal sealed partial class GameHostWindow
     private readonly ContextMenuControlState _vegetationContext = new();
     private string? _vegetationContextKey;
     private Vector2 _vegetationContextWalkTarget;
+    private bool _vegetationContextBerries;
     private string? _activeFibreVegetationKey;
 
     private void InitializeFibreGathering() =>
         _vegetationContext.Selected +=
             HandleVegetationContextSelection;
 
-    private bool TryGetFibreShrubUnderMouse(
+    private bool TryGetGatherableVegetationUnderMouse(
         Vector2 mouse,
         out WorldVegetation vegetation,
         out string stableKey)
@@ -36,7 +37,7 @@ internal sealed partial class GameHostWindow
             if (cached.VegetationIndex < 0) continue;
             var candidate =
                 gpu.Chunk.Vegetation[cached.VegetationIndex];
-            if (!cached.CanGatherFibre ||
+            if ((!cached.CanGatherFibre && !cached.CanGatherBerries) ||
                 !_treeAtlas.TryGetValue(
                     cached.AtlasKey, out var entry))
                 continue;
@@ -68,6 +69,8 @@ internal sealed partial class GameHostWindow
         Vector2 walkTarget)
     {
         _vegetationContextKey = stableKey;
+        _vegetationContextBerries =
+            vegetation.Kind == WorldVegetationKind.BerryBush;
         _vegetationContextWalkTarget = walkTarget;
         _inventoryContext.Close();
         _treeContext.Close();
@@ -75,27 +78,32 @@ internal sealed partial class GameHostWindow
         _fishContext.Close();
         _vegetationContext.Open(
             MouseState.Position,
-            ["Gather fibres", "Walk Here", "Examine"],
+            [_vegetationContextBerries ? "Pick berries" : "Gather fibres",
+             "Walk Here", "Examine"],
             SceneClientBounds(), 154);
     }
 
     private void HandleVegetationContextSelection(int option)
     {
         var key = _vegetationContextKey;
+        var berries = _vegetationContextBerries;
         _vegetationContextKey = null;
         if (key is null) return;
         switch (option)
         {
             case 0:
-                QueueFibreGather(key);
+                if (berries) QueueBerryGather(key);
+                else QueueFibreGather(key);
                 break;
             case 1:
                 QueueWalk(_vegetationContextWalkTarget);
                 break;
             case 2:
                 _chatUi.AddMessage(
-                    "A fibrous green shrub. Its stems can be stripped " +
-                    "and woven.",
+                    berries
+                        ? "A wild berry bush ready to forage."
+                        : "A fibrous green shrub. Its stems can be stripped " +
+                          "and woven.",
                     ChatMessageStyle.Normal);
                 break;
         }
@@ -105,7 +113,7 @@ internal sealed partial class GameHostWindow
     {
         var located = FindVegetation(stableKey);
         if (located is not { } target) return;
-        if (!FibreShrubReady(target.Gpu.Chunk, stableKey))
+        if (!VegetationReady(target.Gpu.Chunk, stableKey))
         {
             ReportBlockedAction(
                 "fibre-shrub-recovering",
@@ -129,7 +137,7 @@ internal sealed partial class GameHostWindow
         if (_player is null || _activePlayer is null) return;
         var located = FindVegetation(stableKey);
         if (located is null ||
-            !FibreShrubReady(located.Value.Gpu.Chunk, stableKey))
+            !VegetationReady(located.Value.Gpu.Chunk, stableKey))
             return;
         _activeFibreVegetationKey = stableKey;
         _player.GatherAt(target);
@@ -151,7 +159,7 @@ internal sealed partial class GameHostWindow
         _activeFibreVegetationKey = null;
         var located = FindVegetation(key);
         if (located is not { } target ||
-            !FibreShrubReady(target.Gpu.Chunk, key))
+            !VegetationReady(target.Gpu.Chunk, key))
         {
             _player.Stop();
             return;
@@ -183,7 +191,8 @@ internal sealed partial class GameHostWindow
             Inventory = inventory,
             UpdatedUtc = DateTime.UtcNow
         };
-        SetFibreShrubCooldown(target.Gpu.Chunk, key);
+        SetVegetationCooldown(
+            target.Gpu.Chunk, key, FibreShrubCooldownSeconds);
         _saves.SavePlayer(_activePlayer);
         QueueChunkSave(target.Gpu.Chunk);
         _chatUi.AddMessage(
@@ -194,7 +203,7 @@ internal sealed partial class GameHostWindow
         _player.Stop();
     }
 
-    private bool FibreShrubReady(
+    private bool VegetationReady(
         WorldChunk chunk, string stableKey) =>
         chunk.VegetationFibreStates.FirstOrDefault(state =>
             state.StableKey.Equals(
@@ -202,15 +211,15 @@ internal sealed partial class GameHostWindow
         is not { } state ||
         state.ReadyAtGameSeconds <= _worldGameSeconds;
 
-    private void SetFibreShrubCooldown(
-        WorldChunk chunk, string stableKey)
+    private void SetVegetationCooldown(
+        WorldChunk chunk, string stableKey, double cooldownSeconds)
     {
         chunk.VegetationFibreStates.RemoveAll(state =>
             state.StableKey.Equals(
                 stableKey, StringComparison.Ordinal));
         chunk.VegetationFibreStates.Add(new(
             stableKey,
-            _worldGameSeconds + FibreShrubCooldownSeconds));
+            _worldGameSeconds + cooldownSeconds));
     }
 
     private (

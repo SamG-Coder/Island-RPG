@@ -19,6 +19,7 @@
     <Content Include="Resources\Images\stone-tools-items.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\stone-pickaxe-item.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\mining-items.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\berry-items.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\stone-shovel-item.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\rope-item.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\dirt-item.png" CopyToOutputDirectory="PreserveNewest" />

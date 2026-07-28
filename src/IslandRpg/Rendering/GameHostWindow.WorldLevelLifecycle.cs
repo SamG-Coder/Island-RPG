@@ -15,5 +15,6 @@ internal sealed partial class GameHostWindow
         _activeMiningKey = null;
         _miningContext.Close();
         _levelUpFireworks.Clear();
+        _activeBerryVegetationKey = null;
     }
 }

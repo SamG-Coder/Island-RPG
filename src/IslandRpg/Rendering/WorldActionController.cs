@@ -79,6 +79,17 @@ internal sealed partial class GameHostWindow
             clearTreeActions: true);
     }
 
+    public void QueueBerryBush(
+        WorldVegetation vegetation, string stableKey)
+    {
+        QueuePath(
+            new Vector2(vegetation.X, vegetation.Y),
+            .72f,
+            GameHostWindow.WorldActionType.GatherBerries,
+            vegetationKey: stableKey,
+            clearTreeActions: true);
+    }
+
     public void QueueMining(WorldVegetation node, string stableKey) =>
         QueuePath(
             new Vector2(node.X, node.Y),
@@ -240,6 +251,14 @@ internal sealed partial class GameHostWindow
                 break;
             case
             {
+                Type: GameHostWindow.WorldActionType.GatherBerries,
+                VegetationKey: { } vegetationKey
+            }:
+                window.BeginBerryGather(
+                    vegetationKey, action.Target);
+                break;
+            case
+            {
                 Type: GameHostWindow.WorldActionType.Mine,
                 VegetationKey: { } vegetationKey
             }:
@@ -292,6 +311,7 @@ internal sealed partial class GameHostWindow
         window.UpdateCooking();
         window.UpdateFishing();
         window.UpdateFibreGathering();
+        window.UpdateBerryGathering();
         window.UpdateMining();
         window.UpdateCaveDigging();
     }
