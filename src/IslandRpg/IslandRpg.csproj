@@ -22,7 +22,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\README.md" Link="README.md" CopyToPublishDirectory="PreserveNewest" />
-    <None Include="..\..\RELEASE_NOTES_0.2.md" Link="RELEASE_NOTES_0.2.md" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\release-notes\RELEASE_NOTES_0.2.md" Link="RELEASE_NOTES_0.2.md" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\LICENSE" Link="LICENSE" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Resources\Fonts\Arimo-Variable.ttf" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Fonts\OFL-Arimo.txt" CopyToOutputDirectory="PreserveNewest" />

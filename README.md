@@ -8,7 +8,7 @@ placeable objects.
 The project is currently at **v0.2.0**. It is playable, but it remains an early
 prototype and its systems, balance and save format may continue to evolve.
 
-See [the v0.2.0 release notes](RELEASE_NOTES_0.2.md) for the complete feature
+See [the v0.2.0 release notes](release-notes/RELEASE_NOTES_0.2.md) for the complete feature
 summary.
 
 ## Important asset requirement
@@ -297,7 +297,7 @@ This is an early playable prototype. Combat, health, hunger, NPC simulation,
 building construction and audio are not implemented. Farming covers tree
 planting and berry foraging, Cooking supports fish and berries, and placeable
 furniture remains limited. See the
-[v0.2.0 release notes](RELEASE_NOTES_0.2.md) for more detail.
+[v0.2.0 release notes](release-notes/RELEASE_NOTES_0.2.md) for more detail.
 
 ## License and acknowledgements
 
