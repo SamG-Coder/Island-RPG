@@ -130,8 +130,8 @@ internal static class AnimationSpriteProcessor
 
     private static void RemoveChroma(byte[] pixels, Rgb key)
     {
-        const double transparent = 28;
-        const double opaque = 100;
+        const double transparent = 24;
+        const double opaque = 180;
         for (var offset = 0; offset < pixels.Length; offset += 4)
         {
             var distance = Math.Sqrt(
@@ -153,7 +153,39 @@ internal static class AnimationSpriteProcessor
                 pixels[offset + 1] = 0;
                 pixels[offset + 2] = 0;
             }
+            else if (alpha < 255)
+            {
+                // Recover the foreground colour from pixels antialiased
+                // against the chroma background, preventing a coloured halo.
+                var coverage = alpha / 255d;
+                pixels[offset] = Unblend(
+                    pixels[offset], key.B, coverage);
+                pixels[offset + 1] = Unblend(
+                    pixels[offset + 1], key.G, coverage);
+                pixels[offset + 2] = Unblend(
+                    pixels[offset + 2], key.R, coverage);
+            }
+            if (pixels[offset + 3] > 0)
+                Despill(pixels, offset);
         }
+    }
+
+    private static byte Unblend(byte value, byte background, double coverage) =>
+        (byte)Math.Clamp(
+            Math.Round(
+                (value - background * (1d - coverage)) / coverage),
+            byte.MinValue,
+            byte.MaxValue);
+
+    private static void Despill(byte[] pixels, int offset)
+    {
+        var spill = Math.Min(
+            pixels[offset],
+            pixels[offset + 2]) - pixels[offset + 1];
+        if (spill <= 8) return;
+        pixels[offset] = (byte)Math.Max(0, pixels[offset] - spill);
+        pixels[offset + 2] = (byte)Math.Max(
+            0, pixels[offset + 2] - Math.Round(spill * .55));
     }
 
     private static Bounds FindBounds(byte[] pixels, int width, int height)

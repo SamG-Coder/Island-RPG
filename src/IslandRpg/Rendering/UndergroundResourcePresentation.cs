@@ -6,16 +6,20 @@ namespace IslandRpg.Rendering;
 internal static class UndergroundResourcePresentation
 {
     public static IEnumerable<(string Key, SpriteFrame Frame)> CreateOreFrames(
-        SpriteFrame goldOre)
+        IReadOnlyList<SpriteFrame> goldOreFrames)
     {
-        yield return (UndergroundResourceGenerator.Coal,
-            Recolor(goldOre, (12, 14, 16), (88, 94, 98)));
-        yield return (UndergroundResourceGenerator.Tin,
-            Recolor(goldOre, (62, 69, 72), (205, 216, 216)));
-        yield return (UndergroundResourceGenerator.Copper,
-            Recolor(goldOre, (62, 22, 10), (214, 101, 39)));
-        yield return (UndergroundResourceGenerator.Iron,
-            Recolor(goldOre, (47, 31, 25), (151, 85, 59)));
+        for (var frame = 0; frame < goldOreFrames.Count; frame++)
+        {
+            var source = goldOreFrames[frame];
+            yield return ($"{UndergroundResourceGenerator.Coal}#{frame}",
+                Recolor(source, (12, 14, 16), (88, 94, 98)));
+            yield return ($"{UndergroundResourceGenerator.Tin}#{frame}",
+                Recolor(source, (62, 69, 72), (205, 216, 216)));
+            yield return ($"{UndergroundResourceGenerator.Copper}#{frame}",
+                Recolor(source, (62, 22, 10), (214, 101, 39)));
+            yield return ($"{UndergroundResourceGenerator.Iron}#{frame}",
+                Recolor(source, (47, 31, 25), (151, 85, 59)));
+        }
     }
 
     internal static SpriteFrame Recolor(

@@ -33,5 +33,6 @@
     <Content Include="Resources\Images\workbench.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\campfire.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\campfire-fire-16.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\CaveGrowth\cave-growth-sprites.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

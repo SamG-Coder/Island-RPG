@@ -1957,12 +1957,64 @@ try
             undergroundReloaded.Vegetation),
         "transient underground generation must be deterministic");
     Require(
-        underground.Vegetation.Length is > 0 and <= 6 &&
+        underground.Vegetation.Length is > 0 and
+            <= CaveFeaturePlacement.MaximumNodes &&
         underground.Vegetation.All(value =>
             UndergroundResourceGenerator.IsResourceGraphic(
                 value.GraphicName) &&
+            value.FrameIndex >= 0 &&
+            value.FrameIndex <
+            UndergroundResourceGenerator.VariantCount(value.GraphicName) &&
             !value.CanBecomeInstance),
         "underground scenery must stay sparse, decorative, and non-interactive");
+    var contextualTiles = underground.Tiles
+        .Select(tile => tile with
+        {
+            Biome = PositiveMod(tile.X, 8) is 3 or 4
+                ? Biome.ShallowWater
+                : Biome.Rock
+        })
+        .ToArray();
+    var contextualScenery = CaveFeaturePlacement.Generate(
+        store.Seed,
+        undergroundCoordinate,
+        contextualTiles,
+        Enumerable.Repeat(true, WorldChunk.Size * WorldChunk.Size).ToArray());
+    Require(
+        contextualScenery.Any(value =>
+            value.GraphicName == UndergroundResourceGenerator.Growth &&
+            value.FrameIndex is >= 0 and <= 4) &&
+        contextualScenery.Any(value =>
+            value.GraphicName != UndergroundResourceGenerator.Growth),
+        "cave features must combine water-aware growth with geological scenery");
+    var shaftTile = Enumerable.Range(0, underground.RenderableTiles.Length)
+        .First(index =>
+        {
+            var x = index % WorldChunk.Size;
+            var y = index / WorldChunk.Size;
+            return x is > 0 and < WorldChunk.Size - 1 &&
+                   y is > 0 and < WorldChunk.Size - 1 &&
+                   underground.RenderableTiles[index];
+        });
+    var testShaft = new WorldGroundObject(
+        Guid.NewGuid(),
+        ItemIds.CaveHole,
+        shaftTile % WorldChunk.Size + .5f,
+        shaftTile / WorldChunk.Size + .5f);
+    underground.GroundObjects.Add(testShaft);
+    var shaftRenderItems = WorldVegetationRenderCache.Build(
+        underground,
+        new float[(WorldChunk.Size + 1) * (WorldChunk.Size + 1)]);
+    underground.GroundObjects.Remove(testShaft);
+    Require(
+        shaftRenderItems.Any(value =>
+            value.StableKey.StartsWith(
+                $"shaft-growth:{testShaft.Id}:",
+                StringComparison.Ordinal) &&
+            value.AtlasKey.StartsWith(
+                UndergroundResourceGenerator.Growth,
+                StringComparison.Ordinal)),
+        "open cave shafts must create cached entrance-zone plant presentation");
     var caveWaterSamples = 0;
     for (var sampleY = -128; sampleY < 128; sampleY++)
     for (var sampleX = -128; sampleX < 128; sampleX++)
@@ -2143,6 +2195,12 @@ Console.WriteLine(
 static void Require(bool condition, string message)
 {
     if (!condition) throw new InvalidOperationException(message);
+}
+
+static int PositiveMod(int value, int divisor)
+{
+    var result = value % divisor;
+    return result < 0 ? result + divisor : result;
 }
 
 static WorldChunk CloneAt(WorldChunk source, ChunkCoordinate coordinate) => new()

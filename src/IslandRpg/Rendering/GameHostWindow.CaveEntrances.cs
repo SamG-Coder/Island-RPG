@@ -475,6 +475,7 @@ internal sealed partial class GameHostWindow
         if (_worldChunks.TryGetValue(coordinate, out var loaded))
         {
             Upsert(loaded.Chunk, shaft);
+            RefreshExcavationVegetation(loaded.Chunk);
             _worldStore?.Save(loaded.Chunk);
             return;
         }
@@ -506,6 +507,7 @@ internal sealed partial class GameHostWindow
         {
             loaded.Chunk.GroundObjects.RemoveAll(
                 value => value.Id == shaft.Id);
+            RefreshExcavationVegetation(loaded.Chunk);
             _worldStore?.Save(loaded.Chunk);
         }
         else if (_worldStore is not null)

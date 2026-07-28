@@ -228,6 +228,7 @@ internal sealed partial class GameHostWindow : GameWindow
         new(StringComparer.OrdinalIgnoreCase);
     private PlaceableObjectSprites _placeableObjectSprites = new();
     private CoastalCollectibleSprites _coastalSprites = new();
+    private CaveGrowthSprites _caveGrowthSprites = new();
     private FibreNetItemSprites _fibreNetSprites = new();
     private readonly CoastalCollectibleRespawnController _coastalRespawns = new();
     private static readonly SpriteFrame WoodcuttingItemsFrame =
@@ -5374,6 +5375,10 @@ internal sealed partial class GameHostWindow : GameWindow
                 AppContext.BaseDirectory, "Resources", "Images",
                 "coastal-collectibles.png"),
             Upload);
+        _caveGrowthSprites = CaveGrowthSprites.Load(
+            Path.Combine(
+                AppContext.BaseDirectory, "Resources", "Images",
+                "CaveGrowth", "cave-growth-sprites.png"));
         _fibreNetSprites = FibreNetItemSprites.Load(
             Path.Combine(
                 AppContext.BaseDirectory, "Resources", "Images",
@@ -5600,22 +5605,29 @@ internal sealed partial class GameHostWindow : GameWindow
                     "STUMB", StringComparison.OrdinalIgnoreCase);
             var vegetation = WorldVegetationGenerator.IsVegetationGraphic(
                 asset.Definition.Name);
+            var undergroundResource =
+                UndergroundResourceGenerator.IsResourceGraphic(
+                    asset.Definition.Name) ||
+                asset.Definition.Name is "STONM_N0" or "GOLDM_N0";
             var treeVariants = WorldTreeCatalog.HasVariants(
                 asset.Definition.Name);
             var fish = WorldFishGenerator.IsFishGraphic(
                 asset.Definition.Name);
-            var frames = cliff || stump || vegetation || treeVariants || fish
+            var frames = cliff || stump || vegetation ||
+                         undergroundResource || treeVariants || fish
                 ? asset.Sprite.Frames
                 : [asset.Sprite.Frames[0]];
             for (var frameIndex = 0; frameIndex < frames.Count; frameIndex++)
             {
                 var frame = frames[frameIndex];
-                var key = cliff || stump || vegetation || treeVariants || fish
+                var key = cliff || stump || vegetation ||
+                          undergroundResource || treeVariants || fish
                     ? $"{asset.Definition.Name}#{frameIndex}"
                     : asset.Definition.Name;
                 Place(
                     key,
-                    (cliff || stump || vegetation || treeVariants || fish) &&
+                    (cliff || stump || vegetation ||
+                     undergroundResource || treeVariants || fish) &&
                     frameIndex == 0
                         ? asset.Definition.Name
                         : null,
@@ -5629,7 +5641,7 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             foreach (var variant in
                      UndergroundResourcePresentation.CreateOreFrames(
-                         goldOre.Sprite.Frames[0]))
+                         goldOre.Sprite.Frames))
                 Place(variant.Key, null, variant.Frame);
         }
         for (var cell = 0; cell < _naturalItemFrames.Length; cell++)
@@ -5673,6 +5685,9 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_coastalSprites.GroundShadows[cell] is { } shadowFrame)
                 Place(CoastalAtlasKey(cell, shadow: true), null, shadowFrame);
         }
+        for (var cell = 0; cell < _caveGrowthSprites.Frames.Length; cell++)
+            if (_caveGrowthSprites.Frames[cell] is { } frame)
+                Place(CaveGrowthSprites.AtlasKey(cell), null, frame);
         for (var cell = 0; cell < _fishItemFrames.Length; cell++)
         {
             if (_fishItemFrames[cell] is { } itemFrame)

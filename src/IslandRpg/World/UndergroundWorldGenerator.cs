@@ -75,7 +75,7 @@ internal static class UndergroundWorldGenerator
             UndergroundDensity = density,
             GroundObjects = [],
             Vegetation = UndergroundResourceGenerator.Generate(
-                seed, coordinate, tiles, renderable, density),
+                seed, coordinate, tiles, renderable),
             Fish = []
         };
         chunk.UndergroundMeshVertices =
