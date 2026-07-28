@@ -43,7 +43,11 @@ internal static class WorldVegetationRenderCache
                 item.Y - tileY);
             var world = IsometricTerrainProjection.Project(
                 item.X, item.Y, elevation);
-            var shadowName = ShadowName(item.GraphicName);
+            var resource = UndergroundResourceGenerator.IsResourceGraphic(
+                item.GraphicName);
+            var shadowName = resource
+                ? UndergroundResourceGenerator.ShadowGraphic(item.GraphicName)
+                : ShadowName(item.GraphicName);
             var biome = chunk.Tiles[
                 localY * WorldChunk.Size + localX].Biome;
             result.Add(new(
@@ -51,10 +55,14 @@ internal static class WorldVegetationRenderCache
                 tileY,
                 world,
                 $"vegetation:{item.X:0.000}:{item.Y:0.000}",
-                $"{item.GraphicName}#{item.FrameIndex}",
+                resource
+                    ? item.GraphicName
+                    : $"{item.GraphicName}#{item.FrameIndex}",
                 shadowName is null
                     ? null
-                    : $"{shadowName}#{item.FrameIndex}",
+                    : resource
+                        ? shadowName
+                        : $"{shadowName}#{item.FrameIndex}",
                 item.CanBecomeInstance &&
                 item.Kind == WorldVegetationKind.Shrub &&
                 biome is not Biome.Snow and not Biome.Tundra));

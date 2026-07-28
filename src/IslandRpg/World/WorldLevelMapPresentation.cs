@@ -32,6 +32,8 @@ internal static class WorldLevelMapPresentation
             (int)MathF.Floor(worldY));
         var baseColor = material switch
         {
+            Biome.RiverWater => (Red: 27, Green: 58, Blue: 67),
+            Biome.ShallowWater => (Red: 38, Green: 72, Blue: 78),
             Biome.Mud => (Red: 91, Green: 70, Blue: 48),
             Biome.CrackedEarth => (Red: 118, Green: 101, Blue: 76),
             _ => (Red: 91, Green: 94, Blue: 96)

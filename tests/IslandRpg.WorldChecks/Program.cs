@@ -1952,8 +1952,31 @@ try
         underground.RenderableTiles.SequenceEqual(
             undergroundReloaded.RenderableTiles) &&
         underground.UndergroundDensity.SequenceEqual(
-            undergroundReloaded.UndergroundDensity),
+            undergroundReloaded.UndergroundDensity) &&
+        underground.Vegetation.SequenceEqual(
+            undergroundReloaded.Vegetation),
         "transient underground generation must be deterministic");
+    Require(
+        underground.Vegetation.Length is > 0 and <= 6 &&
+        underground.Vegetation.All(value =>
+            UndergroundResourceGenerator.IsResourceGraphic(
+                value.GraphicName) &&
+            !value.CanBecomeInstance),
+        "underground scenery must stay sparse, decorative, and non-interactive");
+    var caveWaterSamples = 0;
+    for (var sampleY = -128; sampleY < 128; sampleY++)
+    for (var sampleX = -128; sampleX < 128; sampleX++)
+    {
+        var material = UndergroundWorldGenerator.MaterialAt(
+            store.Seed, sampleX, sampleY);
+        if (material is Biome.ShallowWater or Biome.RiverWater)
+            caveWaterSamples++;
+        Require(
+            material is not Biome.Beach and not Biome.DesertSand,
+            "underground water must blend directly into cave materials");
+    }
+    Require(caveWaterSamples > 0,
+        "underground generation must include cave water presentation");
     var undergroundWeightTextures = new[]
     {
         underground.BiomeWeightsA,

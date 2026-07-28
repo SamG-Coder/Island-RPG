@@ -74,7 +74,8 @@ internal static class UndergroundWorldGenerator
             RenderableTiles = renderable,
             UndergroundDensity = density,
             GroundObjects = [],
-            Vegetation = [],
+            Vegetation = UndergroundResourceGenerator.Generate(
+                seed, coordinate, tiles, renderable, density),
             Fish = []
         };
         chunk.UndergroundMeshVertices =
@@ -155,6 +156,19 @@ internal static class UndergroundWorldGenerator
 
     internal static Biome MaterialAt(long seed, int x, int y)
     {
+        var density = CaveHydrologyField.Density(
+            seed, x + .5f, y + .5f);
+        if (density >= CaveHydrologyField.Boundary + .38f)
+        {
+            var channel = MathF.Abs(
+                Value(seed ^ 0x7269766572, x / 19f, y / 19f) - .5f);
+            var wetness = Fractal(
+                seed ^ 0x706f6f6c, x / 13f, y / 13f);
+            if (channel < .025f && wetness > .34f)
+                return Biome.RiverWater;
+            if (wetness > .87f)
+                return Biome.ShallowWater;
+        }
         var variation = Value(seed ^ 0x6D756431, x / 11f, y / 11f);
         return variation switch
         {

@@ -369,6 +369,9 @@ internal sealed partial class GameHostWindow : GameWindow
             foreach (var name in
                      WorldFishGenerator.RequiredGraphicNames)
                 names.Add(name);
+            foreach (var name in
+                     UndergroundResourceGenerator.RequiredGraphicNames)
+                names.Add(name);
         }
 
         if (mode == PreviewMode.Game)
@@ -462,6 +465,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     ])
                     .Concat(WorldVegetationGenerator.RequiredGraphicNames)
                     .Concat(WorldFishGenerator.RequiredGraphicNames)
+                    .Concat(UndergroundResourceGenerator.RequiredGraphicNames)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase)
                 : _island?.Trees
                     .SelectMany(tree => new[] { tree.GraphicName, tree.GraphicName[..^2] + "N0" })
@@ -5617,6 +5621,16 @@ internal sealed partial class GameHostWindow : GameWindow
                         : null,
                     frame);
             }
+        }
+        var goldOre = _worldAssets.FirstOrDefault(asset =>
+            asset.Definition.Name.Equals(
+                "GOLDM_NN", StringComparison.OrdinalIgnoreCase));
+        if (goldOre is not null)
+        {
+            foreach (var variant in
+                     UndergroundResourcePresentation.CreateOreFrames(
+                         goldOre.Sprite.Frames[0]))
+                Place(variant.Key, null, variant.Frame);
         }
         for (var cell = 0; cell < _naturalItemFrames.Length; cell++)
         {
