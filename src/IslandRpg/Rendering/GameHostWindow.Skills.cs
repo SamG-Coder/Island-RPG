@@ -95,7 +95,6 @@ internal sealed partial class GameHostWindow
             return;
         }
 
-        DrawPanelCaption("Skill details", panel);
         var skill = (SkillType)_selectedSkill;
         var farming = skill == SkillType.Farming;
         var crafting = skill == SkillType.Crafting;
@@ -105,6 +104,7 @@ internal sealed partial class GameHostWindow
         var digging = skill == SkillType.Digging;
         var mining = skill == SkillType.Mining;
         var name = skill.ToString();
+        DrawPanelCaption(name, panel);
         var experience = SkillExperience(skill);
         var level = SkillService.LevelForExperience(experience);
         var maximumLevel = SkillService.MaximumLevel;
@@ -118,7 +118,8 @@ internal sealed partial class GameHostWindow
               (float)Math.Max(1, nextFloor - currentFloor);
 
         RenderSkillNavigation(panel, name);
-        RenderSkillLevelCard(panel, level, maximumLevel);
+        RenderSkillLevelCard(
+            panel, skill, level, maximumLevel);
         RenderSkillProgress(
             panel, experience, level, maximumLevel,
             currentFloor, nextFloor, progress);
@@ -140,7 +141,7 @@ internal sealed partial class GameHostWindow
                 : new(.10f, .085f, .050f, .98f));
         DrawPanelOutline(back, 1, new(.42f, .32f, .15f, 1));
         DrawCenteredUiText(
-            "Back", back, new(224, 213, 175, 255));
+            "< Skills", back, new(224, 213, 175, 255));
         var title = SkillPanelLayout.TitleBounds(panel);
         var opensGuide = SkillGuideService.IsSupported(
             (SkillType)_selectedSkill);
@@ -154,18 +155,54 @@ internal sealed partial class GameHostWindow
             DrawPanelOutline(title, 1, new(.48f, .36f, .15f, 1));
         }
         DrawCenteredUiText(
-            name, title, new(234, 221, 177, 255));
+            opensGuide ? "Guide" : name,
+            title, new(234, 221, 177, 255));
     }
 
     private void RenderSkillLevelCard(
-        Vector4 panel, int level, int maximumLevel)
+        Vector4 panel,
+        SkillType skill,
+        int level,
+        int maximumLevel)
     {
         var card = SkillPanelLayout.LevelCardBounds(panel);
-        DrawUiColor(card, new(.075f, .064f, .042f, .97f));
-        DrawPanelOutline(card, 1, new(.34f, .27f, .13f, 1));
+        var accent = SkillAccent(skill);
+        DrawUiColor(card, new(.048f, .043f, .032f, .98f));
+        DrawPanelOutline(card, 0, new(.025f, .022f, .018f, 1));
+        DrawPanelOutline(card, 1, new(.31f, .25f, .135f, 1));
+        var iconCenterX = MathF.Round(card.X + 34);
+        var iconCenterY = MathF.Round(card.Y + card.W * .5f);
+        DrawUiCircle(
+            iconCenterX, iconCenterY, 24,
+            new(.025f, .022f, .018f, 1));
+        DrawUiCircle(
+            iconCenterX, iconCenterY, 21,
+            new(
+                accent.X * .38f,
+                accent.Y * .38f,
+                accent.Z * .38f,
+                1));
+        DrawUiCircle(
+            iconCenterX, iconCenterY, 18,
+            new(.060f, .054f, .040f, 1));
+        DrawPlayerUiIcon(
+            5 + (int)skill,
+            new(iconCenterX - 16, iconCenterY - 16, 32, 32));
+        var levelArea = new Vector4(
+            card.X + 64,
+            card.Y + 8,
+            card.Z - 70,
+            25);
         DrawCenteredUiText(
-            $"Level {level}  /  {maximumLevel}",
-            card, new(215, 203, 165, 255));
+            $"LEVEL {level}",
+            levelArea,
+            level >= maximumLevel
+                ? new(225, 202, 111, 255)
+                : new(235, 221, 177, 255));
+        DrawSmallCenteredUiText(
+            $"of {maximumLevel}",
+            new(levelArea.X, card.Y + 34, levelArea.Z, 16),
+            new(170, 161, 133, 255));
     }
 
     private void RenderSkillProgress(
@@ -178,21 +215,29 @@ internal sealed partial class GameHostWindow
         float progress)
     {
         var track = SkillPanelLayout.ProgressBounds(panel);
-        DrawUiColor(track, new(.030f, .028f, .023f, .98f));
+        DrawUiColor(track, new(.048f, .043f, .032f, .98f));
+        DrawPanelOutline(track, 0, new(.25f, .20f, .11f, 1));
+        var bar = new Vector4(
+            track.X + 8,
+            track.Y + 17,
+            track.Z - 16,
+            10);
+        DrawUiColor(bar, new(.025f, .023f, .019f, .98f));
         if (progress > 0)
             DrawUiColor(
                 new(
-                    track.X + 2, track.Y + 2,
-                    MathF.Round((track.Z - 4) * progress),
-                    track.W - 4),
+                    bar.X + 1, bar.Y + 1,
+                    MathF.Round((bar.Z - 2) * progress),
+                    bar.W - 2),
                 new(.39f, .52f, .18f, 1));
-        DrawPanelOutline(track, 0, new(.28f, .22f, .12f, 1));
-        DrawCenteredUiText(
+        DrawPanelOutline(bar, 0, new(.30f, .24f, .12f, 1));
+        DrawSmallCenteredUiText(
             level >= maximumLevel
                 ? "Maximum level"
                 : $"{experience - currentFloor}/" +
                   $"{nextFloor - currentFloor} XP",
-            track, new(238, 227, 188, 255));
+            new(track.X + 4, track.Y + 1, track.Z - 8, 15),
+            new(238, 227, 188, 255));
     }
 
     private void RenderSkillInformation(
@@ -208,25 +253,26 @@ internal sealed partial class GameHostWindow
         int experience)
     {
         var info = SkillPanelLayout.InformationBounds(panel);
-        DrawUiColor(info, new(.052f, .047f, .035f, .96f));
+        DrawUiColor(info, new(.044f, .040f, .031f, .98f));
         DrawPanelOutline(info, 1, new(.25f, .205f, .115f, 1));
         var remaining = SkillService.ExperienceToNextLevel(experience);
-        DrawUiText(
+        DrawSmallCenteredUiText(
             remaining == 0 ? $"Total XP: {experience}" :
             $"{remaining} XP to next level",
-            new(info.X + 9, info.Y + 9),
+            new(info.X + 5, info.Y + 6, info.Z - 10, 15),
             new(194, 184, 151, 255));
-        DrawUiText(
-            mining ? $"Hit chance: {MiningSkill.HitChance(level) * 100:0}%" :
-            digging ? "Excavate tougher ground more quickly" :
-            firemaking ? "Longer, larger and brighter fires" :
-            cooking ? "Higher levels reduce burning" :
-            fishing ? "Unlocks more fish" :
-            crafting ? "Browse learned recipes" :
-            farming ? "Plant seeds and forage berries to gain XP" :
-            $"Hit chance: {WoodcuttingSkill.HitChance(level) * 100:0}%",
-            new(info.X + 9, info.Y + 31),
-            new(184, 175, 145, 255));
+        var lines = SkillBenefitLines(
+            farming, crafting, fishing, cooking,
+            firemaking, digging, mining, level);
+        for (var index = 0; index < lines.Length; index++)
+            DrawSmallCenteredUiText(
+                lines[index],
+                new(
+                    info.X + 5,
+                    info.Y + 26 + index * 14,
+                    info.Z - 10,
+                    14),
+                new(184, 175, 145, 255));
     }
 
     private void RenderSkillAction(Vector4 panel)
@@ -282,17 +328,7 @@ internal sealed partial class GameHostWindow
         Vector4 bounds, SkillType skill, int level)
     {
         var hovered = bounds.Contains(MouseState.Position);
-        var accent = skill switch
-        {
-            SkillType.Woodcutting => new Vector4(.31f, .57f, .20f, 1),
-            SkillType.Farming => new Vector4(.57f, .55f, .20f, 1),
-            SkillType.Crafting => new Vector4(.63f, .38f, .14f, 1),
-            SkillType.Fishing => new Vector4(.20f, .46f, .66f, 1),
-            SkillType.Cooking => new Vector4(.72f, .32f, .12f, 1),
-            SkillType.Digging => new Vector4(.48f, .34f, .18f, 1),
-            SkillType.Mining => new Vector4(.58f, .61f, .65f, 1),
-            _ => new Vector4(.88f, .20f, .06f, 1)
-        };
+        var accent = SkillAccent(skill);
         DrawUiColor(
             bounds,
             hovered
@@ -380,6 +416,48 @@ internal sealed partial class GameHostWindow
         SkillType.Firemaking => "Firemaking",
         _ => skill.ToString()
     };
+
+    private static Vector4 SkillAccent(SkillType skill) => skill switch
+    {
+        SkillType.Woodcutting => new(.31f, .57f, .20f, 1),
+        SkillType.Farming => new(.57f, .55f, .20f, 1),
+        SkillType.Crafting => new(.63f, .38f, .14f, 1),
+        SkillType.Fishing => new(.20f, .46f, .66f, 1),
+        SkillType.Cooking => new(.72f, .32f, .12f, 1),
+        SkillType.Digging => new(.48f, .34f, .18f, 1),
+        SkillType.Mining => new(.58f, .61f, .65f, 1),
+        _ => new(.88f, .20f, .06f, 1)
+    };
+
+    private static string[] SkillBenefitLines(
+        bool farming,
+        bool crafting,
+        bool fishing,
+        bool cooking,
+        bool firemaking,
+        bool digging,
+        bool mining,
+        int level) =>
+        mining
+            ? [$"Hit chance {MiningSkill.HitChance(level) * 100:0}%",
+               "Mine tougher deposits"]
+            : digging
+                ? ["Excavate faster", "Open cave passages"]
+                : firemaking
+                    ? ["Fires burn longer", "Larger light radius"]
+                    : cooking
+                        ? ["Reduce burning", "Unlock better meals"]
+                        : fishing
+                            ? ["Catch new fish", "Improve netting"]
+                            : crafting
+                                ? ["Unlock recipes", "Build new stations"]
+                                : farming
+                                    ? ["Plant and forage", "Improve harvests"]
+                                    : [
+                                        $"Hit chance " +
+                                        $"{WoodcuttingSkill.HitChance(level) * 100:0}%",
+                                        "Fell tougher trees"
+                                    ];
 
     private void DrawSmallCenteredUiText(
         string text, Vector4 bounds, FSColor color)
