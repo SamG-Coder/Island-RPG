@@ -142,6 +142,7 @@ internal static class ItemIds
     public const string CaveEntrance = "cave_entrance";
     public const string DigSite = "dig_site";
     public const string ShallowHole = "shallow_hole";
+    public const string TrainingDummy = "training_dummy";
 }
 
 internal static class ItemCatalog
@@ -522,6 +523,12 @@ internal static class ItemCatalog
                 ItemIds.StorageBarrel,
                 "storage barrel", "Barrel",
                 "A compact wooden barrel for persistent item storage.",
+                0, Droppable: false,
+                Tags: ItemTag.PlaceableObject),
+            [ItemIds.TrainingDummy] = new(
+                ItemIds.TrainingDummy,
+                "training dummy", "Training dummy",
+                "A reinforced practice target available only through developer tools.",
                 0, Droppable: false,
                 Tags: ItemTag.PlaceableObject),
             [ItemIds.CaveHole] = new(

@@ -36,6 +36,28 @@ Require(
 var starvation = SurvivalService.Advance(0, 0, 100, 10);
 Require(starvation.Health == 95,
     "empty hunger must cause deterministic starvation damage");
+var meleeHit = MeleeCombatService.Roll(
+    attackExperience: 0,
+    strengthExperience: 0,
+    hitRoll: 0,
+    damageRoll: 0);
+var meleeMiss = MeleeCombatService.Roll(
+    attackExperience: 0,
+    strengthExperience: 0,
+    hitRoll: .99f,
+    damageRoll: 0);
+Require(
+    meleeHit is { Hit: true, Damage: 1, Experience: 4 } &&
+    !meleeMiss.Hit &&
+    MeleeCombatService.AttackIntervalSeconds == 2.4f,
+    "unarmed melee must resolve deterministic hits on fixed combat ticks");
+Require(
+    PlaceableObjectCatalog.TryGet(
+        ItemIds.TrainingDummy, out var dummyDefinition) &&
+    dummyDefinition.ChromaKeyMagenta &&
+    ItemCatalog.Get(ItemIds.TrainingDummy)
+        .HasTag(ItemTag.PlaceableObject),
+    "the training dummy must remain a dev-bank placeable combat target");
 
 var defaultDisplaySettings = new GameSettings();
 Require(
@@ -690,11 +712,17 @@ Require(
         CampfireService.AnimationFrameCount) &&
     placeableSprites.TryGet(
         ItemIds.CookingPot, out var cookingPotSprite) &&
-    cookingPotSprite.Frame.Width == 72 &&
-    cookingPotSprite.Frame.Height == 72 &&
+    cookingPotSprite.Frame.Width == 50 &&
+    cookingPotSprite.Frame.Height == 50 &&
     placeableSprites.TryGet(
         ItemIds.StorageChest, out var storageChestSprite) &&
-    storageChestSprite.Frame.Width == 84 &&
+    storageChestSprite.Frame.Width == 60 &&
+    placeableSprites.TryGet(
+        ItemIds.SmithingAnvil, out var anvilSprite) &&
+    anvilSprite.Frame.Width == 56 &&
+    placeableSprites.TryGet(
+        ItemIds.TrainingDummy, out var dummySprite) &&
+    dummySprite.Frame.Height == 72 &&
     placeableSprites.TryGet(
         ItemIds.StorageBarrel, out var storageBarrelSprite) &&
     storageBarrelSprite.Frame.Height == 58 &&
@@ -740,8 +768,8 @@ Require(
     PlaceableObjectCatalog.TryGet(
         ItemIds.SmithingAnvil, out var anvilDefinition) &&
     anvilDefinition.FootprintWidth == 1 &&
-    anvilDefinition.HotspotX == 40 &&
-    anvilDefinition.HotspotY == 65 &&
+    anvilDefinition.HotspotX == 28 &&
+    anvilDefinition.HotspotY == 48 &&
     ItemCatalog.Get(ItemIds.Bloomery)
         .HasTag(ItemTag.PlaceableObject) &&
     ItemCatalog.Get(ItemIds.SmithingAnvil)
@@ -2935,6 +2963,10 @@ try
         Health = 111,
         Hunger = 64,
         WellFedSeconds = 90,
+        AttackExperience = 350,
+        StrengthExperience = 225,
+        DefenceExperience = 75,
+        CombatStance = MeleeCombatStance.Defensive,
         Inventory = PlayerInventory.Normalize(["logs", "oak_logs"])
     };
     saves.SavePlayer(player);
@@ -2948,6 +2980,11 @@ try
             loadedPlayer.Health == 111 &&
             loadedPlayer.Hunger == 64 &&
             loadedPlayer.WellFedSeconds == 90 &&
+            loadedPlayer.AttackExperience == 350 &&
+            loadedPlayer.StrengthExperience == 225 &&
+            loadedPlayer.DefenceExperience == 75 &&
+            loadedPlayer.CombatStance ==
+            MeleeCombatStance.Defensive &&
             loadedPlayer.Inventory?.Length == PlayerInventory.Capacity &&
             loadedPlayer.Inventory[0] == "logs" &&
             loadedPlayer.Inventory[1] == "oak_logs" &&

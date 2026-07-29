@@ -57,6 +57,17 @@ internal sealed partial class GameHostWindow
             clearTreeActions: true);
     }
 
+    public void QueueTrainingDummyAttack(WorldGroundObject groundObject)
+    {
+        window.CancelMeleeCombat();
+        QueuePath(
+            new Vector2(groundObject.X, groundObject.Y),
+            MeleeCombatService.AttackRange,
+            GameHostWindow.WorldActionType.AttackTrainingDummy,
+            groundObjectId: groundObject.Id,
+            clearTreeActions: true);
+    }
+
     public void QueueFish(WorldFish fish)
     {
         var target = new Vector2(fish.X, fish.Y);
@@ -101,6 +112,7 @@ internal sealed partial class GameHostWindow
     public void QueueWalk(Vector2 target)
     {
         if (window._player is null) return;
+        window.CancelMeleeCombat();
         window._queuedAction = null;
         window._activeTreeId = null;
         window._activeTreeStickGatherId = null;
@@ -137,6 +149,8 @@ internal sealed partial class GameHostWindow
         bool clearTreeActions = false)
     {
         if (window._player is null) return;
+        if (type != GameHostWindow.WorldActionType.AttackTrainingDummy)
+            window.CancelMeleeCombat();
         if (clearTreeActions)
         {
             window._activeTreeId = null;
@@ -187,6 +201,13 @@ internal sealed partial class GameHostWindow
                 break;
             case { Type: GameHostWindow.WorldActionType.GatherTreeSticks }:
                 BeginTreeStickGather(action.Target);
+                break;
+            case
+            {
+                Type: GameHostWindow.WorldActionType.AttackTrainingDummy,
+                GroundObjectId: { } dummyId
+            }:
+                window.BeginTrainingDummyCombat(dummyId);
                 break;
             case
             {
@@ -336,6 +357,7 @@ internal sealed partial class GameHostWindow
         window.UpdateBerryGathering();
         window.UpdateMining();
         window.UpdateCaveDigging();
+        window.UpdateMeleeCombat();
     }
 
     public void CancelPath()

@@ -9,7 +9,10 @@ internal sealed record PlaceableObjectDefinition(
     float FootprintDepth,
     float Height,
     int HotspotX,
-    int HotspotY);
+    int HotspotY,
+    int RenderWidth = 0,
+    int RenderHeight = 0,
+    bool ChromaKeyMagenta = false);
 
 internal static class PlaceableObjectCatalog
 {
@@ -46,24 +49,30 @@ internal static class PlaceableObjectCatalog
                 FootprintWidth: 1,
                 FootprintDepth: 1,
                 Height: .9f,
-                HotspotX: 40,
-                HotspotY: 65),
+                HotspotX: 28,
+                HotspotY: 48,
+                RenderWidth: 56,
+                RenderHeight: 52),
             [ItemIds.CookingPot] = new(
                 ItemIds.CookingPot,
                 "cooking-pot.png",
                 FootprintWidth: .9f,
                 FootprintDepth: .9f,
                 Height: .65f,
-                HotspotX: 36,
-                HotspotY: 63),
+                HotspotX: 25,
+                HotspotY: 47,
+                RenderWidth: 50,
+                RenderHeight: 50),
             [ItemIds.StorageChest] = new(
                 ItemIds.StorageChest,
                 "storage-chest.png",
                 FootprintWidth: 1.25f,
                 FootprintDepth: .75f,
                 Height: .8f,
-                HotspotX: 42,
-                HotspotY: 57),
+                HotspotX: 30,
+                HotspotY: 43,
+                RenderWidth: 60,
+                RenderHeight: 46),
             [ItemIds.StorageBarrel] = new(
                 ItemIds.StorageBarrel,
                 "storage-barrel.png",
@@ -71,7 +80,18 @@ internal static class PlaceableObjectCatalog
                 FootprintDepth: .75f,
                 Height: 1,
                 HotspotX: 31,
-                HotspotY: 53)
+                HotspotY: 53),
+            [ItemIds.TrainingDummy] = new(
+                ItemIds.TrainingDummy,
+                Path.Combine("Combat", "training-dummy-source.png"),
+                FootprintWidth: 1.2f,
+                FootprintDepth: 1.2f,
+                Height: 1.8f,
+                HotspotX: 36,
+                HotspotY: 69,
+                RenderWidth: 72,
+                RenderHeight: 72,
+                ChromaKeyMagenta: true)
         };
 
     public static IReadOnlyCollection<PlaceableObjectDefinition> All =>

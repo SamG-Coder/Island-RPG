@@ -34,7 +34,11 @@ internal sealed record PlayerProfile(
     int AdventureExperience = 0,
     int Health = AdventureService.BaseMaximumHealth,
     float Hunger = SurvivalService.MaximumHunger,
-    float WellFedSeconds = 0);
+    float WellFedSeconds = 0,
+    int AttackExperience = 0,
+    int StrengthExperience = 0,
+    int DefenceExperience = 0,
+    MeleeCombatStance CombatStance = MeleeCombatStance.Accurate);
 
 internal sealed record WorldPlayerState(
     string PlayerId,

@@ -87,7 +87,8 @@ internal sealed partial class GameHostWindow : GameWindow
         RestoreExcavation,
         TakeCaveRope,
         UseCraftingStation,
-        OpenStorage
+        OpenStorage,
+        AttackTrainingDummy
     }
     private sealed record QueuedWorldAction(
         WorldActionType Type, Vector2 Target, float Range,
@@ -307,7 +308,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly WorldActionController _worldActions;
     private readonly LevelUpFireworks _levelUpFireworks = new();
     private readonly Action<string, Vector2, float> _levelUpParticleAdder;
-    private readonly int[] _observedSkillLevels = new int[9];
+    private readonly int[] _observedSkillLevels = new int[12];
     private bool _skillLevelsObserved;
     private string? _overheadSpeech;
     private double _overheadSpeechExpiresAt;
@@ -1269,7 +1270,9 @@ internal sealed partial class GameHostWindow : GameWindow
                         out _, out _);
                 _groundObjectContext.Open(
                     MouseState.Position,
-                    CaveEntranceService.IsEntrance(contextObject)
+                    contextObject.ItemId == ItemIds.TrainingDummy
+                        ? ["Attack", "Walk Here", "Examine"]
+                    : CaveEntranceService.IsEntrance(contextObject)
                         ? _activeWorldLevel == (int)WorldLevel.Overworld
                             ? ["Climb down", "Take rope",
                                "Walk Here", "Examine"]
@@ -1355,7 +1358,9 @@ internal sealed partial class GameHostWindow : GameWindow
             if (TryGetGroundObjectUnderMouse(
                     SceneMousePosition(), out var groundObject, out _))
             {
-                if (CaveEntranceService.IsEntrance(groundObject))
+                if (groundObject.ItemId == ItemIds.TrainingDummy)
+                    QueueTrainingDummyAttack(groundObject);
+                else if (CaveEntranceService.IsEntrance(groundObject))
                     QueueCaveEntry(groundObject);
                 else if (CaveEntranceService.IsDigSite(groundObject))
                     QueueContinueCaveDig(groundObject);
@@ -1486,6 +1491,7 @@ internal sealed partial class GameHostWindow : GameWindow
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         UpdateCraftingWindowInput(MouseState.Position, leftDown);
         UpdateSkillsPanelInput(MouseState.Position, leftDown);
+        UpdateCombatPanelInput(MouseState.Position, leftDown);
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
         if (_gameUi.ActivePanel == GameUiPanel.Inventory)
             UpdateInventoryInteraction(
@@ -3321,6 +3327,7 @@ internal sealed partial class GameHostWindow : GameWindow
         RenderTreeHealthBars(scene);
         RenderMiningHealthBars(scene);
         RenderDigSiteHealthBar(scene);
+        RenderCombatTargetHealthBar(scene);
         RenderOverheadSpeech(scene);
         RenderMinimap();
         RenderPlayerStatus();
@@ -3330,10 +3337,15 @@ internal sealed partial class GameHostWindow : GameWindow
             DrawAoEPanelBorder(_gameUi.Panel.Bounds);
         if (_gameUi.ActivePanel == GameUiPanel.Skills)
             RenderSkillsPanel();
+        else if (_gameUi.ActivePanel == GameUiPanel.Combat)
+            RenderCombatPanel();
         else if (_gameUi.ActivePanel == GameUiPanel.Inventory)
             RenderInventoryPanel();
+        DrawAoEUiTile(_gameUi.CombatButton);
         DrawAoEUiTile(_gameUi.SkillsButton);
         DrawAoEUiTile(_gameUi.InventoryButton);
+        DrawPlayerUiIcon(
+            1, CenteredIconBounds(_gameUi.CombatButton.Bounds));
         DrawPlayerUiIcon(
             1, CenteredIconBounds(_gameUi.SkillsButton.Bounds));
         DrawPlayerUiIcon(
@@ -3593,6 +3605,18 @@ internal sealed partial class GameHostWindow : GameWindow
         if (PlaceableObjectCatalog.IsPlaceable(
                 groundObject.ItemId))
         {
+            if (groundObject.ItemId == ItemIds.TrainingDummy)
+            {
+                if (option == 0)
+                    QueueTrainingDummyAttack(groundObject);
+                else if (option == 1)
+                    QueueWalk(_groundObjectContextWalkTarget);
+                else if (option == 2)
+                    _chatUi.AddMessage(
+                        ItemCatalog.Get(groundObject.ItemId).Examine,
+                        ChatMessageStyle.Normal);
+                return;
+            }
             if (StorageContainerService.IsStorage(
                     groundObject.ItemId))
             {

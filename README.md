@@ -47,6 +47,8 @@ third-party content.
   level-scaled maximum health.
 - Persistent health and hunger, food-specific restoration, and timed
   well-fed bonuses that slow hunger loss.
+- RuneScape-style unarmed melee targeting with Accurate, Aggressive and
+  Defensive stances training Attack, Strength and Defence.
 - Level-based recipes, primitive tools, workbenches and campfires.
 - Reusable skill guides, crafting screens, pause menus and settings.
 - Optional performance metrics and developer world tools.
@@ -112,6 +114,11 @@ The icon-led player panel beside the minimap shows Adventure level, current
 and maximum health, hunger, and remaining well-fed time. Right-click berries,
 cooked fish, or stew in the Bag and select **Eat**. Better meals restore more
 hunger and keep hunger draining slowly for longer.
+Open the crossed-weapons combat tab to choose an unarmed stance. Accurate
+trains Attack, Aggressive trains Strength, and Defensive trains Defence.
+Developer mode's item bank contains a placeable training dummy; left-click it
+or choose **Attack** from its context menu to approach and fight on fixed
+combat ticks.
 
 ### v0.2 progression loop
 
@@ -304,7 +311,8 @@ Before submitting a change:
 
 ## Status and limitations
 
-This is an early playable prototype. Combat, death and respawning, NPC
+This is an early playable prototype. Combat currently covers unarmed training
+against the developer dummy; hostile enemies, death and respawning, NPC
 simulation, building construction and audio are not implemented. Farming covers tree
 planting and berry foraging, Cooking supports fish and berries, and placeable
 furniture remains limited. See the

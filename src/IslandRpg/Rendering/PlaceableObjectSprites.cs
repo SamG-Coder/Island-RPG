@@ -60,14 +60,28 @@ internal sealed class PlaceableObjectSprites
             using var stream = File.OpenRead(path);
             var image = ImageResult.FromStream(
                 stream, ColorComponents.RedGreenBlueAlpha);
+            var width = image.Width;
+            var height = image.Height;
+            var pixels = image.Data;
+            if (definition.RenderWidth > 0 &&
+                definition.RenderHeight > 0)
+            {
+                pixels = ResizeObject(
+                    image,
+                    definition.RenderWidth,
+                    definition.RenderHeight,
+                    definition.ChromaKeyMagenta);
+                width = definition.RenderWidth;
+                height = definition.RenderHeight;
+            }
             var frame = new SpriteFrame(
-                image.Width,
-                image.Height,
+                width,
+                height,
                 Math.Clamp(
-                    definition.HotspotX, 0, image.Width - 1),
+                    definition.HotspotX, 0, width - 1),
                 Math.Clamp(
-                    definition.HotspotY, 0, image.Height - 1),
-                image.Data);
+                    definition.HotspotY, 0, height - 1),
+                pixels);
             result._sprites[definition.ItemId] = new(
                 frame,
                 upload(frame),
@@ -75,6 +89,74 @@ internal sealed class PlaceableObjectSprites
         }
         result.LoadCampfireStates(imageDirectory, upload);
         return result;
+    }
+
+    private static byte[] ResizeObject(
+        ImageResult source,
+        int targetWidth,
+        int targetHeight,
+        bool chromaKeyMagenta)
+    {
+        var left = source.Width;
+        var right = 0;
+        var top = source.Height;
+        var bottom = 0;
+        for (var y = 0; y < source.Height; y++)
+        for (var x = 0; x < source.Width; x++)
+        {
+            var offset = (y * source.Width + x) * 4;
+            if (source.Data[offset + 3] <= 8 ||
+                chromaKeyMagenta &&
+                IsMagenta(source.Data, offset))
+                continue;
+            left = Math.Min(left, x);
+            right = Math.Max(right, x);
+            top = Math.Min(top, y);
+            bottom = Math.Max(bottom, y);
+        }
+        if (right < left || bottom < top)
+            return new byte[targetWidth * targetHeight * 4];
+        var contentWidth = right - left + 1;
+        var contentHeight = bottom - top + 1;
+        var scale = Math.Min(
+            (targetWidth - 4) / (float)contentWidth,
+            (targetHeight - 4) / (float)contentHeight);
+        var drawnWidth = Math.Max(1, (int)MathF.Round(contentWidth * scale));
+        var drawnHeight = Math.Max(1, (int)MathF.Round(contentHeight * scale));
+        var startX = (targetWidth - drawnWidth) / 2;
+        var startY = targetHeight - drawnHeight - 2;
+        var result = new byte[targetWidth * targetHeight * 4];
+        for (var y = 0; y < drawnHeight; y++)
+        for (var x = 0; x < drawnWidth; x++)
+        {
+            var sourceX = left + Math.Min(
+                contentWidth - 1, x * contentWidth / drawnWidth);
+            var sourceY = top + Math.Min(
+                contentHeight - 1, y * contentHeight / drawnHeight);
+            var sourceOffset =
+                (sourceY * source.Width + sourceX) * 4;
+            if (source.Data[sourceOffset + 3] <= 8 ||
+                chromaKeyMagenta &&
+                IsMagenta(source.Data, sourceOffset))
+                continue;
+            var targetOffset =
+                ((startY + y) * targetWidth + startX + x) * 4;
+            result[targetOffset] = source.Data[sourceOffset];
+            result[targetOffset + 1] = source.Data[sourceOffset + 1];
+            result[targetOffset + 2] = source.Data[sourceOffset + 2];
+            result[targetOffset + 3] =
+                source.Data[sourceOffset + 3];
+        }
+        return result;
+    }
+
+    private static bool IsMagenta(byte[] pixels, int offset)
+    {
+        var red = pixels[offset];
+        var green = pixels[offset + 1];
+        var blue = pixels[offset + 2];
+        return red > 115 && blue > 110 &&
+               red - green > 50 && blue - green > 50;
     }
 
     private void LoadCampfireStates(

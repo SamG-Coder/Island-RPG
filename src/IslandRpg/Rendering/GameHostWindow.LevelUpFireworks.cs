@@ -14,7 +14,7 @@ internal sealed partial class GameHostWindow
     {
         _levelUpFireworks.Update(elapsed);
         if (_activePlayer is null) return;
-        Span<int> levels = stackalloc int[9];
+        Span<int> levels = stackalloc int[12];
         CurrentSkillLevels(levels);
         if (!_skillLevelsObserved)
         {
@@ -54,5 +54,11 @@ internal sealed partial class GameHostWindow
             _activePlayer?.MiningExperience ?? 0);
         levels[8] = AdventureService.LevelForExperience(
             _activePlayer?.AdventureExperience ?? 0);
+        levels[9] = SkillService.LevelForExperience(
+            _activePlayer?.AttackExperience ?? 0);
+        levels[10] = SkillService.LevelForExperience(
+            _activePlayer?.StrengthExperience ?? 0);
+        levels[11] = SkillService.LevelForExperience(
+            _activePlayer?.DefenceExperience ?? 0);
     }
 }

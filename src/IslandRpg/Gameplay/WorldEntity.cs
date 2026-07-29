@@ -83,6 +83,15 @@ internal sealed class WorldEntity
     }
 
     public void Attack() => SetAction(EntityAction.Attack);
+    public void AttackAt(Vector2 target)
+    {
+        _path.Clear();
+        Target = Position;
+        var direction = target - Position;
+        if (direction.LengthSquared > .0001f)
+            Facing = direction.Normalized();
+        SetAction(EntityAction.Attack);
+    }
     public void Work() => SetAction(EntityAction.Work);
     public void Gather() => SetAction(EntityAction.Gather);
     public void Die() => SetAction(EntityAction.Die);

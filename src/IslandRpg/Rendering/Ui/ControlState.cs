@@ -5,6 +5,7 @@ namespace IslandRpg.Rendering.Ui;
 internal enum GameUiPanel
 {
     None,
+    Combat,
     Skills,
     Inventory
 }
@@ -62,6 +63,7 @@ internal sealed class GameUiControlState
     private bool _leftWasDown;
 
     public TabControlState SkillsButton { get; } = new(GameUiPanel.Skills);
+    public TabControlState CombatButton { get; } = new(GameUiPanel.Combat);
     public TabControlState InventoryButton { get; } = new(GameUiPanel.Inventory);
     public PanelControlState Panel { get; } = new();
     public GameUiPanel ActivePanel { get; private set; }
@@ -69,7 +71,8 @@ internal sealed class GameUiControlState
     public GameUiControlState()
     {
         // Last visual control is tested first. Tabs sit above the panel.
-        _hitOrder = [InventoryButton, SkillsButton, Panel];
+        _hitOrder = [InventoryButton, SkillsButton, CombatButton, Panel];
+        CombatButton.Clicked += Toggle;
         SkillsButton.Clicked += Toggle;
         InventoryButton.Clicked += Toggle;
     }
@@ -85,6 +88,13 @@ internal sealed class GameUiControlState
             Math.Max(
                 viewport.X,
                 InventoryButton.Bounds.X - ButtonSize - ControlGap),
+            InventoryButton.Bounds.Y,
+            ButtonSize,
+            ButtonSize);
+        CombatButton.Bounds = new(
+            Math.Max(
+                viewport.X,
+                SkillsButton.Bounds.X - ButtonSize - ControlGap),
             InventoryButton.Bounds.Y,
             ButtonSize,
             ButtonSize);
@@ -133,6 +143,7 @@ internal sealed class GameUiControlState
     {
         ActivePanel = GameUiPanel.None;
         SkillsButton.Selected = false;
+        CombatButton.Selected = false;
         InventoryButton.Selected = false;
         Panel.Visible = false;
     }
@@ -141,6 +152,7 @@ internal sealed class GameUiControlState
     {
         ActivePanel = ActivePanel == tab.Panel ? GameUiPanel.None : tab.Panel;
         SkillsButton.Selected = ActivePanel == GameUiPanel.Skills;
+        CombatButton.Selected = ActivePanel == GameUiPanel.Combat;
         InventoryButton.Selected = ActivePanel == GameUiPanel.Inventory;
         Panel.Visible = ActivePanel != GameUiPanel.None;
     }
