@@ -144,8 +144,5 @@ internal static class PlaceableObjectCatalog
             definition.FootprintDepth * .5f + padding;
 
     private static float SnapAxis(float value, float size)
-    {
-        var half = size * .5f;
-        return MathF.Round(value - half) + half;
-    }
+        => WorldPlacementGrid.SnapWithFootprint(value, size);
 }

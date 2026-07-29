@@ -16,12 +16,16 @@ internal static class GridPathfinder
         long seed,
         Vector2 startPosition,
         Vector2 requestedTarget,
-        int maximumVisited = 8192,
+        int maximumVisited = 65536,
         CancellationToken cancellationToken = default,
         int worldLevel = (int)WorldLevel.Overworld)
     {
-        var start = ((int)MathF.Floor(startPosition.X), (int)MathF.Floor(startPosition.Y));
-        var goal = ((int)MathF.Floor(requestedTarget.X), (int)MathF.Floor(requestedTarget.Y));
+        var start = (
+            WorldPlacementGrid.Cell(startPosition.X),
+            WorldPlacementGrid.Cell(startPosition.Y));
+        var goal = (
+            WorldPlacementGrid.Cell(requestedTarget.X),
+            WorldPlacementGrid.Cell(requestedTarget.Y));
         var caveContext = worldLevel == (int)WorldLevel.Underground
             ? new CaveHydrologyField.SamplingContext(seed)
             : null;
@@ -30,7 +34,8 @@ internal static class GridPathfinder
         {
             if (caveDensity.TryGetValue((x, y), out var density))
                 return density;
-            density = caveContext!.Density(x + .5f, y + .5f);
+            var center = WorldPlacementGrid.CellCenter(x, y);
+            density = caveContext!.Density(center.X, center.Y);
             caveDensity[(x, y)] = density;
             return density;
         }
@@ -63,12 +68,17 @@ internal static class GridPathfinder
                     Height(seed, next.Item1, next.Item2, worldLevel, Density) -
                     Height(seed, current.X, current.Y, worldLevel, Density));
                 if (slope > 4) continue;
-                var nextCost = costs[current] + neighbour.Cost + slope * .32f;
+                var nextCost = costs[current] +
+                               neighbour.Cost * WorldPlacementGrid.CellSize +
+                               slope * .32f;
                 if (costs.TryGetValue(next, out var previous) && previous <= nextCost) continue;
                 costs[next] = nextCost;
                 cameFrom[next] = current;
-                var heuristic = Math.Max(Math.Abs(goal.Item1 - next.Item1),
-                                         Math.Abs(goal.Item2 - next.Item2));
+                var heuristic =
+                    Math.Max(
+                        Math.Abs(goal.Item1 - next.Item1),
+                        Math.Abs(goal.Item2 - next.Item2)) *
+                    WorldPlacementGrid.CellSize;
                 frontier.Enqueue(next, nextCost + heuristic);
             }
         }
@@ -79,7 +89,8 @@ internal static class GridPathfinder
             var result = new List<Vector2>();
             while (current != start)
             {
-                result.Add(new Vector2(current.X + .5f, current.Y + .5f));
+                result.Add(WorldPlacementGrid.CellCenter(
+                    current.X, current.Y));
                 current = cameFrom[current];
             }
             result.Reverse();
@@ -94,7 +105,11 @@ internal static class GridPathfinder
         if (worldLevel == (int)WorldLevel.Underground)
             return density(x, y) >=
                 CaveHydrologyField.Boundary;
-        var biome = InfiniteWorldGenerator.BiomeAt(seed, x, y);
+        var center = WorldPlacementGrid.CellCenter(x, y);
+        var biome = InfiniteWorldGenerator.BiomeAt(
+            seed,
+            (int)MathF.Floor(center.X),
+            (int)MathF.Floor(center.Y));
         return biome != Biome.DeepWater;
     }
 
@@ -103,5 +118,14 @@ internal static class GridPathfinder
         Func<int, int, float> density) =>
         worldLevel == (int)WorldLevel.Underground
             ? (int)MathF.Round(UndergroundWorldGenerator.Height(density(x, y)))
-            : InfiniteWorldGenerator.SampleSurfaceHeight(seed, x, y);
+            : SampleSurfaceHeight(seed, x, y);
+
+    private static int SampleSurfaceHeight(long seed, int x, int y)
+    {
+        var center = WorldPlacementGrid.CellCenter(x, y);
+        return InfiniteWorldGenerator.SampleSurfaceHeight(
+            seed,
+            (int)MathF.Floor(center.X),
+            (int)MathF.Floor(center.Y));
+    }
 }

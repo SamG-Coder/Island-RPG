@@ -742,16 +742,19 @@ Require(PlaceableObjectCatalog.TryGet(
             ItemIds.Workbench) == 36 &&
         PlaceableObjectCatalog.SnapToGrid(
             ItemIds.Workbench, new(4.31f, 7.72f)) ==
-        new OpenTK.Mathematics.Vector2(4, 7.5f) &&
+        new OpenTK.Mathematics.Vector2(4.25f, 7.75f) &&
         PlaceableObjectCatalog.ContainsPoint(
             workbenchDefinition,
-            new OpenTK.Mathematics.Vector2(4, 7.5f),
+            new OpenTK.Mathematics.Vector2(4.25f, 7.75f),
             new OpenTK.Mathematics.Vector2(4.8f, 7.7f)) &&
         !PlaceableObjectCatalog.ContainsPoint(
             workbenchDefinition,
-            new OpenTK.Mathematics.Vector2(4, 7.5f),
-            new OpenTK.Mathematics.Vector2(5.1f, 7.7f)),
-    "placeable objects must use deterministic grid snapping and their full footprint");
+            new OpenTK.Mathematics.Vector2(4.25f, 7.75f),
+            new OpenTK.Mathematics.Vector2(5.3f, 7.7f)) &&
+        WorldPlacementGrid.CellsPerTerrainTile == 4 &&
+        WorldPlacementGrid.CellCenter(
+            WorldPlacementGrid.Cell(3.41f)) == 3.375f,
+    "placeable objects and navigation must use a deterministic quarter-tile grid");
 Require(PlaceableObjectCatalog.TryGet(
             ItemIds.Campfire, out var campfireDefinition) &&
         campfireDefinition.FootprintWidth == 1 &&
@@ -1307,6 +1310,33 @@ foreach (var height in new[] { 0f, 2.5f, 4f, 17f })
         (unprojectedMap - expectedMap).LengthSquared < .000001f,
         "isometric click mapping must round-trip terrain at every world level height");
 }
+var logicalPointer = new Vector2(320, 180);
+var nativePointer = SceneCoordinateMapper.ClientToScene(
+    logicalPointer,
+    new(1280, 720),
+    new(1280, 720),
+    new(1280, 720));
+var fullscreenPointer = SceneCoordinateMapper.ClientToScene(
+    new(480, 270),
+    new(1920, 1080),
+    new(1920, 1080),
+    new(1280, 720));
+var dpiScaledPointer = SceneCoordinateMapper.ClientToScene(
+    new(240, 135),
+    new(960, 540),
+    new(1920, 1080),
+    new(1280, 720));
+var letterboxedPointer = SceneCoordinateMapper.ClientToScene(
+    new(480, 330),
+    new(1920, 1200),
+    new(1920, 1200),
+    new(1280, 720));
+Require(
+    (nativePointer - logicalPointer).LengthSquared < .000001f &&
+    (fullscreenPointer - logicalPointer).LengthSquared < .000001f &&
+    (dpiScaledPointer - logicalPointer).LengthSquared < .000001f &&
+    (letterboxedPointer - logicalPointer).LengthSquared < .000001f,
+    "world pointer mapping must remain invariant across fullscreen, DPI scaling, and letterboxing");
 var craftingWindowBounds =
     CraftingWindowState.WindowBounds(new(0, 0, 1280, 720));
 var craftingButton =

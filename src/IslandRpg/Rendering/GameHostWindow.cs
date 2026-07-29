@@ -1215,13 +1215,11 @@ internal sealed partial class GameHostWindow : GameWindow
         _chatFont?.MeasureString(text).X ?? text.Length * 7;
 
     private Vector2 SceneMousePosition()
-    {
-        var scene = SceneClientBounds();
-        var scale = scene.Z / ReferenceWidth;
-        return new Vector2(
-            (MouseState.Position.X - scene.X) / Math.Max(scale, .001f),
-            (MouseState.Position.Y - scene.Y) / Math.Max(scale, .001f));
-    }
+        => SceneCoordinateMapper.ClientToScene(
+            MouseState.Position,
+            ClientSize,
+            FramebufferSize,
+            new(ReferenceWidth, ReferenceHeight));
 
     private Vector4 SceneClientBounds()
     {
@@ -1590,7 +1588,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 (int)MathF.Floor(candidate.Y) == (int)MathF.Floor(start.Y);
             var path = GridPathfinder.Find(
                 _worldSeed, start, candidate,
-                maximumVisited: 8192,
+                maximumVisited: 65536,
                 cancellationToken: cancellationToken,
                 worldLevel: worldLevel);
             if (!sameCell && path.Count == 0) continue;
