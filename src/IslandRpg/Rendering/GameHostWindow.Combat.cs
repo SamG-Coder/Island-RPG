@@ -264,7 +264,10 @@ internal sealed partial class GameHostWindow
         var centerY = scene.Y +
             (targetBounds.Top +
              (targetBounds.Bottom - targetBounds.Top) * .42f) * sceneScale;
-        var fullRadius = Math.Max(10, (int)MathF.Round(12 * sceneScale));
+        // The target position belongs to the scaled world scene, but the
+        // hit-splat is a UI element. Keep its pixel size stable across zoom,
+        // window resolutions, and fullscreen display modes.
+        const int fullRadius = 12;
         var radius = Math.Max(3, (int)MathF.Round(fullRadius * entrance));
         DrawCombatSplatBadge(
             centerX, centerY, radius, splat.Hit, fade);
