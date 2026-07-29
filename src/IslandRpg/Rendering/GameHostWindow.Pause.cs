@@ -166,8 +166,10 @@ internal sealed partial class GameHostWindow
                     var caption = option switch
                     {
                         0 => $"Fullscreen: {(settings.Fullscreen ? "On" : "Off")}",
-                        1 => $"VSync: {settings.VSyncMode}",
-                        2 => "Frame limit: " +
+                        1 => "Fullscreen resolution: " +
+                             FullscreenResolutionLabel(settings),
+                        2 => $"VSync: {settings.VSyncMode}",
+                        3 => "Frame limit: " +
                              DisplaySettingsController.FrameRateLabel(
                                  settings.FrameRateLimit),
                         _ => "Performance metrics: " +

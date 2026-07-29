@@ -179,6 +179,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _streamVbo;
     private int _sceneFramebuffer;
     private int _sceneColor;
+    private int _sceneTargetWidth = ReferenceWidth;
+    private int _sceneTargetHeight = ReferenceHeight;
     private int _pauseBlurProgram;
     private int _pauseBlurTexture;
     private int _pauseBlurIntermediate;
@@ -2515,6 +2517,7 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         base.OnResize(e);
         GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
+        ResizeSceneTarget();
     }
 
     protected override void OnTextInput(TextInputEventArgs e)
@@ -2530,14 +2533,44 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         _sceneColor = GL.GenTexture();
         GL.BindTexture(TextureTarget.Texture2D, _sceneColor);
-        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
-            ReferenceWidth, ReferenceHeight, 0, PixelFormat.Rgba,
-            PixelType.UnsignedByte, IntPtr.Zero);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS,
             (int)TextureWrapMode.ClampToEdge);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT,
             (int)TextureWrapMode.ClampToEdge);
         _sceneFramebuffer = GL.GenFramebuffer();
+        ResizeSceneTarget(force: true);
+    }
+
+    private void ResizeSceneTarget(bool force = false)
+    {
+        if (_sceneColor == 0 || _sceneFramebuffer == 0) return;
+        var framebufferWidth = Math.Max(1, FramebufferSize.X);
+        var framebufferHeight = Math.Max(1, FramebufferSize.Y);
+        var scale = Math.Min(
+            framebufferWidth / (float)ReferenceWidth,
+            framebufferHeight / (float)ReferenceHeight);
+        var width = Math.Max(
+            1, (int)MathF.Round(ReferenceWidth * scale));
+        var height = Math.Max(
+            1, (int)MathF.Round(ReferenceHeight * scale));
+        if (!force &&
+            width == _sceneTargetWidth &&
+            height == _sceneTargetHeight)
+            return;
+        _sceneTargetWidth = width;
+        _sceneTargetHeight = height;
+
+        GL.BindTexture(TextureTarget.Texture2D, _sceneColor);
+        GL.TexImage2D(
+            TextureTarget.Texture2D,
+            0,
+            PixelInternalFormat.Rgba8,
+            width,
+            height,
+            0,
+            PixelFormat.Rgba,
+            PixelType.UnsignedByte,
+            IntPtr.Zero);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFramebuffer);
         GL.FramebufferTexture2D(
             FramebufferTarget.Framebuffer,
@@ -2570,8 +2603,9 @@ internal sealed partial class GameHostWindow : GameWindow
         var rightNdc = (left + outputWidth) * 2 / framebufferWidth - 1;
         var topNdc = 1 - top * 2 / framebufferHeight;
         var bottomNdc = 1 - (top + outputHeight) * 2 / framebufferHeight;
-        var integerScale = Math.Max(1, (int)MathF.Round(scale));
-        var exactInteger = MathF.Abs(scale - integerScale) < .001f;
+        var nativePresentation =
+            MathF.Abs(outputWidth - _sceneTargetWidth) < .51f &&
+            MathF.Abs(outputHeight - _sceneTargetHeight) < .51f;
 
         GL.UseProgram(_program);
         GL.Uniform1(_shaderUniforms.Get(_program, "image"), 0);
@@ -2582,9 +2616,13 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, _sceneColor);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
-            (int)(exactInteger ? TextureMinFilter.Nearest : TextureMinFilter.Linear));
+            (int)(nativePresentation
+                ? TextureMinFilter.Nearest
+                : TextureMinFilter.Linear));
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
-            (int)(exactInteger ? TextureMagFilter.Nearest : TextureMagFilter.Linear));
+            (int)(nativePresentation
+                ? TextureMagFilter.Nearest
+                : TextureMagFilter.Linear));
         Draw([
             leftNdc,topNdc,0,1,
             leftNdc,bottomNdc,0,0,
@@ -2602,7 +2640,8 @@ internal sealed partial class GameHostWindow : GameWindow
         _fontRenderer?.BeginFrame(ClientSize.X, ClientSize.Y);
         _performanceMetrics.RecordFrame(e.Time);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFramebuffer);
-        GL.Viewport(0, 0, ReferenceWidth, ReferenceHeight);
+        GL.Viewport(
+            0, 0, _sceneTargetWidth, _sceneTargetHeight);
         if (_screen == ScreenState.WorldPreview &&
             _activeWorldLevel == (int)WorldLevel.Underground)
             GL.ClearColor(0, 0, 0, 1);

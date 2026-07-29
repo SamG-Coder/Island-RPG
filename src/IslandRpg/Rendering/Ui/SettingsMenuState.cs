@@ -22,7 +22,7 @@ internal sealed class SettingsMenuState
     private static readonly SettingsTab[] AllTabs =
         Enum.GetValues<SettingsTab>();
     private static readonly string[] DisplayItems =
-        ["fullscreen", "vsync", "frame-limit", "metrics"];
+        ["fullscreen", "resolution", "vsync", "frame-limit", "metrics"];
     private static readonly string[] GameItems = ["occluded-player-outline"];
     private static readonly string[] SoundItems = ["sound-placeholder"];
     private static readonly string[] DeveloperItems =
