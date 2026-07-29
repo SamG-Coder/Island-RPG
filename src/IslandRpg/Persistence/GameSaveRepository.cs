@@ -60,7 +60,8 @@ internal sealed record GameSettings(
     bool Fullscreen = false,
     bool PerformanceMetrics = false,
     DisplayVSyncMode VSyncMode = DisplayVSyncMode.Adaptive,
-    int FrameRateLimit = 0);
+    int FrameRateLimit = 0,
+    bool OccludedPlayerOutline = true);
 
 internal sealed class GameSaveRepository
 {

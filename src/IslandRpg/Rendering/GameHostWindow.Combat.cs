@@ -11,6 +11,7 @@ internal sealed partial class GameHostWindow
     private Guid? _combatTargetId;
     private double _nextMeleeAttackAt;
     private double _swingStartedForAttackAt;
+    private double _meleeReturnToIdleAt;
     private bool _combatLeftWasDown;
     private CombatHitSplat? _combatHitSplat;
 
@@ -57,6 +58,7 @@ internal sealed partial class GameHostWindow
         _combatTargetId = null;
         // The ready time is global combat state. Movement or target changes
         // cancel targeting without granting an immediate fresh attack.
+        _meleeReturnToIdleAt = 0;
         if (_player?.Action == EntityAction.Attack)
             _player.Stop();
     }
@@ -85,7 +87,8 @@ internal sealed partial class GameHostWindow
         if (_swingStartedForAttackAt != _nextMeleeAttackAt &&
             _clock < _nextMeleeAttackAt - impactDelay)
         {
-            if (_player.Action == EntityAction.Attack)
+            if (_player.Action == EntityAction.Attack &&
+                _clock >= _meleeReturnToIdleAt)
                 _player.Stop();
             return;
         }
@@ -101,6 +104,7 @@ internal sealed partial class GameHostWindow
         }
         if (_clock < _nextMeleeAttackAt) return;
         _nextMeleeAttackAt += MeleeCombatService.AttackIntervalSeconds;
+        _meleeReturnToIdleAt = _clock + MeleeRecoveryDelay();
 
         var roll = MeleeCombatService.Roll(
             _activePlayer.AttackExperience,
@@ -203,27 +207,12 @@ internal sealed partial class GameHostWindow
     {
         if (_activePlayer is null) return;
         var panel = _gameUi.Panel.Bounds;
-        DrawPanelCaption("Unarmed combat", panel);
-        DrawSmallCenteredUiText(
-            "Choose an attack style",
-            new(panel.X + 10, panel.Y + 43, panel.Z - 20, 17),
-            new FSColor(190, 181, 150, 255));
+        DrawPanelCaption("Combat", panel);
         for (var index = 0; index < MeleeStances.Length; index++)
             DrawCombatStance(
                 CombatStanceBounds(panel, index),
                 MeleeStances[index],
                 _activePlayer.CombatStance == MeleeStances[index]);
-
-        var stats = new Vector4(
-            panel.X + 10, panel.Y + 232, panel.Z - 20, 54);
-        DrawUiColor(stats, new(.043f, .039f, .030f, .97f));
-        DrawPanelOutline(stats, 1, new(.26f, .21f, .12f, 1));
-        DrawCombatStat(
-            stats, 0, "Attack", _activePlayer.AttackExperience);
-        DrawCombatStat(
-            stats, 1, "Strength", _activePlayer.StrengthExperience);
-        DrawCombatStat(
-            stats, 2, "Defence", _activePlayer.DefenceExperience);
     }
 
     private void RenderCombatTargetHealthBar(Vector4 scene)
@@ -342,27 +331,70 @@ internal sealed partial class GameHostWindow
         return impactFrame * animation.SecondsPerFrame;
     }
 
+    private double MeleeRecoveryDelay()
+    {
+        if (_player is null ||
+            !_entityAnimations.TryGetValue(
+                (_player.Gender, EntityAction.Attack), out var animation))
+            return .4;
+        const int storedVillagerAngles = 5;
+        var framesPerAngle = Math.Max(
+            1, animation.Graphic.Sprite.Frames.Count / storedVillagerAngles);
+        var fullAnimationSeconds =
+            framesPerAngle * animation.SecondsPerFrame;
+        return Math.Max(
+            animation.SecondsPerFrame,
+            fullAnimationSeconds - MeleeImpactDelay());
+    }
+
     private void DrawCombatStance(
         Vector4 bounds,
         MeleeCombatStance stance,
         bool selected)
     {
         var hovered = bounds.Contains(MouseState.Position);
+        var accent = stance switch
+        {
+            MeleeCombatStance.Accurate =>
+                new Vector4(.67f, .16f, .09f, 1),
+            MeleeCombatStance.Aggressive =>
+                new Vector4(.72f, .36f, .10f, 1),
+            _ => new Vector4(.18f, .40f, .67f, 1)
+        };
         DrawUiColor(
             bounds,
             selected
-                ? new(.20f, .145f, .055f, .99f)
+                ? new(.115f, .090f, .045f, .99f)
                 : hovered
-                    ? new(.13f, .105f, .055f, .98f)
+                    ? new(.085f, .072f, .045f, .98f)
                     : new(.052f, .047f, .036f, .98f));
         DrawPanelOutline(
             bounds, selected ? 2 : 1,
             selected
-                ? new(.63f, .45f, .16f, 1)
+                ? new(.58f, .43f, .17f, 1)
                 : new(.27f, .22f, .13f, 1));
+        if (selected)
+            DrawUiColor(
+                new(bounds.X + 2, bounds.Y + 3, 3, bounds.W - 6),
+                accent);
+        var icon = stance switch
+        {
+            MeleeCombatStance.Accurate => 0,
+            MeleeCombatStance.Aggressive => 1,
+            _ => 2
+        };
+        DrawUiCircle(
+            bounds.X + 23, bounds.Y + bounds.W * .5f, 16,
+            new(.025f, .022f, .018f, 1));
+        DrawUiCircle(
+            bounds.X + 23, bounds.Y + bounds.W * .5f, 14,
+            new(accent.X * .35f, accent.Y * .35f, accent.Z * .35f, 1));
+        DrawCombatSkillIcon(
+            icon,
+            new(bounds.X + 9, bounds.Y + bounds.W * .5f - 14, 28, 28));
         DrawUiText(
             stance.ToString(),
-            new(bounds.X + 10, bounds.Y + 8),
+            new(bounds.X + 44, bounds.Y + 6),
             selected
                 ? new FSColor(245, 225, 169, 255)
                 : new FSColor(210, 199, 164, 255));
@@ -373,40 +405,19 @@ internal sealed partial class GameHostWindow
                 MeleeCombatStance.Aggressive => "Trains Strength",
                 _ => "Trains Defence"
             },
-            new(
-                bounds.X + bounds.Z - 78,
-                bounds.Y + 5,
-                70,
-                bounds.W - 10),
-            new FSColor(179, 169, 138, 255));
-    }
-
-    private void DrawCombatStat(
-        Vector4 bounds, int column, string name, int experience)
-    {
-        var width = bounds.Z / 3;
-        var cell = new Vector4(
-            bounds.X + column * width,
-            bounds.Y + 5,
-            width,
-            bounds.W - 10);
-        DrawSmallCenteredUiText(
-            name,
-            new(cell.X, cell.Y, cell.Z, 15),
-            new FSColor(173, 164, 136, 255));
-        DrawCenteredUiText(
-            SkillService.LevelForExperience(experience).ToString(),
-            new(cell.X, cell.Y + 14, cell.Z, 25),
-            new FSColor(235, 218, 171, 255));
+            new(bounds.X + 42, bounds.Y + 24, bounds.Z - 49, 14),
+            selected
+                ? new FSColor(198, 184, 143, 255)
+                : new FSColor(153, 145, 119, 255));
     }
 
     private static Vector4 CombatStanceBounds(
         Vector4 panel, int index) =>
         new(
             panel.X + 10,
-            panel.Y + 63 + index * 53,
+            panel.Y + 45 + index * 58,
             panel.Z - 20,
-            45);
+            51);
 
     private static string CombatStatName(MeleeCombatStance stance) =>
         stance switch

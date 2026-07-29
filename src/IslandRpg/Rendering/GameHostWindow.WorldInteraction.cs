@@ -32,10 +32,48 @@ internal sealed partial class GameHostWindow
         var objectBounds = SpriteBounds(entry.Frame, world);
         var playerBounds = SpriteBounds(
             player.Frame, player.World, player.Mirror);
-        return objectBounds.Left < playerBounds.Right &&
-               objectBounds.Right > playerBounds.Left &&
-               objectBounds.Top < playerBounds.Bottom &&
-               objectBounds.Bottom > playerBounds.Top;
+        if (objectBounds.Left >= playerBounds.Right ||
+            objectBounds.Right <= playerBounds.Left ||
+            objectBounds.Top >= playerBounds.Bottom ||
+            objectBounds.Bottom <= playerBounds.Top)
+            return false;
+
+        var scale = SpritePixelScale();
+        if (scale <= 0) return false;
+        var playerFrame = player.Frame;
+        for (var displayY = 0; displayY < playerFrame.Height; displayY++)
+        for (var displayX = 0; displayX < playerFrame.Width; displayX++)
+        {
+            var sourceX = player.Mirror
+                ? playerFrame.Width - 1 - displayX
+                : displayX;
+            var playerAlpha =
+                playerFrame.Rgba[
+                    (displayY * playerFrame.Width + sourceX) * 4 + 3];
+            if (playerAlpha < 32) continue;
+            var screenX =
+                playerBounds.Left + (displayX + .5f) * scale;
+            var screenY =
+                playerBounds.Top + (displayY + .5f) * scale;
+            if (screenX < objectBounds.Left ||
+                screenX >= objectBounds.Right ||
+                screenY < objectBounds.Top ||
+                screenY >= objectBounds.Bottom)
+                continue;
+            var objectX = (int)(
+                (screenX - objectBounds.Left) / scale);
+            var objectY = (int)(
+                (screenY - objectBounds.Top) / scale);
+            if ((uint)objectX >= entry.Frame.Width ||
+                (uint)objectY >= entry.Frame.Height)
+                continue;
+            var objectAlpha =
+                entry.Frame.Rgba[
+                    (objectY * entry.Frame.Width + objectX) * 4 + 3];
+            if (objectAlpha >= 32)
+                return true;
+        }
+        return false;
     }
 
     private bool TryGetTreeUnderMouse(

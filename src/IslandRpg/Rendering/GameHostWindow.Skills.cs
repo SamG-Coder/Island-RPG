@@ -8,13 +8,20 @@ namespace IslandRpg.Rendering;
 internal sealed partial class GameHostWindow
 {
     private static readonly (SkillType Skill, string Name)[] SkillListEntries =
-        Enum.GetValues<SkillType>()
-            .Select(skill => (skill, skill.ToString()))
-            .ToArray();
-    private static readonly string[] SkillListIds =
-        SkillListEntries
-            .Select(entry => entry.Skill.ToString())
-            .ToArray();
+    [
+        (SkillType.Adventure, "Adventure"),
+        (SkillType.Attack, "Attack"),
+        (SkillType.Strength, "Strength"),
+        (SkillType.Defence, "Defence"),
+        (SkillType.Woodcutting, "Woodcutting"),
+        (SkillType.Farming, "Farming"),
+        (SkillType.Fishing, "Fishing"),
+        (SkillType.Cooking, "Cooking"),
+        (SkillType.Firemaking, "Firemaking"),
+        (SkillType.Crafting, "Crafting"),
+        (SkillType.Digging, "Digging"),
+        (SkillType.Mining, "Mining")
+    ];
 
     private void UpdateSkillsPanelInput(Vector2 pointer, bool leftDown)
     {
@@ -45,11 +52,11 @@ internal sealed partial class GameHostWindow
                      .Contains(pointer))
                 _selectedSkill = -1;
             else if (SkillGuideService.IsSupported(
-                         (SkillType)_selectedSkill) &&
+                         SelectedSkill()) &&
                      SkillPanelLayout.TitleBounds(panel)
                          .Contains(pointer))
-                OpenSkillGuideWindow((SkillType)_selectedSkill);
-            else if (_selectedSkill == 2 &&
+                OpenSkillGuideWindow(SelectedSkill());
+            else if (SelectedSkill() == SkillType.Crafting &&
                      SkillPanelLayout.ActionButtonBounds(panel)
                          .Contains(pointer))
                 OpenCraftingWindow();
@@ -99,7 +106,7 @@ internal sealed partial class GameHostWindow
             return;
         }
 
-        var skill = (SkillType)_selectedSkill;
+        var skill = SelectedSkill();
         var farming = skill == SkillType.Farming;
         var crafting = skill == SkillType.Crafting;
         var fishing = skill == SkillType.Fishing;
@@ -148,7 +155,7 @@ internal sealed partial class GameHostWindow
             "< Skills", back, new(224, 213, 175, 255));
         var title = SkillPanelLayout.TitleBounds(panel);
         var opensGuide = SkillGuideService.IsSupported(
-            (SkillType)_selectedSkill);
+            SelectedSkill());
         if (opensGuide)
         {
             DrawUiColor(
@@ -314,6 +321,11 @@ internal sealed partial class GameHostWindow
         return cell.Y >= list.Y &&
                cell.Y + cell.W <= list.Y + list.W;
     }
+
+    private SkillType SelectedSkill() =>
+        SkillListEntries[
+            Math.Clamp(_selectedSkill, 0, SkillListEntries.Length - 1)]
+        .Skill;
 
     private int SkillExperience(SkillType skill) => skill switch
     {

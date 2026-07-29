@@ -789,6 +789,9 @@ internal sealed partial class GameHostWindow : GameWindow
                 if (_settingsMenu.SelectedTab == SettingsTab.Display &&
                     UpdateDisplaySettings(pointer, settingsPanel))
                     break;
+                else if (_settingsMenu.SelectedTab == SettingsTab.Game &&
+                         UpdateGameSettings(pointer, settingsPanel))
+                    break;
                 else if (_settingsMenu.SelectedTab == SettingsTab.Dev &&
                          UpdateDeveloperSettings(pointer, settingsPanel))
                     break;
@@ -5034,12 +5037,14 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         FlushAtlas();
         if (!playerDrawn) DrawPlayer();
-        if (player is not null && playerOccluded)
+        if (player is not null &&
+            playerOccluded &&
+            _occludedPlayerOutlineEnabled)
             DrawSprite(
                 player.Frame, player.Texture, player.World,
                 mirror: player.Mirror, outlineOnly: true,
                 wading: player.Wading,
-                outlineColor: TeamColor(_activePlayer?.TeamColor ?? 0));
+                outlineColor: new Vector3(1f, .72f, .12f));
         if (showGroundItemOutlines)
             DrawGroundItemOutlines(groundOutlineVertices);
         if (_levelUpFireworks.Active)

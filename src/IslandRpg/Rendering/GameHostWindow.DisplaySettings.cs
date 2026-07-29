@@ -7,6 +7,8 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
+    private bool _occludedPlayerOutlineEnabled = true;
+
     internal bool UpdateDisplaySettings(
         Vector2 pointer, Vector4 panel)
     {
@@ -42,9 +44,28 @@ internal sealed partial class GameHostWindow
         IslandRpg.Persistence.GameSettings settings)
     {
         _performanceMetricsEnabled = settings.PerformanceMetrics;
+        _occludedPlayerOutlineEnabled =
+            settings.OccludedPlayerOutline;
         WindowState = settings.Fullscreen
             ? OpenTK.Windowing.Common.WindowState.Fullscreen
             : OpenTK.Windowing.Common.WindowState.Normal;
         DisplaySettingsController.Apply(this, settings);
+    }
+
+    internal bool UpdateGameSettings(Vector2 pointer, Vector4 panel)
+    {
+        _settingsMenu.LayoutContent(panel);
+        if (!_settingsMenu.ContentList.VisibleIndices.Contains(0) ||
+            !_settingsMenu.OptionBounds(0).Contains(pointer))
+            return false;
+        var settings = _saves.LoadSettings();
+        settings = settings with
+        {
+            OccludedPlayerOutline =
+                !settings.OccludedPlayerOutline
+        };
+        _saves.SaveSettings(settings);
+        ApplyDisplaySettings(settings);
+        return true;
     }
 }

@@ -178,10 +178,13 @@ internal sealed partial class GameHostWindow
                 }
                 break;
             case SettingsTab.Game:
-                DrawCenteredUiText(
-                    "Gameplay settings will appear here.",
+                var gameSettings = _saves.LoadSettings();
+                DrawMenuButton(
                     _settingsMenu.OptionBounds(0),
-                    new(174, 164, 134, 255));
+                    "Player outline behind objects: " +
+                    (gameSettings.OccludedPlayerOutline
+                        ? "On"
+                        : "Off"));
                 break;
             case SettingsTab.Sound:
                 DrawCenteredUiText(
