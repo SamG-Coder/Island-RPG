@@ -16,8 +16,9 @@ internal readonly record struct MeleeAttackRoll(
 
 internal static class MeleeCombatService
 {
-    public const float AttackRange = 1.35f;
+    public const float AttackRange = .82f;
     public const float AttackIntervalSeconds = 2.4f;
+    public const float HitSplatSeconds = 1.15f;
     public const int TrainingDummyMaximumHealth = 100;
 
     public static MeleeAttackRoll Roll(

@@ -92,6 +92,11 @@ internal sealed class WorldEntity
             Facing = direction.Normalized();
         SetAction(EntityAction.Attack);
     }
+    public void RestartAttackAt(Vector2 target)
+    {
+        AttackAt(target);
+        ActionTime = 0;
+    }
     public void Work() => SetAction(EntityAction.Work);
     public void Gather() => SetAction(EntityAction.Gather);
     public void Die() => SetAction(EntityAction.Die);

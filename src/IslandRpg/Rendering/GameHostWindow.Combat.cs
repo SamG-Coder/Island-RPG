@@ -10,7 +10,15 @@ internal sealed partial class GameHostWindow
 {
     private Guid? _combatTargetId;
     private double _nextMeleeAttackAt;
+    private double _swingStartedForAttackAt;
     private bool _combatLeftWasDown;
+    private CombatHitSplat? _combatHitSplat;
+
+    private readonly record struct CombatHitSplat(
+        Guid TargetId,
+        int Damage,
+        bool Hit,
+        double ShownAt);
 
     private static readonly MeleeCombatStance[] MeleeStances =
         Enum.GetValues<MeleeCombatStance>();
@@ -25,8 +33,9 @@ internal sealed partial class GameHostWindow
             dummy.ItemId != ItemIds.TrainingDummy)
             return;
         _combatTargetId = dummyId;
-        _nextMeleeAttackAt = _clock + .55;
-        _player.AttackAt(new(dummy.X, dummy.Y));
+        _nextMeleeAttackAt = _clock + MeleeImpactDelay();
+        _swingStartedForAttackAt = _nextMeleeAttackAt;
+        _player.RestartAttackAt(new(dummy.X, dummy.Y));
         _chatUi.AddMessage(
             "You begin attacking the training dummy.",
             ChatMessageStyle.Action);
@@ -37,6 +46,7 @@ internal sealed partial class GameHostWindow
         if (_combatTargetId is null) return;
         _combatTargetId = null;
         _nextMeleeAttackAt = 0;
+        _swingStartedForAttackAt = 0;
         if (_player?.Action == EntityAction.Attack)
             _player.Stop();
     }
@@ -61,7 +71,17 @@ internal sealed partial class GameHostWindow
             CancelMeleeCombat();
             return;
         }
-        _player.AttackAt(target);
+        var impactDelay = MeleeImpactDelay();
+        if (_clock >= _nextMeleeAttackAt - impactDelay &&
+            _swingStartedForAttackAt != _nextMeleeAttackAt)
+        {
+            _player.RestartAttackAt(target);
+            _swingStartedForAttackAt = _nextMeleeAttackAt;
+        }
+        else
+        {
+            _player.AttackAt(target);
+        }
         if (_clock < _nextMeleeAttackAt) return;
         _nextMeleeAttackAt += MeleeCombatService.AttackIntervalSeconds;
 
@@ -72,10 +92,14 @@ internal sealed partial class GameHostWindow
             Random.Shared.NextSingle());
         if (!roll.Hit)
         {
+            _combatHitSplat = new(
+                targetId, 0, false, _clock);
             _chatUi.AddMessage("You miss.", ChatMessageStyle.Action);
             return;
         }
 
+        _combatHitSplat = new(
+            targetId, roll.Damage, true, _clock);
         var health = location.Object.Health <= 0
             ? MeleeCombatService.TrainingDummyMaximumHealth
             : location.Object.Health;
@@ -203,6 +227,102 @@ internal sealed partial class GameHostWindow
             scene,
             SpriteBounds(frame, GroundObjectWorld(location.Object)),
             health / (float)maximum);
+        RenderCombatHitSplat(
+            scene,
+            SpriteBounds(frame, GroundObjectWorld(location.Object)));
+    }
+
+    private void RenderCombatHitSplat(
+        Vector4 scene,
+        (float Left, float Top, float Right, float Bottom) targetBounds)
+    {
+        if (_combatHitSplat is not { } splat ||
+            splat.TargetId != _combatTargetId)
+            return;
+        var age = (float)(_clock - splat.ShownAt);
+        if (age >= MeleeCombatService.HitSplatSeconds)
+        {
+            _combatHitSplat = null;
+            return;
+        }
+
+        var sceneScale = scene.Z / ReferenceWidth;
+        var fade = Math.Clamp(
+            (MeleeCombatService.HitSplatSeconds - age) / .55f, 0, 1);
+        var entrance = Math.Clamp(age / .08f, 0, 1);
+        var centerX = scene.X +
+            (targetBounds.Left + targetBounds.Right) * .5f * sceneScale;
+        var centerY = scene.Y +
+            (targetBounds.Top +
+             (targetBounds.Bottom - targetBounds.Top) * .42f) * sceneScale;
+        var fullRadius = Math.Max(10, (int)MathF.Round(12 * sceneScale));
+        var radius = Math.Max(3, (int)MathF.Round(fullRadius * entrance));
+        DrawCombatSplatBadge(
+            centerX, centerY, radius, splat.Hit, fade);
+        var textBounds = new Vector4(
+            centerX - radius, centerY - radius - 2,
+            radius * 2, radius * 2);
+        DrawCenteredUiText(
+            splat.Damage.ToString(),
+            new(textBounds.X + 1, textBounds.Y + 1,
+                textBounds.Z, textBounds.W),
+            new FSColor(28, 10, 7, (int)(235 * fade)));
+        DrawCenteredUiText(
+            splat.Damage.ToString(),
+            textBounds,
+            new FSColor(255, 246, 218, (int)(255 * fade)));
+    }
+
+    private void DrawCombatSplatBadge(
+        float centerX, float centerY, int radius, bool hit, float fade)
+    {
+        var edge = hit
+            ? new Vector4(.48f, .025f, .015f, fade)
+            : new Vector4(.045f, .16f, .52f, fade);
+        var face = hit
+            ? new Vector4(.78f, .055f, .030f, fade)
+            : new Vector4(.06f, .28f, .74f, fade);
+
+        // Use the same compact eight-point impact silhouette for hits and
+        // misses; only the combat meaning changes the palette.
+        var point = Math.Max(2, radius / 4);
+        DrawUiColor(new(
+            centerX - point / 2f, centerY - radius - 1,
+            point, radius * 2 + 2), edge);
+        DrawUiColor(new(
+            centerX - radius - 1, centerY - point / 2f,
+            radius * 2 + 2, point), edge);
+        var diagonalOffset = radius * .68f;
+        var diagonalSize = Math.Max(2, point);
+        foreach (var (x, y) in new[]
+                 {
+                     (-diagonalOffset, -diagonalOffset),
+                     (diagonalOffset, -diagonalOffset),
+                     (-diagonalOffset, diagonalOffset),
+                     (diagonalOffset, diagonalOffset)
+                 })
+            DrawUiColor(new(
+                centerX + x - diagonalSize / 2f,
+                centerY + y - diagonalSize / 2f,
+                diagonalSize,
+                diagonalSize), edge);
+        DrawUiCircle(centerX, centerY, radius, edge);
+        DrawUiCircle(centerX, centerY, Math.Max(1, radius - 2), face);
+    }
+
+    private double MeleeImpactDelay()
+    {
+        if (_player is null ||
+            !_entityAnimations.TryGetValue(
+                (_player.Gender, EntityAction.Attack), out var animation))
+            return .65;
+        const int storedVillagerAngles = 5;
+        var framesPerAngle = Math.Max(
+            1, animation.Graphic.Sprite.Frames.Count / storedVillagerAngles);
+        var impactFrame = Math.Clamp(
+            (int)MathF.Round((framesPerAngle - 1) * .62f),
+            0, framesPerAngle - 1);
+        return impactFrame * animation.SecondsPerFrame;
     }
 
     private void DrawCombatStance(

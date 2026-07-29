@@ -5905,6 +5905,8 @@ internal sealed partial class GameHostWindow : GameWindow
         var rawFrame = _player.Action == EntityAction.Idle
             ? VillagerDirectionRig.NeutralIdleFrame(framesPerAngle)
             : (int)(_player.ActionTime / animation.SecondsPerFrame);
+        if (_player.Action == EntityAction.Attack)
+            rawFrame = Math.Min(rawFrame, framesPerAngle - 1);
         if (_player.Action == EntityAction.Gather &&
             (_activeGroundDrop is not null ||
              _activeCooking is { ReadyAt: null }))
