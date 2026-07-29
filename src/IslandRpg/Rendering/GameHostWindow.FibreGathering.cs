@@ -191,6 +191,7 @@ internal sealed partial class GameHostWindow
             Inventory = inventory,
             UpdatedUtc = DateTime.UtcNow
         };
+        AwardAdventureExperience(gathered * 2);
         SetVegetationCooldown(
             target.Gpu.Chunk, key, FibreShrubCooldownSeconds);
         _saves.SavePlayer(_activePlayer);

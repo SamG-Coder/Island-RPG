@@ -30,7 +30,11 @@ internal sealed record PlayerProfile(
     int CookingExperience = 0,
     int FiremakingExperience = 0,
     int DiggingExperience = 0,
-    int MiningExperience = 0);
+    int MiningExperience = 0,
+    int AdventureExperience = 0,
+    int Health = AdventureService.BaseMaximumHealth,
+    float Hunger = SurvivalService.MaximumHunger,
+    float WellFedSeconds = 0);
 
 internal sealed record WorldPlayerState(
     string PlayerId,

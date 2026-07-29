@@ -8,6 +8,35 @@ using OpenTK.Mathematics;
 
 WorldCheckProcess.DisableWindowsCrashDialogs();
 
+var adventureAward = AdventureService.AwardFromAction(0, 400);
+Require(
+    adventureAward.Experience == 100 &&
+    AdventureService.MaximumLevel == 100 &&
+    AdventureService.LevelForExperience(
+        AdventureService.ExperienceForLevel(100)) == 100 &&
+    AdventureService.MaximumHealth(
+        AdventureService.ExperienceForLevel(100)) == 298,
+    "all-action Adventure progression must cap at level 100 and scale maximum health");
+Require(
+    SurvivalService.TryFoodEffect(
+        ItemIds.FishBerryStew, out var stewEffect) &&
+    SurvivalService.TryFoodEffect(
+        ItemIds.CookedMinnows, out var minnowsEffect) &&
+    stewEffect.HungerRestored > minnowsEffect.HungerRestored &&
+    stewEffect.WellFedSeconds > minnowsEffect.WellFedSeconds,
+    "better food must restore more hunger and slow hunger for longer");
+var wellFedSurvival = SurvivalService.Advance(
+    100, 60, 100, 60);
+var normalSurvival = SurvivalService.Advance(
+    100, 0, 100, 60);
+Require(
+    wellFedSurvival.Hunger > normalSurvival.Hunger &&
+    wellFedSurvival.WellFedSeconds == 0,
+    "well-fed time must slow hunger drain and expire deterministically");
+var starvation = SurvivalService.Advance(0, 0, 100, 10);
+Require(starvation.Health == 95,
+    "empty hunger must cause deterministic starvation damage");
+
 var defaultDisplaySettings = new GameSettings();
 Require(
     GameCursorFrames.MineAndPickUp == 3 &&
@@ -2902,6 +2931,10 @@ try
     player = player with
     {
         WoodcuttingExperience = 725,
+        AdventureExperience = 1200,
+        Health = 111,
+        Hunger = 64,
+        WellFedSeconds = 90,
         Inventory = PlayerInventory.Normalize(["logs", "oak_logs"])
     };
     saves.SavePlayer(player);
@@ -2911,6 +2944,10 @@ try
     Require(saves.ListPlayers().Single() is var loadedPlayer &&
             loadedPlayer.Id == player.Id &&
             loadedPlayer.WoodcuttingExperience == 725 &&
+            loadedPlayer.AdventureExperience == 1200 &&
+            loadedPlayer.Health == 111 &&
+            loadedPlayer.Hunger == 64 &&
+            loadedPlayer.WellFedSeconds == 90 &&
             loadedPlayer.Inventory?.Length == PlayerInventory.Capacity &&
             loadedPlayer.Inventory[0] == "logs" &&
             loadedPlayer.Inventory[1] == "oak_logs" &&

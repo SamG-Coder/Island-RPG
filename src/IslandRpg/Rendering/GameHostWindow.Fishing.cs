@@ -241,6 +241,7 @@ internal sealed partial class GameHostWindow
 
         var award = FishingSkill.AwardExperience(
             _activePlayer.FishingExperience, fish.Species);
+        AwardAdventureExperience(award.Gained);
         _activePlayer = _activePlayer with
         {
             Inventory = inventory,

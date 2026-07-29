@@ -307,7 +307,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly WorldActionController _worldActions;
     private readonly LevelUpFireworks _levelUpFireworks = new();
     private readonly Action<string, Vector2, float> _levelUpParticleAdder;
-    private readonly int[] _observedSkillLevels = new int[8];
+    private readonly int[] _observedSkillLevels = new int[9];
     private bool _skillLevelsObserved;
     private string? _overheadSpeech;
     private double _overheadSpeechExpiresAt;
@@ -1234,6 +1234,7 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_player is null) return;
         _worldGameSeconds = WorldTime.Advance(
             _worldGameSeconds, elapsed);
+        UpdateSurvival(elapsed);
         UpdateExpiredCampfires();
         _worldActions.ProcessPendingPath();
 
@@ -2056,6 +2057,7 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_activePlayer is null || amount <= 0) return;
         var award = WoodcuttingSkill.AwardExperience(
             _activePlayer.WoodcuttingExperience, amount);
+        AwardAdventureExperience(award.Gained);
         _activePlayer = _activePlayer with
         {
             WoodcuttingExperience = award.Experience,
@@ -2469,12 +2471,9 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         if (_mode == PreviewMode.Game &&
             _gameUi.ActivePanel == GameUiPanel.Skills &&
-            _selectedSkill < 0)
-        {
-            LayoutSkillsList();
-            if (_skillsList.Scroll(MouseState.Position, e.OffsetY))
-                return;
-        }
+            _selectedSkill < 0 &&
+            _gameUi.Panel.Bounds.Contains(MouseState.Position))
+            return;
         if (_mode == PreviewMode.Game)
         {
             _chatUi.Layout(SceneClientBounds());
@@ -3324,6 +3323,7 @@ internal sealed partial class GameHostWindow : GameWindow
         RenderDigSiteHealthBar(scene);
         RenderOverheadSpeech(scene);
         RenderMinimap();
+        RenderPlayerStatus();
         RenderChatUi();
         RenderWorldClock(scene);
         if (_gameUi.Panel.Visible)
@@ -3334,8 +3334,10 @@ internal sealed partial class GameHostWindow : GameWindow
             RenderInventoryPanel();
         DrawAoEUiTile(_gameUi.SkillsButton);
         DrawAoEUiTile(_gameUi.InventoryButton);
-        DrawUiButtonCaption("Skills", _gameUi.SkillsButton.Bounds);
-        DrawUiButtonCaption("Bag", _gameUi.InventoryButton.Bounds);
+        DrawPlayerUiIcon(
+            1, CenteredIconBounds(_gameUi.SkillsButton.Bounds));
+        DrawPlayerUiIcon(
+            0, CenteredIconBounds(_gameUi.InventoryButton.Bounds));
         RenderInventoryContextMenu();
         _uiOpacity = 1;
     }
@@ -3780,6 +3782,7 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_activePlayer is null || amount <= 0) return;
         var award = FarmingSkill.AwardExperience(
             _activePlayer.FarmingExperience, amount);
+        AwardAdventureExperience(award.Gained);
         _activePlayer = _activePlayer with
         {
             FarmingExperience = award.Experience,
@@ -4053,6 +4056,13 @@ internal sealed partial class GameHostWindow : GameWindow
             new FSColor(229, 218, 177, 255));
     }
 
+    private static Vector4 CenteredIconBounds(Vector4 bounds) =>
+        new(
+            MathF.Round(bounds.X + (bounds.Z - 32) * .5f),
+            MathF.Round(bounds.Y + (bounds.W - 32) * .5f),
+            32,
+            32);
+
     private void RenderMinimap()
     {
         if (_player is null || _minimapFrame is null || _minimapTexture == 0) return;
@@ -4120,13 +4130,23 @@ internal sealed partial class GameHostWindow : GameWindow
                 cancellationToken);
         }
         DrawUiSprite(_minimapFrame, _minimapTexture, _minimapUi.Bounds);
+        var levelPlaque = new Vector4(
+            _minimapUi.Bounds.X + 27,
+            _minimapUi.Bounds.Y + _minimapUi.Bounds.W + 3,
+            _minimapUi.Bounds.Z - 54,
+            21);
+        DrawUiColor(
+            levelPlaque,
+            new(.040f, .035f, .025f, .94f));
+        DrawPanelOutline(
+            levelPlaque, 0,
+            new(.035f, .030f, .022f, 1));
+        DrawPanelOutline(
+            levelPlaque, 1,
+            new(.42f, .32f, .14f, 1));
         DrawCenteredUiText(
             WorldLevelMapPresentation.LevelName(_activeWorldLevel),
-            new(
-                _minimapUi.Bounds.X + 18,
-                _minimapUi.Bounds.Y + 8,
-                _minimapUi.Bounds.Z - 36,
-                18),
+            levelPlaque,
             new(226, 216, 181, 230));
     }
 
@@ -5396,6 +5416,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private void PrepareGameUi()
     {
         PrepareFishingItemSprites();
+        PreparePlayerUiIcons();
         _uiPanelFillTexture = Upload(1, 1, [20, 20, 19, 148]);
         _uiSolidTexture = Upload(1, 1, [255, 255, 255, 255]);
         _uiTabFrame = new SpriteFrame(
@@ -6990,6 +7011,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_uiTabTexture != 0) GL.DeleteTexture(_uiTabTexture);
         if (_uiActiveTabTexture != 0) GL.DeleteTexture(_uiActiveTabTexture);
         if (_minimapTexture != 0) GL.DeleteTexture(_minimapTexture);
+        foreach (var texture in _playerUiIconTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
         if (_newWorldPreviewTexture != 0)
             GL.DeleteTexture(_newWorldPreviewTexture);
         _fontSystem?.Dispose();

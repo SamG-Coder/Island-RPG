@@ -173,6 +173,7 @@ internal sealed partial class GameHostWindow
                 location.Value.Object, _worldGameSeconds, level);
         var award = FiremakingSkill.AwardExperience(
             _activePlayer.FiremakingExperience);
+        AwardAdventureExperience(award.Gained);
         _activePlayer = _activePlayer with
         {
             FiremakingExperience = award.Experience,

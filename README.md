@@ -43,6 +43,10 @@ third-party content.
 - Woodcutting, Farming, Crafting, Fishing, Cooking, Firemaking, Digging and
   Mining skills.
 - Berry foraging and cooking, ore deposits, mining tools and level-up effects.
+- Level-100 Adventure progression fed by every skilling action, with
+  level-scaled maximum health.
+- Persistent health and hunger, food-specific restoration, and timed
+  well-fed bonuses that slow hunger loss.
 - Level-based recipes, primitive tools, workbenches and campfires.
 - Reusable skill guides, crafting screens, pause menus and settings.
 - Optional performance metrics and developer world tools.
@@ -104,6 +108,10 @@ The default command opens the playable game and its character/world menus.
 
 Use the on-screen **Skills** and **Bag** buttons for progression and inventory.
 Click any skill name inside its detail panel to open its level guide.
+The icon-led player panel beside the minimap shows Adventure level, current
+and maximum health, hunger, and remaining well-fed time. Right-click berries,
+cooked fish, or stew in the Bag and select **Eat**. Better meals restore more
+hunger and keep hunger draining slowly for longer.
 
 ### v0.2 progression loop
 
@@ -296,8 +304,8 @@ Before submitting a change:
 
 ## Status and limitations
 
-This is an early playable prototype. Combat, health, hunger, NPC simulation,
-building construction and audio are not implemented. Farming covers tree
+This is an early playable prototype. Combat, death and respawning, NPC
+simulation, building construction and audio are not implemented. Farming covers tree
 planting and berry foraging, Cooking supports fish and berries, and placeable
 furniture remains limited. See the
 [v0.2.0 release notes](release-notes/RELEASE_NOTES_0.2.md) for more detail.

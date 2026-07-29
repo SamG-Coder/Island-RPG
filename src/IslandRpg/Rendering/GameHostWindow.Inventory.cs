@@ -194,6 +194,9 @@ internal sealed partial class GameHostWindow
             pointer,
             ItemCatalog.Get(itemId) switch
             {
+                { } item when
+                    SurvivalService.TryFoodEffect(item.Id, out _) =>
+                    ["Eat", "Drop", "Examine"],
                 { } item when item.HasTag(ItemTag.Shovel) =>
                     ["Dig", "Drop", "Examine"],
                 { } item when item.HasTag(ItemTag.Seed) =>
@@ -443,6 +446,11 @@ internal sealed partial class GameHostWindow
         }
         if (option == 0)
         {
+            if (SurvivalService.TryFoodEffect(itemId, out _))
+            {
+                EatInventoryItem(slot, itemId);
+                return;
+            }
             if (item.HasTag(ItemTag.Shovel))
             {
                 BeginCaveDigTargeting(slot);

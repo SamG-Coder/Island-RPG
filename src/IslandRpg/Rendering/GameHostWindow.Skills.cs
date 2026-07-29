@@ -28,11 +28,15 @@ internal sealed partial class GameHostWindow
             var panel = _gameUi.Panel.Bounds;
             if (_selectedSkill < 0)
             {
-                LayoutSkillsList();
-                _skillsList.UpdatePointer(pointer, leftDown);
-                if (_skillsList.TryHit(
-                        pointer, out var index, out _))
+                for (var index = 0;
+                     index < SkillListEntries.Length;
+                     index++)
+                {
+                    if (!SkillGridCell(panel, index).Contains(pointer))
+                        continue;
                     _selectedSkill = index;
+                    break;
+                }
             }
             else if (SkillPanelLayout.BackButtonBounds(panel)
                      .Contains(pointer))
@@ -47,11 +51,6 @@ internal sealed partial class GameHostWindow
                          .Contains(pointer))
                 OpenCraftingWindow();
         }
-        else if (_selectedSkill < 0)
-        {
-            LayoutSkillsList();
-            _skillsList.UpdatePointer(pointer, leftDown);
-        }
         _skillsLeftWasDown = leftDown;
     }
 
@@ -61,18 +60,17 @@ internal sealed partial class GameHostWindow
         DrawPanelCaption("Skills", panel);
         if (_selectedSkill < 0)
         {
-            LayoutSkillsList();
-            foreach (var index in _skillsList.VisibleIndices)
+            for (var index = 0;
+                 index < SkillListEntries.Length;
+                 index++)
             {
                 var entry = SkillListEntries[index];
-                DrawSkillListItem(
-                    _skillsList.RowBounds(index),
+                DrawSkillGridItem(
+                    SkillGridCell(panel, index),
                     entry.Skill,
-                    entry.Name,
                     SkillService.LevelForExperience(
                         SkillExperience(entry.Skill)));
             }
-            RenderListScrollbar(_skillsList);
             return;
         }
 
@@ -223,15 +221,18 @@ internal sealed partial class GameHostWindow
             new(235, 222, 178, 255));
     }
 
-    private void LayoutSkillsList()
+    private static Vector4 SkillGridCell(Vector4 panel, int index)
     {
-        _skillsList.Layout(
-            SkillPanelLayout.ListBounds(_gameUi.Panel.Bounds),
-            SkillListIds,
-            rowHeight: 54,
-            rowGap: 6,
-            deleteWidth: 0,
-            actionGap: 0);
+        const float gap = 5;
+        var list = SkillPanelLayout.ListBounds(panel);
+        var width = (list.Z - gap) * .5f;
+        var row = index / 2;
+        var column = index % 2;
+        return new(
+            list.X + column * (width + gap),
+            list.Y + row * 57,
+            width,
+            52);
     }
 
     private int SkillExperience(SkillType skill) => skill switch
@@ -255,8 +256,8 @@ internal sealed partial class GameHostWindow
         _ => 0
     };
 
-    private void DrawSkillListItem(
-        Vector4 bounds, SkillType skill, string name, int level)
+    private void DrawSkillGridItem(
+        Vector4 bounds, SkillType skill, int level)
     {
         var hovered = bounds.Contains(MouseState.Position);
         var accent = skill switch
@@ -275,35 +276,31 @@ internal sealed partial class GameHostWindow
             hovered
                 ? new(.15f, .13f, .075f, .98f)
                 : new(.060f, .055f, .040f, .97f));
-        DrawUiColor(
-            new(bounds.X + 3, bounds.Y + 3, 4, bounds.W - 6),
-            accent);
         DrawPanelOutline(
             bounds, hovered ? 2 : 1,
             hovered
                 ? new(.49f, .38f, .17f, 1)
                 : new(.27f, .22f, .13f, 1));
-        DrawUiText(
-            name,
-            new(bounds.X + 13, bounds.Y + 10),
-            new(229, 218, 177, 255));
+        DrawPlayerUiIcon(
+            5 + (int)skill,
+            new(bounds.X + 8, bounds.Y + 5, 32, 32));
         var badge = new Vector4(
-            bounds.X + bounds.Z - 57,
-            bounds.Y + 8,
-            48,
-            24);
+            bounds.X + bounds.Z - 34,
+            bounds.Y + 7,
+            29,
+            20);
         DrawUiColor(badge, new(.035f, .032f, .025f, .92f));
         DrawPanelOutline(badge, 1, new(.25f, .21f, .13f, 1));
         DrawCenteredUiText(
-            $"Lv {level}", badge,
+            $"{level}", badge,
             level >= SkillService.MaximumLevel
                 ? new(210, 190, 105, 255)
                 : new(192, 183, 151, 255));
         var track = new Vector4(
-            bounds.X + 13,
-            bounds.Y + bounds.W - 12,
-            bounds.Z - 26,
-            5);
+            bounds.X + 6,
+            bounds.Y + bounds.W - 8,
+            bounds.Z - 12,
+            4);
         DrawUiColor(track, new(.025f, .024f, .020f, .95f));
         DrawUiColor(
             new(

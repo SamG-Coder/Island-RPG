@@ -295,6 +295,7 @@ internal sealed partial class GameHostWindow
         if (_activePlayer is null || amount <= 0) return;
         var award = DiggingSkill.AwardExperience(
             _activePlayer.DiggingExperience, amount);
+        AwardAdventureExperience(award.Gained);
         _activePlayer = _activePlayer with
         {
             DiggingExperience = award.Experience,

@@ -109,6 +109,7 @@ internal sealed partial class GameHostWindow
         var award = FarmingSkill.AwardExperience(
             _activePlayer.FarmingExperience,
             BerryFarmingExperience * gathered);
+        AwardAdventureExperience(award.Gained);
         _activePlayer = _activePlayer with
         {
             Inventory = inventory,

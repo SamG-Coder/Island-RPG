@@ -144,6 +144,7 @@ internal sealed partial class GameHostWindow
             _activePlayer.MiningExperience,
             damage + (health == 0
                 ? value.Definition.CompletionExperience : 0));
+        AwardAdventureExperience(experience.Gained);
         var inventory = _activePlayer.Inventory;
         if (health == 0 &&
             value.Definition.RewardItemId is { } reward)

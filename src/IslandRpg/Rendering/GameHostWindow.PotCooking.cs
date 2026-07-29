@@ -107,6 +107,7 @@ internal sealed partial class GameHostWindow
         var award = CookingSkill.AwardExperience(
             _activePlayer.CookingExperience,
             StewCookingService.Experience);
+        AwardAdventureExperience(award.Gained);
         _activePlayer = _activePlayer with
         {
             Inventory = inventory,
