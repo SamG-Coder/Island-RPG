@@ -11,6 +11,7 @@
   <title>Island RPG — Explore. Gather. Descend.</title>
   <link rel="stylesheet" href="styles.css">
   <script src="script.js" defer></script>
+  <script src="world-generator.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -28,6 +29,7 @@
     <nav id="site-nav" class="site-nav" aria-label="Main navigation" data-nav>
       <a href="#world">The world</a>
       <a href="#skills">Skills</a>
+      <a href="#world-generator">Try a world</a>
       <a href="#releases">Releases</a>
       <a href="#install">Install</a>
       <a class="nav-cta" href="https://github.com/SamG-Coder/Island-RPG">View repository</a>
@@ -164,6 +166,33 @@
             <p>Deterministic seeds create streamed terrain, rivers, coasts, caves and distinct biomes.</p>
           </article>
         </div>
+      </div>
+    </section>
+
+    <section class="section generator-section" id="world-generator">
+      <div class="section-heading reveal">
+        <p class="eyebrow"><span></span> The real world generator</p>
+        <h2>Try an island<br><em>from any seed.</em></h2>
+        <p>This is a browser port of the developer map. It uses the same deterministic terrain, climate, drainage, biome and atlas logic as the game.</p>
+      </div>
+
+      <div class="generator-panel reveal" data-world-generator>
+        <div class="generator-toolbar">
+          <label>
+            <span>World seed</span>
+            <input data-world-seed type="text" value="2187" aria-label="World seed number or phrase" spellcheck="false">
+          </label>
+          <button class="button button-primary" type="button" data-world-generate>Generate world</button>
+          <button class="button button-ghost" type="button" data-world-random>Random seed</button>
+          <button class="button button-ghost" type="button" data-world-layer>Tree density</button>
+        </div>
+        <div class="generator-map-shell">
+          <canvas data-world-map width="160" height="160" aria-label="Procedurally generated isometric world map"></canvas>
+          <div class="generator-loading" aria-hidden="true"><span></span></div>
+          <p class="generator-status" data-world-status role="status">Enter a seed and generate</p>
+          <p class="generator-help">Drag to pan <span>·</span> Wheel to zoom <span>·</span> Switch terrain and tree density</p>
+        </div>
+        <p class="generator-note">Generation is cooperatively scheduled with Promises, keeping the page responsive without game threads or bundled terrain assets.</p>
       </div>
     </section>
 
