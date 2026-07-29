@@ -345,6 +345,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private Vector2 _lastMouse;
     private Vector2 _camera;
     private float _zoom = 1;
+    private float _targetZoom = 1;
+    private Vector2 _zoomAnchor;
     private float _waterTime;
     private double _worldGameSeconds;
 
@@ -567,13 +569,13 @@ internal sealed partial class GameHostWindow : GameWindow
                     {
                         PrepareIslandTerrain();
                         _camera = new Vector2(0, -IslandMap.Size * 24);
-                        _zoom = .65f;
+                        SetZoomImmediate(.65f);
                     }
                     else
                     {
                         PrepareWorldTerrain();
                         _camera = Vector2.Zero;
-                        _zoom = .8f;
+                        SetZoomImmediate(.8f);
                         if (_mode == PreviewMode.Game)
                         {
                             PrepareEntityAnimations();
@@ -690,7 +692,7 @@ internal sealed partial class GameHostWindow : GameWindow
             previewRoot,
             $"terrain-{_worldSeed}");
         _camera = new Vector2(120, -80);
-        _zoom = .9f;
+        SetZoomImmediate(.9f);
         _selectedPlayer = _saves.ListPlayers().FirstOrDefault();
         _frontendPage = _selectedPlayer is null
             ? FrontendPage.CharacterCreate
@@ -1040,7 +1042,7 @@ internal sealed partial class GameHostWindow : GameWindow
             new Vector2(worldPlayer.PositionX, worldPlayer.PositionY),
             player.Gender);
         _camera = Vector2.Zero;
-        _zoom = .8f;
+        SetZoomImmediate(.8f);
         FollowPlayer();
         StreamWorld();
         BlurTextBoxes();
@@ -2404,7 +2406,7 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         var projected =
             IsometricTerrainProjection.Project(tileX, tileY, 0);
-        _zoom = .8f;
+        SetZoomImmediate(.8f);
         _camera = -projected * _zoom;
         CloseWorldAtlasSession();
         StreamWorld();
@@ -2559,11 +2561,45 @@ internal sealed partial class GameHostWindow : GameWindow
             ZoomAtlas(e.OffsetY);
             return;
         }
-        var old = _zoom;
-        _zoom = Math.Clamp(old * MathF.Pow(1.12f, e.OffsetY), 0.45f, 1.75f);
-        var cursor = SceneMousePosition() -
-                     new Vector2(ReferenceWidth / 2f, ReferenceHeight / 2f);
-        _camera = cursor - (cursor - _camera) * (_zoom / old);
+        _targetZoom = Math.Clamp(
+            _targetZoom * MathF.Pow(1.12f, e.OffsetY),
+            0.45f,
+            1.75f);
+        _zoomAnchor = SceneMousePosition() -
+                      new Vector2(ReferenceWidth / 2f, ReferenceHeight / 2f);
+    }
+
+    private void SetZoomImmediate(float zoom)
+    {
+        _zoom = zoom;
+        _targetZoom = zoom;
+    }
+
+    private void UpdateSmoothZoom(double elapsedSeconds)
+    {
+        if (Math.Abs(_targetZoom - _zoom) < .0001f)
+        {
+            _zoom = _targetZoom;
+            return;
+        }
+
+        var oldZoom = _zoom;
+        var blend = 1f - MathF.Exp(-14f * (float)Math.Min(elapsedSeconds, .1));
+        _zoom += (_targetZoom - _zoom) * blend;
+
+        if (_mode == PreviewMode.Game &&
+            _screen == ScreenState.WorldPreview &&
+            _player is not null)
+        {
+            // Gameplay keeps the player centred while the scale changes.
+            FollowPlayer();
+        }
+        else
+        {
+            // Preview cameras retain the terrain point beneath the pointer.
+            _camera = _zoomAnchor -
+                      (_zoomAnchor - _camera) * (_zoom / oldZoom);
+        }
     }
 
     protected override void OnResize(ResizeEventArgs e)
@@ -2690,6 +2726,7 @@ internal sealed partial class GameHostWindow : GameWindow
     protected override void OnRenderFrame(FrameEventArgs e)
     {
         base.OnRenderFrame(e);
+        UpdateSmoothZoom(e.Time);
         _fontRenderer?.BeginFrame(ClientSize.X, ClientSize.Y);
         _performanceMetrics.RecordFrame(e.Time);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFramebuffer);
