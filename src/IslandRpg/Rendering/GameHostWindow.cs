@@ -333,6 +333,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _inventoryDraggingSlot => _inventoryInteraction.DraggingSlot;
     private FontSystem? _fontSystem;
     private DynamicSpriteFont? _chatFont;
+    private DynamicSpriteFont? _menuTitleFont;
     private DynamicSpriteFont? _quantityFont;
     private BatchedOpenGlFontRenderer? _fontRenderer;
     private float _chatLineHeight = 16;
@@ -2728,7 +2729,8 @@ internal sealed partial class GameHostWindow : GameWindow
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
             RenderDeveloperMapOverlay();
         }
-        RenderPerformanceMetrics();
+        if (_screen == ScreenState.WorldPreview)
+            RenderPerformanceMetrics();
         _fontRenderer?.Flush();
         SwapBuffers();
     }
@@ -2799,49 +2801,102 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void RenderMainMenu()
     {
-        var panel = FrontendPanel(430, 590);
+        var panel = FrontendPanel(480, 480);
         DrawAoEPanelBorder(panel);
         DrawUiColor(
-            new(panel.X + 12, panel.Y + 12, panel.Z - 24, 116),
-            new(.035f, .031f, .022f, .88f));
-        DrawPanelOutline(
-            new(panel.X + 12, panel.Y + 12, panel.Z - 24, 116),
-            0,
-            new(.29f, .23f, .12f, 1));
-        DrawCenteredUiText(
-            "ISLAND RPG",
-            new(panel.X, panel.Y + 32, panel.Z, 42),
-            new(232, 217, 166, 255));
-        DrawCenteredUiText(
-            "SURVIVE  •  BUILD  •  EXPLORE",
-            new(panel.X + 24, panel.Y + 76, panel.Z - 48, 24),
-            new(166, 151, 112, 255));
+            new(panel.X + 6, panel.Y + 6, panel.Z - 12, panel.W - 12),
+            new(.020f, .019f, .016f, .96f));
+
+        var hero = new Vector4(
+            panel.X + 18, panel.Y + 18, panel.Z - 36, 112);
         DrawUiColor(
-            new(panel.X + 72, panel.Y + 108, panel.Z - 144, 1),
-            new(.38f, .29f, .12f, 1));
+            hero,
+            new(.052f, .044f, .027f, 1));
+        DrawPanelOutline(
+            hero,
+            0,
+            new(.34f, .27f, .13f, 1));
+        DrawPanelOutline(
+            hero, 1, new(.10f, .085f, .052f, 1));
+        DrawCenteredMenuTitle(
+            "ISLAND RPG",
+            new(hero.X, hero.Y + 18, hero.Z, 44),
+            new(241, 222, 162, 255));
+        DrawCenteredUiText(
+            "SURVIVE   •   BUILD   •   EXPLORE",
+            new(hero.X + 24, hero.Y + 70, hero.Z - 48, 22),
+            new(180, 158, 107, 255));
+        DrawUiColor(
+            new(hero.X + 92, hero.Y + 97, hero.Z - 184, 1),
+            new(.46f, .34f, .13f, 1));
         if (_selectedPlayer is not null)
         {
             var playerCard = new Vector4(
-                panel.X + 48, panel.Y + 140, panel.Z - 96, 38);
-            DrawUiColor(playerCard, new(.025f, .024f, .020f, .86f));
+                panel.X + 44, panel.Y + 145, panel.Z - 88, 32);
+            DrawUiColor(playerCard, new(.038f, .035f, .026f, 1));
             DrawPanelOutline(
-                playerCard, 0, new(.20f, .17f, .10f, 1));
+                playerCard, 0, new(.23f, .19f, .11f, 1));
             DrawCenteredUiText(
-                $"ADVENTURER  •  {_selectedPlayer.Name.ToUpperInvariant()}",
+                $"ADVENTURER   •   {_selectedPlayer.Name.ToUpperInvariant()}",
                 playerCard,
-                new(192, 180, 142, 255));
+                new(199, 184, 142, 255));
         }
         var captions = new[]
         {
-            "New World", "Load World", "Change Character",
+            "BEGIN NEW ADVENTURE", "Load World", "Change Character",
             "Settings", "Credits", "Exit Game"
         };
         for (var index = 0; index < captions.Length; index++)
-            DrawMenuButton(MenuButton(index), captions[index]);
+            DrawMainMenuButton(
+                MenuButton(index),
+                captions[index],
+                primary: index == 0,
+                quiet: index == 5);
         DrawCenteredUiText(
-            $"{ReleaseVersion}  •  EARLY ACCESS",
-            new(panel.X + 20, panel.Y + panel.W - 34, panel.Z - 40, 20),
-            new(151, 143, 119, 255));
+            $"{ReleaseVersion}   •   EARLY ACCESS",
+            new(panel.X + 20, panel.Y + panel.W - 29, panel.Z - 40, 18),
+            new(130, 124, 106, 255));
+    }
+
+    private void DrawMainMenuButton(
+        Vector4 bounds,
+        string caption,
+        bool primary = false,
+        bool quiet = false)
+    {
+        var hovered = bounds.Contains(MouseState.Position);
+        var fill = primary
+            ? hovered
+                ? new Vector4(.22f, .17f, .075f, 1)
+                : new Vector4(.155f, .12f, .055f, 1)
+            : quiet
+                ? new Vector4(.027f, .026f, .022f, 1)
+                : hovered
+                    ? new Vector4(.10f, .086f, .052f, 1)
+                    : new Vector4(.060f, .055f, .041f, 1);
+        DrawUiColor(bounds, fill);
+        DrawPanelOutline(
+            bounds,
+            0,
+            primary
+                ? new(.57f, .42f, .14f, 1)
+                : hovered
+                    ? new(.42f, .33f, .16f, 1)
+                    : new(.22f, .19f, .12f, 1));
+        DrawPanelOutline(
+            bounds, 1, new(.045f, .040f, .029f, 1));
+        if (primary)
+            DrawUiColor(
+                new(bounds.X + 2, bounds.Y + 2, bounds.Z - 4, 2),
+                new(.62f, .46f, .17f, 1));
+        DrawCenteredUiText(
+            caption,
+            bounds,
+            hovered || primary
+                ? new(246, 226, 167, 255)
+                : quiet
+                    ? new(153, 145, 121, 255)
+                    : new(213, 200, 161, 255));
     }
 
     private void RenderCreditsMenu()
@@ -3240,6 +3295,25 @@ internal sealed partial class GameHostWindow : GameWindow
         string text, Vector4 bounds, FSColor color) =>
         DrawUiText(text, CenteredTextPosition(text, bounds), color);
 
+    private void DrawCenteredMenuTitle(
+        string text,
+        Vector4 bounds,
+        FSColor color)
+    {
+        if (_menuTitleFont is null || _fontRenderer is null) return;
+        var size = _menuTitleFont.MeasureString(text);
+        var position = new System.Numerics.Vector2(
+            bounds.X + (bounds.Z - size.X) * .5f,
+            bounds.Y + (bounds.W - size.Y) * .5f);
+        _menuTitleFont.DrawText(
+            _fontRenderer,
+            text,
+            position + new System.Numerics.Vector2(2, 2),
+            new FSColor(0, 0, 0, 210));
+        _menuTitleFont.DrawText(
+            _fontRenderer, text, position, color);
+    }
+
     private Vector4 FrontendPanel(float width, float height) =>
         new(
             MathF.Round((ClientSize.X - width) * .5f),
@@ -3259,19 +3333,38 @@ internal sealed partial class GameHostWindow : GameWindow
             FrontendPage.LoadWorld => FrontendPanel(600, 560),
             FrontendPage.Settings => SettingsPanel(),
             FrontendPage.Credits => FrontendPanel(600, 560),
-            _ => FrontendPanel(430, 590)
+            _ => FrontendPanel(480, 480)
         };
         return new(panel.X + panel.Z - 40, panel.Y + 10, 28, 28);
     }
 
     private Vector4 MenuButton(int index)
     {
-        var panel = FrontendPanel(430, 590);
-        return new(
-            panel.X + 48,
-            panel.Y + 194 + index * 52,
-            panel.Z - 96,
-            42);
+        var panel = FrontendPanel(480, 480);
+        const float left = 44;
+        const float gap = 8;
+        var pairWidth = (panel.Z - left * 2 - gap) * .5f;
+        return index switch
+        {
+            0 => new(
+                panel.X + left, panel.Y + 192,
+                panel.Z - left * 2, 50),
+            1 => new(
+                panel.X + left, panel.Y + 254,
+                pairWidth, 44),
+            2 => new(
+                panel.X + left + pairWidth + gap, panel.Y + 254,
+                pairWidth, 44),
+            3 => new(
+                panel.X + left, panel.Y + 310,
+                pairWidth, 42),
+            4 => new(
+                panel.X + left + pairWidth + gap, panel.Y + 310,
+                pairWidth, 42),
+            _ => new(
+                panel.X + 140, panel.Y + 368,
+                panel.Z - 280, 36)
+        };
     }
 
     private Vector4 NewWorldFieldBounds(int index)
@@ -5930,6 +6023,7 @@ internal sealed partial class GameHostWindow : GameWindow
         });
         _fontSystem.AddFont(File.ReadAllBytes(fontPath));
         _chatFont = _fontSystem.GetFont(14);
+        _menuTitleFont = _fontSystem.GetFont(30);
         _quantityFont = _fontSystem.GetFont(11);
         _chatLineHeight = MathF.Ceiling(
             Math.Max(16, _chatFont.MeasureString("Ag").Y));
