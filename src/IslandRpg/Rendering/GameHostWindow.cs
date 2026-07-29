@@ -196,6 +196,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _entityAnimations = [];
     private EntityAnimation? _moveMarkerAnimation;
     private MouseCursor? _defaultNativeCursor;
+    private MouseCursor? _attackNativeCursor;
     private MouseCursor? _cutNativeCursor;
     private MouseCursor? _pickupNativeCursor;
     private MouseCursor? _dropNativeCursor;
@@ -208,6 +209,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private enum GameCursorKind
     {
         Default,
+        Attack,
         CutTree,
         PickUpItem,
         DropItem,

@@ -27,6 +27,8 @@ internal sealed partial class GameHostWindow
 
         _defaultNativeCursor = CreateNativeCursor(
             cursorSheet.Frames[GameCursorFrames.Default]);
+        _attackNativeCursor = CreateNativeCursor(
+            cursorSheet.Frames[GameCursorFrames.Attack]);
         _pickupNativeCursor = CreateNativeCursor(
             cursorSheet.Frames[GameCursorFrames.MineAndPickUp]);
         _mineNativeCursor = CreateNativeCursor(
@@ -111,7 +113,13 @@ internal sealed partial class GameHostWindow
             if (TryGetGroundObjectUnderMouse(
                     SceneMousePosition(), out var groundObject, out _))
             {
-                if (CaveEntranceService.IsEntrance(groundObject) &&
+                if (IsAttackableCombatTarget(groundObject) &&
+                    _attackNativeCursor is not null)
+                {
+                    next = GameCursorKind.Attack;
+                    cursor = _attackNativeCursor;
+                }
+                else if (CaveEntranceService.IsEntrance(groundObject) &&
                     _activeWorldLevel == (int)WorldLevel.Overworld &&
                     _climbDownNativeCursor is not null)
                 {
@@ -180,4 +188,8 @@ internal sealed partial class GameHostWindow
         _gameCursorKind = next;
         Cursor = cursor;
     }
+
+    private static bool IsAttackableCombatTarget(
+        WorldGroundObject groundObject) =>
+        groundObject.ItemId == ItemIds.TrainingDummy;
 }
