@@ -33,8 +33,10 @@ internal sealed partial class GameHostWindow : GameWindow
         CharacterCreate,
         NewWorld,
         LoadWorld,
-        Settings
+        Settings,
+        Credits
     }
+    private const long MenuPreviewSeed = 137;
     private sealed class GpuWorldChunk(
         WorldChunk chunk, int vbo, int vertexCount,
         int weightsA, int weightsB, int weightsC, int weightsD,
@@ -675,11 +677,13 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void BeginMenuPreview()
     {
-        _worldSeed = 78193021;
+        _worldSeed = MenuPreviewSeed;
         var previewRoot = Path.Combine(
             Path.GetTempPath(), "IslandRpg", "MenuPreview");
         _worldStore = new WorldChunkStore(
-            _worldSeed, previewRoot, "terrain");
+            _worldSeed,
+            previewRoot,
+            $"terrain-{_worldSeed}");
         _camera = new Vector2(120, -80);
         _zoom = .9f;
         _selectedPlayer = _saves.ListPlayers().FirstOrDefault();
@@ -766,6 +770,8 @@ internal sealed partial class GameHostWindow : GameWindow
                     _settingsMenu.EnsureVisible();
                 }
                 else if (MenuButton(4).Contains(pointer))
+                    _frontendPage = FrontendPage.Credits;
+                else if (MenuButton(5).Contains(pointer))
                     Close();
                 break;
             case FrontendPage.CharacterSelect:
@@ -799,6 +805,10 @@ internal sealed partial class GameHostWindow : GameWindow
                 else if (_settingsMenu.SelectedTab == SettingsTab.Dev &&
                          UpdateDeveloperSettings(pointer, settingsPanel))
                     break;
+                break;
+            case FrontendPage.Credits:
+                if (BackButtonBounds().Contains(pointer))
+                    _frontendPage = FrontendPage.Main;
                 break;
         }
     }
@@ -2779,6 +2789,9 @@ internal sealed partial class GameHostWindow : GameWindow
             case FrontendPage.Settings:
                 RenderSettingsMenu();
                 break;
+            case FrontendPage.Credits:
+                RenderCreditsMenu();
+                break;
         }
         if (_frontendPage != FrontendPage.Main)
             DrawMenuButton(FrontendCloseButtonBounds(), "X");
@@ -2786,26 +2799,112 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void RenderMainMenu()
     {
-        var panel = FrontendPanel(400, 470);
+        var panel = FrontendPanel(430, 590);
         DrawAoEPanelBorder(panel);
-        DrawCenteredUiText("ISLAND RPG", new(panel.X, panel.Y + 34, panel.Z, 42),
+        DrawUiColor(
+            new(panel.X + 12, panel.Y + 12, panel.Z - 24, 116),
+            new(.035f, .031f, .022f, .88f));
+        DrawPanelOutline(
+            new(panel.X + 12, panel.Y + 12, panel.Z - 24, 116),
+            0,
+            new(.29f, .23f, .12f, 1));
+        DrawCenteredUiText(
+            "ISLAND RPG",
+            new(panel.X, panel.Y + 32, panel.Z, 42),
             new(232, 217, 166, 255));
+        DrawCenteredUiText(
+            "SURVIVE  •  BUILD  •  EXPLORE",
+            new(panel.X + 24, panel.Y + 76, panel.Z - 48, 24),
+            new(166, 151, 112, 255));
+        DrawUiColor(
+            new(panel.X + 72, panel.Y + 108, panel.Z - 144, 1),
+            new(.38f, .29f, .12f, 1));
         if (_selectedPlayer is not null)
+        {
+            var playerCard = new Vector4(
+                panel.X + 48, panel.Y + 140, panel.Z - 96, 38);
+            DrawUiColor(playerCard, new(.025f, .024f, .020f, .86f));
+            DrawPanelOutline(
+                playerCard, 0, new(.20f, .17f, .10f, 1));
             DrawCenteredUiText(
-                $"Playing as {_selectedPlayer.Name}",
-                new(panel.X + 24, panel.Y + 78, panel.Z - 48, 26),
-                new(184, 174, 143, 255));
+                $"ADVENTURER  •  {_selectedPlayer.Name.ToUpperInvariant()}",
+                playerCard,
+                new(192, 180, 142, 255));
+        }
         var captions = new[]
         {
             "New World", "Load World", "Change Character",
-            "Settings", "Exit / Quit"
+            "Settings", "Credits", "Exit Game"
         };
         for (var index = 0; index < captions.Length; index++)
             DrawMenuButton(MenuButton(index), captions[index]);
         DrawCenteredUiText(
-            $"{ReleaseVersion}  |  Credits: Joana is the best",
-            new(panel.X + 20, panel.Y + panel.W - 38, panel.Z - 40, 22),
+            $"{ReleaseVersion}  •  EARLY ACCESS",
+            new(panel.X + 20, panel.Y + panel.W - 34, panel.Z - 40, 20),
             new(151, 143, 119, 255));
+    }
+
+    private void RenderCreditsMenu()
+    {
+        var panel = FrontendPanel(600, 560);
+        DrawAoEPanelBorder(panel);
+        DrawCenteredUiText(
+            "CREDITS",
+            new(panel.X, panel.Y + 20, panel.Z, 38),
+            new(232, 217, 166, 255));
+        DrawCenteredUiText(
+            "The people and technology behind Island RPG",
+            new(panel.X + 40, panel.Y + 57, panel.Z - 80, 24),
+            new(165, 155, 127, 255));
+
+        DrawCreditsSection(
+            panel, 100, "CREATED & DEVELOPED BY", "SamG-Coder");
+        DrawCreditsSection(
+            panel, 190, "BUILT WITH",
+            ".NET 10  •  OpenTK  •  FontStashSharp  •  StbImageSharp");
+
+        var notice = new Vector4(
+            panel.X + 42, panel.Y + 330, panel.Z - 84, 104);
+        DrawUiColor(notice, new(.026f, .025f, .021f, .90f));
+        DrawPanelOutline(notice, 0, new(.25f, .20f, .11f, 1));
+        DrawCenteredUiText(
+            "ASSET NOTICE",
+            new(notice.X, notice.Y + 12, notice.Z, 22),
+            new(203, 186, 142, 255));
+        DrawCenteredUiText(
+            "Compatible graphics are loaded from your own",
+            new(notice.X + 16, notice.Y + 42, notice.Z - 32, 20),
+            new(166, 158, 134, 255));
+        DrawCenteredUiText(
+            "Age of Empires II HD installation.",
+            new(notice.X + 16, notice.Y + 63, notice.Z - 32, 20),
+            new(166, 158, 134, 255));
+        DrawCenteredUiText(
+            "Unofficial and not affiliated with Microsoft.",
+            new(notice.X + 16, notice.Y + 82, notice.Z - 32, 18),
+            new(132, 126, 109, 255));
+
+        DrawMenuButton(BackButtonBounds(), "Back");
+        DrawCenteredUiText(
+            $"{ReleaseVersion}  •  Original software licensed under MIT",
+            new(panel.X + 24, panel.Y + panel.W - 30, panel.Z - 48, 18),
+            new(139, 132, 112, 255));
+    }
+
+    private void DrawCreditsSection(
+        Vector4 panel,
+        float offsetY,
+        string heading,
+        string value)
+    {
+        DrawCenteredUiText(
+            heading,
+            new(panel.X + 42, panel.Y + offsetY, panel.Z - 84, 20),
+            new(164, 145, 101, 255));
+        DrawCenteredUiText(
+            value,
+            new(panel.X + 42, panel.Y + offsetY + 25, panel.Z - 84, 24),
+            new(224, 211, 174, 255));
     }
 
     private void RenderCharacterCreateMenu()
@@ -3159,15 +3258,20 @@ internal sealed partial class GameHostWindow : GameWindow
             FrontendPage.NewWorld => FrontendPanel(760, 640),
             FrontendPage.LoadWorld => FrontendPanel(600, 560),
             FrontendPage.Settings => SettingsPanel(),
-            _ => FrontendPanel(400, 470)
+            FrontendPage.Credits => FrontendPanel(600, 560),
+            _ => FrontendPanel(430, 590)
         };
         return new(panel.X + panel.Z - 40, panel.Y + 10, 28, 28);
     }
 
     private Vector4 MenuButton(int index)
     {
-        var panel = FrontendPanel(400, 470);
-        return new(panel.X + 48, panel.Y + 112 + index * 62, panel.Z - 96, 48);
+        var panel = FrontendPanel(430, 590);
+        return new(
+            panel.X + 48,
+            panel.Y + 194 + index * 52,
+            panel.Z - 96,
+            42);
     }
 
     private Vector4 NewWorldFieldBounds(int index)
@@ -3250,6 +3354,7 @@ internal sealed partial class GameHostWindow : GameWindow
             FrontendPage.NewWorld => FrontendPanel(760, 640),
             FrontendPage.LoadWorld => FrontendPanel(600, 560),
             FrontendPage.Settings => SettingsPanel(),
+            FrontendPage.Credits => FrontendPanel(600, 560),
             _ => FrontendPanel(480, 360)
         };
         return new(panel.X + panel.Z - 156, panel.Y + panel.W - 92, 108, 48);
