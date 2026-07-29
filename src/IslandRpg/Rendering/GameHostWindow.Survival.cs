@@ -380,19 +380,19 @@ internal sealed partial class GameHostWindow
         int radius,
         Vector4 color)
     {
-        var radiusSquared = radius * radius;
-        for (var y = -radius; y <= radius; y++)
-        {
-            var halfWidth = (int)MathF.Sqrt(
-                Math.Max(0, radiusSquared - y * y));
-            DrawUiColor(
-                new(
-                    centerX - halfWidth,
-                    centerY + y,
-                    halfWidth * 2 + 1,
-                    1),
-                color);
-        }
+        if (_uiCircleFrame is null || _uiCircleTexture == 0) return;
+        var diameter = radius * 2 + 1;
+        DrawUiSprite(
+            _uiCircleFrame,
+            _uiCircleTexture,
+            new(
+                centerX - radius,
+                centerY - radius,
+                diameter,
+                diameter),
+            tint: color.Xyz,
+            tintAmount: 1,
+            drawOpacity: color.W);
     }
 
     private void DrawUiCircleFill(
@@ -402,23 +402,50 @@ internal sealed partial class GameHostWindow
         float progress,
         Vector4 color)
     {
-        if (progress <= 0) return;
-        var radiusSquared = radius * radius;
-        var firstFilledRow = radius -
-            (int)MathF.Round(progress * radius * 2);
-        for (var y = Math.Max(-radius, firstFilledRow);
-             y <= radius;
-             y++)
+        if (progress <= 0 ||
+            _uiCircleFrame is null ||
+            _uiCircleTexture == 0)
+            return;
+        progress = Math.Clamp(progress, 0, 1);
+        var diameter = radius * 2 + 1;
+        var filledHeight = Math.Max(1, diameter * progress);
+        DrawUiSprite(
+            _uiCircleFrame,
+            _uiCircleTexture,
+            new(
+                centerX - radius,
+                centerY + radius + 1 - filledHeight,
+                diameter,
+                filledHeight),
+            uvRectangle: new(0, 1 - progress, 1, progress),
+            tint: color.Xyz,
+            tintAmount: 1,
+            drawOpacity: color.W);
+    }
+
+    private static SpriteFrame CreateUiCircleFrame()
+    {
+        const int size = 64;
+        const float center = (size - 1) * .5f;
+        const float radius = size * .5f - 1;
+        var pixels = new byte[size * size * 4];
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
         {
-            var halfWidth = (int)MathF.Sqrt(
-                Math.Max(0, radiusSquared - y * y));
-            DrawUiColor(
-                new(
-                    centerX - halfWidth,
-                    centerY + y,
-                    halfWidth * 2 + 1,
-                    1),
-                color);
+            var distance = MathF.Sqrt(
+                (x - center) * (x - center) +
+                (y - center) * (y - center));
+            var alpha = (byte)Math.Clamp(
+                (int)MathF.Round(
+                    (radius + .75f - distance) * 255),
+                0,
+                255);
+            var offset = (y * size + x) * 4;
+            pixels[offset] = 255;
+            pixels[offset + 1] = 255;
+            pixels[offset + 2] = 255;
+            pixels[offset + 3] = alpha;
         }
+        return new(size, size, 0, 0, pixels);
     }
 }

@@ -228,6 +228,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private GameCursorKind _gameCursorKind;
     private int _uiPanelFillTexture;
     private int _uiSolidTexture;
+    private SpriteFrame? _uiCircleFrame;
+    private int _uiCircleTexture;
     private SpriteFrame? _uiTabFrame;
     private int _uiTabTexture;
     private int _uiActiveTabTexture;
@@ -5732,6 +5734,8 @@ internal sealed partial class GameHostWindow : GameWindow
         PreparePlayerUiIcons();
         _uiPanelFillTexture = Upload(1, 1, [20, 20, 19, 148]);
         _uiSolidTexture = Upload(1, 1, [255, 255, 255, 255]);
+        _uiCircleFrame = CreateUiCircleFrame();
+        _uiCircleTexture = Upload(_uiCircleFrame);
         _uiTabFrame = new SpriteFrame(
             42, 42, 0, 0, CreateTabPixels(active: false));
         _uiTabTexture = Upload(_uiTabFrame);
@@ -7291,6 +7295,7 @@ internal sealed partial class GameHostWindow : GameWindow
         Cursor = MouseCursor.Default;
         if (_uiPanelFillTexture != 0) GL.DeleteTexture(_uiPanelFillTexture);
         if (_uiSolidTexture != 0) GL.DeleteTexture(_uiSolidTexture);
+        if (_uiCircleTexture != 0) GL.DeleteTexture(_uiCircleTexture);
         if (_woodcuttingItemsTexture != 0)
             GL.DeleteTexture(_woodcuttingItemsTexture);
         foreach (var texture in _woodcuttingItemTextures)
