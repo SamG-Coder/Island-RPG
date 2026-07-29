@@ -96,26 +96,40 @@ The path must contain `AoK HD.exe` and the expected
 
 ## Playing
 
-The default command opens the playable game and its character/world menus.
+Running the game opens the character and world menus. Create or select a
+character, then create or load a world to begin playing.
 
 | Input | Action |
 |---|---|
-| Left click | Move or perform the default interaction |
-| Right click | Open an object's context menu |
-| Mouse wheel | Zoom around the pointer |
-| Drag an inventory item | Reorder, drop, fuel, cook or place where supported |
+| Left-click terrain | Walk to the selected location |
+| Left-click an interactive target | Perform its default action, such as gathering, mining, opening storage or attacking |
+| Right-click a world target | Open its available action menu |
+| Left-click an inventory item | Select or use it when an interaction is active |
+| Right-click an inventory item | Open its item actions, such as Eat, Drop, Excavate or placement |
+| Drag an inventory item | Reorder it, drop it into the world, transfer it, or use it on compatible objects |
+| Mouse wheel over the world | Zoom around the pointer |
+| Mouse wheel over a scrollable panel | Scroll skills, guides, chat, storage or other lists |
 | `Alt` | Highlight collectible ground items |
 | `Enter` | Focus or submit chat |
-| `Escape` | Close the active screen or open the pause menu |
+| `Escape` | Cancel targeting or placement, close the active screen, or open the pause menu |
 
-Use the on-screen **Skills** and **Bag** buttons for progression and inventory.
-Click any skill name inside its detail panel to open its level guide.
+The three buttons at the lower right open **Combat**, **Skills** and **Bag**.
+The Skills panel contains Adventure, combat and gathering skills; use the mouse
+wheel to reach later rows. Select a skill and press **Guide** to open its level
+guide.
+
+World cursors indicate the default interaction available under the pointer.
+For example, the attack cursor identifies a combat target. Open the Combat
+panel to choose an unarmed stance: Accurate trains Attack,
+Aggressive trains Strength, and Defensive trains Defence. Left-click a target
+to approach and continue attacking on the global combat timer. Walking away
+cancels the target without resetting attack readiness.
+
 The icon-led player panel beside the minimap shows Adventure level, current
 and maximum health, hunger, and remaining well-fed time. Right-click berries,
 cooked fish, or stew in the Bag and select **Eat**. Better meals restore more
 hunger and keep hunger draining slowly for longer.
-Open the crossed-weapons combat tab to choose an unarmed stance. Accurate
-trains Attack, Aggressive trains Strength, and Defensive trains Defence.
+
 Developer mode's item bank contains a placeable training dummy; left-click it
 or choose **Attack** from its context menu to approach and fight on fixed
 combat ticks.
