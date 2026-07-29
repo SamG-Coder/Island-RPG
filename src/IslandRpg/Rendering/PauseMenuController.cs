@@ -54,15 +54,24 @@ internal sealed partial class GameHostWindow
         {
             var leftDown =
                 window.MouseState.IsButtonDown(MouseButton.Left);
+            var soundSliderActive = false;
             if (Page == PausePage.Settings)
             {
                 window._settingsMenu.LayoutContent(
                     window.PauseSubmenuPanel());
                 window._settingsMenu.ContentList.UpdatePointer(
                     window.MouseState.Position, leftDown);
+                if (window._settingsMenu.SelectedTab ==
+                    SettingsTab.Sound)
+                    soundSliderActive =
+                        window.UpdateMusicVolumeSlider(
+                            window.MouseState.Position,
+                            leftDown,
+                            window.PauseSubmenuPanel());
             }
             var clicked = leftDown && !_leftWasDown;
             _leftWasDown = leftDown;
+            if (soundSliderActive) return;
             if (!clicked) return;
 
             var pointer = window.MouseState.Position;

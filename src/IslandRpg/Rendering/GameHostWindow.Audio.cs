@@ -7,10 +7,25 @@ namespace IslandRpg.Rendering;
 internal sealed partial class GameHostWindow
 {
     private Age2MusicPlayer? _musicPlayer;
+    private readonly SliderControlState _musicVolumeSlider = new();
 
     private void InitializeMusic()
     {
         _musicPlayer = new Age2MusicPlayer(_install);
+        _musicVolumeSlider.ValueChanged += value =>
+        {
+            var settings = _saves.LoadSettings();
+            _musicPlayer?.Configure(settings.MusicEnabled, value);
+        };
+        _musicVolumeSlider.DragCompleted += value =>
+        {
+            var settings = _saves.LoadSettings() with
+            {
+                MasterVolume = value
+            };
+            _saves.SaveSettings(settings);
+            ApplyMusicSettings();
+        };
         ApplyMusicSettings();
     }
 
@@ -25,27 +40,31 @@ internal sealed partial class GameHostWindow
     internal bool UpdateSoundSettings(Vector2 pointer, Vector4 panel)
     {
         _settingsMenu.LayoutContent(panel);
-        for (var option = 0; option < 2; option++)
+        if (!_settingsMenu.ContentList.VisibleIndices.Contains(0) ||
+            !_settingsMenu.OptionBounds(0).Contains(pointer))
+            return false;
+        var current = _saves.LoadSettings();
+        var settings = current with
         {
-            if (!_settingsMenu.ContentList.VisibleIndices.Contains(option) ||
-                !_settingsMenu.OptionBounds(option).Contains(pointer))
-                continue;
-            var settings = _saves.LoadSettings();
-            settings = option == 0
-                ? settings with
-                {
-                    MusicEnabled = !settings.MusicEnabled
-                }
-                : settings with
-                {
-                    MasterVolume =
-                        MusicSettingsController.NextVolume(
-                            settings.MasterVolume)
-                };
-            _saves.SaveSettings(settings);
-            ApplyMusicSettings();
-            return true;
-        }
-        return false;
+            MusicEnabled = !current.MusicEnabled
+        };
+        _saves.SaveSettings(settings);
+        ApplyMusicSettings();
+        return true;
+    }
+
+    internal bool UpdateMusicVolumeSlider(
+        Vector2 pointer,
+        bool leftDown,
+        Vector4 panel)
+    {
+        _settingsMenu.LayoutContent(panel);
+        if (!_settingsMenu.ContentList.VisibleIndices.Contains(1))
+            return false;
+        var settings = _saves.LoadSettings();
+        if (!_musicVolumeSlider.Pressed)
+            _musicVolumeSlider.SetValue(settings.MasterVolume);
+        _musicVolumeSlider.Layout(_settingsMenu.OptionBounds(1));
+        return _musicVolumeSlider.UpdatePointer(pointer, leftDown);
     }
 }

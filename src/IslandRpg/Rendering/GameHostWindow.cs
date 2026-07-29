@@ -721,6 +721,7 @@ internal sealed partial class GameHostWindow : GameWindow
             value => ClipboardString = value);
 
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
+        var soundSliderActive = false;
         if (_frontendPage == FrontendPage.CharacterSelect)
         {
             var players = _saves.ListPlayers().ToArray();
@@ -740,11 +741,17 @@ internal sealed partial class GameHostWindow : GameWindow
             _settingsMenu.LayoutContent(SettingsPanel());
             _settingsMenu.ContentList.UpdatePointer(
                 MouseState.Position, leftDown);
+            if (_settingsMenu.SelectedTab == SettingsTab.Sound)
+                soundSliderActive = UpdateMusicVolumeSlider(
+                    MouseState.Position,
+                    leftDown,
+                    SettingsPanel());
         }
         textBox?.UpdatePointer(
             MouseState.Position, leftDown, MeasureUiText, 14);
         var clicked = leftDown && !_menuLeftWasDown;
         _menuLeftWasDown = leftDown;
+        if (soundSliderActive) return;
         if (!clicked) return;
 
         var pointer = MouseState.Position;

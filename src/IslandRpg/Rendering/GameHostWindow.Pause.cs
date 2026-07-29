@@ -200,10 +200,7 @@ internal sealed partial class GameHostWindow
                     _settingsMenu.OptionBounds(0),
                     "Music: " +
                     (soundSettings.MusicEnabled ? "On" : "Off"));
-                DrawMenuButton(
-                    _settingsMenu.OptionBounds(1),
-                    "Music volume: " +
-                    $"{MathF.Round(soundSettings.MasterVolume * 100)}%");
+                RenderMusicVolumeSlider(soundSettings.MasterVolume);
                 break;
             case SettingsTab.Dev:
                 RenderDeveloperSettings();
@@ -212,6 +209,46 @@ internal sealed partial class GameHostWindow
         RenderListScrollbar(_settingsMenu.ContentList);
         if (_settingsMenu.SelectedTab == SettingsTab.Display)
             RenderResolutionDropdownMenu();
+    }
+
+    private void RenderMusicVolumeSlider(float persistedVolume)
+    {
+        if (!_musicVolumeSlider.Pressed)
+            _musicVolumeSlider.SetValue(persistedVolume);
+        _musicVolumeSlider.Layout(_settingsMenu.OptionBounds(1));
+        var row = _musicVolumeSlider.Bounds;
+        DrawUiColor(row, new(.055f, .049f, .036f, .96f));
+        DrawPanelOutline(row, 0, new(.24f, .20f, .12f, 1));
+        DrawUiText(
+            $"Music volume  {MathF.Round(_musicVolumeSlider.Value * 100)}%",
+            new(row.X + 12, row.Y + 13),
+            new(211, 199, 160, 255));
+        DrawUiColor(
+            new(
+                _musicVolumeSlider.TrackBounds.X,
+                _musicVolumeSlider.TrackBounds.Y - 2,
+                _musicVolumeSlider.TrackBounds.Z,
+                _musicVolumeSlider.TrackBounds.W + 4),
+            new(.022f, .021f, .018f, 1));
+        DrawUiColor(
+            _musicVolumeSlider.FillBounds,
+            new(.52f, .39f, .12f, 1));
+        DrawPanelOutline(
+            _musicVolumeSlider.ThumbBounds,
+            0,
+            _musicVolumeSlider.Pressed ||
+            _musicVolumeSlider.Hovered
+                ? new(.82f, .66f, .27f, 1)
+                : new(.51f, .42f, .22f, 1));
+        DrawUiColor(
+            new(
+                _musicVolumeSlider.ThumbBounds.X + 2,
+                _musicVolumeSlider.ThumbBounds.Y + 2,
+                _musicVolumeSlider.ThumbBounds.Z - 4,
+                _musicVolumeSlider.ThumbBounds.W - 4),
+            _musicVolumeSlider.Pressed
+                ? new(.58f, .43f, .13f, 1)
+                : new(.30f, .26f, .16f, 1));
     }
 
     private void RenderResolutionDropdownField(

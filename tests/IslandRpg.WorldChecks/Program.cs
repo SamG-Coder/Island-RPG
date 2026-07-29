@@ -1436,13 +1436,22 @@ Require(
     visibleSettingsTabs.Contains(SettingsTab.Game) &&
     visibleSettingsTabs.Contains(SettingsTab.Sound),
     "the settings menu must expose Display, Game, and Sound tabs");
+var volumeSlider = new SliderControlState();
+var volumeCommitted = -1f;
+volumeSlider.DragCompleted += value => volumeCommitted = value;
+volumeSlider.Layout(new(100, 100, 400, 44));
+var volumePointer = new Vector2(
+    volumeSlider.TrackBounds.X +
+    volumeSlider.TrackBounds.Z * .75f,
+    volumeSlider.TrackBounds.Y + 4);
 Require(
-    MusicSettingsController.NextVolume(1) == .75f &&
-    MusicSettingsController.NextVolume(.75f) == .5f &&
-    MusicSettingsController.NextVolume(.5f) == .25f &&
-    MusicSettingsController.NextVolume(.25f) == 0 &&
-    MusicSettingsController.NextVolume(0) == 1,
-    "music volume controls must cycle through predictable audible steps");
+    volumeSlider.UpdatePointer(volumePointer, true) &&
+    volumeSlider.Pressed &&
+    MathF.Abs(volumeSlider.Value - .75f) < .001f &&
+    volumeSlider.UpdatePointer(volumePointer, false) &&
+    !volumeSlider.Pressed &&
+    MathF.Abs(volumeCommitted - .75f) < .001f,
+    "the reusable slider must drag, clamp, and commit its value");
 if (!System.Diagnostics.Debugger.IsAttached)
     Require(!visibleSettingsTabs.Contains(SettingsTab.Dev),
         "the Dev settings tab must stay hidden without an attached debugger");
