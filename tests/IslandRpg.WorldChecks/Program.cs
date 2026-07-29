@@ -755,6 +755,16 @@ Require(PlaceableObjectCatalog.TryGet(
         WorldPlacementGrid.CellCenter(
             WorldPlacementGrid.Cell(3.41f)) == 3.375f,
     "placeable objects and navigation must use a deterministic quarter-tile grid");
+var navigationObstacle = new NavigationObstacle(
+    new OpenTK.Mathematics.Vector2(4.25f, 7.75f), 2, 1);
+Require(
+    navigationObstacle.Contains(
+        new OpenTK.Mathematics.Vector2(3.2f, 7.75f)) &&
+    !navigationObstacle.Contains(
+        new OpenTK.Mathematics.Vector2(3.0f, 7.75f)) &&
+    navigationObstacle.Contains(
+        new OpenTK.Mathematics.Vector2(4.25f, 8.4f)),
+    "navigation obstacles must block the full item footprint plus player clearance");
 Require(PlaceableObjectCatalog.TryGet(
             ItemIds.Campfire, out var campfireDefinition) &&
         campfireDefinition.FootprintWidth == 1 &&

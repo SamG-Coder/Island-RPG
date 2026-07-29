@@ -1551,7 +1551,8 @@ internal sealed partial class GameHostWindow : GameWindow
         int inventorySlot = -1,
         string? itemId = null,
         string? fishKey = null,
-        string? vegetationKey = null)
+        string? vegetationKey = null,
+        IReadOnlyList<NavigationObstacle>? obstacles = null)
     {
         var targetCell = new Vector2i(
             (int)MathF.Floor(target.X),
@@ -1590,7 +1591,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 _worldSeed, start, candidate,
                 maximumVisited: 65536,
                 cancellationToken: cancellationToken,
-                worldLevel: worldLevel);
+                worldLevel: worldLevel,
+                obstacles: obstacles);
             if (!sameCell && path.Count == 0) continue;
             var approach = candidate - target;
             var diagonal = MathF.Abs(approach.X) > .5f &&

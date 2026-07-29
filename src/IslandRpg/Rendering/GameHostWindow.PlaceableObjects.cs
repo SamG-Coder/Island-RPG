@@ -86,6 +86,26 @@ internal sealed partial class GameHostWindow
         _placeableObjectPlacement.Active &&
         !IsPointerOverGameUi(MouseState.Position);
 
+    private NavigationObstacle[] ActiveNavigationObstacles()
+    {
+        var obstacles = new List<NavigationObstacle>();
+        foreach (var gpu in _worldChunks.Values)
+        {
+            if (!IsActiveWorldChunk(gpu)) continue;
+            foreach (var groundObject in gpu.Chunk.GroundObjects)
+            {
+                if (!PlaceableObjectCatalog.TryGet(
+                        groundObject.ItemId, out var definition))
+                    continue;
+                obstacles.Add(new(
+                    new Vector2(groundObject.X, groundObject.Y),
+                    definition.FootprintWidth,
+                    definition.FootprintDepth));
+            }
+        }
+        return obstacles.ToArray();
+    }
+
     private bool CanPlacePlaceableObjectAt(
         string itemId,
         Vector2 target,

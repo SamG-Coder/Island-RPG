@@ -3,6 +3,18 @@ using IslandRpg.World;
 
 namespace IslandRpg.Gameplay;
 
+internal readonly record struct NavigationObstacle(
+    Vector2 Center,
+    float Width,
+    float Depth)
+{
+    public bool Contains(Vector2 point, float clearance = .18f) =>
+        MathF.Abs(point.X - Center.X) <
+            Width * .5f + clearance &&
+        MathF.Abs(point.Y - Center.Y) <
+            Depth * .5f + clearance;
+}
+
 internal static class GridPathfinder
 {
     private static readonly (int X, int Y, float Cost)[] Neighbours =
@@ -18,7 +30,8 @@ internal static class GridPathfinder
         Vector2 requestedTarget,
         int maximumVisited = 65536,
         CancellationToken cancellationToken = default,
-        int worldLevel = (int)WorldLevel.Overworld)
+        int worldLevel = (int)WorldLevel.Overworld,
+        IReadOnlyList<NavigationObstacle>? obstacles = null)
     {
         var start = (
             WorldPlacementGrid.Cell(startPosition.X),
@@ -39,7 +52,10 @@ internal static class GridPathfinder
             caveDensity[(x, y)] = density;
             return density;
         }
-        if (!Passable(seed, goal.Item1, goal.Item2, worldLevel, Density)) return [];
+        if (!Passable(
+                seed, goal.Item1, goal.Item2, worldLevel, Density,
+                obstacles))
+            return [];
 
         var frontier = new PriorityQueue<(int X, int Y), float>();
         var cameFrom = new Dictionary<(int X, int Y), (int X, int Y)>();
@@ -54,15 +70,17 @@ internal static class GridPathfinder
             foreach (var neighbour in Neighbours)
             {
                 var next = (current.X + neighbour.X, current.Y + neighbour.Y);
-                if (!Passable(seed, next.Item1, next.Item2, worldLevel, Density))
+                if (!Passable(
+                        seed, next.Item1, next.Item2, worldLevel, Density,
+                        obstacles))
                     continue;
                 if (neighbour.X != 0 && neighbour.Y != 0 &&
                     (!Passable(
                          seed, current.X + neighbour.X, current.Y,
-                         worldLevel, Density) ||
+                         worldLevel, Density, obstacles) ||
                      !Passable(
                          seed, current.X, current.Y + neighbour.Y,
-                         worldLevel, Density)))
+                         worldLevel, Density, obstacles)))
                     continue;
                 var slope = Math.Abs(
                     Height(seed, next.Item1, next.Item2, worldLevel, Density) -
@@ -100,12 +118,17 @@ internal static class GridPathfinder
 
     private static bool Passable(
         long seed, int x, int y, int worldLevel,
-        Func<int, int, float> density)
+        Func<int, int, float> density,
+        IReadOnlyList<NavigationObstacle>? obstacles)
     {
+        var center = WorldPlacementGrid.CellCenter(x, y);
+        if (obstacles is not null)
+            foreach (var obstacle in obstacles)
+                if (obstacle.Contains(center))
+                    return false;
         if (worldLevel == (int)WorldLevel.Underground)
             return density(x, y) >=
                 CaveHydrologyField.Boundary;
-        var center = WorldPlacementGrid.CellCenter(x, y);
         var biome = InfiniteWorldGenerator.BiomeAt(
             seed,
             (int)MathF.Floor(center.X),

@@ -132,6 +132,7 @@ internal sealed partial class GameHostWindow
         var requestId = ++window._pathRequestId;
         var worldLevel = window._activeWorldLevel;
         var start = window._player.Position;
+        var obstacles = window.ActiveNavigationObstacles();
         window._pendingPathTask = Task.Run(
             () => new GameHostWindow.PathResult(
                 requestId,
@@ -141,7 +142,8 @@ internal sealed partial class GameHostWindow
                     start,
                     target,
                     cancellationToken: token,
-                    worldLevel: worldLevel)),
+                    worldLevel: worldLevel,
+                    obstacles: obstacles)),
             token);
         window._moveMarker = new(target, 0);
     }
@@ -173,6 +175,7 @@ internal sealed partial class GameHostWindow
         var requestId = ++window._pathRequestId;
         var worldLevel = window._activeWorldLevel;
         var start = window._player.Position;
+        var obstacles = window.ActiveNavigationObstacles();
         window._queuedAction = null;
         window._pendingPathTask = Task.Run(
             () => window.FindActionPath(
@@ -187,7 +190,8 @@ internal sealed partial class GameHostWindow
                 inventorySlot,
                 itemId,
                 fishKey,
-                vegetationKey),
+                vegetationKey,
+                obstacles),
             token);
         window._moveMarker = null;
     }
