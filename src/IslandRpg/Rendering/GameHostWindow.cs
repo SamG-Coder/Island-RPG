@@ -428,8 +428,8 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             foreach (var name in new[]
             {
-                "VMBAS_WN", "VMBAS_AN", "VMBAS_DN",
-                "VFBAS_WN", "VFBAS_AN", "VFBAS_DN",
+                "VMBAS_WN", "VMBAS_FN", "VMBAS_AN", "VMBAS_DN",
+                "VFBAS_WN", "VFBAS_FN", "VFBAS_AN", "VFBAS_DN",
                 "VMLUM_AN", "VFLUM_AN",
                 "VMFAR_TN", "VFFAR_TN",
                 "VMMIN_TN", "VFMIN_TN",
@@ -3285,12 +3285,7 @@ internal sealed partial class GameHostWindow : GameWindow
         if (!_entityAnimations.TryGetValue(
                 (gender, EntityAction.Idle), out var animation))
             return;
-        const int authoredAngles = 5;
-        var framesPerAngle = Math.Max(
-            1,
-            animation.Graphic.Sprite.Frames.Count / authoredAngles);
-        var frameIndex = VillagerDirectionRig.NeutralIdleFrame(
-            framesPerAngle);
+        const int frameIndex = 0;
         var frame = animation.Graphic.Sprite.Frames[frameIndex];
         var texture = animation.Textures[frameIndex];
         var scale = Math.Min(
@@ -5377,9 +5372,9 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         var suffixes = new Dictionary<EntityAction, string>
         {
-            // BAS_SN is the final skeleton/decay sheet. AoE holds a neutral
-            // frame from the living walk sheet when the basic villager is idle.
-            [EntityAction.Idle] = "WN",
+            // BAS_FN is the living villager's directional idle/fidget sheet.
+            // BAS_SN is the final skeleton/decay sheet, not a standing pose.
+            [EntityAction.Idle] = "FN",
             [EntityAction.Move] = "WN",
             [EntityAction.Attack] = "AN",
             [EntityAction.Work] = "AN",
@@ -5918,9 +5913,8 @@ internal sealed partial class GameHostWindow : GameWindow
         var graphic = animation.Graphic;
         var framesPerAngle = Math.Max(
             1, graphic.Sprite.Frames.Count / storedVillagerAngles);
-        var rawFrame = _player.Action == EntityAction.Idle
-            ? VillagerDirectionRig.NeutralIdleFrame(framesPerAngle)
-            : (int)(_player.ActionTime / animation.SecondsPerFrame);
+        var rawFrame =
+            (int)(_player.ActionTime / animation.SecondsPerFrame);
         if (_player.Action == EntityAction.Attack)
             rawFrame = Math.Min(rawFrame, framesPerAngle - 1);
         if (_player.Action == EntityAction.Gather &&
