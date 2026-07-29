@@ -1,4 +1,5 @@
 using IslandRpg.Persistence;
+using OpenTK.Mathematics;
 
 namespace IslandRpg.Gameplay;
 
@@ -20,6 +21,22 @@ internal static class MeleeCombatService
     public const float AttackIntervalSeconds = 2.4f;
     public const float HitSplatSeconds = 1.15f;
     public const int TrainingDummyMaximumHealth = 100;
+
+    public static float InteractionRange(Vector2 direction)
+    {
+        if (direction.LengthSquared < .0001f)
+            return AttackRange;
+        direction = direction.Normalized();
+        var projectedPixelsPerTile = new Vector2(
+            (direction.X - direction.Y) * 48,
+            (direction.X + direction.Y) * 24).Length;
+        const float desiredVisualSeparation = 40;
+        return Math.Clamp(
+            desiredVisualSeparation /
+            Math.Max(1, projectedPixelsPerTile),
+            AttackRange,
+            1.22f);
+    }
 
     public static MeleeAttackRoll Roll(
         int attackExperience,

@@ -77,8 +77,11 @@ internal sealed partial class GameHostWindow
         }
         var target = new Vector2(
             location.Object.X, location.Object.Y);
+        var interactionRange =
+            MeleeCombatService.InteractionRange(
+                _player.Position - target);
         if ((_player.Position - target).Length >
-            MeleeCombatService.AttackRange + .25f)
+            interactionRange + .22f)
         {
             CancelMeleeCombat();
             return;

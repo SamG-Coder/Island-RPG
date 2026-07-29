@@ -62,9 +62,16 @@ internal sealed partial class GameHostWindow
         if (window._combatTargetId == groundObject.Id)
             return;
         window.CancelMeleeCombat();
+        var target = new Vector2(
+            groundObject.X, groundObject.Y);
+        var approachDirection =
+            window._player is null
+                ? Vector2.Zero
+                : window._player.Position - target;
         QueuePath(
-            new Vector2(groundObject.X, groundObject.Y),
-            MeleeCombatService.AttackRange,
+            target,
+            MeleeCombatService.InteractionRange(
+                approachDirection),
             GameHostWindow.WorldActionType.AttackTrainingDummy,
             groundObjectId: groundObject.Id,
             clearTreeActions: true);
