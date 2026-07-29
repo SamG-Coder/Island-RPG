@@ -143,6 +143,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private bool _atlasDragging;
     private bool _atlasLeftWasDown;
     private double _clock;
+    private double _gameSimulationAccumulator;
     private double _atlasLastClickTime = -1;
     private Vector2 _atlasLastClickPosition;
     private Vector2 _atlasCenterIso;
@@ -1240,10 +1241,6 @@ internal sealed partial class GameHostWindow : GameWindow
     private void UpdateGame(float elapsed)
     {
         if (_player is null) return;
-        _worldGameSeconds = WorldTime.Advance(
-            _worldGameSeconds, elapsed);
-        UpdateSurvival(elapsed);
-        UpdateExpiredCampfires();
         _worldActions.ProcessPendingPath();
 
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
@@ -1423,6 +1420,27 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         _gameLeftWasDown = leftDown;
 
+        UpdateNativeCursor();
+        _gameSimulationAccumulator = Math.Min(
+            .25,
+            _gameSimulationAccumulator +
+            Math.Clamp(elapsed, 0, .25f));
+        const float simulationStep =
+            1f / (float)DisplaySettingsController.SimulationUpdatesPerSecond;
+        while (_gameSimulationAccumulator + .0000001 >= simulationStep)
+        {
+            UpdateGameSimulation(simulationStep);
+            _gameSimulationAccumulator -= simulationStep;
+        }
+    }
+
+    private void UpdateGameSimulation(float elapsed)
+    {
+        if (_player is null) return;
+        _worldGameSeconds = WorldTime.Advance(
+            _worldGameSeconds, elapsed);
+        UpdateSurvival(elapsed);
+        UpdateExpiredCampfires();
         var currentTerrain = SamplePlayerTerrain(
             _player.Position.X, _player.Position.Y);
         var nextTerrain = SamplePlayerTerrain(
@@ -1435,7 +1453,6 @@ internal sealed partial class GameHostWindow : GameWindow
         _player.TerrainSpeedMultiplier =
             (wading ? .62f : 1f) / (1f + uphill * .18f);
         _player.Update(elapsed);
-        UpdateNativeCursor();
         _worldActions.CompleteQueuedAction();
         _worldActions.Update();
         UpdateLevelUpFireworks(elapsed);

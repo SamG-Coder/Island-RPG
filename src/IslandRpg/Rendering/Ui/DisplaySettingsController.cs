@@ -6,6 +6,8 @@ namespace IslandRpg.Rendering.Ui;
 
 internal static class DisplaySettingsController
 {
+    public const double SimulationUpdatesPerSecond = 60;
+
     public static readonly int[] FrameRateLimits =
         [0, 60, 120, 144, 165, 240];
 
@@ -33,6 +35,11 @@ internal static class DisplaySettingsController
     public static string FrameRateLabel(int limit) =>
         limit <= 0 ? "Unlimited" : $"{limit} FPS";
 
+    public static double GameLoopFrequency(GameSettings settings) =>
+        FrameRateLimits.Contains(settings.FrameRateLimit)
+            ? settings.FrameRateLimit
+            : 0;
+
     public static void Apply(GameWindow window, GameSettings settings)
     {
         window.VSync = settings.VSyncMode switch
@@ -41,9 +48,8 @@ internal static class DisplaySettingsController
             DisplayVSyncMode.Adaptive => VSyncMode.Adaptive,
             _ => VSyncMode.Off
         };
-        var frequency = FrameRateLimits.Contains(settings.FrameRateLimit)
-            ? settings.FrameRateLimit
-            : 0;
-        window.UpdateFrequency = frequency;
+        // OpenTK 4.9 schedules UpdateFrame and RenderFrame together.
+        // Gameplay itself advances through a fixed 60 Hz accumulator.
+        window.UpdateFrequency = GameLoopFrequency(settings);
     }
 }

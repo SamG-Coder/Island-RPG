@@ -84,7 +84,14 @@ var frameLimitedSettings =
         defaultDisplaySettings);
 Require(frameLimitedSettings.FrameRateLimit == 60 &&
         DisplaySettingsController.FrameRateLabel(0) == "Unlimited" &&
-        DisplaySettingsController.FrameRateLabel(144) == "144 FPS",
+        DisplaySettingsController.FrameRateLabel(144) == "144 FPS" &&
+        DisplaySettingsController.SimulationUpdatesPerSecond == 60 &&
+        DisplaySettingsController.GameLoopFrequency(
+            defaultDisplaySettings) == 0 &&
+        DisplaySettingsController.GameLoopFrequency(
+            defaultDisplaySettings with { FrameRateLimit = 144 }) == 144 &&
+        DisplaySettingsController.GameLoopFrequency(
+            defaultDisplaySettings with { FrameRateLimit = 90 }) == 0,
     "frame limits must cycle from unlimited through supported FPS presets");
 
 var overworldCacheChunk = new ChunkCoordinate(4, -2, (int)WorldLevel.Overworld);
