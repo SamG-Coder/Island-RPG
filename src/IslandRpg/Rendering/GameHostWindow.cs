@@ -389,6 +389,12 @@ internal sealed partial class GameHostWindow : GameWindow
         _vao = GL.GenVertexArray();
         GL.BindVertexArray(_vao);
         _streamVbo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _streamVbo);
+        GL.BufferData(
+            BufferTarget.ArrayBuffer,
+            16 * sizeof(float),
+            IntPtr.Zero,
+            BufferUsageHint.StreamDraw);
         CreateSceneTarget();
         PrepareGameUi();
         var settings = _saves.LoadSettings();
@@ -3634,11 +3640,11 @@ internal sealed partial class GameHostWindow : GameWindow
     private void SetPlayerRecolor(int teamColor)
     {
         GL.Uniform1(
-            GL.GetUniformLocation(_program, "recolorPlayer"),
+            _shaderUniforms.Get(_program, "recolorPlayer"),
             teamColor == 0 ? 0 : 1);
         if (teamColor == 0) return;
         GL.Uniform3(
-            GL.GetUniformLocation(_program, "playerColor"),
+            _shaderUniforms.Get(_program, "playerColor"),
             TeamColor(teamColor));
     }
 
@@ -4976,26 +4982,29 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.UseProgram(_program);
         GL.Uniform1(
             _shaderUniforms.Get(_program, "sceneLighting"), 0);
-        GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
+        GL.Uniform1(_shaderUniforms.Get(_program, "image"), 0);
         GL.Uniform1(
-            GL.GetUniformLocation(_program, "opacity"),
+            _shaderUniforms.Get(_program, "opacity"),
             drawOpacity * _uiOpacity);
-        GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), 0);
-        GL.Uniform1(GL.GetUniformLocation(_program, "wading"), 0);
+        GL.Uniform1(_shaderUniforms.Get(_program, "outlineOnly"), 0);
+        GL.Uniform1(_shaderUniforms.Get(_program, "wading"), 0);
         GL.Uniform1(
-            GL.GetUniformLocation(_program, "spriteOutline"),
+            _shaderUniforms.Get(_program, "spriteOutline"),
             spriteOutline is null ? 0 : 1);
         GL.Uniform3(
-            GL.GetUniformLocation(_program, "spriteOutlineColor"),
+            _shaderUniforms.Get(_program, "spriteOutlineColor"),
             spriteOutline ?? Vector3.Zero);
-        GL.Uniform1(GL.GetUniformLocation(_program, "brightness"), brightness);
-        var tintColor = tint ?? Vector3.Zero;
-        GL.Uniform3(GL.GetUniformLocation(_program, "colorTint"), tintColor);
-        GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), tintAmount);
         GL.Uniform1(
-            GL.GetUniformLocation(_program, "grayscaleAmount"),
+            _shaderUniforms.Get(_program, "brightness"), brightness);
+        var tintColor = tint ?? Vector3.Zero;
+        GL.Uniform3(
+            _shaderUniforms.Get(_program, "colorTint"), tintColor);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "tintAmount"), tintAmount);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "grayscaleAmount"),
             grayscaleAmount);
-        GL.Uniform2(GL.GetUniformLocation(_program, "texelSize"),
+        GL.Uniform2(_shaderUniforms.Get(_program, "texelSize"),
             1f / frame.Width, 1f / frame.Height);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, texture);
@@ -5009,12 +5018,12 @@ internal sealed partial class GameHostWindow : GameWindow
             left,top,u0,v0, left,bottom,u0,v1,
             right,bottom,u1,v1, right,top,u1,v0
         ]);
-        GL.Uniform1(GL.GetUniformLocation(_program, "brightness"), 0f);
-        GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), 0f);
-        GL.Uniform1(GL.GetUniformLocation(_program, "grayscaleAmount"), 0f);
-        GL.Uniform1(GL.GetUniformLocation(_program, "recolorPlayer"), 0);
-        GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
-        GL.Uniform1(GL.GetUniformLocation(_program, "spriteOutline"), 0);
+        GL.Uniform1(_shaderUniforms.Get(_program, "brightness"), 0f);
+        GL.Uniform1(_shaderUniforms.Get(_program, "tintAmount"), 0f);
+        GL.Uniform1(_shaderUniforms.Get(_program, "grayscaleAmount"), 0f);
+        GL.Uniform1(_shaderUniforms.Get(_program, "recolorPlayer"), 0);
+        GL.Uniform1(_shaderUniforms.Get(_program, "opacity"), 1f);
+        GL.Uniform1(_shaderUniforms.Get(_program, "spriteOutline"), 0);
     }
 
     private void RenderAtlas()
@@ -7068,7 +7077,11 @@ internal sealed partial class GameHostWindow : GameWindow
     private void Draw(float[] vertices)
     {
         GL.BindBuffer(BufferTarget.ArrayBuffer, _streamVbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * sizeof(float), vertices, BufferUsageHint.StreamDraw);
+        GL.BufferSubData(
+            BufferTarget.ArrayBuffer,
+            IntPtr.Zero,
+            vertices.Length * sizeof(float),
+            vertices);
         GL.EnableVertexAttribArray(0);
         GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, 16, 0);
         GL.EnableVertexAttribArray(1);
