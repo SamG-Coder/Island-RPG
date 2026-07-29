@@ -578,11 +578,17 @@
       }
       const sampler = this.sampler;
       const size = this.canvas.width;
-      const half = this.span * .72;
-      const minX = this.center.x - half;
-      const maxX = this.center.x + half;
-      const minY = this.center.y - half;
-      const maxY = this.center.y + half;
+      // apparentIsoX and apparentIsoY each cover half the displayed span.
+      // Converting back to world space adds/subtracts both axes, so a corner
+      // reaches a full span from the center. Atlas relief can then shift the
+      // sample by 22 height levels * 1.35 pixels, with one extra vertex used
+      // by SampleTile.
+      const minimumProjectionOffset = this.span + 2;
+      const maximumProjectionOffset = this.span + 31;
+      const minX = this.center.x - minimumProjectionOffset;
+      const maxX = this.center.x + maximumProjectionOffset;
+      const minY = this.center.y - minimumProjectionOffset;
+      const maxY = this.center.y + maximumProjectionOffset;
       this.root.classList.add("generating");
       this.status.textContent = "Preparing drainage 0%";
       const started = performance.now();
