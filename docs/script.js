@@ -143,10 +143,13 @@ class ProceduralWorldRenderer {
         float dryPatch = smoothstep(.55, .80,
           fbm(p * .82 + vec2(-17.0, 8.0)));
 
-        vec3 deepWater = vec3(.025, .245, .390);
-        vec3 shelfWater = vec3(.035, .375, .535);
-        float shelf = smoothstep(-.32, -.02, field);
-        vec3 water = mix(deepWater, shelfWater, shelf);
+        vec3 abyssWater = vec3(.012, .105, .205);
+        vec3 deepWater = vec3(.018, .225, .390);
+        vec3 shelfWater = vec3(.045, .385, .535);
+        float deepStage = smoothstep(-.58, -.22, field);
+        float shelfStage = smoothstep(-.16, -.018, field);
+        vec3 water = mix(abyssWater, deepWater, deepStage);
+        water = mix(water, shelfWater, shelfStage);
 
         vec3 sand = mix(
           vec3(.62, .51, .31),
@@ -174,7 +177,7 @@ class ProceduralWorldRenderer {
       vec3 addVegetation(vec3 color, vec2 p, float field) {
         float forestSuitability = smoothstep(.12, .34, field) *
           smoothstep(.42, .67, fbm(p * .55 + 21.0));
-        vec2 scaled = p * 4.7;
+        vec2 scaled = p * 3.65;
         vec2 baseCell = floor(scaled);
         vec2 local = fract(scaled) - .5;
 
@@ -185,8 +188,8 @@ class ProceduralWorldRenderer {
             vec2 random = hash22(cell + 2187.0);
             vec2 center = offset + random * .72 - .36;
             vec2 delta = local - center;
-            float exists = step(.34, random.x) * forestSuitability;
-            float size = mix(.15, .27, random.y);
+            float exists = step(.18, random.x) * forestSuitability;
+            float size = mix(.20, .35, random.y);
 
             vec2 shadowDelta = delta + vec2(.13, -.085);
             float shadow = circle(
@@ -194,12 +197,12 @@ class ProceduralWorldRenderer {
               size * 1.25) * exists;
             color *= 1.0 - shadow * .30;
 
-            float trunk = step(abs(delta.x), size * .12) *
-              step(-size * .68, delta.y) * step(delta.y, size * .28) * exists;
+            float trunk = step(abs(delta.x), size * .09) *
+              step(-size * .88, delta.y) * step(delta.y, size * .26) * exists;
             color = mix(color, vec3(.22, .145, .07), trunk * .82);
 
             float crownA = circle(
-              vec2(delta.x, (delta.y + size * .22) * 1.12), size) * exists;
+              vec2(delta.x, (delta.y + size * .34) * 1.16), size) * exists;
             float crownB = circle(
               vec2(delta.x + size * .58, (delta.y - size * .02) * 1.2),
               size * .72) * exists;
@@ -207,9 +210,12 @@ class ProceduralWorldRenderer {
               vec2(delta.x - size * .58, (delta.y - size * .02) * 1.2),
               size * .72) * exists;
             float crown = max(crownA, max(crownB, crownC));
-            vec3 darkLeaf = vec3(.045, .27, .045);
-            vec3 lightLeaf = vec3(.18, .49, .075);
-            vec3 autumnLeaf = vec3(.48, .31, .045);
+            vec3 darkLeaf = vec3(.035, .225, .025);
+            vec3 lightLeaf = vec3(.15, .46, .055);
+            vec3 autumnLeaf = mix(
+              vec3(.50, .30, .035),
+              vec3(.62, .15, .025),
+              hash21(cell + 91.0));
             vec3 leaves = mix(darkLeaf, lightLeaf,
               smoothstep(-size, size, -delta.y));
             leaves = mix(leaves, autumnLeaf,
@@ -257,15 +263,20 @@ class ProceduralWorldRenderer {
             sin((p.x - p.y * .63) * 31.0 - time * 1.1);
           float sparkle = pow(max(0.0, waves - .54) * 2.05, 5.0);
           color += vec3(.20, .48, .59) * (waves - .42) * .20 * waterCoverage;
-          color += vec3(.62, .83, .86) * sparkle * .22 * waterCoverage;
+          float offshore = 1.0 - smoothstep(-.09, -.018, field);
+          color += vec3(.62, .83, .86) * sparkle * .15 *
+            waterCoverage * offshore;
           color += vec3(.12, .31, .38) * rippleLines * .035 * waterCoverage;
 
-          float shore = (1.0 - smoothstep(.0, .095, abs(field))) *
-            step(field, 0.0);
-          float foamBreakup = smoothstep(.48, .70,
-            valueNoise(p * 9.0 + vec2(time * .08, 0.0)));
+          float shore = (1.0 - smoothstep(.004, .018, abs(field + .010))) *
+            step(field, .008);
+          float foamCrest = pow(.5 + .5 * sin(
+            p.x * 7.5 + p.y * 3.8 + time * .42 +
+            fbm(p * 2.1) * 5.0), 5.0);
+          float foamBreakup = smoothstep(.38, .76,
+            fbm(p * vec2(4.5, 13.0) + vec2(time * .035, 0.0)));
           color = mix(color, vec3(.66, .78, .72),
-            shore * foamBreakup * .19);
+            shore * foamCrest * foamBreakup * .34);
         }
 
         color = addVegetation(color, p, field);
