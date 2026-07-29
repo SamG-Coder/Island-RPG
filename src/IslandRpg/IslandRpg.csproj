@@ -12,8 +12,8 @@
     <AssemblyTitle>Island RPG</AssemblyTitle>
     <Product>Island RPG</Product>
     <Description>Persistent isometric survival and skilling RPG.</Description>
-    <Authors>Samuel Grahame</Authors>
-    <RepositoryUrl>https://github.com/samuelGrahame/AoeRpg</RepositoryUrl>
+    <Authors>SamG-Coder</Authors>
+    <RepositoryUrl>https://github.com/SamG-Coder/Island-RPG</RepositoryUrl>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FontStashSharp.PlatformAgnostic" Version="1.5.6" />
