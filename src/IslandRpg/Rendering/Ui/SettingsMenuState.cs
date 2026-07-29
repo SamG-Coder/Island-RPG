@@ -30,6 +30,7 @@ internal sealed class SettingsMenuState
         "developer-tools-primary",
         "developer-tools-world",
         "developer-tools-items",
+        "developer-navigation-blocks",
         .. DeveloperSettingsController.Skills
             .Select(skill => $"skill-{skill}")
     ];

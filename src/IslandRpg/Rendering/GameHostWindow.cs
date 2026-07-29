@@ -3400,6 +3400,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _gameUi.Layout(scene);
         _chatUi.Layout(scene);
         _minimapUi.Layout(scene);
+        RenderNavigationBlocks(scene);
         RenderTreeHealthBars(scene);
         RenderMiningHealthBars(scene);
         RenderDigSiteHealthBar(scene);

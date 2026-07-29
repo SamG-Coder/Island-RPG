@@ -106,9 +106,16 @@ internal sealed class DeveloperSettingsController
         return new(row.X, row.Y + 7, row.Z, row.W - 14);
     }
 
+    public static Vector4 NavigationBlocksBounds(
+        ListControlState list)
+    {
+        var row = list.RowBounds(3);
+        return new(row.X, row.Y + 7, row.Z, row.W - 14);
+    }
+
     public static Vector4 SkillRowBounds(
         ListControlState list, SkillType skill) =>
-        list.RowBounds(3 + (int)skill);
+        list.RowBounds(4 + (int)skill);
 
     public static Vector4 GrantBounds(
         ListControlState list, SkillType skill)

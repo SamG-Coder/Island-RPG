@@ -98,9 +98,11 @@ internal sealed partial class GameHostWindow
                         groundObject.ItemId, out var definition))
                     continue;
                 obstacles.Add(new(
-                    new Vector2(groundObject.X, groundObject.Y),
-                    definition.FootprintWidth,
-                    definition.FootprintDepth));
+                    PlaceableObjectCatalog.GroundContactCenter(
+                        groundObject.ItemId,
+                        new Vector2(groundObject.X, groundObject.Y)),
+                    definition.GroundContactWidth,
+                    definition.GroundContactDepth));
             }
         }
         return obstacles.ToArray();

@@ -36,7 +36,7 @@ internal static class GridPathfinder
         var start = (
             WorldPlacementGrid.Cell(startPosition.X),
             WorldPlacementGrid.Cell(startPosition.Y));
-        var goal = (
+        var requestedGoal = (
             WorldPlacementGrid.Cell(requestedTarget.X),
             WorldPlacementGrid.Cell(requestedTarget.Y));
         var caveContext = worldLevel == (int)WorldLevel.Underground
@@ -52,10 +52,18 @@ internal static class GridPathfinder
             caveDensity[(x, y)] = density;
             return density;
         }
-        if (!Passable(
-                seed, goal.Item1, goal.Item2, worldLevel, Density,
-                obstacles))
+        var exactTarget = PassablePoint(
+            seed, requestedTarget, worldLevel, caveContext, obstacles);
+        var goal = ResolveGoal(
+            seed,
+            requestedGoal,
+            requestedTarget,
+            worldLevel,
+            Density,
+            obstacles);
+        if (goal is null)
             return [];
+        var resolvedGoal = goal.Value;
 
         var frontier = new PriorityQueue<(int X, int Y), float>();
         var cameFrom = new Dictionary<(int X, int Y), (int X, int Y)>();
@@ -66,7 +74,7 @@ internal static class GridPathfinder
         {
             if ((visited & 63) == 0) cancellationToken.ThrowIfCancellationRequested();
             var current = frontier.Dequeue();
-            if (current == goal) return Reconstruct(current);
+            if (current == resolvedGoal) return Reconstruct(current);
             foreach (var neighbour in Neighbours)
             {
                 var next = (current.X + neighbour.X, current.Y + neighbour.Y);
@@ -94,8 +102,8 @@ internal static class GridPathfinder
                 cameFrom[next] = current;
                 var heuristic =
                     Math.Max(
-                        Math.Abs(goal.Item1 - next.Item1),
-                        Math.Abs(goal.Item2 - next.Item2)) *
+                        Math.Abs(resolvedGoal.Item1 - next.Item1),
+                        Math.Abs(resolvedGoal.Item2 - next.Item2)) *
                     WorldPlacementGrid.CellSize;
                 frontier.Enqueue(next, nextCost + heuristic);
             }
@@ -112,8 +120,66 @@ internal static class GridPathfinder
                 current = cameFrom[current];
             }
             result.Reverse();
+            if (exactTarget)
+            {
+                if (result.Count == 0)
+                    result.Add(requestedTarget);
+                else
+                    result[^1] = requestedTarget;
+            }
             return result;
         }
+    }
+
+    private static (int X, int Y)? ResolveGoal(
+        long seed,
+        (int X, int Y) requestedGoal,
+        Vector2 requestedTarget,
+        int worldLevel,
+        Func<int, int, float> density,
+        IReadOnlyList<NavigationObstacle>? obstacles)
+    {
+        const int searchRadius = 12;
+        (int X, int Y)? nearest = null;
+        var nearestDistance = float.MaxValue;
+        for (var y = -searchRadius; y <= searchRadius; y++)
+        for (var x = -searchRadius; x <= searchRadius; x++)
+        {
+            var candidate = (
+                requestedGoal.X + x,
+                requestedGoal.Y + y);
+            if (!Passable(
+                    seed, candidate.Item1, candidate.Item2,
+                    worldLevel, density, obstacles))
+                continue;
+            var center = WorldPlacementGrid.CellCenter(
+                candidate.Item1, candidate.Item2);
+            var distance = (center - requestedTarget).LengthSquared;
+            if (distance >= nearestDistance) continue;
+            nearest = candidate;
+            nearestDistance = distance;
+        }
+        return nearest;
+    }
+
+    private static bool PassablePoint(
+        long seed,
+        Vector2 point,
+        int worldLevel,
+        CaveHydrologyField.SamplingContext? caveContext,
+        IReadOnlyList<NavigationObstacle>? obstacles)
+    {
+        if (obstacles is not null)
+            foreach (var obstacle in obstacles)
+                if (obstacle.Contains(point))
+                    return false;
+        if (worldLevel == (int)WorldLevel.Underground)
+            return caveContext!.Density(point.X, point.Y) >=
+                CaveHydrologyField.Boundary;
+        return InfiniteWorldGenerator.BiomeAt(
+            seed,
+            (int)MathF.Floor(point.X),
+            (int)MathF.Floor(point.Y)) != Biome.DeepWater;
     }
 
     private static bool Passable(

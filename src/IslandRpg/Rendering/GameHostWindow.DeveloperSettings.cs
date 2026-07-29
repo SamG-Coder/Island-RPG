@@ -6,6 +6,8 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
+    private bool _showNavigationBlocks;
+
     private bool UpdateDeveloperSettings(
         Vector2 pointer, Vector4 panel)
     {
@@ -42,6 +44,13 @@ internal sealed partial class GameHostWindow
                 .Contains(pointer))
         {
             OpenDeveloperItemBank();
+            return true;
+        }
+        if (list.VisibleIndices.Contains(3) &&
+            DeveloperSettingsController.NavigationBlocksBounds(list)
+                .Contains(pointer))
+        {
+            _showNavigationBlocks = !_showNavigationBlocks;
             return true;
         }
         var changed = _developerSettings.TryUpdate(

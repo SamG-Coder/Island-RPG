@@ -55,6 +55,10 @@ Require(
     PlaceableObjectCatalog.TryGet(
         ItemIds.TrainingDummy, out var dummyDefinition) &&
     dummyDefinition.ChromaKeyMagenta &&
+    dummyDefinition.GroundContactWidth == .45f &&
+    dummyDefinition.GroundContactDepth == .3f &&
+    dummyDefinition.GroundContactWidth <
+        dummyDefinition.FootprintWidth &&
     ItemCatalog.Get(ItemIds.TrainingDummy)
         .HasTag(ItemTag.PlaceableObject),
     "the training dummy must remain a dev-bank placeable combat target");
@@ -762,6 +766,14 @@ Require(PlaceableObjectCatalog.TryGet(
         WorldPlacementGrid.CellCenter(
             WorldPlacementGrid.Cell(3.41f)) == 3.375f,
     "placeable objects and navigation must use a deterministic quarter-tile grid");
+var dummyGroundContact = PlaceableObjectCatalog.GroundContactCenter(
+    ItemIds.TrainingDummy,
+    new OpenTK.Mathematics.Vector2(10, 20));
+Require(
+    (dummyGroundContact -
+     new OpenTK.Mathematics.Vector2(
+         10.4125f, 20.4125f)).Length < .0001f,
+    "navigation must follow the same forward ground anchor used to render placed objects");
 var navigationObstacle = new NavigationObstacle(
     new OpenTK.Mathematics.Vector2(4.25f, 7.75f), 2, 1);
 Require(
@@ -772,6 +784,42 @@ Require(
     navigationObstacle.Contains(
         new OpenTK.Mathematics.Vector2(4.25f, 8.4f)),
     "navigation obstacles must block the full item footprint plus player clearance");
+const long navigationPathSeed = 78193021;
+var navigationLandTile = (
+    from y in Enumerable.Range(-16, 33)
+    from x in Enumerable.Range(-16, 33)
+    where InfiniteWorldGenerator.BiomeAt(
+        navigationPathSeed, x, y) != Biome.DeepWater
+    select new OpenTK.Mathematics.Vector2i(x, y)).First();
+var navigationStart = new OpenTK.Mathematics.Vector2(
+    navigationLandTile.X + .125f,
+    navigationLandTile.Y + .125f);
+var exactNavigationTarget = new OpenTK.Mathematics.Vector2(
+    navigationLandTile.X + .73f,
+    navigationLandTile.Y + .66f);
+var exactNavigationPath = GridPathfinder.Find(
+    navigationPathSeed,
+    navigationStart,
+    exactNavigationTarget);
+Require(
+    exactNavigationPath.Count > 0 &&
+    exactNavigationPath[^1] == exactNavigationTarget,
+    "valid movement clicks must preserve their exact world endpoint");
+var blockedNavigationTarget = new OpenTK.Mathematics.Vector2(
+    navigationLandTile.X + .875f,
+    navigationLandTile.Y + .875f);
+var blockingNavigationObstacle = new NavigationObstacle(
+    blockedNavigationTarget, .1f, .1f);
+var resolvedNavigationPath = GridPathfinder.Find(
+    navigationPathSeed,
+    navigationStart,
+    blockedNavigationTarget,
+    obstacles: [blockingNavigationObstacle]);
+Require(
+    resolvedNavigationPath.Count > 0 &&
+    !blockingNavigationObstacle.Contains(resolvedNavigationPath[^1]) &&
+    (resolvedNavigationPath[^1] - blockedNavigationTarget).Length <= .26f,
+    "blocked movement clicks must resolve to the nearest clear quarter-cell");
 Require(PlaceableObjectCatalog.TryGet(
             ItemIds.Campfire, out var campfireDefinition) &&
         campfireDefinition.FootprintWidth == 1 &&
@@ -1418,7 +1466,7 @@ Require(
     "the settings Back button must remain anchored to a resized panel footer");
 Require(
     settingsList.ScrollTrack.Visible &&
-    settingsList.Count == 3 + DeveloperSettingsController.Skills.Length,
+    settingsList.Count == 4 + DeveloperSettingsController.Skills.Length,
     "the developer page must use the shared scroll control for all tool and skill rows");
 Require(
     !DeveloperSettingsController.MapToolBounds(settingsList)
@@ -1431,6 +1479,8 @@ Require(
     DeveloperSettingsController.AdvanceTimeBounds(settingsList).X +
         DeveloperSettingsController.AdvanceTimeBounds(settingsList).Z <=
     DeveloperSettingsController.WorldLevelBounds(settingsList).X &&
+    !DeveloperSettingsController.NavigationBlocksBounds(settingsList)
+        .Contains(settingsBack.Xy) &&
     !DeveloperSettingsController.AdvanceTimeBounds(settingsList)
         .Contains(settingsBack.Xy),
     "developer tools must form non-overlapping two-column rows above the skill list");

@@ -12,7 +12,16 @@ internal sealed record PlaceableObjectDefinition(
     int HotspotY,
     int RenderWidth = 0,
     int RenderHeight = 0,
-    bool ChromaKeyMagenta = false);
+    bool ChromaKeyMagenta = false,
+    float NavigationWidth = 0,
+    float NavigationDepth = 0)
+{
+    public float GroundContactWidth =>
+        NavigationWidth > 0 ? NavigationWidth : FootprintWidth;
+
+    public float GroundContactDepth =>
+        NavigationDepth > 0 ? NavigationDepth : FootprintDepth;
+}
 
 internal static class PlaceableObjectCatalog
 {
@@ -26,7 +35,9 @@ internal static class PlaceableObjectCatalog
                 FootprintDepth: 1,
                 Height: 1,
                 HotspotX: 51,
-                HotspotY: 44),
+                HotspotY: 44,
+                NavigationWidth: .9f,
+                NavigationDepth: .5f),
             [ItemIds.Campfire] = new(
                 ItemIds.Campfire,
                 "campfire.png",
@@ -34,7 +45,9 @@ internal static class PlaceableObjectCatalog
                 FootprintDepth: 1,
                 Height: .3f,
                 HotspotX: 29,
-                HotspotY: 54),
+                HotspotY: 54,
+                NavigationWidth: .55f,
+                NavigationDepth: .4f),
             [ItemIds.Bloomery] = new(
                 ItemIds.Bloomery,
                 "bloomery.png",
@@ -42,7 +55,9 @@ internal static class PlaceableObjectCatalog
                 FootprintDepth: 1.5f,
                 Height: 1.5f,
                 HotspotX: 58,
-                HotspotY: 98),
+                HotspotY: 98,
+                NavigationWidth: .65f,
+                NavigationDepth: .5f),
             [ItemIds.SmithingAnvil] = new(
                 ItemIds.SmithingAnvil,
                 "anvil.png",
@@ -52,7 +67,9 @@ internal static class PlaceableObjectCatalog
                 HotspotX: 28,
                 HotspotY: 48,
                 RenderWidth: 56,
-                RenderHeight: 52),
+                RenderHeight: 52,
+                NavigationWidth: .5f,
+                NavigationDepth: .35f),
             [ItemIds.CookingPot] = new(
                 ItemIds.CookingPot,
                 "cooking-pot.png",
@@ -62,7 +79,9 @@ internal static class PlaceableObjectCatalog
                 HotspotX: 25,
                 HotspotY: 47,
                 RenderWidth: 50,
-                RenderHeight: 50),
+                RenderHeight: 50,
+                NavigationWidth: .45f,
+                NavigationDepth: .35f),
             [ItemIds.StorageChest] = new(
                 ItemIds.StorageChest,
                 "storage-chest.png",
@@ -72,7 +91,9 @@ internal static class PlaceableObjectCatalog
                 HotspotX: 30,
                 HotspotY: 43,
                 RenderWidth: 60,
-                RenderHeight: 46),
+                RenderHeight: 46,
+                NavigationWidth: .6f,
+                NavigationDepth: .3f),
             [ItemIds.StorageBarrel] = new(
                 ItemIds.StorageBarrel,
                 "storage-barrel.png",
@@ -80,7 +101,9 @@ internal static class PlaceableObjectCatalog
                 FootprintDepth: .75f,
                 Height: 1,
                 HotspotX: 31,
-                HotspotY: 53),
+                HotspotY: 53,
+                NavigationWidth: .35f,
+                NavigationDepth: .3f),
             [ItemIds.TrainingDummy] = new(
                 ItemIds.TrainingDummy,
                 Path.Combine("Combat", "training-dummy-source.png"),
@@ -91,7 +114,9 @@ internal static class PlaceableObjectCatalog
                 HotspotY: 69,
                 RenderWidth: 72,
                 RenderHeight: 72,
-                ChromaKeyMagenta: true)
+                ChromaKeyMagenta: true,
+                NavigationWidth: .45f,
+                NavigationDepth: .3f)
         };
 
     public static IReadOnlyCollection<PlaceableObjectDefinition> All =>
@@ -109,6 +134,26 @@ internal static class PlaceableObjectCatalog
             ? (definition.FootprintWidth +
                definition.FootprintDepth) * 12f
             : 0;
+
+    public static Vector2 GroundContactCenter(
+        string itemId,
+        Vector2 storedPosition)
+    {
+        if (!TryGet(itemId, out var definition))
+            return storedPosition;
+        // The sprite hotspot is authored at the front edge of its ground
+        // base. Move back by half the projected navigation footprint so the
+        // collision rectangle is centred beneath the pixels touching ground.
+        var contactHalfDepthPixels =
+            (definition.GroundContactWidth +
+             definition.GroundContactDepth) * 12f;
+        // Equal movement on both world axes projects to a vertical-only shift
+        // of 48 pixels per world unit.
+        var forward =
+            (ProjectedFrontOffsetPixels(itemId) -
+             contactHalfDepthPixels) / 48f;
+        return storedPosition + new Vector2(forward, forward);
+    }
 
     public static Vector2 SnapToGrid(
         string itemId, Vector2 target)

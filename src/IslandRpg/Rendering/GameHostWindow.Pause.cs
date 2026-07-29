@@ -283,9 +283,14 @@ internal sealed partial class GameHostWindow
             DrawMenuButton(
                 DeveloperSettingsController.ItemBankBounds(list),
                 "Open all-items bank");
+        if (list.VisibleIndices.Contains(3))
+            DrawMenuButton(
+                DeveloperSettingsController.NavigationBlocksBounds(list),
+                "Pathing blocks: " +
+                (_showNavigationBlocks ? "On" : "Off"));
         foreach (var skill in DeveloperSettingsController.Skills)
         {
-            if (!list.VisibleIndices.Contains(3 + (int)skill))
+            if (!list.VisibleIndices.Contains(4 + (int)skill))
                 continue;
             var row = DeveloperSettingsController.SkillRowBounds(
                 list, skill);
