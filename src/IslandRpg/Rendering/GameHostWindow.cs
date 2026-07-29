@@ -307,6 +307,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly ChatUiControlState _chatUi = new();
     private readonly RepeatedActionMonologue _repeatedActions = new();
     private readonly SettingsMenuState _settingsMenu = new();
+    private readonly DropdownControlState _resolutionDropdown = new();
     private readonly DeveloperSettingsController _developerSettings = new();
     private readonly DeveloperMapWindow _developerMap = new();
     private readonly SkillGuideWindowState _skillGuideWindow = new();
@@ -2451,6 +2452,11 @@ internal sealed partial class GameHostWindow : GameWindow
             }
             else if (_frontendPage == FrontendPage.Settings)
             {
+                if (ScrollResolutionDropdown(
+                        SettingsPanel(),
+                        MouseState.Position,
+                        e.OffsetY))
+                    return;
                 _settingsMenu.LayoutContent(SettingsPanel());
                 _settingsMenu.ContentList.Scroll(
                     MouseState.Position, e.OffsetY);
@@ -2471,6 +2477,11 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             if (_pauseMenu.Page == PausePage.Settings)
             {
+                if (ScrollResolutionDropdown(
+                        PauseSubmenuPanel(),
+                        MouseState.Position,
+                        e.OffsetY))
+                    return;
                 _settingsMenu.LayoutContent(PauseSubmenuPanel());
                 _settingsMenu.ContentList.Scroll(
                     MouseState.Position, e.OffsetY);

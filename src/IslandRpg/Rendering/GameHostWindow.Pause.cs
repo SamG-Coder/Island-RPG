@@ -157,17 +157,23 @@ internal sealed partial class GameHostWindow
         var content = SettingsMenuState.ContentBounds(panel);
         DrawAoEPanelBorder(content);
         _settingsMenu.LayoutContent(panel);
+        if (_settingsMenu.SelectedTab != SettingsTab.Display)
+            _resolutionDropdown.Close();
         switch (_settingsMenu.SelectedTab)
         {
             case SettingsTab.Display:
                 var settings = _saves.LoadSettings();
+                LayoutResolutionDropdown(panel, settings);
                 foreach (var option in _settingsMenu.ContentList.VisibleIndices)
                 {
+                    if (option == 1)
+                    {
+                        RenderResolutionDropdownField(settings);
+                        continue;
+                    }
                     var caption = option switch
                     {
                         0 => $"Fullscreen: {(settings.Fullscreen ? "On" : "Off")}",
-                        1 => "Fullscreen resolution: " +
-                             FullscreenResolutionLabel(settings),
                         2 => $"VSync: {settings.VSyncMode}",
                         3 => "Frame limit: " +
                              DisplaySettingsController.FrameRateLabel(
@@ -199,6 +205,53 @@ internal sealed partial class GameHostWindow
                 break;
         }
         RenderListScrollbar(_settingsMenu.ContentList);
+        if (_settingsMenu.SelectedTab == SettingsTab.Display)
+            RenderResolutionDropdownMenu();
+    }
+
+    private void RenderResolutionDropdownField(
+        IslandRpg.Persistence.GameSettings settings)
+    {
+        var bounds = _resolutionDropdown.Bounds;
+        DrawMenuButton(
+            bounds,
+            "Resolution: " +
+            FullscreenResolutionLabel(settings));
+        DrawUiText(
+            _resolutionDropdown.IsOpen ? "▲" : "▼",
+            new(bounds.X + bounds.Z - 22, bounds.Y + 12),
+            new(206, 192, 151, 255));
+    }
+
+    private void RenderResolutionDropdownMenu()
+    {
+        if (!_resolutionDropdown.IsOpen) return;
+        var menu = _resolutionDropdown.MenuBounds;
+        DrawUiColor(menu, new(.030f, .027f, .021f, .995f));
+        DrawPanelOutline(menu, 2, new(.48f, .37f, .16f, 1));
+        for (var row = 0;
+             row < _resolutionDropdown.VisibleCount;
+             row++)
+        {
+            var index = _resolutionDropdown.FirstVisibleIndex + row;
+            var bounds = _resolutionDropdown.OptionBounds(row);
+            var hovered = bounds.Contains(MouseState.Position);
+            if (hovered)
+                DrawUiColor(
+                    bounds,
+                    new(.19f, .145f, .055f, .99f));
+            if (row > 0)
+                DrawUiColor(
+                    new(bounds.X + 5, bounds.Y,
+                        bounds.Z - 10, 1),
+                    new(.19f, .16f, .10f, 1));
+            DrawCenteredUiText(
+                _resolutionDropdown.Options[index].Label,
+                bounds,
+                hovered
+                    ? new(244, 225, 171, 255)
+                    : new(205, 195, 160, 255));
+        }
     }
 
     private void RenderDeveloperSettings()
