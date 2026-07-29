@@ -1436,6 +1436,13 @@ Require(
     visibleSettingsTabs.Contains(SettingsTab.Game) &&
     visibleSettingsTabs.Contains(SettingsTab.Sound),
     "the settings menu must expose Display, Game, and Sound tabs");
+Require(
+    MusicSettingsController.NextVolume(1) == .75f &&
+    MusicSettingsController.NextVolume(.75f) == .5f &&
+    MusicSettingsController.NextVolume(.5f) == .25f &&
+    MusicSettingsController.NextVolume(.25f) == 0 &&
+    MusicSettingsController.NextVolume(0) == 1,
+    "music volume controls must cycle through predictable audible steps");
 if (!System.Diagnostics.Debugger.IsAttached)
     Require(!visibleSettingsTabs.Contains(SettingsTab.Dev),
         "the Dev settings tab must stay hidden without an attached debugger");

@@ -195,10 +195,15 @@ internal sealed partial class GameHostWindow
                         : "Off"));
                 break;
             case SettingsTab.Sound:
-                DrawCenteredUiText(
-                    "Sound settings will appear here.",
+                var soundSettings = _saves.LoadSettings();
+                DrawMenuButton(
                     _settingsMenu.OptionBounds(0),
-                    new(174, 164, 134, 255));
+                    "Music: " +
+                    (soundSettings.MusicEnabled ? "On" : "Off"));
+                DrawMenuButton(
+                    _settingsMenu.OptionBounds(1),
+                    "Music volume: " +
+                    $"{MathF.Round(soundSettings.MasterVolume * 100)}%");
                 break;
             case SettingsTab.Dev:
                 RenderDeveloperSettings();

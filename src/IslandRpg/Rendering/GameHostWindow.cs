@@ -389,6 +389,7 @@ internal sealed partial class GameHostWindow : GameWindow
         PrepareGameUi();
         var settings = _saves.LoadSettings();
         ApplyDisplaySettings(settings);
+        InitializeMusic();
         var progress = new Progress<(int Done, int Total, string Name)>(value =>
         {
             _done = value.Done;
@@ -453,6 +454,7 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         base.OnUpdateFrame(e);
         _clock += e.Time;
+        _musicPlayer?.Update();
         _waterTime = (_waterTime + (float)e.Time) % 10000f;
         if (KeyboardState.IsKeyPressed(Keys.Escape))
         {
@@ -802,6 +804,9 @@ internal sealed partial class GameHostWindow : GameWindow
                     break;
                 else if (_settingsMenu.SelectedTab == SettingsTab.Game &&
                          UpdateGameSettings(pointer, settingsPanel))
+                    break;
+                else if (_settingsMenu.SelectedTab == SettingsTab.Sound &&
+                         UpdateSoundSettings(pointer, settingsPanel))
                     break;
                 else if (_settingsMenu.SelectedTab == SettingsTab.Dev &&
                          UpdateDeveloperSettings(pointer, settingsPanel))
@@ -7254,6 +7259,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     protected override void OnUnload()
     {
+        _musicPlayer?.Dispose();
         CancelWorldLevelWork(clearMinimap: true);
         SaveActivePlayerState();
         foreach (var coordinate in _worldChunks.Keys.ToArray())

@@ -63,7 +63,8 @@ internal sealed record GameSettings(
     int FrameRateLimit = 0,
     bool OccludedPlayerOutline = true,
     int FullscreenWidth = 0,
-    int FullscreenHeight = 0);
+    int FullscreenHeight = 0,
+    bool MusicEnabled = true);
 
 internal sealed class GameSaveRepository
 {
