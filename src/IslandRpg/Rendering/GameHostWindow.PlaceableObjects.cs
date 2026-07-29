@@ -7,6 +7,10 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
+    private readonly Dictionary<string, SpriteGroundContact>
+        _resourceGroundContacts =
+            new(StringComparer.OrdinalIgnoreCase);
+
     private void BeginPlaceableObjectPlacement(
         int inventorySlot, string itemId)
     {
@@ -92,6 +96,35 @@ internal sealed partial class GameHostWindow
         foreach (var gpu in _worldChunks.Values)
         {
             if (!IsActiveWorldChunk(gpu)) continue;
+            foreach (var tree in gpu.Chunk.Trees)
+            {
+                var atlasKey = WorldTreeCatalog.AtlasKey(tree);
+                if (!TryGroundContact(atlasKey, out var contact))
+                    continue;
+                obstacles.Add(ResourceObstacle(
+                    new Vector2(tree.X + .5f, tree.Y + .5f),
+                    contact));
+            }
+
+            foreach (var vegetation in gpu.Chunk.Vegetation)
+            {
+                if (!MiningNodeCatalog.TryGet(vegetation, out _))
+                    continue;
+                var stableKey =
+                    $"vegetation:{vegetation.X:0.000}:{vegetation.Y:0.000}";
+                if (gpu.Chunk.MiningStates.Any(state =>
+                        state.StableKey == stableKey &&
+                        state.Health == 0))
+                    continue;
+                var atlasKey =
+                    $"{vegetation.GraphicName}#{vegetation.FrameIndex}";
+                if (!TryGroundContact(atlasKey, out var contact))
+                    continue;
+                obstacles.Add(ResourceObstacle(
+                    new Vector2(vegetation.X, vegetation.Y),
+                    contact));
+            }
+
             foreach (var groundObject in gpu.Chunk.GroundObjects)
             {
                 if (!PlaceableObjectCatalog.TryGet(
@@ -106,6 +139,32 @@ internal sealed partial class GameHostWindow
             }
         }
         return obstacles.ToArray();
+
+        bool TryGroundContact(
+            string atlasKey,
+            out SpriteGroundContact contact)
+        {
+            if (_resourceGroundContacts.TryGetValue(
+                    atlasKey, out contact))
+                return true;
+            if (!_treeAtlas.TryGetValue(atlasKey, out var entry))
+                return false;
+            contact = SpriteGroundContactCalculator.Measure(entry.Frame);
+            _resourceGroundContacts[atlasKey] = contact;
+            return true;
+        }
+
+        static NavigationObstacle ResourceObstacle(
+            Vector2 anchor,
+            SpriteGroundContact contact)
+        {
+            // A horizontal sprite offset projects equally along the two
+            // opposing isometric world axes.
+            var center = anchor + new Vector2(
+                contact.LateralOffset,
+                -contact.LateralOffset);
+            return new(center, contact.Width, contact.Depth);
+        }
     }
 
     private bool CanPlacePlaceableObjectAt(

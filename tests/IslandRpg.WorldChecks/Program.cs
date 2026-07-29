@@ -784,6 +784,17 @@ Require(
     navigationObstacle.Contains(
         new OpenTK.Mathematics.Vector2(4.25f, 8.4f)),
     "navigation obstacles must block the full item footprint plus player clearance");
+var groundContactPixels = new byte[20 * 20 * 4];
+for (var y = 10; y <= 16; y++)
+for (var x = 8; x <= 11; x++)
+    groundContactPixels[(y * 20 + x) * 4 + 3] = 255;
+var measuredGroundContact = SpriteGroundContactCalculator.Measure(
+    new SpriteFrame(20, 20, 9, 16, groundContactPixels));
+Require(
+    measuredGroundContact.Width == .16f &&
+    measuredGroundContact.Depth == .16f &&
+    measuredGroundContact.LateralOffset > 0,
+    "resource navigation footprints must be measured from each sprite's opaque ground contact");
 const long navigationPathSeed = 78193021;
 var navigationLandTile = (
     from y in Enumerable.Range(-16, 33)
