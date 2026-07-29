@@ -33,7 +33,9 @@ internal sealed partial class GameHostWindow
                      index < SkillListEntries.Length;
                      index++)
                 {
-                    if (!SkillGridCell(panel, index).Contains(pointer))
+                    var cell = SkillGridCell(panel, index);
+                    if (!SkillCellVisible(panel, cell) ||
+                        !cell.Contains(pointer))
                         continue;
                     _selectedSkill = index;
                     break;
@@ -61,8 +63,7 @@ internal sealed partial class GameHostWindow
         if (_selectedSkill < 0)
         {
             var totalLevel = SkillListEntries.Sum(entry =>
-                SkillService.LevelForExperience(
-                    SkillExperience(entry.Skill)));
+                SkillLevel(entry.Skill));
             DrawPanelCaption(
                 $"Skills   Total {totalLevel}", panel);
             var content = SkillPanelLayout.ListBounds(panel);
@@ -86,12 +87,15 @@ internal sealed partial class GameHostWindow
                  index++)
             {
                 var entry = SkillListEntries[index];
+                var cell = SkillGridCell(panel, index);
+                if (!SkillCellVisible(panel, cell))
+                    continue;
                 DrawSkillGridItem(
-                    SkillGridCell(panel, index),
+                    cell,
                     entry.Skill,
-                    SkillService.LevelForExperience(
-                        SkillExperience(entry.Skill)));
+                    SkillLevel(entry.Skill));
             }
+            DrawSkillsScrollbar(panel);
             return;
         }
 
@@ -106,12 +110,12 @@ internal sealed partial class GameHostWindow
         var name = skill.ToString();
         DrawPanelCaption(name, panel);
         var experience = SkillExperience(skill);
-        var level = SkillService.LevelForExperience(experience);
-        var maximumLevel = SkillService.MaximumLevel;
-        var currentFloor = SkillService.ExperienceForLevel(level);
+        var level = SkillLevel(skill);
+        var maximumLevel = SkillMaximumLevel(skill);
+        var currentFloor = SkillExperienceForLevel(skill, level);
         var nextFloor = level >= maximumLevel
             ? currentFloor
-            : SkillService.ExperienceForLevel(level + 1);
+            : SkillExperienceForLevel(skill, level + 1);
         var progress = level >= maximumLevel
             ? 1f
             : (experience - currentFloor) /
@@ -124,7 +128,7 @@ internal sealed partial class GameHostWindow
             panel, experience, level, maximumLevel,
             currentFloor, nextFloor, progress);
         RenderSkillInformation(
-            panel, farming, crafting, fishing, cooking, firemaking, digging,
+            panel, skill, farming, crafting, fishing, cooking, firemaking, digging,
             mining,
             level, experience);
         if (crafting) RenderSkillAction(panel);
@@ -185,8 +189,8 @@ internal sealed partial class GameHostWindow
         DrawUiCircle(
             iconCenterX, iconCenterY, 18,
             new(.060f, .054f, .040f, 1));
-        DrawPlayerUiIcon(
-            5 + (int)skill,
+        DrawSkillIcon(
+            skill,
             new(iconCenterX - 16, iconCenterY - 16, 32, 32));
         var levelArea = new Vector4(
             card.X + 64,
@@ -242,6 +246,7 @@ internal sealed partial class GameHostWindow
 
     private void RenderSkillInformation(
         Vector4 panel,
+        SkillType skill,
         bool farming,
         bool crafting,
         bool fishing,
@@ -255,14 +260,14 @@ internal sealed partial class GameHostWindow
         var info = SkillPanelLayout.InformationBounds(panel);
         DrawUiColor(info, new(.044f, .040f, .031f, .98f));
         DrawPanelOutline(info, 1, new(.25f, .205f, .115f, 1));
-        var remaining = SkillService.ExperienceToNextLevel(experience);
+        var remaining = SkillExperienceToNextLevel(skill, experience);
         DrawSmallCenteredUiText(
             remaining == 0 ? $"Total XP: {experience}" :
             $"{remaining} XP to next level",
             new(info.X + 5, info.Y + 6, info.Z - 10, 15),
             new(194, 184, 151, 255));
         var lines = SkillBenefitLines(
-            farming, crafting, fishing, cooking,
+            skill, farming, crafting, fishing, cooking,
             firemaking, digging, mining, level);
         for (var index = 0; index < lines.Length; index++)
             DrawSmallCenteredUiText(
@@ -289,7 +294,7 @@ internal sealed partial class GameHostWindow
             new(235, 222, 178, 255));
     }
 
-    private static Vector4 SkillGridCell(Vector4 panel, int index)
+    private Vector4 SkillGridCell(Vector4 panel, int index)
     {
         const float gap = 5;
         var list = SkillPanelLayout.ListBounds(panel);
@@ -298,9 +303,16 @@ internal sealed partial class GameHostWindow
         var column = index % 2;
         return new(
             list.X + column * (width + gap),
-            list.Y + row * 59,
+            list.Y + (row - _skillsScrollRow) * 59,
             width,
             54);
+    }
+
+    private bool SkillCellVisible(Vector4 panel, Vector4 cell)
+    {
+        var list = SkillPanelLayout.ListBounds(panel);
+        return cell.Y >= list.Y &&
+               cell.Y + cell.W <= list.Y + list.W;
     }
 
     private int SkillExperience(SkillType skill) => skill switch
@@ -321,6 +333,14 @@ internal sealed partial class GameHostWindow
             _activePlayer?.DiggingExperience ?? 0,
         SkillType.Mining =>
             _activePlayer?.MiningExperience ?? 0,
+        SkillType.Adventure =>
+            _activePlayer?.AdventureExperience ?? 0,
+        SkillType.Attack =>
+            _activePlayer?.AttackExperience ?? 0,
+        SkillType.Strength =>
+            _activePlayer?.StrengthExperience ?? 0,
+        SkillType.Defence =>
+            _activePlayer?.DefenceExperience ?? 0,
         _ => 0
     };
 
@@ -357,8 +377,8 @@ internal sealed partial class GameHostWindow
         DrawUiCircle(
             iconCenterX, iconCenterY, 15,
             new(.055f, .050f, .039f, 1));
-        DrawPlayerUiIcon(
-            5 + (int)skill,
+        DrawSkillIcon(
+            skill,
             new(iconCenterX - 16, iconCenterY - 16, 32, 32));
         var badge = new Vector4(
             bounds.X + bounds.Z - 30,
@@ -368,12 +388,12 @@ internal sealed partial class GameHostWindow
         DrawUiColor(badge, new(.030f, .027f, .022f, .98f));
         DrawPanelOutline(
             badge, 1,
-            level >= SkillService.MaximumLevel
+            level >= SkillMaximumLevel(skill)
                 ? new(.58f, .47f, .20f, 1)
                 : new(.31f, .25f, .14f, 1));
         DrawSmallCenteredUiText(
             level.ToString(), badge,
-            level >= SkillService.MaximumLevel
+            level >= SkillMaximumLevel(skill)
                 ? new(210, 190, 105, 255)
                 : new(220, 209, 170, 255));
         var nameBounds = new Vector4(
@@ -388,11 +408,12 @@ internal sealed partial class GameHostWindow
                 ? new(245, 226, 171, 255)
                 : new(194, 184, 151, 255));
         var experience = SkillExperience(skill);
-        var floor = SkillService.ExperienceForLevel(level);
-        var ceiling = level >= SkillService.MaximumLevel
+        var maximumLevel = SkillMaximumLevel(skill);
+        var floor = SkillExperienceForLevel(skill, level);
+        var ceiling = level >= maximumLevel
             ? floor
-            : SkillService.ExperienceForLevel(level + 1);
-        var progress = level >= SkillService.MaximumLevel
+            : SkillExperienceForLevel(skill, level + 1);
+        var progress = level >= maximumLevel
             ? 1
             : (experience - floor) /
               (float)Math.Max(1, ceiling - floor);
@@ -426,10 +447,82 @@ internal sealed partial class GameHostWindow
         SkillType.Cooking => new(.72f, .32f, .12f, 1),
         SkillType.Digging => new(.48f, .34f, .18f, 1),
         SkillType.Mining => new(.58f, .61f, .65f, 1),
+        SkillType.Adventure => new(.78f, .60f, .18f, 1),
+        SkillType.Attack => new(.72f, .16f, .10f, 1),
+        SkillType.Strength => new(.78f, .38f, .12f, 1),
+        SkillType.Defence => new(.20f, .42f, .68f, 1),
         _ => new(.88f, .20f, .06f, 1)
     };
 
+    private int SkillLevel(SkillType skill)
+    {
+        var experience = SkillExperience(skill);
+        return skill == SkillType.Adventure
+            ? AdventureService.LevelForExperience(experience)
+            : SkillService.LevelForExperience(experience);
+    }
+
+    private static int SkillMaximumLevel(SkillType skill) =>
+        skill == SkillType.Adventure
+            ? AdventureService.MaximumLevel
+            : SkillService.MaximumLevel;
+
+    private static int SkillExperienceForLevel(
+        SkillType skill, int level) =>
+        skill == SkillType.Adventure
+            ? AdventureService.ExperienceForLevel(level)
+            : SkillService.ExperienceForLevel(level);
+
+    private static int SkillExperienceToNextLevel(
+        SkillType skill, int experience)
+    {
+        var level = skill == SkillType.Adventure
+            ? AdventureService.LevelForExperience(experience)
+            : SkillService.LevelForExperience(experience);
+        var maximum = SkillMaximumLevel(skill);
+        return level >= maximum
+            ? 0
+            : SkillExperienceForLevel(skill, level + 1) -
+              Math.Max(0, experience);
+    }
+
+    private void DrawSkillIcon(SkillType skill, Vector4 bounds)
+    {
+        if (skill == SkillType.Adventure)
+        {
+            DrawPlayerUiIcon(2, bounds);
+            return;
+        }
+        if (skill >= SkillType.Attack)
+        {
+            DrawCombatSkillIcon((int)skill - (int)SkillType.Attack, bounds);
+            return;
+        }
+        DrawPlayerUiIcon(5 + (int)skill, bounds);
+    }
+
+    private void DrawSkillsScrollbar(Vector4 panel)
+    {
+        var totalRows = (SkillListEntries.Length + 1) / 2;
+        const int visibleRows = 4;
+        if (totalRows <= visibleRows) return;
+        var list = SkillPanelLayout.ListBounds(panel);
+        var track = new Vector4(
+            list.X + list.Z + 3, list.Y, 4, list.W);
+        DrawUiColor(track, new(.025f, .022f, .018f, .9f));
+        var thumbHeight = MathF.Max(
+            24, track.W * visibleRows / totalRows);
+        var travel = track.W - thumbHeight;
+        var offset = _skillsScrollRow /
+            (float)(totalRows - visibleRows);
+        DrawUiColor(
+            new(track.X, track.Y + travel * offset,
+                track.Z, thumbHeight),
+            new(.48f, .37f, .16f, 1));
+    }
+
     private static string[] SkillBenefitLines(
+        SkillType skill,
         bool farming,
         bool crafting,
         bool fishing,
@@ -438,7 +531,17 @@ internal sealed partial class GameHostWindow
         bool digging,
         bool mining,
         int level) =>
-        mining
+        skill switch
+        {
+            SkillType.Adventure =>
+                ["Raised by every activity", "Increases maximum health"],
+            SkillType.Attack =>
+                ["Improves melee accuracy", "Trained with Accurate stance"],
+            SkillType.Strength =>
+                ["Improves maximum hit", "Trained with Aggressive stance"],
+            SkillType.Defence =>
+                ["Improves melee defence", "Trained with Defensive stance"],
+            _ => mining
             ? [$"Hit chance {MiningSkill.HitChance(level) * 100:0}%",
                "Mine tougher deposits"]
             : digging
@@ -457,7 +560,8 @@ internal sealed partial class GameHostWindow
                                         $"Hit chance " +
                                         $"{WoodcuttingSkill.HitChance(level) * 100:0}%",
                                         "Fell tougher trees"
-                                    ];
+                                    ],
+        };
 
     private void DrawSmallCenteredUiText(
         string text, Vector4 bounds, FSColor color)

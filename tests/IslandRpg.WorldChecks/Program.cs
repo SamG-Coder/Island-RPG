@@ -1753,7 +1753,7 @@ var ironAxeStrike = WoodcuttingSkill.Roll(0, 0, 0, 2);
 Require(ironAxeStrike.Damage > stoneAxeStrike.Damage,
     "an axe's woodcutting power must improve its chopping damage");
 Require(
-    Enum.GetValues<SkillType>().Length == 8 &&
+    Enum.GetValues<SkillType>().Length == 12 &&
     SkillService.LevelForExperience(
         SkillService.ExperienceForLevel(10)) == 10 &&
     WoodcuttingSkill.ExperienceForLevel(10) ==

@@ -9,7 +9,11 @@ internal enum SkillType
     Cooking,
     Firemaking,
     Digging,
-    Mining
+    Mining,
+    Adventure,
+    Attack,
+    Strength,
+    Defence
 }
 
 internal static class SkillService

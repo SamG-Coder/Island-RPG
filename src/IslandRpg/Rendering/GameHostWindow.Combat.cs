@@ -33,9 +33,19 @@ internal sealed partial class GameHostWindow
             dummy.ItemId != ItemIds.TrainingDummy)
             return;
         _combatTargetId = dummyId;
-        _nextMeleeAttackAt = _clock + MeleeImpactDelay();
-        _swingStartedForAttackAt = _nextMeleeAttackAt;
-        _player.RestartAttackAt(new(dummy.X, dummy.Y));
+        var target = new Vector2(dummy.X, dummy.Y);
+        if (_nextMeleeAttackAt <= _clock)
+        {
+            _nextMeleeAttackAt = _clock + MeleeImpactDelay();
+            _swingStartedForAttackAt = _nextMeleeAttackAt;
+            _player.RestartAttackAt(target);
+        }
+        else if (_swingStartedForAttackAt == _nextMeleeAttackAt)
+        {
+            // Re-selecting a target during the current swing may adjust facing,
+            // but must never restart the animation or its impact timing.
+            _player.AttackAt(target);
+        }
         _chatUi.AddMessage(
             "You begin attacking the training dummy.",
             ChatMessageStyle.Action);
@@ -45,8 +55,8 @@ internal sealed partial class GameHostWindow
     {
         if (_combatTargetId is null) return;
         _combatTargetId = null;
-        _nextMeleeAttackAt = 0;
-        _swingStartedForAttackAt = 0;
+        // The ready time is global combat state. Movement or target changes
+        // cancel targeting without granting an immediate fresh attack.
         if (_player?.Action == EntityAction.Attack)
             _player.Stop();
     }
@@ -72,6 +82,13 @@ internal sealed partial class GameHostWindow
             return;
         }
         var impactDelay = MeleeImpactDelay();
+        if (_swingStartedForAttackAt != _nextMeleeAttackAt &&
+            _clock < _nextMeleeAttackAt - impactDelay)
+        {
+            if (_player.Action == EntityAction.Attack)
+                _player.Stop();
+            return;
+        }
         if (_clock >= _nextMeleeAttackAt - impactDelay &&
             _swingStartedForAttackAt != _nextMeleeAttackAt)
         {

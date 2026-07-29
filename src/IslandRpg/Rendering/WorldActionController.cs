@@ -59,6 +59,8 @@ internal sealed partial class GameHostWindow
 
     public void QueueTrainingDummyAttack(WorldGroundObject groundObject)
     {
+        if (window._combatTargetId == groundObject.Id)
+            return;
         window.CancelMeleeCombat();
         QueuePath(
             new Vector2(groundObject.X, groundObject.Y),

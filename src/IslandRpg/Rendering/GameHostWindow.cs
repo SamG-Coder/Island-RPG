@@ -298,6 +298,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly PlaceableObjectPlacementController
         _placeableObjectPlacement = new();
     private bool _skillsLeftWasDown;
+    private int _skillsScrollRow;
     private readonly ListControlState _skillsList = new();
     private int _selectedSkill = -1;
     private readonly GameUiControlState _gameUi = new();
@@ -2481,7 +2482,15 @@ internal sealed partial class GameHostWindow : GameWindow
             _gameUi.ActivePanel == GameUiPanel.Skills &&
             _selectedSkill < 0 &&
             _gameUi.Panel.Bounds.Contains(MouseState.Position))
+        {
+            var visibleRows = 4;
+            var totalRows = (SkillListEntries.Length + 1) / 2;
+            _skillsScrollRow = Math.Clamp(
+                _skillsScrollRow - Math.Sign(e.OffsetY),
+                0,
+                Math.Max(0, totalRows - visibleRows));
             return;
+        }
         if (_mode == PreviewMode.Game)
         {
             _chatUi.Layout(SceneClientBounds());
@@ -3348,8 +3357,8 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawAoEUiTile(_gameUi.InventoryButton);
         DrawPlayerUiIcon(
             1, CenteredIconBounds(_gameUi.CombatButton.Bounds));
-        DrawPlayerUiIcon(
-            1, CenteredIconBounds(_gameUi.SkillsButton.Bounds));
+        DrawCombatSkillIcon(
+            3, CenteredIconBounds(_gameUi.SkillsButton.Bounds));
         DrawPlayerUiIcon(
             0, CenteredIconBounds(_gameUi.InventoryButton.Bounds));
         RenderInventoryContextMenu();
