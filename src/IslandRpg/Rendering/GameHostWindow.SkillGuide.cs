@@ -12,7 +12,7 @@ internal sealed partial class GameHostWindow
         var experience = SkillExperience(skill);
         _skillGuideWindow.Open(
             SkillGuideService.Definition(skill),
-            SkillService.LevelForExperience(experience));
+            SkillLevel(skill));
         _modalScreen.Open(ModalScreenKind.SkillGuide);
         _chatUi.BlurInput();
         _inventoryContext.Close();

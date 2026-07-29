@@ -12,7 +12,7 @@ internal sealed record SkillGuideDefinition(
 internal static class SkillGuideService
 {
     public static bool IsSupported(SkillType skill) =>
-        Enum.IsDefined(skill);
+        skill is >= SkillType.Woodcutting and <= SkillType.Defence;
 
     public static SkillGuideDefinition Definition(SkillType skill) =>
         skill switch
@@ -25,9 +25,58 @@ internal static class SkillGuideService
             SkillType.Firemaking => Firemaking(),
             SkillType.Digging => Digging(),
             SkillType.Mining => Mining(),
+            SkillType.Adventure => Adventure(),
+            SkillType.Attack => Attack(),
+            SkillType.Strength => Strength(),
+            SkillType.Defence => Defence(),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(skill), skill, "This skill has no level guide.")
         };
+
+    private static SkillGuideDefinition Adventure() =>
+        new(
+            SkillType.Adventure,
+            "Adventure",
+            Enumerable.Range(0, 11)
+                .Select(index => index == 0 ? 1 : index * 10)
+                .Select(level => new SkillGuideEntry(
+                    level,
+                    level == 1
+                        ? "All activities grant Adventure XP • 100 maximum health"
+                        : $"{AdventureService.BaseMaximumHealth + (level - 1) * AdventureService.HealthPerLevel} maximum health"))
+                .ToArray());
+
+    private static SkillGuideDefinition Attack() =>
+        new(
+            SkillType.Attack,
+            "Attack",
+            new[] { 1, 5, 10, 15, 20 }
+                .Select(level => new SkillGuideEntry(
+                    level,
+                    $"{Math.Clamp(.62f + (level - 1) * .012f, .62f, .90f) * 100:0}% base melee accuracy"))
+                .ToArray());
+
+    private static SkillGuideDefinition Strength() =>
+        new(
+            SkillType.Strength,
+            "Strength",
+            new[] { 1, 4, 7, 10, 13, 16, 19 }
+                .Select(level => new SkillGuideEntry(
+                    level,
+                    $"Maximum unarmed hit {1 + (level - 1) / 3}"))
+                .ToArray());
+
+    private static SkillGuideDefinition Defence() =>
+        new(
+            SkillType.Defence,
+            "Defence",
+            new[] { 1, 5, 10, 15, 20 }
+                .Select(level => new SkillGuideEntry(
+                    level,
+                    level == 1
+                        ? "Train with the Defensive combat stance"
+                        : $"Defence training milestone {level}"))
+                .ToArray());
 
     private static SkillGuideDefinition Farming() =>
         new(
