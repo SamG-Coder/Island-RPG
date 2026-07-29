@@ -7,7 +7,7 @@ internal sealed partial class GameHostWindow
 {
     private void RenderNavigationBlocks(Vector4 scene)
     {
-        if (!_showNavigationBlocks ||
+        if (!_navigationBlocksToggle.IsChecked ||
             !_settingsMenu.DeveloperModeEnabled)
             return;
 

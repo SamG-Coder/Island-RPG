@@ -1439,13 +1439,13 @@ settingsMenu.SelectAt(
 settingsMenu.LayoutContent(settingsPanel);
 var settingsList = settingsMenu.ContentList;
 Require(
-    DeveloperSettingsController.GrantBounds(
-        settingsList, SkillType.Woodcutting).X +
-    DeveloperSettingsController.GrantBounds(
-        settingsList, SkillType.Woodcutting).Z <=
     DeveloperSettingsController.MaxBounds(
-        settingsList, SkillType.Woodcutting).X,
-    "developer XP grant and max-level buttons must not overlap");
+        settingsList, SkillType.Woodcutting).Z <= 60 &&
+    DeveloperSettingsController.MaxBounds(
+        settingsList, SkillType.Woodcutting).X >
+    DeveloperSettingsController.SkillRowBounds(
+        settingsList, SkillType.Woodcutting).X + 80,
+    "developer skill rows must reserve most of their width for icon-led skill information");
 var settingsContent = SettingsMenuState.ContentBounds(settingsPanel);
 var settingsBack = SettingsMenuState.BackButtonBounds(settingsPanel);
 var tallerSettingsPanel = new Vector4(
@@ -1466,24 +1466,51 @@ Require(
     "the settings Back button must remain anchored to a resized panel footer");
 Require(
     settingsList.ScrollTrack.Visible &&
-    settingsList.Count == 4 + DeveloperSettingsController.Skills.Length,
+    settingsList.Count ==
+        DeveloperSettingsController.SkillStartIndex +
+        DeveloperSettingsController.Skills.Length,
     "the developer page must use the shared scroll control for all tool and skill rows");
 Require(
     !DeveloperSettingsController.MapToolBounds(settingsList)
         .Contains(settingsBack.Xy),
     "the developer map-tool button must not overlap settings navigation");
 Require(
-    DeveloperSettingsController.MultiplierBounds(settingsList).X +
-        DeveloperSettingsController.MultiplierBounds(settingsList).Z <=
-    DeveloperSettingsController.MapToolBounds(settingsList).X &&
+    DeveloperSettingsController.MapToolBounds(settingsList).X +
+        DeveloperSettingsController.MapToolBounds(settingsList).Z <=
+    DeveloperSettingsController.ItemBankBounds(settingsList).X &&
     DeveloperSettingsController.AdvanceTimeBounds(settingsList).X +
         DeveloperSettingsController.AdvanceTimeBounds(settingsList).Z <=
     DeveloperSettingsController.WorldLevelBounds(settingsList).X &&
-    !DeveloperSettingsController.NavigationBlocksBounds(settingsList)
-        .Contains(settingsBack.Xy) &&
     !DeveloperSettingsController.AdvanceTimeBounds(settingsList)
         .Contains(settingsBack.Xy),
     "developer tools must form non-overlapping two-column rows above the skill list");
+settingsList.ScrollToIndex(
+    DeveloperSettingsController.NavigationBlocksIndex);
+settingsMenu.LayoutContent(settingsPanel);
+Require(
+    settingsList.VisibleIndices.Contains(
+        DeveloperSettingsController.NavigationBlocksIndex) &&
+    !DeveloperSettingsController.NavigationBlocksBounds(settingsList)
+        .Contains(settingsBack.Xy),
+    "developer diagnostics must remain inside the scrolling content area");
+var toggleControl = new ToggleControlState(
+    "Pathing blocks", "Draw navigation blockers.");
+toggleControl.Layout(
+    DeveloperSettingsController.NavigationBlocksBounds(settingsList),
+    horizontalInset: 0);
+Require(
+    toggleControl.Bounds.X ==
+        DeveloperSettingsController.NavigationBlocksBounds(settingsList).X &&
+    toggleControl.Bounds.Z ==
+        DeveloperSettingsController.NavigationBlocksBounds(settingsList).Z &&
+    !toggleControl.IsChecked &&
+    toggleControl.ToggleAt(
+        toggleControl.Bounds.Xy +
+        new Vector2(toggleControl.Bounds.Z * .5f,
+                    toggleControl.Bounds.W * .5f)) &&
+    toggleControl.IsChecked &&
+    !toggleControl.ToggleAt(settingsBack.Xy),
+    "the reusable toggle control must change only from an enabled hit inside its bounds");
 var developerMap = new DeveloperMapWindow();
 developerMap.Open();
 Require(developerMap.IsOpen,

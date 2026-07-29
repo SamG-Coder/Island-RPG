@@ -27,10 +27,12 @@ internal sealed class SettingsMenuState
     private static readonly string[] SoundItems = ["sound-placeholder"];
     private static readonly string[] DeveloperItems =
     [
+        "developer-section-tools",
         "developer-tools-primary",
         "developer-tools-world",
-        "developer-tools-items",
+        "developer-section-diagnostics",
         "developer-navigation-blocks",
+        "developer-section-progression",
         .. DeveloperSettingsController.Skills
             .Select(skill => $"skill-{skill}")
     ];
@@ -103,8 +105,8 @@ internal sealed class SettingsMenuState
                 content.Z - 28,
                 content.W - 28),
             items,
-            rowHeight: SelectedTab == SettingsTab.Dev ? 62 : 44,
-            rowGap: SelectedTab == SettingsTab.Dev ? 8 : 14,
+            rowHeight: SelectedTab == SettingsTab.Dev ? 50 : 44,
+            rowGap: SelectedTab == SettingsTab.Dev ? 5 : 14,
             deleteWidth: 0,
             actionGap: 0);
     }

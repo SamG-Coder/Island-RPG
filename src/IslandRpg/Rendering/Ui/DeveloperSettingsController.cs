@@ -6,13 +6,16 @@ namespace IslandRpg.Rendering.Ui;
 
 internal sealed class DeveloperSettingsController
 {
-    private static readonly int[] Multipliers = [1, 10, 100];
+    public const int ToolsHeaderIndex = 0;
+    public const int PrimaryToolsIndex = 1;
+    public const int WorldToolsIndex = 2;
+    public const int DiagnosticsHeaderIndex = 3;
+    public const int NavigationBlocksIndex = 4;
+    public const int ProgressionHeaderIndex = 5;
+    public const int SkillStartIndex = 6;
+
     public static readonly SkillType[] Skills =
         Enum.GetValues<SkillType>();
-    private int _multiplierIndex;
-
-    public int ExperienceMultiplier => Multipliers[_multiplierIndex];
-    public int ExperienceGrant => 100 * ExperienceMultiplier;
 
     public bool TryUpdate(
         Vector2 pointer,
@@ -21,28 +24,13 @@ internal sealed class DeveloperSettingsController
         out PlayerProfile? updated)
     {
         updated = player;
-        if (MultiplierBounds(list).Contains(pointer))
-        {
-            _multiplierIndex =
-                (_multiplierIndex + 1) % Multipliers.Length;
-            return false;
-        }
         if (player is null) return false;
 
         foreach (var skill in Skills)
         {
-            if (!list.VisibleIndices.Contains(3 + (int)skill))
+            if (!list.VisibleIndices.Contains(
+                    SkillStartIndex + (int)skill))
                 continue;
-            if (GrantBounds(list, skill).Contains(pointer))
-            {
-                updated = SetExperience(
-                    player,
-                    skill,
-                    SkillService.AwardExperience(
-                        Experience(player, skill),
-                        ExperienceGrant).Experience);
-                return true;
-            }
             if (MaxBounds(list, skill).Contains(pointer))
             {
                 updated = SetExperience(
@@ -80,55 +68,39 @@ internal sealed class DeveloperSettingsController
         PlayerProfile? player, SkillType skill) =>
         SkillService.ExperienceToNextLevel(Experience(player, skill));
 
-    public static Vector4 MultiplierBounds(ListControlState list)
-    {
-        return RowColumnBounds(list.RowBounds(0), 0);
-    }
-
     public static Vector4 MapToolBounds(ListControlState list)
     {
-        return RowColumnBounds(list.RowBounds(0), 1);
-    }
-
-    public static Vector4 AdvanceTimeBounds(ListControlState list)
-    {
-        return RowColumnBounds(list.RowBounds(1), 0);
-    }
-
-    public static Vector4 WorldLevelBounds(ListControlState list)
-    {
-        return RowColumnBounds(list.RowBounds(1), 1);
+        return RowColumnBounds(list.RowBounds(PrimaryToolsIndex), 0);
     }
 
     public static Vector4 ItemBankBounds(ListControlState list)
     {
-        var row = list.RowBounds(2);
-        return new(row.X, row.Y + 7, row.Z, row.W - 14);
+        return RowColumnBounds(list.RowBounds(PrimaryToolsIndex), 1);
+    }
+
+    public static Vector4 AdvanceTimeBounds(ListControlState list)
+    {
+        return RowColumnBounds(list.RowBounds(WorldToolsIndex), 0);
+    }
+
+    public static Vector4 WorldLevelBounds(ListControlState list)
+    {
+        return RowColumnBounds(list.RowBounds(WorldToolsIndex), 1);
     }
 
     public static Vector4 NavigationBlocksBounds(
-        ListControlState list)
-    {
-        var row = list.RowBounds(3);
-        return new(row.X, row.Y + 7, row.Z, row.W - 14);
-    }
+        ListControlState list) =>
+        list.RowBounds(NavigationBlocksIndex);
 
     public static Vector4 SkillRowBounds(
         ListControlState list, SkillType skill) =>
-        list.RowBounds(4 + (int)skill);
-
-    public static Vector4 GrantBounds(
-        ListControlState list, SkillType skill)
-    {
-        var row = SkillRowBounds(list, skill);
-        return new(row.X + row.Z - 196, row.Y + 15, 98, 32);
-    }
+        list.RowBounds(SkillStartIndex + (int)skill);
 
     public static Vector4 MaxBounds(
         ListControlState list, SkillType skill)
     {
         var row = SkillRowBounds(list, skill);
-        return new(row.X + row.Z - 90, row.Y + 15, 82, 32);
+        return new(row.X + row.Z - 66, row.Y + 10, 58, 30);
     }
 
     private static Vector4 RowColumnBounds(Vector4 row, int column)

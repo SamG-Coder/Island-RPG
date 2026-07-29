@@ -6,7 +6,9 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
-    private bool _showNavigationBlocks;
+    private readonly ToggleControlState _navigationBlocksToggle = new(
+        "Pathing blocks",
+        "Show object collision cells in the world.");
 
     private bool UpdateDeveloperSettings(
         Vector2 pointer, Vector4 panel)
@@ -15,8 +17,12 @@ internal sealed partial class GameHostWindow
             return false;
         _settingsMenu.LayoutContent(panel);
         var list = _settingsMenu.ContentList;
+        _navigationBlocksToggle.Layout(
+            DeveloperSettingsController.NavigationBlocksBounds(list),
+            horizontalInset: 0);
         if (_activePlayer is not null &&
-            list.VisibleIndices.Contains(0) &&
+            list.VisibleIndices.Contains(
+                DeveloperSettingsController.PrimaryToolsIndex) &&
             DeveloperSettingsController.MapToolBounds(list)
                 .Contains(pointer))
         {
@@ -24,7 +30,8 @@ internal sealed partial class GameHostWindow
             return true;
         }
         if (_activeWorld is not null &&
-            list.VisibleIndices.Contains(1) &&
+            list.VisibleIndices.Contains(
+                DeveloperSettingsController.WorldToolsIndex) &&
             DeveloperSettingsController.AdvanceTimeBounds(list)
                 .Contains(pointer))
         {
@@ -32,27 +39,26 @@ internal sealed partial class GameHostWindow
             return true;
         }
         if (_activeWorld is not null &&
-            list.VisibleIndices.Contains(1) &&
+            list.VisibleIndices.Contains(
+                DeveloperSettingsController.WorldToolsIndex) &&
             DeveloperSettingsController.WorldLevelBounds(list)
                 .Contains(pointer))
         {
             SwitchWorldLevelForDeveloper();
             return true;
         }
-        if (list.VisibleIndices.Contains(2) &&
+        if (list.VisibleIndices.Contains(
+                DeveloperSettingsController.PrimaryToolsIndex) &&
             DeveloperSettingsController.ItemBankBounds(list)
                 .Contains(pointer))
         {
             OpenDeveloperItemBank();
             return true;
         }
-        if (list.VisibleIndices.Contains(3) &&
-            DeveloperSettingsController.NavigationBlocksBounds(list)
-                .Contains(pointer))
-        {
-            _showNavigationBlocks = !_showNavigationBlocks;
+        if (list.VisibleIndices.Contains(
+                DeveloperSettingsController.NavigationBlocksIndex) &&
+            _navigationBlocksToggle.ToggleAt(pointer))
             return true;
-        }
         var changed = _developerSettings.TryUpdate(
             pointer, list, _activePlayer, out var updated);
         if (!changed || updated is null) return false;

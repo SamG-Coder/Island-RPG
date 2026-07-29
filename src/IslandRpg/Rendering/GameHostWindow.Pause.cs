@@ -258,17 +258,25 @@ internal sealed partial class GameHostWindow
     {
         if (!_settingsMenu.DeveloperModeEnabled) return;
         var list = _settingsMenu.ContentList;
-        if (list.VisibleIndices.Contains(0))
+        RenderDeveloperSection(
+            list,
+            DeveloperSettingsController.ToolsHeaderIndex,
+            "WORLD TOOLS",
+            "Inspect and manipulate the active test world.");
+        if (list.VisibleIndices.Contains(
+                DeveloperSettingsController.PrimaryToolsIndex))
         {
-            DrawMenuButton(
-                DeveloperSettingsController.MultiplierBounds(list),
-                $"XP multiplier: x{_developerSettings.ExperienceMultiplier}");
             if (_activePlayer is not null)
                 DrawMenuButton(
                     DeveloperSettingsController.MapToolBounds(list),
                     "Open map tool");
+            DrawMenuButton(
+                DeveloperSettingsController.ItemBankBounds(list),
+                "All-items bank");
         }
-        if (list.VisibleIndices.Contains(1) && _activeWorld is not null)
+        if (list.VisibleIndices.Contains(
+                DeveloperSettingsController.WorldToolsIndex) &&
+            _activeWorld is not null)
         {
             DrawMenuButton(
                 DeveloperSettingsController.AdvanceTimeBounds(list),
@@ -279,23 +287,39 @@ internal sealed partial class GameHostWindow
                     ? "Enter underground"
                     : "Return overworld");
         }
-        if (list.VisibleIndices.Contains(2))
-            DrawMenuButton(
-                DeveloperSettingsController.ItemBankBounds(list),
-                "Open all-items bank");
-        if (list.VisibleIndices.Contains(3))
-            DrawMenuButton(
+        RenderDeveloperSection(
+            list,
+            DeveloperSettingsController.DiagnosticsHeaderIndex,
+            "DIAGNOSTICS",
+            "Optional overlays for validating world systems.");
+        if (list.VisibleIndices.Contains(
+                DeveloperSettingsController.NavigationBlocksIndex))
+        {
+            _navigationBlocksToggle.Layout(
                 DeveloperSettingsController.NavigationBlocksBounds(list),
-                "Pathing blocks: " +
-                (_showNavigationBlocks ? "On" : "Off"));
+                horizontalInset: 0);
+            _navigationBlocksToggle.Hovered =
+                _navigationBlocksToggle.HitTest(MouseState.Position);
+            DrawToggleControl(_navigationBlocksToggle);
+        }
+        RenderDeveloperSection(
+            list,
+            DeveloperSettingsController.ProgressionHeaderIndex,
+            "PROGRESSION",
+            "Grant experience for focused skill testing.");
         foreach (var skill in DeveloperSettingsController.Skills)
         {
-            if (!list.VisibleIndices.Contains(4 + (int)skill))
+            if (!list.VisibleIndices.Contains(
+                    DeveloperSettingsController.SkillStartIndex +
+                    (int)skill))
                 continue;
             var row = DeveloperSettingsController.SkillRowBounds(
                 list, skill);
             DrawUiColor(row, new(.055f, .048f, .034f, .96f));
             DrawPanelOutline(row, 1, new(.28f, .23f, .13f, 1));
+            DrawSkillIcon(
+                skill,
+                new(row.X + 8, row.Y + 9, 32, 32));
             var level = DeveloperSettingsController.Level(
                 _activePlayer, skill);
             var experience = DeveloperSettingsController.Experience(
@@ -305,21 +329,94 @@ internal sealed partial class GameHostWindow
                     _activePlayer, skill);
             DrawUiText(
                 $"{skill}  Lv {level}/20",
-                new(row.X + 10, row.Y + 10),
+                new(row.X + 49, row.Y + 7),
                 new(224, 210, 168, 255));
             DrawUiText(
                 toNext == 0
                     ? $"{experience} XP  (max level)"
                     : $"{experience} XP  |  {toNext} to next",
-                new(row.X + 10, row.Y + 34),
+                new(row.X + 49, row.Y + 28),
                 new(174, 164, 134, 255));
-            DrawMenuButton(
-                DeveloperSettingsController.GrantBounds(list, skill),
-                $"+{_developerSettings.ExperienceGrant}");
             DrawMenuButton(
                 DeveloperSettingsController.MaxBounds(list, skill),
                 "Max");
         }
+    }
+
+    private void RenderDeveloperSection(
+        ListControlState list,
+        int index,
+        string title,
+        string description)
+    {
+        if (!list.VisibleIndices.Contains(index)) return;
+        var row = list.RowBounds(index);
+        DrawUiColor(row, new(.047f, .041f, .029f, .72f));
+        DrawUiColor(
+            new(row.X, row.Y + 5, 3, row.W - 10),
+            new(.57f, .43f, .17f, .95f));
+        DrawUiText(
+            title,
+            new(row.X + 13, row.Y + 5),
+            new(231, 209, 154, 255));
+        DrawUiText(
+            description,
+            new(row.X + 13, row.Y + 26),
+            new(159, 151, 127, 255));
+    }
+
+    private void DrawToggleControl(ToggleControlState toggle)
+    {
+        var bounds = toggle.Bounds;
+        DrawRoundedUiColor(
+            bounds,
+            4,
+            toggle.Hovered
+                ? new(.090f, .076f, .046f, .98f)
+                : new(.059f, .052f, .037f, .98f));
+        DrawPanelOutline(
+            bounds,
+            1,
+            toggle.Hovered
+                ? new(.48f, .37f, .15f, 1)
+                : new(.25f, .22f, .14f, 1));
+        DrawUiText(
+            toggle.Label,
+            new(
+                bounds.X + 12,
+                bounds.Y + (bounds.W >= 54 ? 8 : 13)),
+            new(226, 213, 174, 255));
+        if (bounds.W >= 54 &&
+            !string.IsNullOrWhiteSpace(toggle.Description))
+            DrawUiText(
+                toggle.Description,
+                new(bounds.X + 12, bounds.Y + 31),
+                new(154, 148, 129, 255));
+
+        const float trackWidth = 42;
+        const float trackHeight = 20;
+        var track = new Vector4(
+            bounds.X + bounds.Z - trackWidth - 12,
+            bounds.Y + (bounds.W - trackHeight) * .5f,
+            trackWidth,
+            trackHeight);
+        DrawRoundedUiColor(
+            track,
+            trackHeight * .5f,
+            toggle.IsChecked
+                ? new(.32f, .38f, .15f, 1)
+                : new(.12f, .11f, .09f, 1));
+        DrawPanelOutline(track, 1, new(.16f, .13f, .075f, 1));
+        var thumbX = toggle.IsChecked
+            ? track.X + track.Z - trackHeight * .5f
+            : track.X + trackHeight * .5f;
+        DrawUiCircle(
+            thumbX,
+            track.Y + track.W * .5f,
+            7,
+            toggle.IsChecked
+                ? new(.79f, .69f, .36f, 1)
+                : new(.45f, .42f, .34f, 1));
     }
 
     private Vector4 PausePanel() => FrontendPanel(400, 470);
