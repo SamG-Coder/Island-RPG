@@ -7,7 +7,9 @@ internal enum ModalScreenKind
     Death,
     Crafting,
     SkillGuide,
-    ItemContainer
+    ItemContainer,
+    QuestJournal,
+    QuestComplete
 }
 
 internal sealed class ModalScreenState
@@ -15,7 +17,8 @@ internal sealed class ModalScreenState
     public ModalScreenKind Active { get; private set; }
     public bool IsOpen => Active != ModalScreenKind.None;
     public bool PausesSimulation =>
-        Active is ModalScreenKind.Pause or ModalScreenKind.Death;
+        Active is ModalScreenKind.Pause or ModalScreenKind.Death or
+            ModalScreenKind.QuestComplete;
     public bool HidesGameUi => IsOpen;
     public bool CapturesAllInput => IsOpen;
     public bool BlursBackground => IsOpen;

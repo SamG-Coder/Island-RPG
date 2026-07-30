@@ -239,6 +239,10 @@ internal sealed partial class GameHostWindow
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
+        if (!result.Burnt)
+            RecordQuestEvent(new(
+                QuestEventType.CookFood,
+                result.ItemId));
 
         var resultName = ItemCatalog.Get(result.ItemId).Name;
         _chatUi.AddMessage(

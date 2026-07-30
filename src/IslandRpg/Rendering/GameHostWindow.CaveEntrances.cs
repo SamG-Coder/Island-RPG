@@ -424,6 +424,8 @@ internal sealed partial class GameHostWindow
                 ? "You climb down into the cave."
                 : "You climb back into the daylight.",
             ChatMessageStyle.Action);
+        if (destinationLevel == (int)WorldLevel.Underground)
+            RecordQuestEvent(new(QuestEventType.EnterCave));
     }
 
     private void TryInstallCaveRope(Guid holeId, int ropeSlot)

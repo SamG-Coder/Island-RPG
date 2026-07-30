@@ -184,6 +184,7 @@ internal sealed partial class GameHostWindow
         _chatUi.AddMessage(
             "You strike the small rocks against the knife and light the campfire.",
             ChatMessageStyle.Action);
+        RecordQuestEvent(new(QuestEventType.LightCampfire));
         if (award.Gained > 0)
             _chatUi.AddMessage(
                 FiremakingSkill.ExperienceMessage(award.Gained),

@@ -249,6 +249,9 @@ internal sealed partial class GameHostWindow
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
+        RecordQuestEvent(new(
+            QuestEventType.CatchFish,
+            profile.ItemId));
 
         var chunk = FindFishChunk(fish.StableKey);
         if (chunk is null) return false;

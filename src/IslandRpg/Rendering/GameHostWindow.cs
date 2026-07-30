@@ -534,6 +534,10 @@ internal sealed partial class GameHostWindow : GameWindow
                     CloseSkillGuideWindow();
                 else if (_craftingWindowOpen)
                     CloseCraftingWindow();
+                else if (_modalScreen.Active is
+                         ModalScreenKind.QuestJournal or
+                         ModalScreenKind.QuestComplete)
+                    CloseQuestWindow();
                 else
                     _pauseMenu.HandleEscapeKey();
             }
@@ -670,6 +674,19 @@ internal sealed partial class GameHostWindow : GameWindow
                     MouseState.IsButtonDown(MouseButton.Left));
                 if (!_pauseMenu.IsPaused)
                     UpdateGame((float)e.Time);
+            }
+            else if (_mode == PreviewMode.Game &&
+                     _modalScreen.Active == ModalScreenKind.QuestComplete)
+                UpdateQuestWindowInput(
+                    MouseState.Position,
+                    MouseState.IsButtonDown(MouseButton.Left));
+            else if (_mode == PreviewMode.Game &&
+                     _modalScreen.Active == ModalScreenKind.QuestJournal)
+            {
+                UpdateQuestWindowInput(
+                    MouseState.Position,
+                    MouseState.IsButtonDown(MouseButton.Left));
+                UpdateGame((float)e.Time);
             }
             else if (_mode == PreviewMode.Game &&
                 _modalScreen.PausesSimulation)
@@ -1657,6 +1674,9 @@ internal sealed partial class GameHostWindow : GameWindow
                 _commandHints.Selected() is { } selected)
                 CompleteCommandHint(selected);
         }
+        if (!_chatUi.Input.Focused &&
+            KeyboardState.IsKeyPressed(Keys.Q))
+            OpenQuestWindow();
     }
 
     private bool IsPointerOverGameUi(Vector2 mouse) =>
@@ -2002,6 +2022,9 @@ internal sealed partial class GameHostWindow : GameWindow
             };
             _saves.SavePlayer(_activePlayer);
             QueueChunkSave(gpu.Chunk);
+            RecordQuestEvent(new(
+                QuestEventType.GatherItem,
+                ItemIds.Sticks));
             _chatUi.AddMessage(
                 $"You gather a stick from beneath the tree " +
                 $"({instance.InitialStickCount -
@@ -2636,6 +2659,12 @@ internal sealed partial class GameHostWindow : GameWindow
             return;
         }
         if (_mode == PreviewMode.Game &&
+            _modalScreen.Active == ModalScreenKind.QuestJournal)
+        {
+            ScrollQuestWindow(MouseState.Position, e.OffsetY);
+            return;
+        }
+        if (_mode == PreviewMode.Game &&
             _gameUi.ActivePanel == GameUiPanel.Skills &&
             _selectedSkill < 0 &&
             _gameUi.Panel.Bounds.Contains(MouseState.Position))
@@ -2887,6 +2916,10 @@ internal sealed partial class GameHostWindow : GameWindow
                 RenderItemContainerWindow();
             else if (_modalScreen.Active == ModalScreenKind.Death)
                 RenderDeathOverlay();
+            else if (_modalScreen.Active is
+                     ModalScreenKind.QuestJournal or
+                     ModalScreenKind.QuestComplete)
+                RenderQuestWindow();
             else if (_pauseMenu.IsPaused) RenderPauseMenu();
             else if (_craftingWindowOpen) RenderCraftingWindow();
             else if (_skillGuideWindow.Visible) RenderSkillGuideWindow();

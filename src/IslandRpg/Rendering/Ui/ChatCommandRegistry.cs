@@ -34,6 +34,7 @@ internal static class ChatCommandRegistry
         new("/xp", "/xp <skill> <amount>", "Grant skill experience.", true),
         new("/level", "/level <skill> <level>", "Set a skill level.", true),
         new("/damage", "/damage <amount>", "Apply player damage.", true),
+        new("/quest", "/quest complete <id>", "Complete a quest.", true),
         new("/spawn", "/spawn <creature-id>", "Spawn a hostile creature.", true),
         new("/killall", "/killall", "Remove nearby spawned creatures.", true),
         new("/debug", "/debug", "Show active developer states.", true)

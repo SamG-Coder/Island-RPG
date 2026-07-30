@@ -196,6 +196,10 @@ internal sealed partial class GameHostWindow
             target.Gpu.Chunk, key, FibreShrubCooldownSeconds);
         _saves.SavePlayer(_activePlayer);
         QueueChunkSave(target.Gpu.Chunk);
+        RecordQuestEvent(new(
+            QuestEventType.GatherItem,
+            ItemIds.PlantFibres,
+            gathered));
         _chatUi.AddMessage(
             gathered == 1
                 ? "You gather some plant fibres."

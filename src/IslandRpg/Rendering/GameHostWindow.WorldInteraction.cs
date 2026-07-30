@@ -257,6 +257,8 @@ internal sealed partial class GameHostWindow
         _chatUi.AddMessage(
             $"You pick up the {ItemCatalog.Get(itemId).Name}.",
             ChatMessageStyle.Action);
+        RecordQuestEvent(new(
+            QuestEventType.GatherItem, itemId));
     }
 
     internal void BeginGroundObjectPickup(Guid groundObjectId, Vector2 target)
@@ -643,6 +645,10 @@ internal sealed partial class GameHostWindow
                 ? $"You place the {ItemCatalog.Get(drop.ItemId).Name}."
                 : $"You drop the {ItemCatalog.Get(drop.ItemId).Name}.",
             ChatMessageStyle.Action);
+        if (PlaceableObjectCatalog.IsPlaceable(drop.ItemId))
+            RecordQuestEvent(new(
+                QuestEventType.BuildObject,
+                drop.ItemId));
         _player.Stop();
     }
 

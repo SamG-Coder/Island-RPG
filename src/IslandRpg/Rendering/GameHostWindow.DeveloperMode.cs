@@ -112,6 +112,15 @@ internal sealed partial class GameHostWindow
                 else
                     Usage(command.Definition);
                 break;
+            case "/quest":
+                if (args.Length == 2 &&
+                    args[0].Equals(
+                        "complete",
+                        StringComparison.OrdinalIgnoreCase))
+                    CompleteQuestFromCommand(args[1]);
+                else
+                    Usage(command.Definition);
+                break;
             case "/spawn":
             case "/killall":
                 CommandMessage(

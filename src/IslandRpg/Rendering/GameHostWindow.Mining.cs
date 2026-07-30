@@ -185,6 +185,11 @@ internal sealed partial class GameHostWindow
             _activeMiningKey, health, value.Definition.MaximumHealth));
         QueueChunkSave(value.Gpu.Chunk);
         _saves.SavePlayer(_activePlayer);
+        if (health == 0 &&
+            value.Definition.RewardItemId is { } minedItem)
+            RecordQuestEvent(new(
+                QuestEventType.MineOre,
+                minedItem));
         _chatUi.AddMessage(
             $"You hit the {value.Definition.DisplayName.ToLowerInvariant()} " +
             $"for {damage} damage " +

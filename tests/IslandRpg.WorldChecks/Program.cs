@@ -312,6 +312,37 @@ Require(
     berryFarmingAward.Gained == 36,
     "berry harvesting XP must use the shared Farming progression");
 
+var questProgress = QuestService.Normalize(null);
+Require(
+    questProgress[0].Status == QuestStatus.InProgress &&
+    questProgress.Skip(1).All(value => value.Status == QuestStatus.Locked),
+    "a new character must begin the first quest with later quests locked");
+var questExperience = 0;
+foreach (var questEvent in new[]
+         {
+             new QuestEvent(QuestEventType.GatherItem, ItemIds.SmallRocks),
+             new QuestEvent(QuestEventType.GatherItem, ItemIds.Sticks),
+             new QuestEvent(QuestEventType.GatherItem, ItemIds.PlantFibres)
+         })
+{
+    var update = QuestService.Apply(
+        questProgress, questExperience, questEvent);
+    questProgress = update.Progress;
+    questExperience = update.AdventureExperience;
+}
+Require(
+    questProgress[0].Status == QuestStatus.Complete &&
+    questProgress[1].Status == QuestStatus.InProgress &&
+    questExperience == 50,
+    "completing the first quest must award Adventure XP and unlock its successor");
+var duplicateQuestUpdate = QuestService.Apply(
+    questProgress,
+    questExperience,
+    new QuestEvent(QuestEventType.GatherItem, ItemIds.Sticks));
+Require(
+    duplicateQuestUpdate.AdventureExperience == questExperience,
+    "completed quest events must not award Adventure XP twice");
+
 Console.WriteLine(
     "World-hover probe benchmark (1,000 stationary updates): " +
     $"legacy 1,000 scans, gated {hoverProbeCount} scan; " +
@@ -3183,6 +3214,19 @@ try
         StrengthExperience = 225,
         DefenceExperience = 75,
         CombatStance = MeleeCombatStance.Defensive,
+        Quests =
+        [
+            new(
+                "washed-ashore",
+                QuestStatus.Complete,
+                new Dictionary<string, int>
+                {
+                    ["rocks"] = 1,
+                    ["sticks"] = 1,
+                    ["fibres"] = 1
+                },
+                DateTime.UtcNow)
+        ],
         Inventory = PlayerInventory.Normalize(["logs", "oak_logs"])
     };
     saves.SavePlayer(player);
@@ -3201,11 +3245,14 @@ try
             loadedPlayer.DefenceExperience == 75 &&
             loadedPlayer.CombatStance ==
             MeleeCombatStance.Defensive &&
+            loadedPlayer.Quests?.Single().Status ==
+            QuestStatus.Complete &&
+            loadedPlayer.Quests[0].ObjectiveCounts?["sticks"] == 1 &&
             loadedPlayer.Inventory?.Length == PlayerInventory.Capacity &&
             loadedPlayer.Inventory[0] == "logs" &&
             loadedPlayer.Inventory[1] == "oak_logs" &&
             PlayerInventory.Count(loadedPlayer.Inventory) == 2,
-        "character skills and inventory must persist independently");
+        "character skills, quest progress, and inventory must persist independently");
     Require(saves.ListWorlds().Single().Id == world.Id,
         "named world profiles must round-trip");
     var worldPlayer = saves.LoadWorldPlayer(world.Id, player.Id);

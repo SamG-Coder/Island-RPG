@@ -196,6 +196,9 @@ internal sealed partial class GameHostWindow
         _chatUi.AddMessage(
             $"You craft {ItemCatalog.Get(recipe.ResultItemId).Name}.",
             ChatMessageStyle.Action);
+        RecordQuestEvent(new(
+            QuestEventType.CraftItem,
+            recipe.ResultItemId));
         AwardCraftingExperience(recipe.Id);
     }
 
