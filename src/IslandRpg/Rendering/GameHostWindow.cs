@@ -1997,11 +1997,11 @@ internal sealed partial class GameHostWindow : GameWindow
             1, animation.Graphic.Sprite.Frames.Count / 5);
         var cycleDuration = Math.Max(
             framesPerAngle * animation.SecondsPerFrame, .1f);
-        // The AoE lumberjack animation makes axe contact at frame 12 of
-        // its 15-frame authored cycle. Apply damage, XP, chat, and sound
-        // when that frame appears instead of after the cycle has reset.
+        // The AoE lumberjack animation first makes axe contact on authored
+        // frame 7 (zero-based frame 6) of its 15-frame cycle. Apply damage,
+        // XP, chat, and sound on that first contact pose.
         var impactFrame = Math.Clamp(
-            (int)MathF.Round((framesPerAngle - 1) * .86f),
+            (int)MathF.Round((framesPerAngle - 1) * .43f),
             0,
             framesPerAngle - 1);
         var impactTime = impactFrame * animation.SecondsPerFrame;

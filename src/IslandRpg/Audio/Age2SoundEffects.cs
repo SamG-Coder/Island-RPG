@@ -90,7 +90,11 @@ internal sealed class Age2SoundEffectPlayer : IDisposable
             ReadFully = true
         };
         _volume = new VolumeSampleProvider(_mixer);
-        _output = new WaveOutEvent();
+        _output = new WaveOutEvent
+        {
+            DesiredLatency = 60,
+            NumberOfBuffers = 3
+        };
         _output.Init(_volume);
         _output.Play();
     }
@@ -118,6 +122,27 @@ internal sealed class Age2SoundEffectPlayer : IDisposable
         catch
         {
             // A malformed expansion sound must not interrupt the game.
+        }
+    }
+
+    public void Preload(IEnumerable<string> paths)
+    {
+        foreach (var path in paths.Distinct(
+                     StringComparer.OrdinalIgnoreCase))
+        {
+            if (_disposed || !File.Exists(path) ||
+                _cache.ContainsKey(path))
+                continue;
+            try
+            {
+                _cache[path] = CachedSound.Load(path);
+                _cacheOrder.Enqueue(path);
+                TrimCache();
+            }
+            catch
+            {
+                // Keep loading other mapped effects.
+            }
         }
     }
 

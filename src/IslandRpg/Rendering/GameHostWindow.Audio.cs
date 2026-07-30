@@ -33,6 +33,10 @@ internal sealed partial class GameHostWindow
             {
                 Volume = _saves.LoadSettings().EffectsVolume
             };
+            _soundEffects.Preload(
+                _soundCues.Values
+                    .SelectMany(variants => variants)
+                    .Select(sound => sound.Path));
         }
         catch
         {
