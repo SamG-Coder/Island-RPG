@@ -2942,9 +2942,6 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         var panel = FrontendPanel(480, 480);
         DrawAoEPanelBorder(panel);
-        DrawUiColor(
-            new(panel.X + 6, panel.Y + 6, panel.Z - 12, panel.W - 12),
-            new(.020f, .019f, .016f, .96f));
 
         var hero = new Vector4(
             panel.X + 18, panel.Y + 18, panel.Z - 36, 112);
@@ -3305,41 +3302,6 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawMenuButton(BackButtonBounds(), "Back");
     }
 
-    private void RenderLoadWorldMenu()
-    {
-        var panel = FrontendPanel(600, 560);
-        DrawAoEPanelBorder(panel);
-        DrawCenteredUiText(
-            "SELECT WORLD", new(panel.X, panel.Y + 22, panel.Z, 38),
-            new(232, 217, 166, 255));
-        var worlds = _saves.ListWorlds().ToArray();
-        LayoutWorldList(worlds);
-        if (worlds.Length == 0)
-        {
-            DrawCenteredUiText(
-                "No worlds have been created yet.",
-                new(panel.X + 30, panel.Y + 150, panel.Z - 60, 30),
-                new(204, 190, 150, 255));
-        }
-        foreach (var index in _worldList.VisibleIndices)
-        {
-            var world = worlds[index];
-            var row = _worldList.RowBounds(index);
-            DrawMenuButton(row, world.Name);
-            DrawUiText(
-                $"Seed {world.Seed}",
-                new(row.X + 16, row.Y + row.W - 17),
-                new(158, 148, 120, 255));
-            DrawMenuButton(
-                _worldList.DeleteBounds(index),
-                _worldList.IsDeletePending(world.Id)
-                    ? "Confirm?"
-                    : "Delete");
-        }
-        RenderListScrollbar(_worldList);
-        DrawMenuButton(BackButtonBounds(), "Back");
-    }
-
     private void RenderSettingsMenu()
     {
         var panel = SettingsPanel();
@@ -3470,7 +3432,7 @@ internal sealed partial class GameHostWindow : GameWindow
             FrontendPage.CharacterCreate => FrontendPanel(760, 640),
             FrontendPage.CharacterSelect => FrontendPanel(660, 600),
             FrontendPage.NewWorld => FrontendPanel(760, 640),
-            FrontendPage.LoadWorld => FrontendPanel(600, 560),
+            FrontendPage.LoadWorld => WorldSelectionPanel(),
             FrontendPage.Settings => SettingsPanel(),
             FrontendPage.Credits => FrontendPanel(600, 560),
             _ => FrontendPanel(480, 480)
@@ -3580,27 +3542,19 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private Vector4 BackButtonBounds()
     {
+        if (_frontendPage == FrontendPage.LoadWorld)
+            return WorldSelectionBackButtonBounds();
+
         var panel = _frontendPage switch
         {
             FrontendPage.CharacterCreate => FrontendPanel(760, 640),
             FrontendPage.CharacterSelect => FrontendPanel(660, 600),
             FrontendPage.NewWorld => FrontendPanel(760, 640),
-            FrontendPage.LoadWorld => FrontendPanel(600, 560),
             FrontendPage.Settings => SettingsPanel(),
             FrontendPage.Credits => FrontendPanel(600, 560),
             _ => FrontendPanel(480, 360)
         };
         return new(panel.X + panel.Z - 156, panel.Y + panel.W - 92, 108, 48);
-    }
-
-    private void LayoutWorldList(IReadOnlyList<WorldProfile> worlds)
-    {
-        var panel = FrontendPanel(600, 560);
-        _worldList.Layout(
-            new(panel.X + 48, panel.Y + 88, panel.Z - 96, 364),
-            worlds.Select(world => world.Id).ToArray(),
-            rowHeight: 54,
-            rowGap: 8);
     }
 
     private Vector4 CharacterPreviewBounds()
