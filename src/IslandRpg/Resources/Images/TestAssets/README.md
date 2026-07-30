@@ -88,3 +88,21 @@ STUMB_NN      2 large stump variants        43 x 26
 Multi-frame graphics use zero-padded files such as `FPAL_NN/000.png`.
 Corresponding `_N0` directories contain original translucent ground shadows
 derived for these sprites rather than copied assets.
+
+## Bushes and plants
+
+Original vegetation source sheets are stored under `SourceSheets/Bushes`.
+Runtime frames match the installed game's variant counts and canvas sizes:
+
+```text
+PLANTS      5 ground-plant variants       18-39 x 15-34
+BUSH_NN     2 large-shrub variants       108-118 x 68-74
+BUSH2_NN   18 woodland-shrub variants     53-99 x 47-71
+BUSH3_NN    9 alpine flowering shrubs     53-113 x 49-74
+FORAG_NN    4 temperate berry bushes      69-88 x 50-64
+FORAGM_NN   4 tropical berry bushes       72-82 x 61-66
+```
+
+`BUSH2_NN` frames `012` through `017` are the snow-covered variants selected
+on snow terrain. The three bush families have matching `_N0` shadow folders;
+plants and berry bushes do not request separate shadow graphics.
