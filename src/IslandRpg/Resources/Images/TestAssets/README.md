@@ -66,3 +66,25 @@ normal3.png  Secondary shoreline ripples
 
 The shader scrolls and combines these layers at different scales and speeds;
 they are normal maps rather than sequential animation frames.
+
+## Trees
+
+Original tree source sheets are stored under `SourceSheets/Trees`. Runtime
+frames use the installed game's frame counts and canvas dimensions:
+
+```text
+TREEA-TREEL  12 single-frame generic trees  102-176 x 127-182
+FPAL_NN      13 palm variants               61-129 x 75-168
+FPIN_NN       9 pine variants               72-106 x 118-157
+FOAK_NN      14 oak variants                93-128 x 127-188
+FJUN_NN      13 jungle variants             71-118 x 59-178
+FSNO_NN       9 snow-pine variants          72-106 x 118-157
+FBAM_NN       4 bamboo variants             53-71 x 69-91
+FCAC_NN       6 cactus variants             14-21 x 14-61
+STUMP_NN      3 stump variants              20-29 x 19-20
+STUMB_NN      2 large stump variants        43 x 26
+```
+
+Multi-frame graphics use zero-padded files such as `FPAL_NN/000.png`.
+Corresponding `_N0` directories contain original translucent ground shadows
+derived for these sprites rather than copied assets.
