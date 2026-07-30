@@ -2576,10 +2576,13 @@ internal sealed partial class GameHostWindow : GameWindow
             ZoomAtlas(e.OffsetY);
             return;
         }
-        _targetZoom = Math.Clamp(
-            _targetZoom * MathF.Pow(1.12f, e.OffsetY),
-            0.45f,
-            1.75f);
+        var requestedZoom =
+            _targetZoom * MathF.Pow(1.12f, e.OffsetY);
+        if (!float.IsFinite(requestedZoom) || requestedZoom <= 0)
+            return;
+        _targetZoom = _unlimitedZoomToggle.IsChecked
+            ? requestedZoom
+            : Math.Clamp(requestedZoom, .45f, 1.75f);
         _zoomAnchor = SceneMousePosition() -
                       new Vector2(ReferenceWidth / 2f, ReferenceHeight / 2f);
     }

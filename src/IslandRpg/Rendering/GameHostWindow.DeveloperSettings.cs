@@ -9,6 +9,9 @@ internal sealed partial class GameHostWindow
     private readonly ToggleControlState _navigationBlocksToggle = new(
         "Pathing blocks",
         "Show object collision cells in the world.");
+    private readonly ToggleControlState _unlimitedZoomToggle = new(
+        "Unlimited zoom",
+        "Remove the normal gameplay camera zoom limits.");
 
     private bool UpdateDeveloperSettings(
         Vector2 pointer, Vector4 panel)
@@ -19,6 +22,9 @@ internal sealed partial class GameHostWindow
         var list = _settingsMenu.ContentList;
         _navigationBlocksToggle.Layout(
             DeveloperSettingsController.NavigationBlocksBounds(list),
+            horizontalInset: 0);
+        _unlimitedZoomToggle.Layout(
+            DeveloperSettingsController.UnlimitedZoomBounds(list),
             horizontalInset: 0);
         if (_activePlayer is not null &&
             list.VisibleIndices.Contains(
@@ -81,6 +87,14 @@ internal sealed partial class GameHostWindow
                 DeveloperSettingsController.NavigationBlocksIndex) &&
             _navigationBlocksToggle.ToggleAt(pointer))
             return true;
+        if (list.VisibleIndices.Contains(
+                DeveloperSettingsController.UnlimitedZoomIndex) &&
+            _unlimitedZoomToggle.ToggleAt(pointer))
+        {
+            if (!_unlimitedZoomToggle.IsChecked)
+                _targetZoom = Math.Clamp(_targetZoom, .45f, 1.75f);
+            return true;
+        }
         var changed = _developerSettings.TryUpdate(
             pointer, list, _activePlayer, out var updated);
         if (!changed || updated is null) return false;
