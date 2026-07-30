@@ -1630,8 +1630,6 @@ internal sealed partial class GameHostWindow : GameWindow
                 candidates.Add(candidate);
         }
 
-        List<Vector2>? bestPath = null;
-        float bestScore = float.MaxValue;
         foreach (var candidate in candidates.OrderBy(candidate =>
                      (candidate - start).LengthSquared))
         {
@@ -1655,23 +1653,19 @@ internal sealed partial class GameHostWindow : GameWindow
             var standPosition = actionType == WorldActionType.Fish
                 ? candidate
                 : target + approach.Normalized() * finalDistance;
-            var score = path.Count + (diagonal ? .35f : 0f);
-            if (score >= bestScore) continue;
-
-            bestScore = score;
-            bestPath = path.ToList();
-            if (bestPath.Count == 0)
-                bestPath.Add(standPosition);
+            var actionPath = path.ToList();
+            if (actionPath.Count == 0)
+                actionPath.Add(standPosition);
             else
-                bestPath[^1] = standPosition;
-        }
+                actionPath[^1] = standPosition;
 
-        return bestPath is null
-            ? new PathResult(requestId, worldLevel, [])
-            : new PathResult(
+            // Candidates are ordered by distance from the player. The first
+            // reachable approach is already the natural interaction side, so
+            // avoid running another complete A* search for every other side.
+            return new PathResult(
                 requestId,
                 worldLevel,
-                bestPath,
+                actionPath,
                 new QueuedWorldAction(
                     actionType, target,
                     Math.Max(standOff, .72f) + .08f,
@@ -1680,6 +1674,9 @@ internal sealed partial class GameHostWindow : GameWindow
                     itemId,
                     fishKey,
                     vegetationKey));
+        }
+
+        return new PathResult(requestId, worldLevel, []);
     }
 
     private float TreeInteractionDistance(string graphicName)
