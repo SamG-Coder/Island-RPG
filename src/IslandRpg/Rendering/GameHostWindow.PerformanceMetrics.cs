@@ -120,6 +120,7 @@ internal sealed partial class GameHostWindow
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, _uiSolidTexture);
         GL.Uniform1(GL.GetUniformLocation(_program, "recolorPlayer"), 0);
+        GL.BindVertexArray(_vao);
         GL.BindBuffer(BufferTarget.ArrayBuffer, _streamVbo);
         GL.BufferData(
             BufferTarget.ArrayBuffer,

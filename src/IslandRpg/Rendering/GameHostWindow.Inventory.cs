@@ -83,6 +83,7 @@ internal sealed partial class GameHostWindow
                 if (_quantityFont is not null &&
                     _fontRenderer is not null)
                 {
+                    _uiColorBatch.Flush();
                     _quantityFont.DrawText(
                         _fontRenderer,
                         text,

@@ -579,6 +579,7 @@ internal sealed partial class GameHostWindow
         string text, Vector4 bounds, FSColor color)
     {
         if (_quantityFont is null || _fontRenderer is null) return;
+        _uiColorBatch.Flush();
         var size = _quantityFont.MeasureString(text);
         var position = new System.Numerics.Vector2(
             MathF.Round(bounds.X + (bounds.Z - size.X) * .5f),

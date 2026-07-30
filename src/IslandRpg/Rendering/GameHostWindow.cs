@@ -109,6 +109,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly string _install;
     private readonly WorldRenderQueue _worldRenderQueue = new();
     private readonly ShaderUniformCache _shaderUniforms = new();
+    private readonly UiColorBatch _uiColorBatch = new();
     private readonly PreviewMode _mode;
     private long _worldSeed;
     private readonly GameSaveRepository _saves = new();
@@ -395,6 +396,7 @@ internal sealed partial class GameHostWindow : GameWindow
             16 * sizeof(float),
             IntPtr.Zero,
             BufferUsageHint.StreamDraw);
+        _uiColorBatch.Initialize();
         CreateSceneTarget();
         PrepareGameUi();
         var settings = _saves.LoadSettings();
@@ -2734,6 +2736,7 @@ internal sealed partial class GameHostWindow : GameWindow
         base.OnRenderFrame(e);
         UpdateSmoothZoom(e.Time);
         _fontRenderer?.BeginFrame(ClientSize.X, ClientSize.Y);
+        _uiColorBatch.BeginFrame(ClientSize.X, ClientSize.Y);
         _performanceMetrics.RecordFrame(e.Time);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFramebuffer);
         GL.Viewport(
@@ -2788,6 +2791,7 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         if (_screen == ScreenState.WorldPreview)
             RenderPerformanceMetrics();
+        _uiColorBatch.Flush();
         _fontRenderer?.Flush();
         SwapBuffers();
     }
@@ -3358,6 +3362,7 @@ internal sealed partial class GameHostWindow : GameWindow
         FSColor color)
     {
         if (_menuTitleFont is null || _fontRenderer is null) return;
+        _uiColorBatch.Flush();
         var size = _menuTitleFont.MeasureString(text);
         var position = new System.Numerics.Vector2(
             bounds.X + (bounds.Z - size.X) * .5f,
@@ -3781,6 +3786,7 @@ internal sealed partial class GameHostWindow : GameWindow
             new(.68f, .68f, .66f, .9f));
 
         if (_fontRenderer is null) return;
+        _uiColorBatch.Flush();
         var position = new System.Numerics.Vector2(
             bubble.X + horizontalPadding,
             bubble.Y + verticalPadding);
@@ -4876,6 +4882,7 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         if (string.IsNullOrEmpty(text) ||
             _chatFont is null || _fontRenderer is null) return;
+        _uiColorBatch.Flush();
         _chatFont.DrawText(
             _fontRenderer, text, position + System.Numerics.Vector2.One,
             new FSColor(0, 0, 0, 190));
@@ -4920,14 +4927,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void DrawUiColor(Vector4 rectangle, Vector4 color)
     {
-        if (_uiSolidTexture == 0) return;
-        DrawUiSprite(
-            SolidUiFrame,
-            _uiSolidTexture,
-            rectangle,
-            tint: new Vector3(color.X, color.Y, color.Z),
-            tintAmount: 1,
-            drawOpacity: color.W);
+        if (_uiColorBatch.IsEmpty)
+            _fontRenderer?.Flush();
+        _uiColorBatch.Add(rectangle, color, _uiOpacity);
     }
 
     private void DrawRoundedUiColor(
@@ -4973,6 +4975,7 @@ internal sealed partial class GameHostWindow : GameWindow
         Vector3? spriteOutline = null)
     {
         _fontRenderer?.Flush();
+        _uiColorBatch.Flush();
         var viewportWidth = Math.Max(1, ClientSize.X);
         var viewportHeight = Math.Max(1, ClientSize.Y);
         var left = (rectangle.X - viewportWidth * .5f) * 2 / viewportWidth;
@@ -7076,6 +7079,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void Draw(float[] vertices)
     {
+        GL.BindVertexArray(_vao);
         GL.BindBuffer(BufferTarget.ArrayBuffer, _streamVbo);
         GL.BufferSubData(
             BufferTarget.ArrayBuffer,
@@ -7320,6 +7324,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     protected override void OnUnload()
     {
+        _uiColorBatch.Dispose();
         _musicPlayer?.Dispose();
         CancelWorldLevelWork(clearMinimap: true);
         SaveActivePlayerState();
