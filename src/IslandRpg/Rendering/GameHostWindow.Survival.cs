@@ -1,6 +1,7 @@
 using FontStashSharp;
 using IslandRpg.Assets;
 using IslandRpg.Gameplay;
+using IslandRpg.Persistence;
 using IslandRpg.Rendering.Ui;
 using OpenTK.Mathematics;
 using StbImageSharp;
@@ -47,7 +48,7 @@ internal sealed partial class GameHostWindow
 
     private void UpdateSurvival(float elapsed)
     {
-        if (_activePlayer is null || elapsed <= 0) return;
+        if (_activePlayer is null || _playerDefeated || elapsed <= 0) return;
         var maximumHealth = AdventureService.MaximumHealth(
             _activePlayer.AdventureExperience);
         if (_activePlayer.Hunger <= 0)
@@ -70,6 +71,64 @@ internal sealed partial class GameHostWindow
             WellFedSeconds = update.WellFedSeconds,
             Health = update.Health
         };
+        if (update.Health <= 0)
+            HandlePlayerDefeat("You succumb to starvation.");
+    }
+
+    internal void ApplyPlayerDamage(int damage, string source)
+    {
+        if (_activePlayer is null || _playerDefeated || damage <= 0) return;
+        var health = PlayerDeathService.ApplyDamage(
+            _activePlayer.Health, damage);
+        _activePlayer = _activePlayer with
+        {
+            Health = health,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        _chatUi.AddMessage(
+            $"{source} hits you for {damage}.",
+            ChatMessageStyle.Damage);
+        if (health <= 0)
+            HandlePlayerDefeat($"You were defeated by {source.ToLowerInvariant()}.");
+    }
+
+    private void HandlePlayerDefeat(string message)
+    {
+        if (_activePlayer is null || _player is null ||
+            _activeWorld is null)
+            return;
+
+        CancelMeleeCombat();
+        CancelWorldLevelWork(clearMinimap: true);
+        _player.Die();
+        _playerDefeated = true;
+        _deathMessage = message;
+        _chatUi.AddMessage(message, ChatMessageStyle.Warning);
+
+        var marker = new PlayerDeathMarker(
+            _player.Position.X,
+            _player.Position.Y,
+            _activeWorldLevel,
+            _player.Gender,
+            DateTime.UtcNow);
+        _saves.AddPlayerDeath(
+            _activeWorld.Id, _activePlayer.Id, marker);
+        _playerDeaths = _saves.LoadPlayerDeaths(
+            _activeWorld.Id, _activePlayer.Id);
+        _saves.SavePlayer(_activePlayer);
+        _deathOverlayAt = _clock + DeathAnimationSeconds();
+    }
+
+    private double DeathAnimationSeconds()
+    {
+        if (_player is null ||
+            !_entityAnimations.TryGetValue(
+                (_player.Gender, EntityAction.Die), out var animation))
+            return 1.4;
+        const int storedVillagerAngles = 5;
+        var frames = Math.Max(
+            1, animation.Graphic.Sprite.Frames.Count / storedVillagerAngles);
+        return frames * animation.SecondsPerFrame;
     }
 
     private void EatInventoryItem(int slot, string itemId)

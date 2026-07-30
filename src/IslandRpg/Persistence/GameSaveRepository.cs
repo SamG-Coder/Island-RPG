@@ -47,6 +47,13 @@ internal sealed record WorldPlayerState(
     DateTime UpdatedUtc,
     int WorldLevel = (int)IslandRpg.World.WorldLevel.Overworld);
 
+internal sealed record PlayerDeathMarker(
+    float PositionX,
+    float PositionY,
+    int WorldLevel,
+    EntityGender Gender,
+    DateTime DiedUtc);
+
 internal enum DisplayVSyncMode
 {
     On,
@@ -154,9 +161,13 @@ internal sealed class GameSaveRepository
         foreach (var worldDirectory in
                  Directory.EnumerateDirectories(WorldsRoot))
         {
-            var state = Path.Combine(
-                worldDirectory, "players", playerId + ".json");
-            if (File.Exists(state)) File.Delete(state);
+            var players = Path.Combine(worldDirectory, "players");
+            foreach (var path in new[]
+                     {
+                         Path.Combine(players, playerId + ".json"),
+                         Path.Combine(players, playerId + "-deaths.json")
+                     })
+                if (File.Exists(path)) File.Delete(path);
         }
     }
 
@@ -183,6 +194,31 @@ internal sealed class GameSaveRepository
             Path.Combine(
                 WorldsRoot, worldId, "players", state.PlayerId + ".json"),
             state with { UpdatedUtc = DateTime.UtcNow });
+
+    public IReadOnlyList<PlayerDeathMarker> LoadPlayerDeaths(
+        string worldId,
+        string playerId) =>
+        (ReadJson<List<PlayerDeathMarker>>(Path.Combine(
+             WorldsRoot, worldId, "players", playerId + "-deaths.json")) ?? [])
+        .OrderByDescending(marker => marker.DiedUtc)
+        .Take(PlayerDeathService.MaximumRememberedDeaths)
+        .ToArray();
+
+    public void AddPlayerDeath(
+        string worldId,
+        string playerId,
+        PlayerDeathMarker marker)
+    {
+        var deaths = LoadPlayerDeaths(worldId, playerId)
+            .Prepend(marker)
+            .OrderByDescending(value => value.DiedUtc)
+            .Take(PlayerDeathService.MaximumRememberedDeaths)
+            .ToArray();
+        WriteJson(
+            Path.Combine(
+                WorldsRoot, worldId, "players", playerId + "-deaths.json"),
+            deaths);
+    }
 
     public GameSettings LoadSettings() =>
         ReadJson<GameSettings>(SettingsPath) ?? new();

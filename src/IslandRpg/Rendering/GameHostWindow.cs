@@ -126,6 +126,13 @@ internal sealed partial class GameHostWindow : GameWindow
     private bool _menuLeftWasDown;
     private string? _frontendError;
     private readonly ModalScreenState _modalScreen = new();
+    private bool _playerDefeated;
+    private bool _deathLeftWasDown;
+    private double _deathOverlayAt;
+    private string _deathMessage = "";
+    private IReadOnlyList<PlayerDeathMarker> _playerDeaths = [];
+    private readonly Dictionary<EntityGender, EntityAnimation>
+        _skeletonAnimations = [];
     private readonly PauseMenuController _pauseMenu;
     private readonly ListControlState _characterList = new();
     private readonly ListControlState _worldList = new();
@@ -620,6 +627,9 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_screen == ScreenState.WorldPreview)
         {
             if (_mode == PreviewMode.Game &&
+                _modalScreen.Active == ModalScreenKind.Death)
+                UpdateDeathOverlay();
+            else if (_mode == PreviewMode.Game &&
                 _itemContainerWindow.Visible)
             {
                 UpdateItemContainerInput(
@@ -1043,6 +1053,9 @@ internal sealed partial class GameHostWindow : GameWindow
         _worldGameSeconds = Math.Max(
             0, _activeWorld.ElapsedGameSeconds);
         _activePlayer = player;
+        _playerDefeated = false;
+        _modalScreen.Close(ModalScreenKind.Death);
+        _playerDeaths = _saves.LoadPlayerDeaths(world.Id, player.Id);
         _saves.SaveWorld(_activeWorld);
         _worldStore = new WorldChunkStore(
             world.Seed, _saves.WorldsRoot, world.Id);
@@ -1067,6 +1080,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
         _activeWorld = null;
         _activePlayer = null;
+        _playerDefeated = false;
+        _playerDeaths = [];
+        _modalScreen.Close(ModalScreenKind.Death);
         _skillLevelsObserved = false;
         _player = null;
         _queuedAction = null;
@@ -1276,6 +1292,11 @@ internal sealed partial class GameHostWindow : GameWindow
     private void UpdateGame(float elapsed)
     {
         if (_player is null) return;
+        if (_playerDefeated)
+        {
+            UpdateGameSimulation(Math.Clamp(elapsed, 0, .25f));
+            return;
+        }
         _worldActions.ProcessPendingPath();
 
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
@@ -1472,6 +1493,18 @@ internal sealed partial class GameHostWindow : GameWindow
     private void UpdateGameSimulation(float elapsed)
     {
         if (_player is null) return;
+        if (_playerDefeated)
+        {
+            _player.Update(elapsed);
+            if (_clock >= _deathOverlayAt &&
+                _modalScreen.Active != ModalScreenKind.Death)
+            {
+                _modalScreen.Open(ModalScreenKind.Death);
+                _deathLeftWasDown =
+                    MouseState.IsButtonDown(MouseButton.Left);
+            }
+            return;
+        }
         _worldGameSeconds = WorldTime.Advance(
             _worldGameSeconds, elapsed);
         UpdateSurvival(elapsed);
@@ -2788,6 +2821,8 @@ internal sealed partial class GameHostWindow : GameWindow
             if (!_modalScreen.HidesGameUi) RenderGameUi();
             if (_itemContainerWindow.Visible)
                 RenderItemContainerWindow();
+            else if (_modalScreen.Active == ModalScreenKind.Death)
+                RenderDeathOverlay();
             else if (_pauseMenu.IsPaused) RenderPauseMenu();
             else if (_craftingWindowOpen) RenderCraftingWindow();
             else if (_skillGuideWindow.Visible) RenderSkillGuideWindow();
@@ -5371,6 +5406,7 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         FlushAtlas();
         if (!playerDrawn) DrawPlayer();
+        RenderDeathMarkers();
         if (player is not null &&
             playerOccluded &&
             _occludedPlayerOutlineEnabled)
@@ -5781,6 +5817,21 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         foreach (var gender in Enum.GetValues<EntityGender>())
         {
+            var skeletonName =
+                gender == EntityGender.Male ? "VMBAS_SN" : "VFBAS_SN";
+            var skeleton = _catalog!.Graphics.Values.FirstOrDefault(value =>
+                value.Definition.Name.Equals(
+                    skeletonName, StringComparison.OrdinalIgnoreCase));
+            if (skeleton is not null)
+            {
+                var textures = skeleton.Sprite.Frames.Select(Upload).ToArray();
+                _skeletonAnimations[gender] = new(
+                    skeleton,
+                    textures,
+                    skeleton.Definition.FrameRate is > .015f and < 2f
+                        ? skeleton.Definition.FrameRate
+                        : .09f);
+            }
             if (!_entityAnimations.ContainsKey((gender, EntityAction.Dig)) &&
                 _entityAnimations.TryGetValue(
                     (gender, EntityAction.Work), out var work))

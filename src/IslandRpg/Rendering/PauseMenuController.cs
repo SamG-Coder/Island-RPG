@@ -21,6 +21,7 @@ internal sealed partial class GameHostWindow
 
         public void HandleEscapeKey()
         {
+            if (window._playerDefeated) return;
             if (IsPaused && Page != PausePage.Main)
                 Page = PausePage.Main;
             else

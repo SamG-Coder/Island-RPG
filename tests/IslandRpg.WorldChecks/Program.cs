@@ -36,6 +36,17 @@ Require(
 var starvation = SurvivalService.Advance(0, 0, 100, 10);
 Require(starvation.Health == 95,
     "empty hunger must cause deterministic starvation damage");
+Require(
+    PlayerDeathService.ApplyDamage(12, 5) == 7 &&
+    PlayerDeathService.ApplyDamage(3, 8) == 0 &&
+    PlayerDeathService.ApplyDamage(12, -4) == 12,
+    "player damage must clamp at zero and ignore negative damage");
+var recovery = PlayerDeathService.Recover(101);
+Require(
+    recovery.Health == 50 &&
+    recovery.Hunger == PlayerDeathService.RecoveryHunger &&
+    recovery.WellFedSeconds == 0,
+    "defeat recovery must restore half health and minimum survival resources");
 var meleeHit = MeleeCombatService.Roll(
     attackExperience: 0,
     strengthExperience: 0,
@@ -3149,9 +3160,33 @@ try
             worldPlayer.PositionX == 12.5f &&
             worldPlayer.PositionY == -8.25f,
         "character position must be stored per world");
+    var deathBase = DateTime.UtcNow.AddMinutes(-20);
+    for (var index = 0;
+         index < PlayerDeathService.MaximumRememberedDeaths + 3;
+         index++)
+        saves.AddPlayerDeath(
+            world.Id,
+            player.Id,
+            new(
+                index,
+                -index,
+                index % 2,
+                index % 2 == 0
+                    ? EntityGender.Male
+                    : EntityGender.Female,
+                deathBase.AddMinutes(index)));
+    var deaths = saves.LoadPlayerDeaths(world.Id, player.Id);
+    Require(
+        deaths.Count == PlayerDeathService.MaximumRememberedDeaths &&
+        deaths[0].PositionX == 12 &&
+        deaths[^1].PositionX == 3 &&
+        deaths[0].WorldLevel == 0 &&
+        deaths[1].Gender == EntityGender.Female,
+        "death markers must persist newest-first with position, layer, gender, and a ten-marker cap");
     saves.DeletePlayer(player.Id);
     Require(saves.ListPlayers().Count == 0 &&
-            saves.LoadWorldPlayer(world.Id, player.Id) is null,
+            saves.LoadWorldPlayer(world.Id, player.Id) is null &&
+            saves.LoadPlayerDeaths(world.Id, player.Id).Count == 0,
         "deleting a character must remove its world-specific states");
     saves.DeleteWorld(world.Id);
     Require(saves.ListWorlds().Count == 0,
