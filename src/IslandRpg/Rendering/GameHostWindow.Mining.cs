@@ -152,7 +152,14 @@ internal sealed partial class GameHostWindow
             Random.Shared.NextSingle(), Random.Shared.NextSingle(),
             pickaxe.MiningPower);
         PlaySoundCue("mining-impact");
-        if (!roll.Hit) return;
+        if (!roll.Hit)
+        {
+            _chatUi.AddMessage(
+                $"Mining {roll.Level}: you miss the " +
+                $"{value.Definition.DisplayName.ToLowerInvariant()}.",
+                ChatMessageStyle.Miss);
+            return;
+        }
 
         var damage = Math.Min(health, roll.Damage);
         health -= damage;
@@ -178,6 +185,18 @@ internal sealed partial class GameHostWindow
             _activeMiningKey, health, value.Definition.MaximumHealth));
         QueueChunkSave(value.Gpu.Chunk);
         _saves.SavePlayer(_activePlayer);
+        _chatUi.AddMessage(
+            $"You hit the {value.Definition.DisplayName.ToLowerInvariant()} " +
+            $"for {damage} damage " +
+            $"({health}/{value.Definition.MaximumHealth}).",
+            ChatMessageStyle.Damage);
+        _chatUi.AddMessage(
+            $"+{experience.Gained} Mining XP.",
+            ChatMessageStyle.Experience);
+        if (experience.LevelledUp)
+            _chatUi.AddMessage(
+                $"Your Mining level is now {experience.Level}.",
+                ChatMessageStyle.LevelUp);
         if (health != 0) return;
 
         value.Gpu.VegetationRenderItems = WorldVegetationRenderCache.Build(
