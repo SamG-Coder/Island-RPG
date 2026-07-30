@@ -3169,37 +3169,6 @@ internal sealed partial class GameHostWindow : GameWindow
             DrawMenuButton(BackButtonBounds(), "Back");
     }
 
-    private void RenderCharacterSelectMenu()
-    {
-        var panel = FrontendPanel(660, 600);
-        DrawAoEPanelBorder(panel);
-        DrawCenteredUiText(
-            "SELECT CHARACTER", new(panel.X, panel.Y + 20, panel.Z, 38),
-            new(232, 217, 166, 255));
-        var players = _saves.ListPlayers().ToArray();
-        LayoutCharacterList(players);
-        foreach (var index in _characterList.VisibleIndices)
-        {
-            var player = players[index];
-            var row = _characterList.RowBounds(index);
-            DrawMenuButton(
-                row, player.Name,
-                TeamColor(player.TeamColor));
-            if (_selectedPlayer?.Id == player.Id)
-                DrawPanelOutline(row, 3, new(.62f, .48f, .20f, 1));
-            DrawMenuButton(
-                _characterList.DeleteBounds(index),
-                _characterList.IsDeletePending(player.Id)
-                    ? "Confirm?"
-                    : "Delete");
-        }
-        RenderListScrollbar(_characterList);
-        DrawMenuButton(NewCharacterButtonBounds(), "New Character");
-        if (_selectedPlayer is not null)
-            DrawMenuButton(ContinueCharacterButtonBounds(), "Use Character");
-        DrawMenuButton(BackButtonBounds(), "Back");
-    }
-
     private void RenderNewWorldMenu()
     {
         var panel = FrontendPanel(760, 640);
@@ -3430,7 +3399,7 @@ internal sealed partial class GameHostWindow : GameWindow
         var panel = _frontendPage switch
         {
             FrontendPage.CharacterCreate => FrontendPanel(760, 640),
-            FrontendPage.CharacterSelect => FrontendPanel(660, 600),
+            FrontendPage.CharacterSelect => CharacterSelectionPanel(),
             FrontendPage.NewWorld => FrontendPanel(760, 640),
             FrontendPage.LoadWorld => WorldSelectionPanel(),
             FrontendPage.Settings => SettingsPanel(),
@@ -3542,13 +3511,14 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private Vector4 BackButtonBounds()
     {
+        if (_frontendPage == FrontendPage.CharacterSelect)
+            return CharacterSelectionBackButtonBounds();
         if (_frontendPage == FrontendPage.LoadWorld)
             return WorldSelectionBackButtonBounds();
 
         var panel = _frontendPage switch
         {
             FrontendPage.CharacterCreate => FrontendPanel(760, 640),
-            FrontendPage.CharacterSelect => FrontendPanel(660, 600),
             FrontendPage.NewWorld => FrontendPanel(760, 640),
             FrontendPage.Settings => SettingsPanel(),
             FrontendPage.Credits => FrontendPanel(600, 560),
@@ -3598,30 +3568,6 @@ internal sealed partial class GameHostWindow : GameWindow
             panel.Y + panel.W - 92,
             228,
             48);
-    }
-
-    private void LayoutCharacterList(
-        IReadOnlyList<PlayerProfile> players)
-    {
-        var panel = FrontendPanel(660, 600);
-        _characterList.SelectedId = _selectedPlayer?.Id;
-        _characterList.Layout(
-            new(panel.X + 48, panel.Y + 82, panel.Z - 96, 384),
-            players.Select(player => player.Id).ToArray(),
-            rowHeight: 54,
-            rowGap: 12);
-    }
-
-    private Vector4 NewCharacterButtonBounds()
-    {
-        var panel = FrontendPanel(660, 600);
-        return new(panel.X + 48, panel.Y + panel.W - 92, 176, 48);
-    }
-
-    private Vector4 ContinueCharacterButtonBounds()
-    {
-        var panel = FrontendPanel(660, 600);
-        return new(panel.X + 238, panel.Y + panel.W - 92, 190, 48);
     }
 
     private void DrawColorSwatch(
