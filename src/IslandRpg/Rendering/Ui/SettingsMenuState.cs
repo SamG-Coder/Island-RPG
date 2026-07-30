@@ -35,6 +35,7 @@ internal sealed class SettingsMenuState
         "developer-section-diagnostics",
         "developer-navigation-blocks",
         "developer-unlimited-zoom",
+        "developer-zoom-scaled-loading",
         "developer-section-progression",
         .. DeveloperSettingsController.Skills
             .Select(skill => $"skill-{skill}")

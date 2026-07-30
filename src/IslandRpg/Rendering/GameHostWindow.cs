@@ -5653,8 +5653,8 @@ internal sealed partial class GameHostWindow : GameWindow
             FloorDiv((int)MathF.Floor(mapCenter.X), WorldChunk.Size),
             FloorDiv((int)MathF.Floor(mapCenter.Y), WorldChunk.Size),
             _activeWorldLevel);
-        const int loadRadius = 2;
-        const int unloadRadius = 3;
+        var loadRadius = WorldStreamLoadRadius();
+        var unloadRadius = loadRadius + 1;
 
         var wanted = new List<ChunkCoordinate>();
         for (var y = center.Y - loadRadius; y <= center.Y + loadRadius; y++)
@@ -5687,6 +5687,24 @@ internal sealed partial class GameHostWindow : GameWindow
                              value, center, unloadRadius))
                      .ToArray())
             UnloadWorldChunk(coordinate, save: true);
+    }
+
+    private int WorldStreamLoadRadius()
+    {
+        const int standardRadius = 2;
+        if (!_zoomScaledLoadingToggle.IsChecked)
+            return standardRadius;
+
+        // Radius 2 covers the normal minimum zoom of 0.45. Below that,
+        // increase the surrounding chunk square in inverse proportion to
+        // zoom. The ceiling is purely a memory-safety boundary for extreme
+        // developer camera values: radius 32 already permits 4,225 chunks.
+        const int maximumDeveloperRadius = 32;
+        var zoom = Math.Max(_zoom, .001f);
+        return Math.Clamp(
+            (int)MathF.Ceiling(.9f / zoom),
+            standardRadius,
+            maximumDeveloperRadius);
     }
 
     private void PrepareWorldTerrain()
