@@ -4,4 +4,5 @@
   <Project Path="tools/IslandRpg.SpriteTool/IslandRpg.SpriteTool.csproj" />
   <Project Path="tools/IslandRpg.ObjectSpriteTool/IslandRpg.ObjectSpriteTool.csproj" />
   <Project Path="tools/AoeCursorSheet/AoeCursorSheet.csproj" />
+  <Project Path="tools/IslandRpg.SoundMap/IslandRpg.SoundMap.csproj" />
 </Solution>

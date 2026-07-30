@@ -754,7 +754,7 @@ internal sealed partial class GameHostWindow : GameWindow
             _settingsMenu.ContentList.UpdatePointer(
                 MouseState.Position, leftDown);
             if (_settingsMenu.SelectedTab == SettingsTab.Sound)
-                soundSliderActive = UpdateMusicVolumeSlider(
+                soundSliderActive = UpdateSoundVolumeSliders(
                     MouseState.Position,
                     leftDown,
                     SettingsPanel());
@@ -1997,7 +1997,17 @@ internal sealed partial class GameHostWindow : GameWindow
             1, animation.Graphic.Sprite.Frames.Count / 5);
         var cycleDuration = Math.Max(
             framesPerAngle * animation.SecondsPerFrame, .1f);
-        var strike = (int)(_player.ActionTime / cycleDuration);
+        // The AoE lumberjack animation makes axe contact at frame 12 of
+        // its 15-frame authored cycle. Apply damage, XP, chat, and sound
+        // when that frame appears instead of after the cycle has reset.
+        var impactFrame = Math.Clamp(
+            (int)MathF.Round((framesPerAngle - 1) * .86f),
+            0,
+            framesPerAngle - 1);
+        var impactTime = impactFrame * animation.SecondsPerFrame;
+        if (_player.ActionTime < impactTime) return;
+        var strike = 1 + (int)(
+            (_player.ActionTime - impactTime) / cycleDuration);
         if (strike <= _lastTreeStrike) return;
         _lastTreeStrike = strike;
 
@@ -2045,6 +2055,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 Random.Shared.NextSingle(),
                 Random.Shared.NextSingle(),
                 axe.WoodcuttingPower);
+            PlaySoundCue("woodcutting-impact");
             if (!strikeResult.Hit)
             {
                 _chatUi.AddMessage(
@@ -2052,7 +2063,6 @@ internal sealed partial class GameHostWindow : GameWindow
                     ChatMessageStyle.Miss);
                 return;
             }
-
             var damage = Math.Min(instance.Health, strikeResult.Damage);
             var health = Math.Max(0, instance.Health - damage);
             var state = health == 0

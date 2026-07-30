@@ -25,7 +25,7 @@ internal sealed class SettingsMenuState
         ["fullscreen", "resolution", "vsync", "frame-limit", "metrics"];
     private static readonly string[] GameItems = ["occluded-player-outline"];
     private static readonly string[] SoundItems =
-        ["music-enabled", "music-volume"];
+        ["music-enabled", "music-volume", "effects-volume"];
     private static readonly string[] DeveloperItems =
     [
         "developer-section-tools",

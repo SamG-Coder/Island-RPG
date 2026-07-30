@@ -64,7 +64,8 @@ internal sealed record GameSettings(
     bool OccludedPlayerOutline = true,
     int FullscreenWidth = 0,
     int FullscreenHeight = 0,
-    bool MusicEnabled = true);
+    bool MusicEnabled = true,
+    float EffectsVolume = .85f);
 
 internal sealed class GameSaveRepository
 {

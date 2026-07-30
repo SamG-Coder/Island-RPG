@@ -64,7 +64,7 @@ internal sealed partial class GameHostWindow
                 if (window._settingsMenu.SelectedTab ==
                     SettingsTab.Sound)
                     soundSliderActive =
-                        window.UpdateMusicVolumeSlider(
+                        window.UpdateSoundVolumeSliders(
                             window.MouseState.Position,
                             leftDown,
                             window.PauseSubmenuPanel());

@@ -61,5 +61,6 @@
     <Content Include="Resources\Images\Ui\player-ui-icons.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\Ui\combat-skill-icons-source.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\Combat\training-dummy-source.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Audio\aoe-sound-cues.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

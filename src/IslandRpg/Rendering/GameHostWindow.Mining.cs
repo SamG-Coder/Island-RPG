@@ -136,6 +136,7 @@ internal sealed partial class GameHostWindow
             _activePlayer.MiningExperience,
             Random.Shared.NextSingle(), Random.Shared.NextSingle(),
             pickaxe.MiningPower);
+        PlaySoundCue("mining-impact");
         if (!roll.Hit) return;
 
         var damage = Math.Min(health, roll.Damage);

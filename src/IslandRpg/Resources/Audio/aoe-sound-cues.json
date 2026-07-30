@@ -1,0 +1,22 @@
+{
+  "cues": {
+    "woodcutting-impact": [5301, 5302, 5303],
+    "mining-impact": [5351, 5352]
+  },
+  "reference": {
+    "human-death-or-heavy-hit": [5309, 5310, 5311, 5312, 5313, 5314],
+    "stone-impact": [5344, 5345, 5346, 5347, 5348, 5350],
+    "stone-or-metal-double-impact": [5925, 5926],
+    "swords": [5360, 5361, 5362, 5363, 5364, 5365],
+    "sword-battle": [5358, 5359],
+    "soft-farm-exhaustion": [6183],
+    "metal-on-metal": [5466, 5467, 5468],
+    "boar-death": [5998],
+    "female-fight-voice": [5759],
+    "male-fight-voice": [6233],
+    "female-yes-voice": [5763, 5764, 5765, 5766, 5767],
+    "horse": [5343, 5421],
+    "hawk-or-eagle": [6044],
+    "sheep": [6041, 6042]
+  }
+}

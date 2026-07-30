@@ -1,5 +1,6 @@
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
+using System.Text.Json;
 
 namespace IslandRpg.Audio;
 
@@ -27,6 +28,45 @@ internal static class Age2SoundEffectCatalog
                 value.ResourceId, value.Path))
             .ToArray();
     }
+}
+
+internal static class Age2SoundCueCatalog
+{
+    public static IReadOnlyDictionary<string, Age2SoundEffect[]> Load(
+        string mappingPath,
+        IReadOnlyList<Age2SoundEffect> availableSounds)
+    {
+        if (!File.Exists(mappingPath)) return
+            new Dictionary<string, Age2SoundEffect[]>();
+        try
+        {
+            using var stream = File.OpenRead(mappingPath);
+            var mapping = JsonSerializer.Deserialize<CueMapping>(
+                stream,
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+            if (mapping?.Cues is null) return
+                new Dictionary<string, Age2SoundEffect[]>();
+            var byId = availableSounds.ToDictionary(
+                sound => sound.ResourceId);
+            return mapping.Cues.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value
+                    .Where(byId.ContainsKey)
+                    .Select(resourceId => byId[resourceId])
+                    .ToArray(),
+                StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return new Dictionary<string, Age2SoundEffect[]>();
+        }
+    }
+
+    private sealed record CueMapping(
+        Dictionary<string, int[]> Cues);
 }
 
 internal sealed class Age2SoundEffectPlayer : IDisposable
