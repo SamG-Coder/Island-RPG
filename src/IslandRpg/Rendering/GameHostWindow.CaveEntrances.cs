@@ -188,7 +188,19 @@ internal sealed partial class GameHostWindow
             1, animation.Graphic.Sprite.Frames.Count / 5);
         var cycleDuration = Math.Max(
             framesPerAngle * animation.SecondsPerFrame, .1f);
-        var strike = (int)(_player.ActionTime / cycleDuration);
+        // The male farmer's hoe contacts the ground on authored frame 6,
+        // while the female farmer's hand reaches the ground on frame 7.
+        // Resolve each complete excavation strike on its gender-specific
+        // pose so sound, damage, XP, and feedback remain aligned.
+        var authoredImpactFrame = _player.Gender == EntityGender.Female
+            ? 6
+            : 5;
+        var impactFrame = Math.Clamp(
+            authoredImpactFrame, 0, framesPerAngle - 1);
+        var impactTime = impactFrame * animation.SecondsPerFrame;
+        if (_player.ActionTime < impactTime) return;
+        var strike = 1 + (int)(
+            (_player.ActionTime - impactTime) / cycleDuration);
         if (strike <= _lastDigStrike) return;
         _lastDigStrike = strike;
 
@@ -205,6 +217,11 @@ internal sealed partial class GameHostWindow
             DiggingSkill.Damage(
                 _activePlayer?.DiggingExperience ?? 0));
         var health = site.Health - damage;
+        PlaySoundCue("digging-impact");
+        _chatUi.AddMessage(
+            $"You excavate for {damage} damage " +
+            $"({health}/{site.MaxHealth}).",
+            ChatMessageStyle.Damage);
         if (health > 0)
         {
             location.Value.Chunk.GroundObjects[location.Value.Index] =
@@ -302,6 +319,9 @@ internal sealed partial class GameHostWindow
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
+        _chatUi.AddMessage(
+            $"+{award.Gained} Digging XP.",
+            ChatMessageStyle.Experience);
         if (award.LevelledUp)
             _chatUi.AddMessage(
                 $"Your Digging level is now {award.Level}.",

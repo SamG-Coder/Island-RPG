@@ -1,7 +1,8 @@
 {
   "cues": {
     "woodcutting-impact": [5301, 5302, 5303],
-    "mining-impact": [5351, 5352]
+    "mining-impact": [5351, 5352],
+    "digging-impact": [6183]
   },
   "reference": {
     "human-death-or-heavy-hit": [5309, 5310, 5311, 5312, 5313, 5314],
