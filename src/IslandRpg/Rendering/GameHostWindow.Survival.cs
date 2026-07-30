@@ -51,7 +51,7 @@ internal sealed partial class GameHostWindow
         if (_activePlayer is null || _playerDefeated || elapsed <= 0) return;
         var maximumHealth = AdventureService.MaximumHealth(
             _activePlayer.AdventureExperience);
-        if (_activePlayer.Hunger <= 0)
+        if (!_godMode && _activePlayer.Hunger <= 0)
             _starvationElapsed += elapsed;
         else
             _starvationElapsed = 0;
@@ -65,6 +65,8 @@ internal sealed partial class GameHostWindow
             _activePlayer.WellFedSeconds,
             Math.Clamp(_activePlayer.Health, 0, maximumHealth),
             damageElapsed > 0 ? damageElapsed : elapsed);
+        if (_godMode && update.Health < _activePlayer.Health)
+            update = update with { Health = _activePlayer.Health };
         _activePlayer = _activePlayer with
         {
             Hunger = update.Hunger,
@@ -77,7 +79,8 @@ internal sealed partial class GameHostWindow
 
     internal void ApplyPlayerDamage(int damage, string source)
     {
-        if (_activePlayer is null || _playerDefeated || damage <= 0) return;
+        if (_activePlayer is null || _playerDefeated ||
+            _godMode || damage <= 0) return;
         var health = PlayerDeathService.ApplyDamage(
             _activePlayer.Health, damage);
         _activePlayer = _activePlayer with
@@ -90,6 +93,17 @@ internal sealed partial class GameHostWindow
             ChatMessageStyle.Damage);
         if (health <= 0)
             HandlePlayerDefeat($"You were defeated by {source.ToLowerInvariant()}.");
+    }
+
+    private void ForcePlayerDefeat(string message)
+    {
+        if (_activePlayer is null || _playerDefeated) return;
+        _activePlayer = _activePlayer with
+        {
+            Health = 0,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        HandlePlayerDefeat(message);
     }
 
     private void HandlePlayerDefeat(string message)

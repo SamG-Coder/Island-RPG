@@ -8,6 +8,28 @@ using OpenTK.Mathematics;
 
 WorldCheckProcess.DisableWindowsCrashDialogs();
 
+var playerCommandHints = ChatCommandRegistry.Filter("/h", false);
+var developerCommandHints = ChatCommandRegistry.Filter("/h", true);
+Require(
+    playerCommandHints.Select(command => command.Name)
+        .SequenceEqual(["/help"]) &&
+    developerCommandHints.Any(command => command.Name == "/heal") &&
+    !playerCommandHints.Any(command => command.RequiresDeveloperMode) &&
+    ChatCommandRegistry.TryParse(
+        "/teleport 12.5 -8", out var parsedTeleport) &&
+    parsedTeleport.Definition.RequiresDeveloperMode &&
+    parsedTeleport.Arguments.SequenceEqual(["12.5", "-8"]),
+    "chat command filtering must match prefixes, permissions, and arguments");
+var commandDropdown = new CommandHintDropdownState();
+commandDropdown.UpdateItems(
+    developerCommandHints,
+    new Vector4(100, 500, 360, 38));
+Require(
+    commandDropdown.Visible &&
+    commandDropdown.Bounds.Y < 500 &&
+    commandDropdown.RowBounds(0).Z == 360,
+    "command hints must form a reusable dropdown above the chat input");
+
 var adventureAward = AdventureService.AwardFromAction(0, 400);
 Require(
     adventureAward.Experience == 100 &&

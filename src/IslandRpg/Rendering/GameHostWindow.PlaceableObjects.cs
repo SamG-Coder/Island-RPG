@@ -92,6 +92,7 @@ internal sealed partial class GameHostWindow
 
     private NavigationObstacle[] ActiveNavigationObstacles()
     {
+        if (_noClipMode) return [];
         var obstacles = new List<NavigationObstacle>();
         foreach (var gpu in _worldChunks.Values)
         {

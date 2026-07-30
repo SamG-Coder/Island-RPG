@@ -18,12 +18,14 @@ internal sealed partial class GameHostWindow
             RespawnPlayer();
     }
 
-    private void RespawnPlayer()
+    private void RespawnPlayer(bool force = false)
     {
-        if (!_playerDefeated || _activePlayer is null ||
+        if ((!_playerDefeated && !force) || _activePlayer is null ||
             _activeWorld is null || _player is null)
             return;
 
+        CancelMeleeCombat();
+        CancelWorldLevelWork(clearMinimap: true);
         var spawn = FindPlayableSpawn();
         var maximumHealth = AdventureService.MaximumHealth(
             _activePlayer.AdventureExperience);

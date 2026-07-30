@@ -151,6 +151,19 @@ internal sealed class ChatUiControlState
             InputText = InputText[..^1];
     }
 
+    public void SetInputText(string text)
+    {
+        InputText = text[..Math.Min(text.Length, 256)];
+        Input.Focused = true;
+    }
+
+    public void ClearMessages()
+    {
+        _messages.Clear();
+        FirstVisibleLine = 0;
+        UpdateThumbBounds();
+    }
+
     public void Submit()
     {
         if (!Input.Focused || string.IsNullOrWhiteSpace(InputText)) return;

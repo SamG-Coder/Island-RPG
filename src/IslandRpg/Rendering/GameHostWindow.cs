@@ -126,6 +126,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private bool _menuLeftWasDown;
     private string? _frontendError;
     private readonly ModalScreenState _modalScreen = new();
+    private readonly CommandHintDropdownState _commandHints = new();
     private bool _playerDefeated;
     private bool _deathLeftWasDown;
     private double _deathOverlayAt;
@@ -1555,6 +1556,7 @@ internal sealed partial class GameHostWindow : GameWindow
         var scene = SceneClientBounds();
         _gameUi.Layout(scene);
         _chatUi.Layout(scene);
+        UpdateCommandHints();
         _minimapUi.Layout(scene);
         _gameUi.UpdatePointer(
             MouseState.Position,
@@ -1562,6 +1564,10 @@ internal sealed partial class GameHostWindow : GameWindow
         _chatUi.UpdatePointer(
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
+        if (_commandHints.UpdatePointer(
+                MouseState.Position,
+                MouseState.IsButtonDown(MouseButton.Left)) is { } hint)
+            CompleteCommandHint(hint);
         _inventoryContext.UpdatePointer(
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
@@ -1609,11 +1615,22 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_chatUi.Input.Focused &&
             KeyboardState.IsKeyPressed(Keys.Backspace))
             _chatUi.Backspace();
+        if (_chatUi.Input.Focused && _commandHints.Visible)
+        {
+            if (KeyboardState.IsKeyPressed(Keys.Up))
+                _commandHints.MoveSelection(-1);
+            else if (KeyboardState.IsKeyPressed(Keys.Down))
+                _commandHints.MoveSelection(1);
+            if (KeyboardState.IsKeyPressed(Keys.Tab) &&
+                _commandHints.Selected() is { } selected)
+                CompleteCommandHint(selected);
+        }
     }
 
     private bool IsPointerOverGameUi(Vector2 mouse) =>
         _gameUi.BlocksWorldInput(mouse) ||
         _chatUi.BlocksWorldInput(mouse) ||
+        _commandHints.HitTest(mouse) ||
         _inventoryContext.HitTest(mouse) ||
         _treeContext.HitTest(mouse) ||
         _groundObjectContext.HitTest(mouse) ||
@@ -4900,6 +4917,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     new(.72f, .68f, .55f, 1));
             }
         }
+        RenderCommandHints();
     }
 
     private System.Numerics.Vector2 CenteredTextPosition(
