@@ -60,6 +60,7 @@
     <Content Include="Resources\Images\CaveGrowth\cave-growth-sprites.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\Ui\player-ui-icons.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\Ui\combat-skill-icons-source.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\loading-world.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\Combat\training-dummy-source.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\TestAssets\**\*" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Audio\aoe-sound-cues.json" CopyToOutputDirectory="PreserveNewest" />

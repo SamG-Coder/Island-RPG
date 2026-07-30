@@ -25,7 +25,14 @@ internal sealed partial class GameHostWindow : GameWindow
     private const int ReferenceHeight = 720;
     private const string ReleaseVersion = "v0.2.0";
     internal enum PreviewMode { Assets, Island, World, Game }
-    private enum ScreenState { LoadingAssets, PreparingGpu, MainMenu, WorldPreview }
+    private enum ScreenState
+    {
+        LoadingAssets,
+        PreparingGpu,
+        LoadingComplete,
+        MainMenu,
+        WorldPreview
+    }
     private enum FrontendPage
     {
         Main,
@@ -415,6 +422,7 @@ internal sealed partial class GameHostWindow : GameWindow
             BufferUsageHint.StreamDraw);
         _uiColorBatch.Initialize();
         CreateSceneTarget();
+        PrepareLoadingScreen();
         PrepareGameUi();
         if (_cannotLocateAoeAssets)
         {
@@ -496,6 +504,8 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         base.OnUpdateFrame(e);
         _clock += e.Time;
+        if (FinishLoadingTransition())
+            return;
         _musicPlayer?.Update();
         _waterTime = (_waterTime + (float)e.Time) % 10000f;
         if (KeyboardState.IsKeyPressed(Keys.Escape))
@@ -581,7 +591,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 .OrderBy(asset => asset.Definition.GraphicId)
                 .ToList();
             _total = _worldAssets.Count +
-                     (_mode == PreviewMode.Assets ? _catalog.TerrainTiles.Count : 0);
+                     (_mode == PreviewMode.Assets ? _catalog.TerrainTiles.Count : 1);
             _done = 0;
             _current = "Preparing world graphics";
             _screen = ScreenState.PreparingGpu;
@@ -618,13 +628,13 @@ internal sealed partial class GameHostWindow : GameWindow
                         {
                             PrepareEntityAnimations();
                             BeginMenuPreview();
-                            _screen = ScreenState.MainMenu;
+                            CompleteLoading(ScreenState.MainMenu);
                             return;
                         }
                         _worldStore = new WorldChunkStore(_worldSeed);
                         StreamWorld();
                     }
-                    _screen = ScreenState.WorldPreview;
+                    CompleteLoading(ScreenState.WorldPreview);
                     return;
                 }
                 var terrainStop = Math.Min(_terrainUploadIndex + 8, _catalog!.TerrainTiles.Count);
@@ -637,7 +647,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 }
                 _done = _worldAssets.Count + _terrainUploadIndex;
                 if (_terrainUploadIndex == _catalog.TerrainTiles.Count)
-                    _screen = ScreenState.WorldPreview;
+                    CompleteLoading(ScreenState.WorldPreview);
             }
         }
 
@@ -2856,7 +2866,8 @@ internal sealed partial class GameHostWindow : GameWindow
         else RenderLoading();
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         PresentScene();
-        if (_screen is ScreenState.LoadingAssets or ScreenState.PreparingGpu)
+        if (_screen is ScreenState.LoadingAssets or
+            ScreenState.PreparingGpu or ScreenState.LoadingComplete)
         {
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
             RenderLoadingUi();
@@ -2892,37 +2903,6 @@ internal sealed partial class GameHostWindow : GameWindow
         _uiColorBatch.Flush();
         _fontRenderer?.Flush();
         SwapBuffers();
-    }
-
-    private void RenderLoading()
-    {
-        GL.ClearColor(.025f, .027f, .024f, 1);
-        GL.Clear(ClearBufferMask.ColorBufferBit);
-    }
-
-    private void RenderLoadingUi()
-    {
-        var panel = FrontendPanel(560, 190);
-        DrawAoEPanelBorder(panel);
-        DrawCenteredUiText(
-            "ISLAND RPG", new(panel.X, panel.Y + 24, panel.Z, 40),
-            new(232, 217, 166, 255));
-        DrawCenteredUiText(
-            _current, new(panel.X + 32, panel.Y + 73, panel.Z - 64, 25),
-            new(183, 173, 143, 255));
-        var track = new Vector4(
-            panel.X + 42, panel.Y + 119, panel.Z - 84, 24);
-        DrawUiColor(track, new(.025f, .024f, .020f, 1));
-        DrawPanelOutline(track, 0, new(.24f, .20f, .12f, 1));
-        var ratio = Math.Clamp(_done / (float)Math.Max(1, _total), 0, 1);
-        if (ratio > 0)
-            DrawUiColor(
-                new(track.X + 3, track.Y + 3, (track.Z - 6) * ratio, track.W - 6),
-                new(.32f, .25f, .11f, 1));
-        DrawCenteredUiText(
-            $"{(int)(ratio * 100)}%",
-            new(track.X, track.Y, track.Z, track.W),
-            new(235, 221, 179, 255));
     }
 
     private void RenderFrontend()
@@ -7516,6 +7496,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_uiPanelFillTexture != 0) GL.DeleteTexture(_uiPanelFillTexture);
         if (_uiSolidTexture != 0) GL.DeleteTexture(_uiSolidTexture);
         if (_uiCircleTexture != 0) GL.DeleteTexture(_uiCircleTexture);
+        if (_loadingBackgroundTexture != 0)
+            GL.DeleteTexture(_loadingBackgroundTexture);
         if (_woodcuttingItemsTexture != 0)
             GL.DeleteTexture(_woodcuttingItemsTexture);
         foreach (var texture in _woodcuttingItemTextures)
