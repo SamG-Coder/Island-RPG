@@ -107,6 +107,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private sealed record NewWorldPreviewResult(
         string SeedText, long Seed, Vector2 Spawn, byte[] Pixels);
     private readonly string _install;
+    private readonly bool _useTestAssets;
+    private readonly bool _cannotLocateAoeAssets;
     private readonly WorldRenderQueue _worldRenderQueue = new();
     private readonly ShaderUniformCache _shaderUniforms = new();
     private readonly UiColorBatch _uiColorBatch = new();
@@ -361,7 +363,12 @@ internal sealed partial class GameHostWindow : GameWindow
 
     public AssetCatalog? Catalog => _catalog;
 
-    public GameHostWindow(string install, PreviewMode mode = PreviewMode.Assets, long worldSeed = 2187) : base(
+    public GameHostWindow(
+        string install,
+        PreviewMode mode = PreviewMode.Assets,
+        long worldSeed = 2187,
+        bool useTestAssets = false,
+        bool cannotLocateAoeAssets = false) : base(
         GameWindowSettings.Default,
         new NativeWindowSettings
         {
@@ -372,6 +379,8 @@ internal sealed partial class GameHostWindow : GameWindow
         _install = install;
         _mode = mode;
         _worldSeed = worldSeed;
+        _useTestAssets = useTestAssets;
+        _cannotLocateAoeAssets = cannotLocateAoeAssets;
         _pauseMenu = new(this);
         _worldActions = new(this);
         _levelUpParticleAdder = AddLevelUpParticle;
@@ -407,6 +416,12 @@ internal sealed partial class GameHostWindow : GameWindow
         _uiColorBatch.Initialize();
         CreateSceneTarget();
         PrepareGameUi();
+        if (_cannotLocateAoeAssets)
+        {
+            _chatUi.AddMessage(
+                "AoE assets were not found. Test assets are enabled for this session.",
+                ChatMessageStyle.Warning);
+        }
         var settings = _saves.LoadSettings();
         ApplyDisplaySettings(settings);
         InitializeMusic();
@@ -418,7 +433,14 @@ internal sealed partial class GameHostWindow : GameWindow
         });
         var requiredGraphics = RequiredGraphicsFor(_mode);
         _loadTask = Task.Run(() =>
-            AssetLoader.LoadAll(_install, progress, requiredGraphics));
+            _useTestAssets && _mode == PreviewMode.Game
+                ? TestAssetLoader.LoadAll(
+                    _install,
+                    progress,
+                    requiredGraphics ??
+                    new HashSet<string>(StringComparer.OrdinalIgnoreCase))
+                : AssetLoader.LoadAll(
+                    _install, progress, requiredGraphics));
     }
 
     internal static IReadOnlySet<string>? RequiredGraphicsFor(PreviewMode mode)

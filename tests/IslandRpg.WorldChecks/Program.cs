@@ -120,7 +120,8 @@ Require(
     "mining, storage, crafting stations, and cave traversal must retain their authored AoE cursor frames");
 Require(defaultDisplaySettings.VSyncMode ==
             DisplayVSyncMode.Adaptive &&
-        defaultDisplaySettings.FrameRateLimit == 0,
+        defaultDisplaySettings.FrameRateLimit == 0 &&
+        !defaultDisplaySettings.UseTestAssets,
     "display settings must default to adaptive VSync and unlimited FPS");
 var cycledDisplaySettings =
     DisplaySettingsController.CycleVSync(defaultDisplaySettings);
@@ -2679,6 +2680,22 @@ var root = Path.Combine(Path.GetTempPath(), $"IslandRpg.WorldChecks.{Guid.NewGui
 long regionBytes = 0;
 try
 {
+    var testAssetRoot = Path.Combine(root, "test-assets");
+    var testCatalog = TestAssetLoader.LoadAll(
+        testAssetRoot,
+        new Progress<(int Done, int Total, string Name)>(),
+        GameHostWindow.RequiredGraphicsFor(
+            GameHostWindow.PreviewMode.Game)!);
+    Require(
+        testCatalog.Graphics.Count > 0 &&
+        testCatalog.TerrainTiles.Count == Enum.GetValues<Biome>().Length &&
+        testCatalog.WaterTextures.Count == 4 &&
+        testCatalog.Graphics.Values.All(graphic =>
+            graphic.SourcePath.StartsWith(
+                Path.Combine(testAssetRoot, "Graphics"),
+                StringComparison.OrdinalIgnoreCase)),
+        "an empty test-asset redirect must produce a complete placeholder catalogue without AoE files");
+
     var store = new WorldChunkStore(seed, root);
     var touchedTree = origin.Trees.First();
     origin.TreeInstances.Add(new(

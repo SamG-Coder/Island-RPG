@@ -13,6 +13,13 @@ internal sealed partial class GameHostWindow
 
     private void PrepareGameCursors()
     {
+        if (_useTestAssets)
+        {
+            Cursor = MouseCursor.Default;
+            CursorState = CursorState.Normal;
+            return;
+        }
+
         var path = Path.Combine(
             _install, "resources", "_common", "drs", "interface", "51000.slp");
         if (!File.Exists(path))

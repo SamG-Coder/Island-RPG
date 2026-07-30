@@ -401,6 +401,18 @@ internal sealed partial class GameHostWindow
                 _zoomScaledLoadingToggle.HitTest(MouseState.Position);
             DrawToggleControl(_zoomScaledLoadingToggle);
         }
+        if (list.VisibleIndices.Contains(
+                DeveloperSettingsController.UseTestAssetsIndex))
+        {
+            _useTestAssetsToggle.SetChecked(
+                _saves.LoadSettings().UseTestAssets);
+            _useTestAssetsToggle.Layout(
+                DeveloperSettingsController.UseTestAssetsBounds(list),
+                horizontalInset: 0);
+            _useTestAssetsToggle.Hovered =
+                _useTestAssetsToggle.HitTest(MouseState.Position);
+            DrawToggleControl(_useTestAssetsToggle);
+        }
         RenderDeveloperSection(
             list,
             DeveloperSettingsController.ProgressionHeaderIndex,

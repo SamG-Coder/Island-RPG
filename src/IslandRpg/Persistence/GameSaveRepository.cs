@@ -74,7 +74,8 @@ internal sealed record GameSettings(
     int FullscreenWidth = 0,
     int FullscreenHeight = 0,
     bool MusicEnabled = true,
-    float EffectsVolume = .85f);
+    float EffectsVolume = .85f,
+    bool UseTestAssets = false);
 
 internal sealed class GameSaveRepository
 {

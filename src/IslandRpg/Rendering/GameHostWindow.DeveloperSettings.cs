@@ -15,6 +15,9 @@ internal sealed partial class GameHostWindow
     private readonly ToggleControlState _zoomScaledLoadingToggle = new(
         "Zoom-scaled world loading",
         "Load more surrounding chunks as the camera zooms out.");
+    private readonly ToggleControlState _useTestAssetsToggle = new(
+        "Use Test Assets",
+        "Load Resources/Images/TestAssets after restarting.");
 
     private bool UpdateDeveloperSettings(
         Vector2 pointer, Vector4 panel)
@@ -31,6 +34,11 @@ internal sealed partial class GameHostWindow
             horizontalInset: 0);
         _zoomScaledLoadingToggle.Layout(
             DeveloperSettingsController.ZoomScaledLoadingBounds(list),
+            horizontalInset: 0);
+        var settings = _saves.LoadSettings();
+        _useTestAssetsToggle.SetChecked(settings.UseTestAssets);
+        _useTestAssetsToggle.Layout(
+            DeveloperSettingsController.UseTestAssetsBounds(list),
             horizontalInset: 0);
         if (_activePlayer is not null &&
             list.VisibleIndices.Contains(
@@ -105,6 +113,19 @@ internal sealed partial class GameHostWindow
                 DeveloperSettingsController.ZoomScaledLoadingIndex) &&
             _zoomScaledLoadingToggle.ToggleAt(pointer))
             return true;
+        if (list.VisibleIndices.Contains(
+                DeveloperSettingsController.UseTestAssetsIndex) &&
+            _useTestAssetsToggle.ToggleAt(pointer))
+        {
+            _saves.SaveSettings(settings with
+            {
+                UseTestAssets = _useTestAssetsToggle.IsChecked
+            });
+            _chatUi.AddMessage(
+                "Asset source change will apply after restarting the game.",
+                ChatMessageStyle.Action);
+            return true;
+        }
         var changed = _developerSettings.TryUpdate(
             pointer, list, _activePlayer, out var updated);
         if (!changed || updated is null) return false;

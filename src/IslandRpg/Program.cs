@@ -1,11 +1,35 @@
 using IslandRpg.Assets;
+using IslandRpg.Persistence;
 using IslandRpg.Rendering;
 
 try
 {
     var options = AppOptions.Parse(args);
-    var install = Age2InstallLocator.Find(options.Age2Path);
-    Console.WriteLine($"Age2HD: {install}");
+    var saves = new GameSaveRepository();
+    var gameMode = options.Catalog && options.Game;
+    var foundAoeAssets = Age2InstallLocator.TryFind(
+        options.Age2Path,
+        out var age2Install);
+    var cannotLocateAoeAssets = gameMode && !foundAoeAssets;
+    var useTestAssets = gameMode &&
+                        (saves.LoadSettings().UseTestAssets ||
+                         cannotLocateAoeAssets);
+    var install = useTestAssets
+        ? Path.Combine(
+            AppContext.BaseDirectory,
+            "Resources",
+            "Images",
+            "TestAssets")
+        : foundAoeAssets
+            ? age2Install
+            : Age2InstallLocator.Find(options.Age2Path);
+    if (useTestAssets)
+    {
+        Directory.CreateDirectory(install);
+        Console.WriteLine($"Test assets: {install}");
+    }
+    else
+        Console.WriteLine($"Age2HD: {install}");
 
     var datPath = Path.Combine(install, "resources", "_common", "dat", "empires2_x2_p1.dat");
     if (options.Catalog)
@@ -28,7 +52,9 @@ try
                     : options.Island
                     ? GameHostWindow.PreviewMode.Island
                     : GameHostWindow.PreviewMode.Assets,
-                options.Seed);
+                options.Seed,
+                useTestAssets,
+                cannotLocateAoeAssets);
             host.Run();
             assetCatalog = host.Catalog ??
                            throw new InvalidOperationException("The asset catalogue did not finish loading.");

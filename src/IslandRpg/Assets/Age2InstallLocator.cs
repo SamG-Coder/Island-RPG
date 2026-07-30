@@ -8,6 +8,14 @@ internal static class Age2InstallLocator
 
     public static string Find(string? explicitPath)
     {
+        return TryFind(explicitPath, out var install)
+            ? install
+            : throw new DirectoryNotFoundException(
+                "Age2HD was not found. Pass --age2-path or set AGE2HD_PATH.");
+    }
+
+    public static bool TryFind(string? explicitPath, out string install)
+    {
         var candidates = new List<string?>();
         if (!string.IsNullOrWhiteSpace(explicitPath)) candidates.Add(explicitPath);
         candidates.Add(Environment.GetEnvironmentVariable("AGE2HD_PATH"));
@@ -26,8 +34,8 @@ internal static class Age2InstallLocator
         var found = candidates.Where(p => !string.IsNullOrWhiteSpace(p))
             .Select(p => Path.GetFullPath(p!))
             .FirstOrDefault(p => File.Exists(Path.Combine(p, RelativeExe)));
-        return found ?? throw new DirectoryNotFoundException(
-            "Age2HD was not found. Pass --age2-path or set AGE2HD_PATH.");
+        install = found ?? string.Empty;
+        return found is not null;
     }
 
     private static IEnumerable<string> ReadLibraryFolders(string vdf)
