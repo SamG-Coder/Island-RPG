@@ -4930,34 +4930,32 @@ internal sealed partial class GameHostWindow : GameWindow
             _uiTabTexture,
             control.Bounds,
             control.Pressed ? -.16f : control.Hovered ? .14f : 0);
-        if (!control.Hovered) return;
-        DrawPanelOutline(
-            control.Bounds,
-            2,
-            new(.62f, .46f, .17f, 1));
-        DrawUiColor(
-            new(
-                control.Bounds.X + 4,
-                control.Bounds.Y + 3,
-                control.Bounds.Z - 8,
-                2),
-            new(.78f, .61f, .25f, .9f));
     }
 
     private void RenderToolbarActionTooltip()
     {
-        var (control, label) = _gameUi.QuestButton.Hovered
-            ? (_gameUi.QuestButton, "Quest Journal")
-            : _gameUi.CraftingButton.Hovered
-                ? (_gameUi.CraftingButton, "Crafting Recipes")
-                : (null, null);
+        ControlState? control = null;
+        string? label = null;
+        if (_gameUi.QuestButton.Hovered)
+            (control, label) = (_gameUi.QuestButton, "Quest Journal");
+        else if (_gameUi.CraftingButton.Hovered)
+            (control, label) = (_gameUi.CraftingButton, "Crafting Recipes");
+        else if (_gameUi.CombatButton.Hovered)
+            (control, label) = (_gameUi.CombatButton, "Combat");
+        else if (_gameUi.SkillsButton.Hovered)
+            (control, label) = (_gameUi.SkillsButton, "Skills");
+        else if (_gameUi.InventoryButton.Hovered)
+            (control, label) = (_gameUi.InventoryButton, "Inventory");
         if (control is null || label is null) return;
         var textWidth = MeasureUiText(label);
         var width = MathF.Ceiling(textWidth) + 20;
         var bounds = new Vector4(
-            MathF.Round(
-                control.Bounds.X +
-                (control.Bounds.Z - width) * .5f),
+            Math.Clamp(
+                MathF.Round(
+                    control.Bounds.X +
+                    (control.Bounds.Z - width) * .5f),
+                4,
+                Math.Max(4, ClientSize.X - width - 4)),
             control.Bounds.Y - 33,
             width,
             27);
