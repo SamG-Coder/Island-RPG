@@ -401,6 +401,10 @@ internal sealed partial class GameHostWindow : GameWindow
         _groundObjectContext.Selected +=
             HandleGroundObjectContextSelection;
         _chatUi.Submitted += HandleChatSubmission;
+        _gameUi.CraftingButton.Clicked += () =>
+            OpenCraftingWindow();
+        _gameUi.QuestButton.Clicked += () =>
+            OpenQuestWindow();
     }
 
     protected override void OnLoad()
@@ -3692,12 +3696,19 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawAoEUiTile(_gameUi.CombatButton);
         DrawAoEUiTile(_gameUi.SkillsButton);
         DrawAoEUiTile(_gameUi.InventoryButton);
+        DrawAoEUiTile(_gameUi.CraftingButton);
+        DrawAoEUiTile(_gameUi.QuestButton);
         DrawPlayerUiIcon(
             1, CenteredIconBounds(_gameUi.CombatButton.Bounds));
         DrawCombatSkillIcon(
             3, CenteredIconBounds(_gameUi.SkillsButton.Bounds));
         DrawPlayerUiIcon(
             0, CenteredIconBounds(_gameUi.InventoryButton.Bounds));
+        DrawToolbarActionIcon(
+            1, CenteredIconBounds(_gameUi.CraftingButton.Bounds));
+        DrawToolbarActionIcon(
+            0, CenteredIconBounds(_gameUi.QuestButton.Bounds));
+        RenderToolbarActionTooltip();
         RenderInventoryContextMenu();
         _uiOpacity = 1;
     }
@@ -4909,6 +4920,52 @@ internal sealed partial class GameHostWindow : GameWindow
             control.Selected ? _uiActiveTabTexture : _uiTabTexture,
             control.Bounds,
             control.Pressed ? -.16f : control.Hovered ? .14f : 0);
+    }
+
+    private void DrawAoEUiTile(ActionControlState control)
+    {
+        if (_uiTabFrame is null || _uiTabTexture == 0) return;
+        DrawUiSprite(
+            _uiTabFrame,
+            _uiTabTexture,
+            control.Bounds,
+            control.Pressed ? -.16f : control.Hovered ? .14f : 0);
+        if (!control.Hovered) return;
+        DrawPanelOutline(
+            control.Bounds,
+            2,
+            new(.62f, .46f, .17f, 1));
+        DrawUiColor(
+            new(
+                control.Bounds.X + 4,
+                control.Bounds.Y + 3,
+                control.Bounds.Z - 8,
+                2),
+            new(.78f, .61f, .25f, .9f));
+    }
+
+    private void RenderToolbarActionTooltip()
+    {
+        var (control, label) = _gameUi.QuestButton.Hovered
+            ? (_gameUi.QuestButton, "Quest Journal")
+            : _gameUi.CraftingButton.Hovered
+                ? (_gameUi.CraftingButton, "Crafting Recipes")
+                : (null, null);
+        if (control is null || label is null) return;
+        var textWidth = MeasureUiText(label);
+        var width = MathF.Ceiling(textWidth) + 20;
+        var bounds = new Vector4(
+            MathF.Round(
+                control.Bounds.X +
+                (control.Bounds.Z - width) * .5f),
+            control.Bounds.Y - 33,
+            width,
+            27);
+        DrawUiColor(bounds, new(.026f, .024f, .020f, .97f));
+        DrawPanelOutline(bounds, 0, new(.34f, .27f, .14f, 1));
+        DrawCenteredUiText(
+            label, bounds,
+            new(225, 212, 174, 255));
     }
 
     private void DrawAoEPanelBorder(Vector4 box)
@@ -7468,6 +7525,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_uiActiveTabTexture != 0) GL.DeleteTexture(_uiActiveTabTexture);
         if (_minimapTexture != 0) GL.DeleteTexture(_minimapTexture);
         foreach (var texture in _playerUiIconTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _toolbarActionIconTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         if (_newWorldPreviewTexture != 0)
             GL.DeleteTexture(_newWorldPreviewTexture);

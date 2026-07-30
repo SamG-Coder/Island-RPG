@@ -1249,6 +1249,37 @@ var inventoryGridBottom =
     GameUiControlState.InventoryRowGap;
 Require(gameUi.Panel.Bounds.W > inventoryGridBottom,
     "the inventory panel must include padding beneath all seven grid rows");
+Require(
+    gameUi.QuestButton.Bounds.Z > gameUi.QuestButton.Bounds.W &&
+    gameUi.CraftingButton.Bounds.Z >
+    gameUi.CraftingButton.Bounds.W &&
+    gameUi.QuestButton.Bounds.X +
+    gameUi.QuestButton.Bounds.Z <
+    gameUi.CraftingButton.Bounds.X &&
+    gameUi.CraftingButton.Bounds.X +
+    gameUi.CraftingButton.Bounds.Z <
+    gameUi.CombatButton.Bounds.X,
+    "the bottom toolbar must expose wider, non-overlapping quest and crafting actions");
+var questToolbarClicked = false;
+gameUi.QuestButton.Clicked += () => questToolbarClicked = true;
+var skillsButtonCenter = new Vector2(
+    gameUi.SkillsButton.Bounds.X +
+    gameUi.SkillsButton.Bounds.Z * .5f,
+    gameUi.SkillsButton.Bounds.Y +
+    gameUi.SkillsButton.Bounds.W * .5f);
+gameUi.UpdatePointer(skillsButtonCenter, leftDown: true);
+gameUi.UpdatePointer(skillsButtonCenter, leftDown: false);
+var questButtonCenter = new Vector2(
+    gameUi.QuestButton.Bounds.X +
+    gameUi.QuestButton.Bounds.Z * .5f,
+    gameUi.QuestButton.Bounds.Y +
+    gameUi.QuestButton.Bounds.W * .5f);
+gameUi.UpdatePointer(questButtonCenter, leftDown: true);
+gameUi.UpdatePointer(questButtonCenter, leftDown: false);
+Require(
+    questToolbarClicked &&
+    gameUi.ActivePanel == GameUiPanel.Skills,
+    "quest and crafting actions must activate without closing the selected gameplay panel");
 var skillBack = SkillPanelLayout.BackButtonBounds(gameUi.Panel.Bounds);
 var skillTitle = SkillPanelLayout.TitleBounds(gameUi.Panel.Bounds);
 var skillLevel = SkillPanelLayout.LevelCardBounds(gameUi.Panel.Bounds);

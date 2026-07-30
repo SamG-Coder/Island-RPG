@@ -41,9 +41,17 @@ internal sealed class TabControlState(GameUiPanel panel) : ControlState
     internal override void Activate() => Clicked?.Invoke(this);
 }
 
+internal sealed class ActionControlState : ControlState
+{
+    public event Action? Clicked;
+
+    internal override void Activate() => Clicked?.Invoke();
+}
+
 internal sealed class GameUiControlState
 {
-    private const float ButtonSize = 38;
+    private const float ButtonWidth = 52;
+    private const float ButtonHeight = 42;
     private const float ControlGap = 4;
     internal const int InventoryColumns = 4;
     internal const int InventoryRows = 7;
@@ -65,13 +73,23 @@ internal sealed class GameUiControlState
     public TabControlState SkillsButton { get; } = new(GameUiPanel.Skills);
     public TabControlState CombatButton { get; } = new(GameUiPanel.Combat);
     public TabControlState InventoryButton { get; } = new(GameUiPanel.Inventory);
+    public ActionControlState CraftingButton { get; } = new();
+    public ActionControlState QuestButton { get; } = new();
     public PanelControlState Panel { get; } = new();
     public GameUiPanel ActivePanel { get; private set; }
 
     public GameUiControlState()
     {
         // Last visual control is tested first. Tabs sit above the panel.
-        _hitOrder = [InventoryButton, SkillsButton, CombatButton, Panel];
+        _hitOrder =
+        [
+            InventoryButton,
+            SkillsButton,
+            CombatButton,
+            CraftingButton,
+            QuestButton,
+            Panel
+        ];
         CombatButton.Clicked += Toggle;
         SkillsButton.Clicked += Toggle;
         InventoryButton.Clicked += Toggle;
@@ -80,24 +98,38 @@ internal sealed class GameUiControlState
     public void Layout(Vector4 viewport)
     {
         InventoryButton.Bounds = new(
-            Math.Max(viewport.X, viewport.X + viewport.Z - ButtonSize - 12),
-            Math.Max(viewport.Y, viewport.Y + viewport.W - ButtonSize - 12),
-            ButtonSize,
-            ButtonSize);
+            Math.Max(viewport.X, viewport.X + viewport.Z - ButtonWidth - 12),
+            Math.Max(viewport.Y, viewport.Y + viewport.W - ButtonHeight - 12),
+            ButtonWidth,
+            ButtonHeight);
         SkillsButton.Bounds = new(
             Math.Max(
                 viewport.X,
-                InventoryButton.Bounds.X - ButtonSize - ControlGap),
+                InventoryButton.Bounds.X - ButtonWidth - ControlGap),
             InventoryButton.Bounds.Y,
-            ButtonSize,
-            ButtonSize);
+            ButtonWidth,
+            ButtonHeight);
         CombatButton.Bounds = new(
             Math.Max(
                 viewport.X,
-                SkillsButton.Bounds.X - ButtonSize - ControlGap),
+                SkillsButton.Bounds.X - ButtonWidth - ControlGap),
             InventoryButton.Bounds.Y,
-            ButtonSize,
-            ButtonSize);
+            ButtonWidth,
+            ButtonHeight);
+        CraftingButton.Bounds = new(
+            Math.Max(
+                viewport.X,
+                CombatButton.Bounds.X - ButtonWidth - ControlGap),
+            InventoryButton.Bounds.Y,
+            ButtonWidth,
+            ButtonHeight);
+        QuestButton.Bounds = new(
+            Math.Max(
+                viewport.X,
+                CraftingButton.Bounds.X - ButtonWidth - ControlGap),
+            InventoryButton.Bounds.Y,
+            ButtonWidth,
+            ButtonHeight);
         Panel.Bounds = new(
             Math.Max(
                 viewport.X,

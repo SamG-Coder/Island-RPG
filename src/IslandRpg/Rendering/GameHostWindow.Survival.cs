@@ -20,6 +20,9 @@ internal sealed partial class GameHostWindow
         new SpriteFrame?[CombatSkillIconCount];
     private readonly int[] _combatSkillIconTextures =
         new int[CombatSkillIconCount];
+    private readonly SpriteFrame?[] _toolbarActionIconFrames =
+        new SpriteFrame?[2];
+    private readonly int[] _toolbarActionIconTextures = new int[2];
     private float _starvationElapsed;
 
     private void AwardAdventureExperience(int actionExperience)
@@ -269,6 +272,69 @@ internal sealed partial class GameHostWindow
             _playerUiIconTextures[cell] = Upload(frame);
         }
         PrepareCombatSkillIcons();
+        PrepareToolbarActionIcons();
+    }
+
+    private void PrepareToolbarActionIcons()
+    {
+        var path = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Images", "Ui",
+            "quest-crafting-ui-icons-source.png");
+        if (!File.Exists(path)) return;
+        using var stream = File.OpenRead(path);
+        var sheet = ImageResult.FromStream(
+            stream, ColorComponents.RedGreenBlueAlpha);
+        for (var cell = 0; cell < 2; cell++)
+        {
+            var left = cell * sheet.Width / 2;
+            var right = (cell + 1) * sheet.Width / 2;
+            var contentLeft = right;
+            var contentRight = left;
+            var contentTop = sheet.Height;
+            var contentBottom = 0;
+            for (var y = 0; y < sheet.Height; y++)
+            for (var x = left; x < right; x++)
+            {
+                var source = (y * sheet.Width + x) * 4;
+                if (IsPlayerUiChromaKey(sheet.Data, source)) continue;
+                contentLeft = Math.Min(contentLeft, x);
+                contentRight = Math.Max(contentRight, x);
+                contentTop = Math.Min(contentTop, y);
+                contentBottom = Math.Max(contentBottom, y);
+            }
+            if (contentRight < contentLeft || contentBottom < contentTop)
+                continue;
+            var sourceSpan = Math.Max(
+                contentRight - contentLeft + 1,
+                contentBottom - contentTop + 1);
+            var centerX = (contentLeft + contentRight) / 2;
+            var centerY = (contentTop + contentBottom) / 2;
+            const int iconSize = 32;
+            var pixels = new byte[iconSize * iconSize * 4];
+            for (var y = 0; y < iconSize; y++)
+            for (var x = 0; x < iconSize; x++)
+            {
+                var sourceX = Math.Clamp(
+                    centerX - sourceSpan / 2 +
+                    (x * 2 + 1) * sourceSpan / (iconSize * 2),
+                    left, right - 1);
+                var sourceY = Math.Clamp(
+                    centerY - sourceSpan / 2 +
+                    (y * 2 + 1) * sourceSpan / (iconSize * 2),
+                    0, sheet.Height - 1);
+                var source = (sourceY * sheet.Width + sourceX) * 4;
+                if (IsPlayerUiChromaKey(sheet.Data, source)) continue;
+                var target = (y * iconSize + x) * 4;
+                pixels[target] = sheet.Data[source];
+                pixels[target + 1] = sheet.Data[source + 1];
+                pixels[target + 2] = sheet.Data[source + 2];
+                pixels[target + 3] = 255;
+            }
+            var frame = new SpriteFrame(
+                iconSize, iconSize, 16, 16, pixels);
+            _toolbarActionIconFrames[cell] = frame;
+            _toolbarActionIconTextures[cell] = Upload(frame);
+        }
     }
 
     private void PrepareCombatSkillIcons()
@@ -364,6 +430,18 @@ internal sealed partial class GameHostWindow
             _combatSkillIconTextures[index] == 0)
             return;
         DrawUiSprite(frame, _combatSkillIconTextures[index], bounds);
+    }
+
+    private void DrawToolbarActionIcon(int index, Vector4 bounds)
+    {
+        if ((uint)index >= _toolbarActionIconFrames.Length ||
+            _toolbarActionIconFrames[index] is not { } frame ||
+            _toolbarActionIconTextures[index] == 0)
+            return;
+        DrawUiSprite(
+            frame,
+            _toolbarActionIconTextures[index],
+            bounds);
     }
 
     private void RenderPlayerStatus()
