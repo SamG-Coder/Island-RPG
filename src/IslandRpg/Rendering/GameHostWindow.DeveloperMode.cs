@@ -152,11 +152,13 @@ internal sealed partial class GameHostWindow
         DrawUiColor(_commandHints.Bounds, new(.030f, .027f, .021f, .99f));
         DrawPanelOutline(
             _commandHints.Bounds, 2, new(.45f, .35f, .15f, 1));
-        for (var index = 0; index < _commandHints.Items.Count; index++)
+        for (var rowIndex = 0;
+             rowIndex < _commandHints.VisibleCount;
+             rowIndex++)
         {
-            var item = _commandHints.Items[index];
-            var row = _commandHints.RowBounds(index);
-            var selected = index == _commandHints.SelectedIndex;
+            var item = _commandHints.ItemAtVisibleRow(rowIndex);
+            var row = _commandHints.RowBounds(rowIndex);
+            var selected = _commandHints.IsSelectedVisibleRow(rowIndex);
             var hovered = row.Contains(MouseState.Position);
             if (selected || hovered)
                 DrawUiColor(
@@ -164,7 +166,7 @@ internal sealed partial class GameHostWindow
                     selected
                         ? new(.16f, .125f, .045f, .99f)
                         : new(.09f, .075f, .042f, .99f));
-            if (index > 0)
+            if (rowIndex > 0)
                 DrawUiColor(
                     new(row.X + 8, row.Y, row.Z - 16, 1),
                     new(.18f, .15f, .09f, 1));
@@ -178,6 +180,19 @@ internal sealed partial class GameHostWindow
                 item.Description,
                 new(row.X + 10, row.Y + 23),
                 new FSColor(153, 147, 127, 255));
+        }
+        if (_commandHints.CanScroll)
+        {
+            DrawUiColor(
+                _commandHints.ScrollTrackBounds,
+                new(.035f, .032f, .027f, .98f));
+            DrawUiColor(
+                _commandHints.ScrollThumbBounds,
+                new(.30f, .27f, .18f, 1));
+            DrawPanelOutline(
+                _commandHints.ScrollTrackBounds,
+                0,
+                new(.18f, .15f, .09f, 1));
         }
     }
 

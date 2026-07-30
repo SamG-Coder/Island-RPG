@@ -47,8 +47,7 @@ internal static class ChatCommandRegistry
 
     public static IReadOnlyList<ChatCommandDefinition> Filter(
         string input,
-        bool developerMode,
-        int maximum = 6)
+        bool developerMode)
     {
         if (!input.StartsWith('/')) return [];
         if (input.Contains(' ')) return [];
@@ -56,7 +55,6 @@ internal static class ChatCommandRegistry
         return Visible(developerMode)
             .Where(command => command.Name.StartsWith(
                 token, StringComparison.OrdinalIgnoreCase))
-            .Take(maximum)
             .ToArray();
     }
 

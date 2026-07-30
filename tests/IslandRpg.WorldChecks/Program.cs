@@ -22,13 +22,18 @@ Require(
     "chat command filtering must match prefixes, permissions, and arguments");
 var commandDropdown = new CommandHintDropdownState();
 commandDropdown.UpdateItems(
-    developerCommandHints,
+    ChatCommandRegistry.Filter("/", true),
     new Vector4(100, 500, 360, 38));
 Require(
     commandDropdown.Visible &&
     commandDropdown.Bounds.Y < 500 &&
-    commandDropdown.RowBounds(0).Z == 360,
-    "command hints must form a reusable dropdown above the chat input");
+    commandDropdown.VisibleCount == 6 &&
+    commandDropdown.CanScroll &&
+    commandDropdown.FirstVisibleIndex == 0 &&
+    commandDropdown.Scroll(new(110, 300), -1) &&
+    commandDropdown.FirstVisibleIndex == 1 &&
+    commandDropdown.ScrollThumbBounds.W > 0,
+    "command hints must form a reusable scrollable dropdown above the chat input");
 var gameGraphics = GameHostWindow.RequiredGraphicsFor(
     GameHostWindow.PreviewMode.Game);
 Require(

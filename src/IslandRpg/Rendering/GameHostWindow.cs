@@ -2619,6 +2619,10 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_mode == PreviewMode.Game)
         {
             _chatUi.Layout(SceneClientBounds());
+            UpdateCommandHints();
+            if (_commandHints.Scroll(
+                    MouseState.Position, e.OffsetY))
+                return;
             if (_chatUi.Scroll(MouseState.Position, e.OffsetY)) return;
         }
         if (_atlasOpen)
