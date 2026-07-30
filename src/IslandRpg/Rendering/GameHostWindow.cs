@@ -5797,10 +5797,13 @@ internal sealed partial class GameHostWindow : GameWindow
             tile.Name.Equals(TerrainName(Biome.Rock), StringComparison.OrdinalIgnoreCase));
         _cliffTexture = Upload(rock.Width, rock.Height, rock.Rgba);
         GL.BindTexture(TextureTarget.Texture2D, _cliffTexture);
+        var cliffWrap = _useTestAssets
+            ? TextureWrapMode.MirroredRepeat
+            : TextureWrapMode.Repeat;
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS,
-            (int)TextureWrapMode.Repeat);
+            (int)cliffWrap);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT,
-            (int)TextureWrapMode.Repeat);
+            (int)cliffWrap);
         _cliffBatchVbo = GL.GenBuffer();
         PrepareTreeAtlas();
     }
@@ -7269,8 +7272,17 @@ internal sealed partial class GameHostWindow : GameWindow
                 PixelFormat.Rgba, PixelType.UnsignedByte, selected[layer].Rgba);
         GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
         GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
-        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
+        var terrainWrap = _useTestAssets
+            ? TextureWrapMode.MirroredRepeat
+            : TextureWrapMode.Repeat;
+        GL.TexParameter(
+            TextureTarget.Texture2DArray,
+            TextureParameterName.TextureWrapS,
+            (int)terrainWrap);
+        GL.TexParameter(
+            TextureTarget.Texture2DArray,
+            TextureParameterName.TextureWrapT,
+            (int)terrainWrap);
         return texture;
     }
 
@@ -7299,10 +7311,17 @@ internal sealed partial class GameHostWindow : GameWindow
             (int)TextureMinFilter.Linear);
         GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter,
             (int)TextureMagFilter.Linear);
-        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS,
-            (int)TextureWrapMode.Repeat);
-        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapT,
-            (int)TextureWrapMode.Repeat);
+        var waterWrap = _useTestAssets
+            ? TextureWrapMode.MirroredRepeat
+            : TextureWrapMode.Repeat;
+        GL.TexParameter(
+            TextureTarget.Texture2DArray,
+            TextureParameterName.TextureWrapS,
+            (int)waterWrap);
+        GL.TexParameter(
+            TextureTarget.Texture2DArray,
+            TextureParameterName.TextureWrapT,
+            (int)waterWrap);
         return textureArray;
     }
 
