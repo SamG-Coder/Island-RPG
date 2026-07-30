@@ -29,6 +29,15 @@ Require(
     commandDropdown.Bounds.Y < 500 &&
     commandDropdown.RowBounds(0).Z == 360,
     "command hints must form a reusable dropdown above the chat input");
+var gameGraphics = GameHostWindow.RequiredGraphicsFor(
+    GameHostWindow.PreviewMode.Game);
+Require(
+    gameGraphics is not null &&
+    gameGraphics.Contains("VMBAS_DN") &&
+    gameGraphics.Contains("VFBAS_DN") &&
+    gameGraphics.Contains("VMBAS_SN") &&
+    gameGraphics.Contains("VFBAS_SN"),
+    "game asset loading must include both directional death and skeleton sheets");
 
 var adventureAward = AdventureService.AwardFromAction(0, 400);
 Require(
@@ -3196,15 +3205,19 @@ try
                 index % 2 == 0
                     ? EntityGender.Male
                     : EntityGender.Female,
-                deathBase.AddMinutes(index)));
+                deathBase.AddMinutes(index),
+                FacingX: -1,
+                FacingY: 1));
     var deaths = saves.LoadPlayerDeaths(world.Id, player.Id);
     Require(
         deaths.Count == PlayerDeathService.MaximumRememberedDeaths &&
         deaths[0].PositionX == 12 &&
         deaths[^1].PositionX == 3 &&
         deaths[0].WorldLevel == 0 &&
-        deaths[1].Gender == EntityGender.Female,
-        "death markers must persist newest-first with position, layer, gender, and a ten-marker cap");
+        deaths[1].Gender == EntityGender.Female &&
+        deaths[0].FacingX == -1 &&
+        deaths[0].FacingY == 1,
+        "death markers must persist newest-first with position, layer, facing, gender, and a ten-marker cap");
     saves.DeletePlayer(player.Id);
     Require(saves.ListPlayers().Count == 0 &&
             saves.LoadWorldPlayer(world.Id, player.Id) is null &&

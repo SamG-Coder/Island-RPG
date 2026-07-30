@@ -421,7 +421,7 @@ internal sealed partial class GameHostWindow : GameWindow
             AssetLoader.LoadAll(_install, progress, requiredGraphics));
     }
 
-    private static IReadOnlySet<string>? RequiredGraphicsFor(PreviewMode mode)
+    internal static IReadOnlySet<string>? RequiredGraphicsFor(PreviewMode mode)
     {
         if (mode == PreviewMode.Assets) return null;
 
@@ -456,8 +456,8 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             foreach (var name in new[]
             {
-                "VMBAS_WN", "VMBAS_FN", "VMBAS_AN", "VMBAS_DN",
-                "VFBAS_WN", "VFBAS_FN", "VFBAS_AN", "VFBAS_DN",
+                "VMBAS_WN", "VMBAS_FN", "VMBAS_AN", "VMBAS_DN", "VMBAS_SN",
+                "VFBAS_WN", "VFBAS_FN", "VFBAS_AN", "VFBAS_DN", "VFBAS_SN",
                 "VMLUM_AN", "VFLUM_AN",
                 "VMFAR_TN", "VFFAR_TN",
                 "VMMIN_TN", "VFMIN_TN",
@@ -5397,6 +5397,7 @@ internal sealed partial class GameHostWindow : GameWindow
         }
 
         _worldRenderQueue.Sort();
+        RenderDeathMarkers();
         var shadowVertices = _worldRenderQueue.ShadowVertices;
         foreach (var shadow in shadows)
             AddAtlasQuad(
@@ -5424,7 +5425,6 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         FlushAtlas();
         if (!playerDrawn) DrawPlayer();
-        RenderDeathMarkers();
         if (player is not null &&
             playerOccluded &&
             _occludedPlayerOutlineEnabled)
@@ -5859,6 +5859,17 @@ internal sealed partial class GameHostWindow : GameWindow
                 !_entityAnimations.ContainsKey((gender, EntityAction.Gather)))
                 throw new InvalidOperationException(
                     $"The installed assets do not contain the complete {gender} villager rig.");
+        }
+        foreach (var gender in Enum.GetValues<EntityGender>())
+        {
+            if (_skeletonAnimations.ContainsKey(gender)) continue;
+            var fallbackGender = gender == EntityGender.Male
+                ? EntityGender.Female
+                : EntityGender.Male;
+            if (!_skeletonAnimations.TryGetValue(
+                    fallbackGender, out var fallback))
+                continue;
+            _skeletonAnimations[gender] = fallback;
         }
 
         var markerGraphic = _catalog!.Graphics.Values.FirstOrDefault(value =>
@@ -6337,6 +6348,7 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         const int storedVillagerAngles = 5;
         if (_player is null ||
+            (_playerDefeated && _clock >= _deathOverlayAt) ||
             !_entityAnimations.TryGetValue((_player.Gender, _player.Action), out var animation))
             return null;
         var graphic = animation.Graphic;

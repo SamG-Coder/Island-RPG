@@ -93,7 +93,9 @@ internal sealed partial class GameHostWindow
     {
         for (var index = 0; index < _playerDeaths.Count; index++)
         {
-            if (_playerDefeated && index == 0) continue;
+            if (_playerDefeated && index == 0 &&
+                _clock < _deathOverlayAt)
+                continue;
             var marker = _playerDeaths[index];
             if (marker.WorldLevel != _activeWorldLevel ||
                 !_skeletonAnimations.TryGetValue(
@@ -101,7 +103,16 @@ internal sealed partial class GameHostWindow
                 animation.Graphic.Sprite.Frames.Count == 0)
                 continue;
 
-            var frameIndex = animation.Graphic.Sprite.Frames.Count - 1;
+            const int storedVillagerAngles = 5;
+            var framesPerAngle = Math.Max(
+                1,
+                animation.Graphic.Sprite.Frames.Count /
+                storedVillagerAngles);
+            var directional = VillagerDirectionRig.Resolve(
+                new(marker.FacingX, marker.FacingY),
+                animation.Graphic.Sprite.Frames.Count,
+                storedVillagerAngles,
+                framesPerAngle - 1);
             var terrain = SamplePlayerTerrain(
                 marker.PositionX, marker.PositionY);
             var world = IsometricTerrainProjection.Project(
@@ -109,9 +120,11 @@ internal sealed partial class GameHostWindow
                 marker.PositionY,
                 terrain.Height);
             DrawSprite(
-                animation.Graphic.Sprite.Frames[frameIndex],
-                animation.Textures[frameIndex],
-                world);
+                animation.Graphic.Sprite.Frames[directional.Index],
+                animation.Textures[directional.Index],
+                world,
+                opacity: .68f,
+                mirror: directional.Mirror);
         }
     }
 

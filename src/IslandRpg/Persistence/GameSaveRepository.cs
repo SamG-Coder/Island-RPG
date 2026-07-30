@@ -52,7 +52,9 @@ internal sealed record PlayerDeathMarker(
     float PositionY,
     int WorldLevel,
     EntityGender Gender,
-    DateTime DiedUtc);
+    DateTime DiedUtc,
+    float FacingX = 1,
+    float FacingY = 1);
 
 internal enum DisplayVSyncMode
 {

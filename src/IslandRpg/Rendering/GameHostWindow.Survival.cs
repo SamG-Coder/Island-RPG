@@ -114,6 +114,7 @@ internal sealed partial class GameHostWindow
 
         CancelMeleeCombat();
         CancelWorldLevelWork(clearMinimap: true);
+        UseDefaultGameCursor();
         _player.Die();
         _playerDefeated = true;
         _deathMessage = message;
@@ -124,7 +125,9 @@ internal sealed partial class GameHostWindow
             _player.Position.Y,
             _activeWorldLevel,
             _player.Gender,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            _player.Facing.X,
+            _player.Facing.Y);
         _saves.AddPlayerDeath(
             _activeWorld.Id, _activePlayer.Id, marker);
         _playerDeaths = _saves.LoadPlayerDeaths(
