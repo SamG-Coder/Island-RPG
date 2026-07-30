@@ -2673,14 +2673,23 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         if (Math.Abs(_targetZoom - _zoom) < .0001f)
         {
+            if (_zoom == _targetZoom)
+                return;
+
+            var previousZoom = _zoom;
             _zoom = _targetZoom;
+            ApplyZoomCamera(previousZoom);
             return;
         }
 
         var oldZoom = _zoom;
         var blend = 1f - MathF.Exp(-14f * (float)Math.Min(elapsedSeconds, .1));
         _zoom += (_targetZoom - _zoom) * blend;
+        ApplyZoomCamera(oldZoom);
+    }
 
+    private void ApplyZoomCamera(float oldZoom)
+    {
         if (_mode == PreviewMode.Game &&
             _screen == ScreenState.WorldPreview &&
             _player is not null)
@@ -2692,7 +2701,8 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             // Preview cameras retain the terrain point beneath the pointer.
             _camera = _zoomAnchor -
-                      (_zoomAnchor - _camera) * (_zoom / oldZoom);
+                      (_zoomAnchor - _camera) *
+                      (_zoom / Math.Max(oldZoom, .001f));
         }
     }
 
