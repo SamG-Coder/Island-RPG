@@ -86,19 +86,72 @@ internal sealed class UiColorBatch : IDisposable
 
     public void Add(Vector4 rectangle, Vector4 color, float opacity)
     {
-        if (rectangle.Z <= 0 || rectangle.W <= 0 || opacity <= 0) return;
+        if (!IsFinite(rectangle) ||
+            !IsFinite(color) ||
+            !float.IsFinite(opacity) ||
+            rectangle.Z <= 0 ||
+            rectangle.W <= 0 ||
+            opacity <= 0)
+            return;
+
+        // Layout is expressed in logical client pixels. Clip it here before
+        // uploading vertices so a transient off-screen or oversized control
+        // can never become a huge clipped triangle in the OpenGL viewport.
+        var left = Math.Clamp(rectangle.X, 0, _viewportWidth);
+        var top = Math.Clamp(rectangle.Y, 0, _viewportHeight);
+        var right = Math.Clamp(
+            rectangle.X + rectangle.Z, 0, _viewportWidth);
+        var bottom = Math.Clamp(
+            rectangle.Y + rectangle.W, 0, _viewportHeight);
+        if (right <= left || bottom <= top) return;
+
         EnsureCapacity(VerticesPerRectangle * FloatsPerVertex);
-        var left = rectangle.X;
-        var top = rectangle.Y;
-        var right = rectangle.X + rectangle.Z;
-        var bottom = rectangle.Y + rectangle.W;
-        var alpha = color.W * opacity;
+        var alpha = Math.Clamp(color.W * opacity, 0, 1);
         AddVertex(left, top, color, alpha);
         AddVertex(left, bottom, color, alpha);
         AddVertex(right, bottom, color, alpha);
         AddVertex(left, top, color, alpha);
         AddVertex(right, bottom, color, alpha);
         AddVertex(right, top, color, alpha);
+    }
+
+    public void AddLine(
+        float x1,
+        float y1,
+        float x2,
+        float y2,
+        float width,
+        Vector4 color,
+        float opacity)
+    {
+        if (!float.IsFinite(x1) ||
+            !float.IsFinite(y1) ||
+            !float.IsFinite(x2) ||
+            !float.IsFinite(y2) ||
+            !float.IsFinite(width) ||
+            !IsFinite(color) ||
+            !float.IsFinite(opacity) ||
+            width <= 0 ||
+            opacity <= 0)
+            return;
+
+        var deltaX = x2 - x1;
+        var deltaY = y2 - y1;
+        var length = MathF.Sqrt(deltaX * deltaX + deltaY * deltaY);
+        if (!float.IsFinite(length) || length <= float.Epsilon) return;
+
+        var halfWidth = width * .5f;
+        var normalX = -deltaY / length * halfWidth;
+        var normalY = deltaX / length * halfWidth;
+        var alpha = Math.Clamp(color.W * opacity, 0, 1);
+        EnsureCapacity(VerticesPerRectangle * FloatsPerVertex);
+
+        AddVertex(x1 + normalX, y1 + normalY, color, alpha);
+        AddVertex(x1 - normalX, y1 - normalY, color, alpha);
+        AddVertex(x2 - normalX, y2 - normalY, color, alpha);
+        AddVertex(x1 + normalX, y1 + normalY, color, alpha);
+        AddVertex(x2 - normalX, y2 - normalY, color, alpha);
+        AddVertex(x2 + normalX, y2 + normalY, color, alpha);
     }
 
     public void Flush()
@@ -172,6 +225,12 @@ internal sealed class UiColorBatch : IDisposable
             ref _vertices,
             Math.Max(required, _vertices.Length * 2));
     }
+
+    private static bool IsFinite(Vector4 value) =>
+        float.IsFinite(value.X) &&
+        float.IsFinite(value.Y) &&
+        float.IsFinite(value.Z) &&
+        float.IsFinite(value.W);
 
     private static int Compile(ShaderType type, string source)
     {
