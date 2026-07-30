@@ -116,7 +116,22 @@ internal sealed partial class GameHostWindow
             _activeMiningKey = null;
             return;
         }
-        var strike = (int)(_player.ActionTime / .8f);
+        if (!_entityAnimations.TryGetValue(
+                (_player.Gender, EntityAction.Mine),
+                out var animation))
+            return;
+        var framesPerAngle = Math.Max(
+            1, animation.Graphic.Sprite.Frames.Count / 5);
+        var cycleDuration = Math.Max(
+            framesPerAngle * animation.SecondsPerFrame, .1f);
+        // The AoE mining animation first contacts the node on authored
+        // frame 10 (zero-based frame 9). Resolve sound, roll, damage, XP,
+        // depletion, and feedback together on that pose.
+        var impactFrame = Math.Clamp(9, 0, framesPerAngle - 1);
+        var impactTime = impactFrame * animation.SecondsPerFrame;
+        if (_player.ActionTime < impactTime) return;
+        var strike = 1 + (int)(
+            (_player.ActionTime - impactTime) / cycleDuration);
         if (strike <= _lastMiningStrike) return;
         _lastMiningStrike = strike;
 
