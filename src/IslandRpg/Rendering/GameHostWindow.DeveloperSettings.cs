@@ -56,6 +56,28 @@ internal sealed partial class GameHostWindow
             return true;
         }
         if (list.VisibleIndices.Contains(
+                DeveloperSettingsController.SoundAuditionIndex))
+        {
+            if (DeveloperSettingsController.SoundPreviousBounds(list)
+                .Contains(pointer))
+            {
+                SelectPreviousDeveloperSound();
+                return true;
+            }
+            if (DeveloperSettingsController.SoundPlayBounds(list)
+                .Contains(pointer))
+            {
+                PlaySelectedDeveloperSound();
+                return true;
+            }
+            if (DeveloperSettingsController.SoundNextBounds(list)
+                .Contains(pointer))
+            {
+                SelectNextDeveloperSound();
+                return true;
+            }
+        }
+        if (list.VisibleIndices.Contains(
                 DeveloperSettingsController.NavigationBlocksIndex) &&
             _navigationBlocksToggle.ToggleAt(pointer))
             return true;

@@ -329,6 +329,30 @@ internal sealed partial class GameHostWindow
                     ? "Enter underground"
                     : "Return overworld");
         }
+        if (list.VisibleIndices.Contains(
+                DeveloperSettingsController.SoundAuditionIndex))
+        {
+            var row = list.RowBounds(
+                DeveloperSettingsController.SoundAuditionIndex);
+            DrawUiColor(row, new(.055f, .048f, .034f, .96f));
+            DrawPanelOutline(row, 1, new(.28f, .23f, .13f, 1));
+            var sound = SelectedDeveloperSound();
+            DrawUiText(
+                sound is null
+                    ? "AoE sounds unavailable"
+                    : $"Sound {sound.ResourceId}",
+                new(row.X + 10, row.Y + 17),
+                new(224, 210, 168, 255));
+            DrawMenuButton(
+                DeveloperSettingsController.SoundPreviousBounds(list),
+                "Previous");
+            DrawMenuButton(
+                DeveloperSettingsController.SoundPlayBounds(list),
+                "Play");
+            DrawMenuButton(
+                DeveloperSettingsController.SoundNextBounds(list),
+                "Next");
+        }
         RenderDeveloperSection(
             list,
             DeveloperSettingsController.DiagnosticsHeaderIndex,

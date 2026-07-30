@@ -7,15 +7,32 @@ namespace IslandRpg.Rendering;
 internal sealed partial class GameHostWindow
 {
     private Age2MusicPlayer? _musicPlayer;
+    private Age2SoundEffectPlayer? _soundEffects;
+    private IReadOnlyList<Age2SoundEffect> _soundBrowser = [];
+    private int _soundBrowserIndex;
     private readonly SliderControlState _musicVolumeSlider = new();
 
     private void InitializeMusic()
     {
         _musicPlayer = new Age2MusicPlayer(_install);
+        _soundBrowser = Age2SoundEffectCatalog.Find(_install);
+        try
+        {
+            _soundEffects = new Age2SoundEffectPlayer
+            {
+                Volume = _saves.LoadSettings().MasterVolume
+            };
+        }
+        catch
+        {
+            _soundEffects = null;
+        }
         _musicVolumeSlider.ValueChanged += value =>
         {
             var settings = _saves.LoadSettings();
             _musicPlayer?.Configure(settings.MusicEnabled, value);
+            if (_soundEffects is not null)
+                _soundEffects.Volume = value;
         };
         _musicVolumeSlider.DragCompleted += value =>
         {
@@ -29,12 +46,44 @@ internal sealed partial class GameHostWindow
         ApplyMusicSettings();
     }
 
+    private Age2SoundEffect? SelectedDeveloperSound() =>
+        _soundBrowser.Count == 0
+            ? null
+            : _soundBrowser[Math.Clamp(
+                _soundBrowserIndex, 0, _soundBrowser.Count - 1)];
+
+    private void SelectPreviousDeveloperSound()
+    {
+        if (_soundBrowser.Count == 0) return;
+        _soundBrowserIndex =
+            (_soundBrowserIndex - 1 + _soundBrowser.Count) %
+            _soundBrowser.Count;
+    }
+
+    private void SelectNextDeveloperSound()
+    {
+        if (_soundBrowser.Count == 0) return;
+        _soundBrowserIndex =
+            (_soundBrowserIndex + 1) % _soundBrowser.Count;
+    }
+
+    private void PlaySelectedDeveloperSound()
+    {
+        if (SelectedDeveloperSound() is { } sound)
+        {
+            _soundEffects?.StopAll();
+            _soundEffects?.Play(sound.Path);
+        }
+    }
+
     private void ApplyMusicSettings()
     {
         var settings = _saves.LoadSettings();
         _musicPlayer?.Configure(
             settings.MusicEnabled,
             settings.MasterVolume);
+        if (_soundEffects is not null)
+            _soundEffects.Volume = settings.MasterVolume;
     }
 
     internal bool UpdateSoundSettings(Vector2 pointer, Vector4 panel)

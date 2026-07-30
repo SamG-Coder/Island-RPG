@@ -9,10 +9,11 @@ internal sealed class DeveloperSettingsController
     public const int ToolsHeaderIndex = 0;
     public const int PrimaryToolsIndex = 1;
     public const int WorldToolsIndex = 2;
-    public const int DiagnosticsHeaderIndex = 3;
-    public const int NavigationBlocksIndex = 4;
-    public const int ProgressionHeaderIndex = 5;
-    public const int SkillStartIndex = 6;
+    public const int SoundAuditionIndex = 3;
+    public const int DiagnosticsHeaderIndex = 4;
+    public const int NavigationBlocksIndex = 5;
+    public const int ProgressionHeaderIndex = 6;
+    public const int SkillStartIndex = 7;
 
     public static readonly SkillType[] Skills =
         Enum.GetValues<SkillType>();
@@ -92,6 +93,15 @@ internal sealed class DeveloperSettingsController
         ListControlState list) =>
         list.RowBounds(NavigationBlocksIndex);
 
+    public static Vector4 SoundPreviousBounds(ListControlState list) =>
+        SoundColumnBounds(list, 0);
+
+    public static Vector4 SoundPlayBounds(ListControlState list) =>
+        SoundColumnBounds(list, 1);
+
+    public static Vector4 SoundNextBounds(ListControlState list) =>
+        SoundColumnBounds(list, 2);
+
     public static Vector4 SkillRowBounds(
         ListControlState list, SkillType skill) =>
         list.RowBounds(SkillStartIndex + (int)skill);
@@ -109,6 +119,20 @@ internal sealed class DeveloperSettingsController
         var width = (row.Z - gap) * .5f;
         return new(
             row.X + column * (width + gap),
+            row.Y + 7,
+            width,
+            row.W - 14);
+    }
+
+    private static Vector4 SoundColumnBounds(
+        ListControlState list, int column)
+    {
+        var row = list.RowBounds(SoundAuditionIndex);
+        const float labelWidth = 150;
+        const float gap = 6;
+        var width = (row.Z - labelWidth - gap * 2) / 3;
+        return new(
+            row.X + labelWidth + column * (width + gap),
             row.Y + 7,
             width,
             row.W - 14);

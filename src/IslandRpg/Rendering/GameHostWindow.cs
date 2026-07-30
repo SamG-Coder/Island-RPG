@@ -7322,6 +7322,7 @@ internal sealed partial class GameHostWindow : GameWindow
     protected override void OnUnload()
     {
         _uiColorBatch.Dispose();
+        _soundEffects?.Dispose();
         _musicPlayer?.Dispose();
         CancelWorldLevelWork(clearMinimap: true);
         SaveActivePlayerState();

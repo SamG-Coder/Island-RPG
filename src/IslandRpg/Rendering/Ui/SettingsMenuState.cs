@@ -31,6 +31,7 @@ internal sealed class SettingsMenuState
         "developer-section-tools",
         "developer-tools-primary",
         "developer-tools-world",
+        "developer-sound-audition",
         "developer-section-diagnostics",
         "developer-navigation-blocks",
         "developer-section-progression",
