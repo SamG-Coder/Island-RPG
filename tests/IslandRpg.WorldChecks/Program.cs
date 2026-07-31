@@ -1043,6 +1043,75 @@ Require(
         distantStranger.Position) >=
         VillagerSimulation.InteractionRange * .85f,
     "social approaches must stop at conversation range instead of walking into or swapping through the other actor");
+var axeCarrierInventory = PlayerInventory.CreateStartingInventory();
+axeCarrierInventory[0] = ItemIds.StoneAxe;
+var visibleAxeTools = VillagerCapabilityMemory.VisibleTools(
+    axeCarrierInventory);
+var capabilityObserver = VillagerCapabilityMemory.Observe(
+    curiousVillager,
+    "axe-carrier",
+    "Tomas",
+    visibleAxeTools,
+    distance: 2,
+    gameSeconds: 120);
+capabilityObserver = VillagerCapabilityMemory.Observe(
+    capabilityObserver,
+    "axe-carrier",
+    "Tomas",
+    visibleAxeTools,
+    distance: 2,
+    gameSeconds: 180);
+var distantCapabilityObserver = VillagerCapabilityMemory.Observe(
+    curiousVillager,
+    "distant-axe-carrier",
+    "Reed",
+    visibleAxeTools,
+    VillagerSimulation.SocialRange + 1,
+    gameSeconds: 120);
+Require(
+    VillagerCapabilityMemory.KnownTools(
+        capabilityObserver, "axe-carrier")
+        .SequenceEqual([ItemIds.StoneAxe]) &&
+    capabilityObserver.Memories?.Count(memory =>
+        memory.Kind == VillagerCapabilityMemory.ObservedToolKind &&
+        memory.SubjectId == "axe-carrier") == 1 &&
+    VillagerCapabilityMemory.KnownTools(
+        distantCapabilityObserver, "distant-axe-carrier").Count == 0,
+    "nearby visible tools must create one refreshed owner-specific memory without granting distant inventory knowledge");
+var capabilitySocialObserver = capabilityObserver with
+{
+    KnownPeople =
+    [
+        new(
+            "ordinary-worker",
+            AcquaintanceStage.Cooperative,
+            "Mira",
+            0),
+        new(
+            "axe-carrier",
+            AcquaintanceStage.Cooperative,
+            "Tomas",
+            0)
+    ],
+    NextSocialGameSeconds = 0
+};
+var capabilityGoal = VillagerSimulation.SelectSocialGoal(
+    capabilitySocialObserver,
+    new SocialActorObservation[]
+    {
+        new(
+            "ordinary-worker", "Mira", new(1, 0), 0, 90, 0),
+        new(
+            "axe-carrier", "Tomas", new(1.4f, 0), 0, 90, 0,
+            visibleAxeTools)
+    },
+    gameSeconds: 200);
+Require(
+    capabilityGoal.Intent == VillagerSocialIntent.AskTools &&
+    capabilityGoal.OtherActorId == "axe-carrier" &&
+    capabilityGoal.Speech?.Contains(
+        "Stone Axe", StringComparison.OrdinalIgnoreCase) == true,
+    "an observed tool holder must be treated as a salient skilled person and asked specifically about that tool");
 Require(
     VillagerSimulation.PerceivedName(
         curiousVillager, stranger.Id) == "the stranger" &&

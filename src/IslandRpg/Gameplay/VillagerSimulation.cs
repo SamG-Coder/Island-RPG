@@ -38,7 +38,8 @@ internal sealed record VillagerMemory(
     float Confidence,
     double GameSeconds,
     int Sentiment = 0,
-    string? Summary = null);
+    string? Summary = null,
+    string? ItemId = null);
 
 internal sealed record VillagerRelationship(
     string CharacterId,
@@ -187,7 +188,8 @@ internal readonly record struct SocialActorObservation(
     Vector2 Position,
     int WorldLevel,
     float Hunger,
-    int FoodCount);
+    int FoodCount,
+    IReadOnlyList<string>? VisibleToolIds = null);
 
 internal readonly record struct VillagerSocialGoal(
     VillagerSocialIntent Intent,
@@ -544,6 +546,10 @@ internal static class VillagerSimulation
                 known?.Stage == AcquaintanceStage.ExchangedOrigins;
             var needsTools =
                 known?.Stage == AcquaintanceStage.Cooperative;
+            var hasKnownTool =
+                actor.VisibleToolIds is { Count: > 0 } ||
+                VillagerCapabilityMemory.KnownTools(
+                    state, actor.Id).Count > 0;
             var relationshipCheckIn =
                 state.Need == VillagerNeed.Social &&
                 (known is null ||
@@ -569,7 +575,8 @@ internal static class VillagerSimulation
                 (canHelpHungryVillager ||
                  needsOurSurplus
                     ? 1024
-                    : 0);
+                    : 0) -
+                (hasKnownTool ? 16 : 0);
             if (score >= bestScore) continue;
             bestScore = score;
             bestDistance = distance;
@@ -639,6 +646,17 @@ internal static class VillagerSimulation
                     : null);
         if (acquaintance.Stage ==
             AcquaintanceStage.Cooperative)
+        {
+            var knownToolId = best.VisibleToolIds?.FirstOrDefault() ??
+                VillagerCapabilityMemory.KnownTools(
+                    state, best.Id).FirstOrDefault();
+            var toolQuestion = knownToolId is not null &&
+                               ItemCatalog.TryGet(
+                                   knownToolId, out var knownTool)
+                ? $"I noticed your {knownTool.Name}. Could you show me how you use it?"
+                : state.Persona is { } persona
+                    ? $"I used to work as a {persona.PriorTrade}. What tools do you know?"
+                    : "What sort of work and tools do you know?";
             return new(
                 VillagerSocialIntent.AskTools,
                 best.Id,
@@ -646,10 +664,9 @@ internal static class VillagerSimulation
                     ? null
                     : StepToward(position, best.Position),
                 inConversationRange
-                    ? state.Persona is { } persona
-                        ? $"I used to work as a {persona.PriorTrade}. What tools do you know?"
-                        : "What sort of work and tools do you know?"
+                    ? toolQuestion
                     : null);
+        }
         return new(
             VillagerSocialIntent.SeekCompany,
             best.Id,

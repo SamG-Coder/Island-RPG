@@ -366,7 +366,9 @@ internal sealed partial class GameHostWindow
                 _activeWorldLevel,
                 _activePlayer.Hunger,
                 VillagerSimulation.CountFood(
-                    _activePlayer.Inventory ?? [])));
+                    _activePlayer.Inventory ?? []),
+                VillagerCapabilityMemory.VisibleTools(
+                    _activePlayer.Inventory)));
         foreach (var actor in _villagers)
             _socialActorObservations.Add(new(
                 actor.Id,
@@ -376,7 +378,40 @@ internal sealed partial class GameHostWindow
                 actor.WorldLevel,
                 actor.Hunger,
                 VillagerSimulation.CountFood(
+                    actor.Inventory),
+                VillagerCapabilityMemory.VisibleTools(
                     actor.Inventory)));
+        var beforeCapabilityObservation = villager;
+        foreach (var actor in _socialActorObservations)
+        {
+            if (actor.Id == villager.Id ||
+                actor.WorldLevel != villager.WorldLevel)
+                continue;
+            var before = VillagerCapabilityMemory.KnownTools(
+                villager, actor.Id).Count;
+            villager = VillagerCapabilityMemory.Observe(
+                villager,
+                actor.Id,
+                actor.Name,
+                actor.VisibleToolIds,
+                Vector2.Distance(
+                    new(villager.PositionX, villager.PositionY),
+                    actor.Position),
+                _worldGameSeconds);
+            var knownTools = VillagerCapabilityMemory.KnownTools(
+                villager, actor.Id);
+            if (knownTools.Count > before)
+                ObserveLog("capability_observed", villager.Id, new
+                {
+                    SubjectId = actor.Id,
+                    ToolIds = knownTools
+                });
+        }
+        if (!ReferenceEquals(beforeCapabilityObservation, villager))
+        {
+            _villagers[villagerIndex] = villager;
+            _villagersDirty = true;
+        }
         var goal = VillagerSimulation.SelectSocialGoal(
             villager,
             CollectionsMarshal.AsSpan(
@@ -400,7 +435,8 @@ internal sealed partial class GameHostWindow
                     Y = value.Position.Y
                 },
                 value.Hunger,
-                value.FoodCount
+                value.FoodCount,
+                value.VisibleToolIds
             }).ToArray()
         });
         if (goal.Intent == VillagerSocialIntent.None)
