@@ -6,6 +6,8 @@ using IslandRpg.Rendering;
 try
 {
     var options = AppOptions.Parse(args);
+    if (options.Observe)
+        ObserveConsole.AttachToParent();
     var saves = new GameSaveRepository();
     ObserveModeOptions? observeMode = null;
     if (options.Observe)

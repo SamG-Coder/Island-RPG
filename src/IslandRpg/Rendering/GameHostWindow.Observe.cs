@@ -1,9 +1,68 @@
 using System.Text.Json;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
 using IslandRpg.Gameplay;
 using IslandRpg.Rendering.Ui;
 using OpenTK.Mathematics;
 
 namespace IslandRpg.Rendering;
+
+internal static class ObserveConsole
+{
+    private const uint AttachParentProcess = 0xffffffff;
+    private const int ErrorAccessDenied = 5;
+    private const int StandardOutputHandle = -11;
+    private const int StandardErrorHandle = -12;
+
+    public static void AttachToParent()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var outputHandle = GetStdHandle(StandardOutputHandle);
+        var errorHandle = GetStdHandle(StandardErrorHandle);
+        if (!IsUsable(outputHandle) || !IsUsable(errorHandle))
+        {
+            if (!AttachConsole(AttachParentProcess))
+            {
+                var error = Marshal.GetLastPInvokeError();
+                if (error != ErrorAccessDenied)
+                    throw new InvalidOperationException(
+                        $"Observe mode could not attach to its parent " +
+                        $"output (Win32 error {error}).");
+            }
+            outputHandle = GetStdHandle(StandardOutputHandle);
+            errorHandle = GetStdHandle(StandardErrorHandle);
+        }
+        Console.SetOut(CreateWriter(Open(outputHandle)));
+        Console.SetError(CreateWriter(Open(errorHandle)));
+    }
+
+    private static bool IsUsable(nint handle) =>
+        handle != 0 && handle != -1;
+
+    private static FileStream Open(nint handle)
+    {
+        if (!IsUsable(handle))
+            throw new InvalidOperationException(
+                "Observe mode has no writable parent output stream.");
+        return new(
+            new SafeFileHandle(handle, ownsHandle: false),
+            FileAccess.Write);
+    }
+
+    private static StreamWriter CreateWriter(Stream stream) =>
+        new(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
+        {
+            AutoFlush = true
+        };
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AttachConsole(uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern nint GetStdHandle(int standardHandle);
+}
 
 internal sealed record ObserveModeOptions(
     string WorldId,
