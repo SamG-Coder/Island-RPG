@@ -104,7 +104,15 @@ using (var interpretingAi = new NpcAiService(
             "Can you give Mira food?",
             [new("mira", "Mira", 2, 20, "neutral")],
             [],
-            []));
+            [],
+            Self: new(
+                100,
+                80,
+                [ItemIds.CookedMinnows],
+                "Idle",
+                "Idle",
+                [],
+                [])));
     Require(
         interpretation is
         {
@@ -4406,7 +4414,16 @@ try
             rememberedVillager,
             persistedPromise) with
         {
-            FollowingActorId = player.Id
+            FollowingActorId = player.Id,
+            LastDeliberation = new(
+                "Helping build shelter benefits both of us.",
+                "accept",
+                "help_build",
+                85,
+                30,
+                10,
+                90,
+                750)
         };
     persistedVillagers[0] = rememberedVillager;
     for (var turn = 0; turn < 20; turn++)
@@ -4431,6 +4448,12 @@ try
         loadedVillagers[0].Promises?.Single().Id ==
             persistedPromise.Id &&
         loadedVillagers[0].FollowingActorId == player.Id &&
+        loadedVillagers[0].LastDeliberation is
+        {
+            Decision: "accept",
+            Action: "help_build",
+            Priority: 90
+        } &&
         loadedVillagers[1].ConversationHistory?.Count ==
             VillagerSimulation.MaximumConversationTurns &&
         loadedVillagers[1].Memories?.Any(memory =>
@@ -4608,6 +4631,13 @@ static async Task<bool> RunLiveArrivalScenario(string model)
                 elapsedSeconds / 3600d,
                 history));
         var reply = interpretation?.Reply ?? "";
+        var normalizedReply = reply
+            .ToLowerInvariant()
+            .Replace('’', '\'');
+        var claimsSamuelIdentity =
+            normalizedReply.Contains("i'm samuel") ||
+            normalizedReply.Contains("i am samuel") ||
+            normalizedReply.Contains("my name is samuel");
         Console.WriteLine(
             $"ARRIVAL LIVE [{model}] " +
             $"{elapsedSeconds / 60:00}:{elapsedSeconds % 60:00} " +
@@ -4621,9 +4651,10 @@ static async Task<bool> RunLiveArrivalScenario(string model)
                     previous,
                     reply,
                     StringComparison.OrdinalIgnoreCase)) ||
+            claimsSamuelIdentity ||
             !ContainsAny(reply, expectedTerms))
             failures.Add(
-                $"{label} was empty, generic, repeated, or off-topic: {reply}");
+                $"{label} was empty, generic, repeated, identity-confused, or off-topic: {reply}");
         history.Add(new(
             "mira", "Mira", reply, gameSeconds + 1));
         replies.Add(reply);
@@ -4959,6 +4990,78 @@ static async Task<bool> RunLiveAiContract(string model)
             "get them", "good idea", "all right", "okay"))
         failures.Add(
             $"rock-gathering proposal was generic, repeated, or irrelevant: {rocksReply}");
+
+    var deliberation = await ai.InterpretAsync(
+        settings,
+        new(
+            "speaker",
+            "Samuel",
+            "mira",
+            "Mira",
+            "Can you gather 3 logs for our shelter?",
+            sharedActors,
+            ["HelpPerson:speaker", "StockpileWood:4"],
+            ["Samuel and Mira agreed to build shelter together."],
+            "A carpenter from a harbour town.",
+            "Careful, practical, and curious.",
+            "Carpenter",
+            [ItemIds.StoneAxe, ItemIds.StoneHammer],
+            "Woke on the beach after rough water.",
+            .35,
+            [
+                new(
+                    "speaker", "Samuel",
+                    "Can you gather 3 logs for our shelter?", 1_080)
+            ],
+            [
+                new(
+                    "Samuel proposed a shared shelter.",
+                    "speaker",
+                    .95f,
+                    20,
+                    1_070)
+            ],
+            new(
+                100,
+                78,
+                [ItemIds.StoneAxe],
+                "Explore",
+                "Idle",
+                ["StockpileWood:0/4"],
+                [],
+                ""),
+            [
+                new(
+                    "logs-nearby",
+                    ItemIds.Logs,
+                    "ground_item",
+                    2.5f,
+                    "",
+                    true),
+                new(
+                    "logs-owned",
+                    ItemIds.Logs,
+                    "ground_item",
+                    5,
+                    "rowan",
+                    true)
+            ]));
+    Console.WriteLine(
+        $"AI LIVE DELIBERATION [{model}] => " +
+        System.Text.Json.JsonSerializer.Serialize(deliberation));
+    if (deliberation is null ||
+        deliberation.PrivateThought.Length == 0 ||
+        deliberation.Action != "gather" ||
+        deliberation.ItemId != ItemIds.Logs ||
+        deliberation.Decision is not
+            ("accept" or "negotiate" or "refuse") ||
+        deliberation.Willingness is < 0 or > 100 ||
+        deliberation.EstimatedCost is < 0 or > 100 ||
+        deliberation.Risk is < 0 or > 100 ||
+        deliberation.Priority is < 0 or > 100 ||
+        deliberation.Reply.Length == 0)
+        failures.Add(
+            "resource deliberation did not return a grounded private cost-benefit decision");
 
     var rude = await ai.InterpretAsync(
         settings,

@@ -76,6 +76,16 @@ internal sealed record VillagerConversationTurn(
     string Text,
     double GameSeconds);
 
+internal sealed record VillagerDeliberationTrace(
+    string PrivateThought,
+    string Decision,
+    string Action,
+    int Willingness,
+    int EstimatedCost,
+    int Risk,
+    int Priority,
+    double GameSeconds);
+
 internal sealed record VillagerState(
     string Id,
     string Name,
@@ -114,7 +124,8 @@ internal sealed record VillagerState(
     double ActivityUntilGameSeconds = 0,
     string? ConversationPartnerId = null,
     int BlockedMoveAttempts = 0,
-    IReadOnlyList<VillagerConversationTurn>? ConversationHistory = null);
+    IReadOnlyList<VillagerConversationTurn>? ConversationHistory = null,
+    VillagerDeliberationTrace? LastDeliberation = null);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,

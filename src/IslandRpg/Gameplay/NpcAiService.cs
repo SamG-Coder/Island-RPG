@@ -43,6 +43,24 @@ internal sealed record NpcAiKnownFact(
     int Sentiment,
     double LearnedGameSeconds);
 
+internal sealed record NpcAiWorldObservation(
+    string ObjectId,
+    string ItemId,
+    string Kind,
+    float Distance,
+    string OwnerId,
+    bool Reachable);
+
+internal sealed record NpcAiSelfContext(
+    int Health,
+    float Hunger,
+    IReadOnlyList<string> Inventory,
+    string Need,
+    string Activity,
+    IReadOnlyList<string> ActiveGoals,
+    IReadOnlyList<string> ActivePromises,
+    string LastPrivateThought = "");
+
 internal sealed record NpcAiSpeechContext(
     string SpeakerId,
     string SpeakerName,
@@ -59,7 +77,9 @@ internal sealed record NpcAiSpeechContext(
     string ArrivalMemory = "",
     double HoursOnIsland = 0,
     IReadOnlyList<VillagerConversationTurn>? RecentConversation = null,
-    IReadOnlyList<NpcAiKnownFact>? KnownFacts = null);
+    IReadOnlyList<NpcAiKnownFact>? KnownFacts = null,
+    NpcAiSelfContext? Self = null,
+    IReadOnlyList<NpcAiWorldObservation>? NearbyWorld = null);
 
 internal sealed record NpcAiInterpretation(
     string AddressedActorId,
@@ -72,7 +92,15 @@ internal sealed record NpcAiInterpretation(
     string Goal,
     string Memory,
     string Reply,
-    bool FreeformThought);
+    bool FreeformThought,
+    string PrivateThought = "",
+    string Decision = "",
+    int Willingness = 50,
+    int EstimatedCost = 0,
+    int Risk = 0,
+    int Priority = 50,
+    string LocationHint = "",
+    string ReplyMeaning = "");
 
 internal sealed record NpcAiDialogueContext(
     string SpeakerName,
@@ -203,7 +231,7 @@ internal sealed class NpcAiService : IDisposable
             return null;
         using var timeout = CancellationTokenSource
             .CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(12));
+        timeout.CancelAfter(TimeSpan.FromSeconds(20));
         var compactContext = context with
         {
             RelevantMemories = CompactStrings(
@@ -212,7 +240,23 @@ internal sealed class NpcAiService : IDisposable
                 context.KnownGoals, 4, 240),
             RecentConversation = CompactConversation(
                 context.RecentConversation),
-            KnownFacts = CompactFacts(context.KnownFacts)
+            KnownFacts = CompactFacts(context.KnownFacts),
+            NearbyWorld = context.NearbyWorld?
+                .OrderBy(value => value.Distance)
+                .Take(12)
+                .ToArray() ?? [],
+            Self = context.Self is null
+                ? null
+                : context.Self with
+                {
+                    Inventory = context.Self.Inventory
+                        .Take(PlayerInventory.Capacity)
+                        .ToArray(),
+                    ActiveGoals = CompactStrings(
+                        context.Self.ActiveGoals, 6, 360),
+                    ActivePromises = CompactStrings(
+                        context.Self.ActivePromises, 6, 360)
+                }
         };
         var prompt = JsonSerializer.Serialize(
             compactContext, JsonOptions);
@@ -238,7 +282,16 @@ internal sealed class NpcAiService : IDisposable
                 "important output field. " +
                 "Never use a generic acknowledgement " +
                 "or ask what they want to know. Use empty strings for unknown structured " +
-                "fields, but not for a relevant conversational reply. Sentiment is -100..100.",
+                "fields, but not for a relevant conversational reply. Sentiment is -100..100. " +
+                " Deliberate privately before deciding. Supported actions are: none, " +
+                "follow, come, wait, stop_following, go_away, gather, give, " +
+                "help_build, explore, seek_food, seek_shelter, " +
+                "rest, and clarify. Decision must be accept, refuse, negotiate, " +
+                "clarify, or none. Weigh hunger, health, distance, ownership, tools, " +
+                "trust, promises, goals, risk, personal cost, and group benefit. " +
+                "privateThought is never spoken. Use only actor IDs, item IDs, and " +
+                "world objects present in context. Willingness, cost, risk, and " +
+                "priority are integers from 0 to 100.",
             prompt,
             stream = false,
             think = false,
@@ -247,7 +300,7 @@ internal sealed class NpcAiService : IDisposable
             options = new
             {
                 temperature = .2,
-                num_predict = 180
+                num_predict = 320
             }
         });
         try
@@ -343,6 +396,8 @@ internal sealed class NpcAiService : IDisposable
             var valid = !EchoesPlayerSpeech(
                             reply ?? "", context.Text) &&
                         !RepeatsRecentReply(
+                            reply ?? "", context) &&
+                        !ClaimsAnotherActorsIdentity(
                             reply ?? "", context) &&
                         ReplyMatchesSpeechIntent(
                             reply ?? "", context.Text)
@@ -552,8 +607,22 @@ internal sealed class NpcAiService : IDisposable
             reply = "";
         if (RepeatsRecentReply(reply, context))
             reply = "";
+        if (ClaimsAnotherActorsIdentity(reply, context))
+            reply = "";
         if (!ReplyMatchesSpeechIntent(reply, context.Text))
             reply = "";
+        var action = NormalizeAction(value.Action);
+        var decision = NormalizeDecision(value.Decision);
+        var knownItemIds = (context.NearbyWorld ?? [])
+            .Select(item => item.ItemId)
+            .Concat(context.Self?.Inventory ?? [])
+            .ToHashSet(StringComparer.Ordinal);
+        var itemId = knownItemIds.Contains(value.ItemId)
+            ? value.ItemId
+            : "";
+        if (action is "gather" or "give" &&
+            itemId.Length == 0)
+            action = "clarify";
         return value with
         {
             AddressedActorId = knownIds.Contains(
@@ -568,8 +637,41 @@ internal sealed class NpcAiService : IDisposable
             Sentiment = Math.Clamp(value.Sentiment, -100, 100),
             Reply = reply,
             Goal = Limit(value.Goal, 160),
-            Memory = Limit(value.Memory, 160)
+            Memory = Limit(value.Memory, 160),
+            Action = action,
+            ItemId = itemId,
+            PrivateThought = Limit(value.PrivateThought, 220),
+            Decision = decision,
+            Willingness = Math.Clamp(value.Willingness, 0, 100),
+            EstimatedCost = Math.Clamp(value.EstimatedCost, 0, 100),
+            Risk = Math.Clamp(value.Risk, 0, 100),
+            Priority = Math.Clamp(value.Priority, 0, 100),
+            LocationHint = Limit(value.LocationHint, 80),
+            ReplyMeaning = Limit(value.ReplyMeaning, 160)
         };
+    }
+
+    private static string NormalizeAction(string? value)
+    {
+        var action = value?.Trim().ToLowerInvariant() ?? "";
+        return action is
+            "none" or "follow" or "come" or "wait" or
+            "stop_following" or "go_away" or "gather" or
+            "give" or "help_build" or "explore" or
+            "seek_food" or "seek_shelter" or
+            "rest" or "clarify"
+            ? action
+            : "none";
+    }
+
+    private static string NormalizeDecision(string? value)
+    {
+        var decision = value?.Trim().ToLowerInvariant() ?? "";
+        return decision is
+            "accept" or "refuse" or "negotiate" or
+            "clarify" or "none"
+            ? decision
+            : "none";
     }
 
     private static HttpRequestMessage Request(
@@ -734,6 +836,34 @@ internal sealed class NpcAiService : IDisposable
                    "leave", "alone", "away", "space", "fine",
                    "rude", "speak", "talk", "insult", "sorry",
                    "need", "stop", "won't", "will not");
+    }
+
+    private static bool ClaimsAnotherActorsIdentity(
+        string reply,
+        NpcAiSpeechContext context)
+    {
+        var normalized = reply
+            .ToLowerInvariant()
+            .Replace('’', '\'');
+        if (context.SpeakerId != context.ListenerId &&
+            ClaimsIdentity(normalized, context.SpeakerName))
+            return true;
+        return context.NearbyActors.Any(actor =>
+            actor.Id != context.ListenerId &&
+            ClaimsIdentity(normalized, actor.Name));
+    }
+
+    private static bool ClaimsIdentity(
+        string normalizedReply,
+        string actorName)
+    {
+        var name = actorName.ToLowerInvariant();
+        return normalizedReply.Contains(
+                   $"i'm {name}", StringComparison.Ordinal) ||
+               normalizedReply.Contains(
+                   $"i am {name}", StringComparison.Ordinal) ||
+               normalizedReply.Contains(
+                   $"my name is {name}", StringComparison.Ordinal);
     }
 
     private static bool ContainsAny(
@@ -959,13 +1089,24 @@ internal sealed class NpcAiService : IDisposable
             memory = new { type = "string" },
             reply = new { type = "string" },
             freeformThought = new { type = "boolean" }
+            ,
+            privateThought = new { type = "string" },
+            decision = new { type = "string" },
+            willingness = new { type = "integer" },
+            estimatedCost = new { type = "integer" },
+            risk = new { type = "integer" },
+            priority = new { type = "integer" },
+            locationHint = new { type = "string" },
+            replyMeaning = new { type = "string" }
         },
         required = new[]
         {
             "addressedActorId", "referencedActorId",
             "desire", "action", "itemId", "quantity",
             "sentiment", "goal", "memory", "reply",
-            "freeformThought"
+            "freeformThought", "privateThought", "decision",
+            "willingness", "estimatedCost", "risk",
+            "priority", "locationHint", "replyMeaning"
         }
     };
 }

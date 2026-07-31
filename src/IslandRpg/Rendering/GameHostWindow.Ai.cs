@@ -1,6 +1,7 @@
 using IslandRpg.Gameplay;
 using IslandRpg.Persistence;
 using IslandRpg.Rendering.Ui;
+using IslandRpg.World;
 using OpenTK.Mathematics;
 
 namespace IslandRpg.Rendering;
@@ -486,6 +487,36 @@ internal sealed partial class GameHostWindow
                 _activePlayer.Id,
                 message,
                 _worldGameSeconds);
+        var listenerPosition = new Vector2(
+            listener.PositionX, listener.PositionY);
+        var nearbyWorld = _worldChunks.Values
+            .Where(IsActiveWorldChunk)
+            .SelectMany(gpu => gpu.Chunk.GroundObjects)
+            .Select(item => new
+            {
+                Item = item,
+                Distance = Vector2.Distance(
+                    listenerPosition,
+                    new(item.X, item.Y))
+            })
+            .Where(value => value.Distance <= 16)
+            .OrderBy(value => value.Distance)
+            .Take(16)
+            .Select(value => new NpcAiWorldObservation(
+                value.Item.Id.ToString("N"),
+                value.Item.ItemId,
+                StorageContainerService.IsStorage(
+                    value.Item.ItemId)
+                    ? "storage"
+                    : "ground_item",
+                value.Distance,
+                value.Item.OwnerId ?? "",
+                WorldLevelNavigation.IsWalkable(
+                    _worldSeed,
+                    (int)MathF.Floor(value.Item.X),
+                    (int)MathF.Floor(value.Item.Y),
+                    listener.WorldLevel)))
+            .ToArray();
         var context = new NpcAiSpeechContext(
             _activePlayer.Id,
             _activePlayer.Name,
@@ -520,7 +551,32 @@ internal sealed partial class GameHostWindow
                     memory.Confidence,
                     memory.Sentiment,
                     memory.GameSeconds))
-                .ToArray());
+                .ToArray(),
+            new(
+                listener.Health,
+                listener.Hunger,
+                listener.Inventory
+                    .Where(item => item is not null)
+                    .Select(item => item!)
+                    .ToArray(),
+                listener.Need.ToString(),
+                listener.Activity.ToString(),
+                listener.Goals?
+                    .Where(goal =>
+                        goal.Status == CommitmentStatus.Active)
+                    .Select(goal =>
+                        $"{goal.Kind}:{goal.ItemId ?? ""}:" +
+                        $"{goal.Progress}/{goal.TargetQuantity}")
+                    .ToArray() ?? [],
+                listener.Promises?
+                    .Where(promise =>
+                        promise.Status == CommitmentStatus.Active)
+                    .Select(promise =>
+                        $"{promise.Kind}:{promise.ItemId ?? ""}:" +
+                        $"{promise.Progress}/{promise.TargetQuantity}")
+                    .ToArray() ?? [],
+                listener.LastDeliberation?.PrivateThought ?? ""),
+            nearbyWorld);
         _npcAiSpeechVillagerIndex = villagerIndex;
         _npcAiSpeechFallback =
             FallbackNpcReply(listener, message);
@@ -539,6 +595,69 @@ internal sealed partial class GameHostWindow
         string speechFallback)
     {
         var villager = _villagers[villagerIndex];
+        villager = villager with
+        {
+            LastDeliberation = new(
+                interpretation.PrivateThought,
+                interpretation.Decision,
+                interpretation.Action,
+                interpretation.Willingness,
+                interpretation.EstimatedCost,
+                interpretation.Risk,
+                interpretation.Priority,
+                _worldGameSeconds)
+        };
+        var permitsAction =
+            interpretation.Decision is not
+                ("refuse" or "clarify");
+        if (permitsAction && _activePlayer is not null)
+        {
+            villager = interpretation.Action switch
+            {
+                "follow" or "come" => villager with
+                {
+                    FollowingActorId = _activePlayer.Id,
+                    NextDecisionGameSeconds = _worldGameSeconds
+                },
+                "wait" or "stop_following" or "go_away" =>
+                    villager with
+                    {
+                        FollowingActorId = null,
+                        Action = EntityAction.Idle,
+                        TargetX = null,
+                        TargetY = null,
+                        NextDecisionGameSeconds =
+                            _worldGameSeconds +
+                            VillagerSimulation.NearbyDecisionSeconds
+                    },
+                "explore" => villager with
+                {
+                    Need = VillagerNeed.Explore,
+                    NextDecisionGameSeconds = _worldGameSeconds
+                },
+                "seek_food" => villager with
+                {
+                    Need = VillagerNeed.Food,
+                    NextDecisionGameSeconds = _worldGameSeconds
+                },
+                "seek_shelter" => villager with
+                {
+                    Need = VillagerNeed.Safe,
+                    NextDecisionGameSeconds = _worldGameSeconds
+                },
+                "rest" => villager with
+                {
+                    Need = VillagerNeed.Idle,
+                    Action = EntityAction.Idle,
+                    TargetX = null,
+                    TargetY = null,
+                    NextDecisionGameSeconds =
+                        _worldGameSeconds +
+                        VillagerSimulation.NearbyDecisionSeconds
+                },
+                _ => villager
+            };
+        }
         if (_activePlayer is not null)
             villager = VillagerSimulation.RecordConversation(
                 villager,
@@ -607,7 +726,8 @@ internal sealed partial class GameHostWindow
                 Memories = memories
             };
         }
-        if (!interpretation.FreeformThought &&
+        if (permitsAction &&
+            !interpretation.FreeformThought &&
             !string.IsNullOrWhiteSpace(
                 interpretation.Goal))
         {
@@ -629,7 +749,27 @@ internal sealed partial class GameHostWindow
                     interpretation.ReferencedActorId));
             villager = villager with { Goals = goals };
         }
-        if (!interpretation.FreeformThought &&
+        if (permitsAction &&
+            !interpretation.FreeformThought &&
+            interpretation.Action == "help_build" &&
+            _activePlayer is not null)
+        {
+            var acceptance =
+                VillagerCommitmentService.TryAccept(
+                    villager,
+                    _activePlayer.Id,
+                    VillagerPromiseKind.HelpBuild,
+                    null,
+                    1,
+                    _worldGameSeconds);
+            if (acceptance.Accepted &&
+                acceptance.Promise is { } promise)
+                villager =
+                    VillagerCommitmentService.AddPromise(
+                        villager, promise);
+        }
+        if (permitsAction &&
+            !interpretation.FreeformThought &&
             interpretation.Action is
                 "gather" or "give" &&
             ItemCatalog.TryGet(

@@ -456,11 +456,97 @@ internal static class NpcAiScenarioChecks
             dismissedFollower.ConversationHistory?.Count == 2,
             "42 dismissal stops following and records conflict in relationship and memory state");
 
-        if (passed != 42)
+        interpreted = await Interpret(valid with
+        {
+            Action = "gather",
+            ItemId = ItemIds.Logs,
+            PrivateThought =
+                "Shelter helps us both, and the logs are nearby.",
+            Decision = "accept",
+            Willingness = 140,
+            EstimatedCost = -5,
+            Risk = 25,
+            Priority = 91,
+            LocationHint = "near the western tree line",
+            ReplyMeaning = "Accept gathering nearby logs"
+        });
+        Check(
+            interpreted is
+            {
+                Action: "gather",
+                Decision: "accept",
+                Willingness: 100,
+                EstimatedCost: 0,
+                Risk: 25,
+                Priority: 91
+            } &&
+            interpreted.PrivateThought.Contains(
+                "Shelter", StringComparison.Ordinal),
+            "43 deliberation preserves private rationale and clamps cost-benefit scores");
+
+        interpreted = await Interpret(valid with
+        {
+            Action = "teleport",
+            Decision = "obey",
+            ItemId = "invented_item"
+        });
+        Check(
+            interpreted is
+            {
+                Action: "none",
+                Decision: "none",
+                ItemId: ""
+            },
+            "44 unsupported model actions, decisions, and items fail closed");
+
+        interpreted = await Interpret(valid with
+        {
+            Action = "gather",
+            Decision = "accept",
+            ItemId = ItemIds.IronOre
+        });
+        Check(
+            interpreted is
+            {
+                Action: "clarify",
+                ItemId: ""
+            },
+            "45 gathering an unseen and uncarried item requires clarification");
+
+        interpreted = await Interpret(valid with
+        {
+            Action = "follow",
+            Decision = "refuse",
+            Willingness = 12,
+            EstimatedCost = 80,
+            Risk = 70,
+            PrivateThought =
+                "I do not trust this person enough to leave the safe beach."
+        });
+        Check(
+            interpreted is
+            {
+                Action: "follow",
+                Decision: "refuse",
+                Willingness: 12,
+                EstimatedCost: 80,
+                Risk: 70
+            },
+            "46 refusal retains the proposed action and its private cost reasoning");
+
+        interpreted = await Interpret(valid with
+        {
+            Reply = "I'm Samuel. We need to stay alive together."
+        });
+        Check(
+            interpreted?.Reply == "",
+            "47 listener cannot claim the speaker's identity");
+
+        if (passed != 47)
             throw new InvalidOperationException(
-                $"Expected 42 NPC AI scenarios, passed {passed}.");
+                $"Expected 47 NPC AI scenarios, passed {passed}.");
         Console.WriteLine(
-            "NPC AI scenario matrix passed: 42/42.");
+            "NPC AI scenario matrix passed: 47/47.");
     }
 
     private static SocialActorObservation[] Observe(
@@ -503,7 +589,25 @@ internal static class NpcAiScenarioChecks
                 playerSpeech,
                 [new("mira", "Mira", 1, 80, "neutral")],
                 [],
-                []));
+                [],
+                Self: new(
+                    100,
+                    80,
+                    [ItemIds.Logs],
+                    "Idle",
+                    "Idle",
+                    [],
+                    []),
+                NearbyWorld:
+                [
+                    new(
+                        "logs-1",
+                        ItemIds.Logs,
+                        "ground_item",
+                        2,
+                        "",
+                        true)
+                ]));
     }
 
     private static async Task<string?> Compose(string reply)
