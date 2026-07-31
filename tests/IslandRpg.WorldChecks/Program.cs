@@ -869,6 +869,56 @@ Require(
         value.CharacterId == drasticRequester.Id).State is
         { Fear: > 0, Resentment: > 0, Trust: < 0 },
     "drastic refusal branches must persist thought, memory, fear, resentment, and lost trust");
+var frightenedConflict = VillagerConflictService.DecideResponse(
+    politeRequester with { Health = 70, Boldness = .2f },
+    drasticRequester,
+    wasAttacked: true);
+var socialConflict = VillagerConflictService.DecideResponse(
+    traderRequester with
+    {
+        Health = 70,
+        Boldness = .4f,
+        Sociability = .8f
+    },
+    drasticRequester,
+    wasAttacked: true,
+    nearbyAllies: 1);
+var defensiveConflict = VillagerConflictService.DecideResponse(
+    threateningRequester with { Health = 70, Boldness = .6f },
+    drasticRequester,
+    wasAttacked: true);
+var retaliatingConflict = VillagerConflictService.DecideResponse(
+    drasticRequester with { Health = 70, Boldness = .8f },
+    threateningRequester,
+    wasAttacked: true);
+var surrenderConflict = VillagerConflictService.DecideResponse(
+    drasticRequester with { Health = 20 },
+    threateningRequester,
+    wasAttacked: true);
+Require(
+    frightenedConflict.Intent == VillagerConflictIntent.Flee &&
+    socialConflict.Intent == VillagerConflictIntent.CallForHelp &&
+    defensiveConflict.Intent == VillagerConflictIntent.Defend &&
+    retaliatingConflict.Intent == VillagerConflictIntent.Retaliate &&
+    surrenderConflict.Intent == VillagerConflictIntent.Surrender,
+    "NPC conflict responses must account for health, boldness, allies, and prior relationship pressure");
+var persistedConflict = VillagerConflictService.ApplyDecision(
+    threateningRequester,
+    drasticRequester,
+    defensiveConflict,
+    "food taken by force",
+    gameSeconds: 900);
+var clearedConflict = VillagerConflictService.Clear(
+    persistedConflict, gameSeconds: 950);
+Require(
+    persistedConflict.ConflictTargetId == drasticRequester.Id &&
+    persistedConflict.ConflictIntent == VillagerConflictIntent.Defend &&
+    persistedConflict.ConflictExpiresGameSeconds > 900 &&
+    persistedConflict.LastDeliberation is
+        { Action: "defend", Decision: "conflict_response" } &&
+    clearedConflict.ConflictTargetId is null &&
+    clearedConflict.ConflictIntent == VillagerConflictIntent.None,
+    "NPC conflict decisions must persist as executable actions and cleanly de-escalate");
 var tradeSeekingState = VillagerRequestApprovalService.ApplyRefusal(
     traderRequester, requestOwner, tradePlan, gameSeconds: 800).Requester;
 Require(
@@ -909,6 +959,23 @@ Require(
     VillagerSimulation.CountFood(
         scarceScenarioVillagers[0].Inventory) == 1,
     "observe scenarios must support controlled starting-food scarcity without changing their biome or actors");
+var knifeConflictVillagers = ObserveScenarioService.Configure(
+    ObserveScenarioService.DesertKnifeConflict,
+    2187,
+    twoVillagerSpawn,
+    startingFoodCount: 20);
+Require(
+    ObserveScenarioService.IsSupported(
+        ObserveScenarioService.DesertKnifeConflict) &&
+    VillagerSimulation.CountFood(
+        knifeConflictVillagers[0].Inventory) == 2 &&
+    knifeConflictVillagers[0].Hunger == 35 &&
+    knifeConflictVillagers[0].Boldness == .62f &&
+    knifeConflictVillagers[1].Inventory.Count(value =>
+        value == ItemIds.StoneKnife) == 1 &&
+    knifeConflictVillagers[1].Hunger == 8 &&
+    knifeConflictVillagers[1].Boldness == .82f,
+    "desert knife conflict scenarios must fix scarcity and personality pressure regardless of generic food options");
 var observeFocus = ObserveModePolicy.Focus(
     [
         villagerSpawnA[0] with { PositionX = 10, PositionY = 20 },
@@ -1189,6 +1256,22 @@ Require(
                 "Player",
                 StringComparison.OrdinalIgnoreCase)),
     "social survival planning must select people by perceived needs and supplies without knowing who is player-controlled");
+var scarceProviderGoal = VillagerSimulation.SelectSocialGoal(
+    socialProvider with { Hunger = 35 },
+    new SocialActorObservation[]
+    {
+        new(
+            hungrySocialVillager.Id,
+            hungrySocialVillager.Name,
+            new(1, 0),
+            0,
+            hungrySocialVillager.Hunger,
+            0)
+    },
+    gameSeconds: 100);
+Require(
+    scarceProviderGoal.Intent != VillagerSocialIntent.OfferFood,
+    "NPCs who expect to need their two-meal reserve must wait for an approval request instead of volunteering it away");
 var curiousVillager = villagerSpawnA[0] with
 {
     PositionX = 0,

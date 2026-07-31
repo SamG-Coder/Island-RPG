@@ -289,7 +289,9 @@ internal sealed class NpcAiService : IDisposable
                 "help_build, explore, seek_food, seek_shelter, rest, clarify, " +
                 "cut_tree, gather_sticks, gather_berries, gather_fibre, fish, " +
                 "craft, build, cook, light_fire, mine, dig, enter_cave, " +
-                "board_boat, drop, withdraw, attack, flee. Prefer a specific " +
+                "board_boat, drop, withdraw, attack, flee, warn, surrender, " +
+                "defend, call_help, retaliate, forgive, deescalate, threaten, " +
+                "seek_trade, take_food. Prefer a specific " +
                 "action over gather/build when the request makes it knowable. " +
                 "Decision must be accept, refuse, negotiate, " +
                 "clarify, or none. Weigh hunger, health, distance, ownership, tools, " +
@@ -679,7 +681,10 @@ internal sealed class NpcAiService : IDisposable
             "build" or "cook" or "light_fire" or
             "mine" or "dig" or "enter_cave" or
             "board_boat" or "drop" or "withdraw" or
-            "attack" or "flee"
+            "attack" or "flee" or "warn" or "surrender" or
+            "defend" or "call_help" or "retaliate" or
+            "forgive" or "deescalate" or "threaten" or
+            "seek_trade" or "take_food"
             ? action
             : "none";
     }

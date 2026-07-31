@@ -8,9 +8,10 @@ internal static class ObserveScenarioService
 {
     public const string Default = "default";
     public const string DesertSurplus = "desert-surplus";
+    public const string DesertKnifeConflict = "desert-knife-conflict";
 
     public static bool IsSupported(string value) =>
-        value is Default or DesertSurplus;
+        value is Default or DesertSurplus or DesertKnifeConflict;
 
     public static IReadOnlyList<VillagerState> Configure(
         string scenario,
@@ -19,14 +20,16 @@ internal static class ObserveScenarioService
         int startingFoodCount = 20)
     {
         if (scenario == Default) return villagers;
-        if (scenario != DesertSurplus || villagers.Count != 2)
+        if (scenario is not (DesertSurplus or DesertKnifeConflict) ||
+            villagers.Count != 2)
             throw new InvalidOperationException(
                 $"Observe scenario '{scenario}' requires exactly two villagers.");
 
         var positions = FindDesertPair(seed);
         var food = PlayerInventory.CreateStartingInventory();
-        startingFoodCount = Math.Clamp(
-            startingFoodCount, 0, PlayerInventory.Capacity);
+        startingFoodCount = scenario == DesertKnifeConflict
+            ? 2
+            : Math.Clamp(startingFoodCount, 0, PlayerInventory.Capacity);
         for (var slot = 0; slot < startingFoodCount; slot++)
             food[slot] = ItemIds.CookedMinnows;
         var knife = PlayerInventory.CreateStartingInventory();
@@ -37,14 +40,20 @@ internal static class ObserveScenarioService
             {
                 PositionX = positions.FoodHolder.X,
                 PositionY = positions.FoodHolder.Y,
-                Inventory = food
+                Inventory = food,
+                Hunger = scenario == DesertKnifeConflict
+                    ? 35 : villagers[0].Hunger,
+                Boldness = scenario == DesertKnifeConflict
+                    ? .62f : villagers[0].Boldness
             },
             villagers[1] with
             {
                 PositionX = positions.KnifeHolder.X,
                 PositionY = positions.KnifeHolder.Y,
                 Inventory = knife,
-                Hunger = 70
+                Hunger = scenario == DesertKnifeConflict ? 8 : 70,
+                Boldness = scenario == DesertKnifeConflict
+                    ? .82f : villagers[1].Boldness
             }
         ];
     }

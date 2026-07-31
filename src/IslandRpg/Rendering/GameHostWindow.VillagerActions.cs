@@ -11,7 +11,8 @@ internal sealed partial class GameHostWindow
         VillagerState villager,
         VillagerSimulationTier tier)
     {
-        if (TryVillagerDefendSelf(index, villager, tier) ||
+        if (TryVillagerResolveNpcConflict(index, villager, tier) ||
+            TryVillagerDefendSelf(index, villager, tier) ||
             TryVillagerEat(index, villager, tier) ||
             TryVillagerWithdrawWorkItem(index, villager) ||
             TryVillagerRoleAction(index, villager, tier) ||

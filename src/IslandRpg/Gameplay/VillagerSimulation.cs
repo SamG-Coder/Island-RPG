@@ -30,6 +30,19 @@ internal enum VillagerActivity : byte
     Blocked
 }
 
+internal enum VillagerConflictIntent : byte
+{
+    None,
+    Warn,
+    Flee,
+    Surrender,
+    Defend,
+    CallForHelp,
+    Retaliate,
+    Forgive,
+    Deescalate
+}
+
 internal sealed record VillagerMemory(
     Guid EventId,
     string Kind,
@@ -142,7 +155,11 @@ internal sealed record VillagerState(
     int AttackExperience = 0,
     int StrengthExperience = 0,
     int DefenceExperience = 0,
-    VillagerWorkRole WorkRole = VillagerWorkRole.Unassigned);
+    VillagerWorkRole WorkRole = VillagerWorkRole.Unassigned,
+    string? ConflictTargetId = null,
+    VillagerConflictIntent ConflictIntent = VillagerConflictIntent.None,
+    string? ConflictMotive = null,
+    double ConflictExpiresGameSeconds = 0);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,
@@ -618,7 +635,8 @@ internal static class VillagerSimulation
                         ? $"{best.Name}, could you spare some food?"
                         : $"{best.Name}, I'm running low. Could we plan to share some food?"
                     : null);
-        if (ownFood > 1 &&
+        if (!ownNeedsFoodSoon &&
+            ownFood > 1 &&
             bestNeedsFoodSoon &&
             best.FoodCount == 0)
             return new(

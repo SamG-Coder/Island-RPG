@@ -718,12 +718,16 @@ internal sealed partial class GameHostWindow
         };
         _villagersDirty = true;
         if (forcedTaking)
+        {
             ObserveLog("drastic_action", receiver.Id, new
             {
                 Action = "take_food_by_force",
                 OwnerId = donor.Id,
                 ItemId = donor.Inventory[foodSlot]
             });
+            StartVillagerConflict(
+                receiverIndex, donorIndex, "food taken by force", false);
+        }
         if (completedTradeItem is not null)
             ObserveLog("trade_completed", receiver.Id, new
             {
