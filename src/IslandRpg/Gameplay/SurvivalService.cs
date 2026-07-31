@@ -41,9 +41,11 @@ internal static class SurvivalService
         float hunger,
         float wellFedSeconds,
         int health,
-        float elapsed)
+        float elapsed,
+        float hungerLossMultiplier = 1)
     {
         elapsed = Math.Max(0, elapsed);
+        hungerLossMultiplier = Math.Max(0, hungerLossMultiplier);
         hunger = Math.Clamp(hunger, 0, MaximumHunger);
         wellFedSeconds = Math.Max(0, wellFedSeconds);
         var protectedTime = Math.Min(elapsed, wellFedSeconds);
@@ -51,7 +53,8 @@ internal static class SurvivalService
         hunger = Math.Max(
             0,
             hunger - BaseHungerLossPerSecond *
-            (protectedTime * WellFedHungerMultiplier + normalTime));
+            (protectedTime * WellFedHungerMultiplier + normalTime) *
+            hungerLossMultiplier);
         wellFedSeconds = Math.Max(0, wellFedSeconds - elapsed);
         if (hunger <= 0)
             health = Math.Max(

@@ -69,7 +69,9 @@ try
             world.Id,
             observer.Id,
             options.ObserveSeconds,
-            options.ObserveLogIntervalSeconds);
+            options.ObserveLogIntervalSeconds,
+            options.ObserveScenario,
+            options.ObserveHungerRateMultiplier);
         ObserveEventLog.Write(
             Console.Out, 0, world.ElapsedGameSeconds, "Day 1 08:00", null,
             "world_created", new
@@ -78,6 +80,8 @@ try
                 ObserverId = observer.Id,
                 AiEnabled = world.AiNpcsEnabled,
                 NpcCount = world.AiNpcCount,
+                Scenario = options.ObserveScenario,
+                options.ObserveHungerRateMultiplier,
                 aiSettings.Model
             });
     }
@@ -195,7 +199,7 @@ catch (Exception ex)
     Console.Error.WriteLine(ex.Message);
     Console.Error.WriteLine(
         "Usage: IslandRpg [--game | --world] [--seed <number>] [--island | --catalog] " +
-        "[--observe [--observe-seconds <seconds>] [--observe-log-interval <seconds>]] " +
+        "[--observe [--observe-seconds <seconds>] [--observe-log-interval <seconds>] [--observe-scenario <name>] [--observe-hunger-rate <multiplier>]] " +
         "[--age2-path <folder>] [--graphic <SLP id> | --graphic-name <DAT name>]");
     Environment.ExitCode = 1;
 }
@@ -212,7 +216,9 @@ internal sealed record AppOptions(
     long Seed,
     bool Observe,
     double ObserveSeconds,
-    double ObserveLogIntervalSeconds)
+    double ObserveLogIntervalSeconds,
+    string ObserveScenario,
+    float ObserveHungerRateMultiplier)
 {
     public static AppOptions Parse(string[] args)
     {
@@ -229,6 +235,8 @@ internal sealed record AppOptions(
         var observe = false;
         double observeSeconds = 0;
         double observeLogIntervalSeconds = 2;
+        var observeScenario = ObserveScenarioService.Default;
+        float observeHungerRateMultiplier = 1;
         long seed = 2187;
         for (var i = 0; i < args.Length; i++)
         {
@@ -301,6 +309,19 @@ internal sealed record AppOptions(
                          out var parsedLogInterval) &&
                      parsedLogInterval > 0)
                 observeLogIntervalSeconds = parsedLogInterval;
+            else if (args[i] == "--observe-scenario" &&
+                     i + 1 < args.Length &&
+                     ObserveScenarioService.IsSupported(args[i + 1]))
+                observeScenario = args[++i];
+            else if (args[i] == "--observe-hunger-rate" &&
+                     i + 1 < args.Length &&
+                     float.TryParse(
+                         args[++i],
+                         System.Globalization.NumberStyles.Float,
+                         System.Globalization.CultureInfo.InvariantCulture,
+                         out var parsedHungerRate) &&
+                     parsedHungerRate > 0)
+                observeHungerRateMultiplier = parsedHungerRate;
             else if (args[i] == "--seed" && i + 1 < args.Length &&
                      long.TryParse(args[++i], out var parsedSeed)) seed = parsedSeed;
             else if (args[i] == "--validate") validateOnly = true;
@@ -309,6 +330,7 @@ internal sealed record AppOptions(
         return new(
             path, graphic, graphicName, validateOnly,
             catalog, island, world, game, seed,
-            observe, observeSeconds, observeLogIntervalSeconds);
+            observe, observeSeconds, observeLogIntervalSeconds,
+            observeScenario, observeHungerRateMultiplier);
     }
 }

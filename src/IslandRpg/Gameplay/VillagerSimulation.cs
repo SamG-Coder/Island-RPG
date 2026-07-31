@@ -39,7 +39,8 @@ internal sealed record VillagerMemory(
     double GameSeconds,
     int Sentiment = 0,
     string? Summary = null,
-    string? ItemId = null);
+    string? ItemId = null,
+    float? ObservedValue = null);
 
 internal sealed record VillagerRelationship(
     string CharacterId,
@@ -337,7 +338,8 @@ internal static class VillagerSimulation
 
     public static VillagerState CatchUp(
         VillagerState state,
-        double gameSeconds)
+        double gameSeconds,
+        float hungerLossMultiplier = 1)
     {
         if (state.SurvivalTimeScaleVersion < 1)
         {
@@ -368,7 +370,8 @@ internal static class VillagerSimulation
             state.Hunger,
             state.WellFedSeconds,
             state.Health,
-            (float)realSeconds);
+            (float)realSeconds,
+            hungerLossMultiplier);
         return state with
         {
             Hunger = survival.Hunger,
@@ -517,7 +520,12 @@ internal static class VillagerSimulation
         ReadOnlySpan<SocialActorObservation> actors,
         double gameSeconds = 0)
     {
-        if (gameSeconds < state.NextSocialGameSeconds)
+        var projectedFoodNeed =
+            state.Hunger <= 35 ||
+            VillagerNeedPatternMemory.NeedsFoodSoon(
+                state, state.Id, gameSeconds);
+        if (gameSeconds < state.NextSocialGameSeconds &&
+            !projectedFoodNeed)
             return default;
         var position = new Vector2(
             state.PositionX, state.PositionY);
@@ -557,11 +565,15 @@ internal static class VillagerSimulation
                  gameSeconds -
                  known.LastConversationGameSeconds >=
                  RelationshipCheckInSeconds);
+            var actorNeedsFoodSoon =
+                actor.Hunger <= 35 ||
+                VillagerNeedPatternMemory.NeedsFoodSoon(
+                    state, actor.Id, gameSeconds);
             var canHelpHungryVillager =
-                state.Hunger <= 35 && ownFood == 0 &&
+                projectedFoodNeed && ownFood == 0 &&
                 actor.FoodCount > 1;
             var needsOurSurplus =
-                ownFood > 1 && actor.Hunger <= 35 &&
+                ownFood > 1 && actorNeedsFoodSoon &&
                 actor.FoodCount == 0;
             if (!canHelpHungryVillager &&
                 !needsOurSurplus &&
@@ -586,7 +598,13 @@ internal static class VillagerSimulation
         if (!found) return default;
         var inConversationRange =
             bestDistance <= InteractionRange * InteractionRange;
-        if (state.Hunger <= 35 &&
+        var ownNeedsFoodSoon =
+            projectedFoodNeed;
+        var bestNeedsFoodSoon =
+            best.Hunger <= 35 ||
+            VillagerNeedPatternMemory.NeedsFoodSoon(
+                state, best.Id, gameSeconds);
+        if (ownNeedsFoodSoon &&
             ownFood == 0 &&
             best.FoodCount > 1)
             return new(
@@ -596,10 +614,12 @@ internal static class VillagerSimulation
                     ? null
                     : StepToward(position, best.Position),
                 inConversationRange
-                    ? $"{best.Name}, could you spare some food?"
+                    ? state.Hunger <= 35
+                        ? $"{best.Name}, could you spare some food?"
+                        : $"{best.Name}, I'm running low. Could we plan to share some food?"
                     : null);
         if (ownFood > 1 &&
-            best.Hunger <= 35 &&
+            bestNeedsFoodSoon &&
             best.FoodCount == 0)
             return new(
                 VillagerSocialIntent.OfferFood,
@@ -608,7 +628,9 @@ internal static class VillagerSimulation
                     ? null
                     : StepToward(position, best.Position),
                 inConversationRange
-                    ? $"{best.Name}, take this. You need it."
+                    ? best.Hunger <= 35
+                        ? $"{best.Name}, take this. You need it."
+                        : $"{best.Name}, you'll need food soon. Take this before it becomes urgent."
                     : null);
         var acquaintance = KnownPerson(state, best.Id);
         if (acquaintance?.Stage is null or

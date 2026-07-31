@@ -47,7 +47,9 @@ internal sealed partial class GameHostWindow
         if (saved.Count > 0)
             _villagers.AddRange(saved.Select(value =>
                 VillagerSimulation.CatchUp(
-                    value, _worldGameSeconds)));
+                    value,
+                    _worldGameSeconds,
+                    _observeMode?.HungerRateMultiplier ?? 1)));
         else
         {
             _villagers.AddRange(
@@ -282,7 +284,21 @@ internal sealed partial class GameHostWindow
             var tier = VillagerSimulation.Tier(
                 position, simulationFocus);
             villager = VillagerSimulation.CatchUp(
-                villager, _worldGameSeconds);
+                villager,
+                _worldGameSeconds,
+                _observeMode?.HungerRateMultiplier ?? 1);
+            var beforeNeedObservation = villager;
+            villager = VillagerNeedPatternMemory.ObserveHunger(
+                villager,
+                villager.Id,
+                villager.Name,
+                villager.Hunger,
+                _worldGameSeconds);
+            if (!ReferenceEquals(beforeNeedObservation, villager))
+            {
+                _villagers[index] = villager;
+                _villagersDirty = true;
+            }
             if (TryExecuteVillagerSocialGoal(
                     index, villager, tier))
                 continue;
@@ -381,7 +397,7 @@ internal sealed partial class GameHostWindow
                     actor.Inventory),
                 VillagerCapabilityMemory.VisibleTools(
                     actor.Inventory)));
-        var beforeCapabilityObservation = villager;
+        var beforeSocialObservation = villager;
         foreach (var actor in _socialActorObservations)
         {
             if (actor.Id == villager.Id ||
@@ -389,14 +405,22 @@ internal sealed partial class GameHostWindow
                 continue;
             var before = VillagerCapabilityMemory.KnownTools(
                 villager, actor.Id).Count;
+            var distance = Vector2.Distance(
+                new(villager.PositionX, villager.PositionY),
+                actor.Position);
+            if (distance <= VillagerSimulation.SocialRange)
+                villager = VillagerNeedPatternMemory.ObserveHunger(
+                    villager,
+                    actor.Id,
+                    actor.Name,
+                    actor.Hunger,
+                    _worldGameSeconds);
             villager = VillagerCapabilityMemory.Observe(
                 villager,
                 actor.Id,
                 actor.Name,
                 actor.VisibleToolIds,
-                Vector2.Distance(
-                    new(villager.PositionX, villager.PositionY),
-                    actor.Position),
+                distance,
                 _worldGameSeconds);
             var knownTools = VillagerCapabilityMemory.KnownTools(
                 villager, actor.Id);
@@ -407,7 +431,7 @@ internal sealed partial class GameHostWindow
                     ToolIds = knownTools
                 });
         }
-        if (!ReferenceEquals(beforeCapabilityObservation, villager))
+        if (!ReferenceEquals(beforeSocialObservation, villager))
         {
             _villagers[villagerIndex] = villager;
             _villagersDirty = true;

@@ -720,15 +720,105 @@ Require(
 
 var observeOptions = AppOptions.Parse([
     "--observe", "--observe-seconds", "45",
-    "--observe-log-interval", "1.5"
+    "--observe-log-interval", "1.5",
+    "--observe-scenario", ObserveScenarioService.DesertSurplus,
+    "--observe-hunger-rate", "4"
 ]);
 Require(
     observeOptions.Observe && observeOptions.Game &&
     observeOptions.ObserveSeconds == 45 &&
     observeOptions.ObserveLogIntervalSeconds == 1.5 &&
+    observeOptions.ObserveScenario ==
+        ObserveScenarioService.DesertSurplus &&
+    observeOptions.ObserveHungerRateMultiplier == 4 &&
     ObserveModePolicy.RequiredVillagerCount == 2 &&
     !ObserveModePolicy.ObserverParticipatesInSimulation,
     "Observe CLI configuration must request exactly two villagers and exclude the hidden observer");
+var acceleratedHunger = VillagerSimulation.CatchUp(
+    villagerSpawnA[0],
+    villagerSpawnA[0].LastSimulatedGameSeconds +
+    60 * VillagerSimulation.GameSecondsPerRealSecond,
+    hungerLossMultiplier: 4);
+Require(
+    MathF.Abs(acceleratedHunger.Hunger -
+        (SurvivalService.MaximumHunger -
+         SurvivalService.BaseHungerLossPerSecond * 60 * 4)) < .001f,
+    "observe hunger acceleration must scale NPC hunger loss without changing the shared default survival rate");
+var decliningNeedMemory = VillagerNeedPatternMemory.ObserveHunger(
+    villagerSpawnA[0] with
+    {
+        Hunger = 50,
+        PositionX = 0,
+        PositionY = 0,
+        Inventory = PlayerInventory.CreateStartingInventory()
+    },
+    villagerSpawnA[0].Id,
+    villagerSpawnA[0].Name,
+    60,
+    gameSeconds: 100);
+decliningNeedMemory = VillagerNeedPatternMemory.ObserveHunger(
+    decliningNeedMemory,
+    decliningNeedMemory.Id,
+    decliningNeedMemory.Name,
+    50,
+    gameSeconds: 700);
+var stableNeedMemory = VillagerNeedPatternMemory.ObserveHunger(
+    villagerSpawnA[0],
+    villagerSpawnA[0].Id,
+    villagerSpawnA[0].Name,
+    60,
+    gameSeconds: 100);
+stableNeedMemory = VillagerNeedPatternMemory.ObserveHunger(
+    stableNeedMemory,
+    stableNeedMemory.Id,
+    stableNeedMemory.Name,
+    59,
+    gameSeconds: 700);
+Require(
+    VillagerNeedPatternMemory.NeedsFoodSoon(
+        decliningNeedMemory, decliningNeedMemory.Id, 700) &&
+    !VillagerNeedPatternMemory.NeedsFoodSoon(
+        stableNeedMemory, stableNeedMemory.Id, 700),
+    "NPC planning must react to a repeated declining need pattern without treating a stable history as a crisis");
+var futureFoodProvider = new SocialActorObservation(
+    "future-provider",
+    "Tomas",
+    new(1, 0),
+    0,
+    90,
+    20);
+var proactiveFoodGoal = VillagerSimulation.SelectSocialGoal(
+    decliningNeedMemory with { NextSocialGameSeconds = 9999 },
+    new[] { futureFoodProvider },
+    gameSeconds: 700);
+Require(
+    proactiveFoodGoal.Intent == VillagerSocialIntent.RequestFood &&
+    proactiveFoodGoal.Speech?.Contains(
+        "plan", StringComparison.OrdinalIgnoreCase) == true,
+    "a forecast food shortage must create a proactive sharing request before current hunger reaches crisis level");
+var desertScenarioVillagers = ObserveScenarioService.Configure(
+    ObserveScenarioService.DesertSurplus,
+    2187,
+    twoVillagerSpawn);
+Require(
+    desertScenarioVillagers.Count == 2 &&
+    InfiniteWorldGenerator.BiomeAt(
+        2187,
+        (int)MathF.Floor(desertScenarioVillagers[0].PositionX),
+        (int)MathF.Floor(desertScenarioVillagers[0].PositionY)) is
+        Biome.DesertSand or Biome.CrackedEarth &&
+    Vector2.Distance(
+        new(
+            desertScenarioVillagers[0].PositionX,
+            desertScenarioVillagers[0].PositionY),
+        new(
+            desertScenarioVillagers[1].PositionX,
+            desertScenarioVillagers[1].PositionY)) == 1 &&
+    VillagerSimulation.CountFood(
+        desertScenarioVillagers[0].Inventory) == 20 &&
+    desertScenarioVillagers[1].Inventory.Count(value =>
+        value == ItemIds.StoneKnife) == 1,
+    "desert-surplus must start two adjacent desert survivors with asymmetric food and knife resources");
 var observeFocus = ObserveModePolicy.Focus(
     [
         villagerSpawnA[0] with { PositionX = 10, PositionY = 20 },

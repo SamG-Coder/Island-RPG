@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.Win32.SafeHandles;
 using IslandRpg.Gameplay;
 using IslandRpg.Rendering.Ui;
+using IslandRpg.World;
 using OpenTK.Mathematics;
 
 namespace IslandRpg.Rendering;
@@ -68,7 +69,9 @@ internal sealed record ObserveModeOptions(
     string WorldId,
     string PlayerId,
     double DurationSeconds = 0,
-    double LogIntervalSeconds = 2);
+    double LogIntervalSeconds = 2,
+    string Scenario = ObserveScenarioService.Default,
+    float HungerRateMultiplier = 1);
 
 internal static class ObserveModePolicy
 {
@@ -151,6 +154,29 @@ internal sealed partial class GameHostWindow
                 "Observe mode requires exactly two enabled AI villagers.");
 
         EnterWorld(world, player);
+        if (_observeMode.Scenario != ObserveScenarioService.Default)
+        {
+            var configured = ObserveScenarioService.Configure(
+                _observeMode.Scenario, _worldSeed, _villagers);
+            _villagers.Clear();
+            _villagers.AddRange(configured);
+            _villagersDirty = true;
+            ObserveLog("scenario_started", null, new
+            {
+                _observeMode.Scenario,
+                Biome = InfiniteWorldGenerator.BiomeAt(
+                    _worldSeed,
+                    (int)MathF.Floor(_villagers[0].PositionX),
+                    (int)MathF.Floor(_villagers[0].PositionY)).ToString(),
+                Villagers = _villagers.Select(value => new
+                {
+                    value.Id,
+                    value.Name,
+                    Position = new { value.PositionX, value.PositionY },
+                    Inventory = value.Inventory
+                }).ToArray()
+            });
+        }
         _observeStarted = true;
         _observeStartedAt = _clock;
         _observeNextLogAt = _clock;
@@ -161,6 +187,8 @@ internal sealed partial class GameHostWindow
             world.Seed,
             ObserverId = player.Id,
             VillagerCount = _villagers.Count,
+            _observeMode.Scenario,
+            _observeMode.HungerRateMultiplier,
             ObserverVisible = false,
             ObserverPerceived = false
         });

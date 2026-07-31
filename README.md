@@ -99,6 +99,25 @@ dotnet run --project src/IslandRpg -c Release
 The path must contain `AoK HD.exe` and the expected
 `resources\_common` data directories.
 
+### NPC observe scenarios
+
+Observe mode can run repeatable autonomous-NPC scenarios and stream JSON
+events to standard output. The desert-surplus scenario starts two independent
+NPCs together in desert terrain: one carries 20 cooked minnows and the other a
+stone knife. Their personalities and simulation state decide whether the
+imbalance produces cooperation, bargaining, separation or conflict.
+
+```powershell
+dotnet run --project src/IslandRpg -- --observe `
+  --observe-scenario desert-surplus --observe-seconds 300 `
+  --observe-hunger-rate 4 --seed 2187
+```
+
+Use `--observe-log-interval <seconds>` to adjust snapshot frequency. Scenario
+events include the exact starting biome, positions and inventories.
+`--observe-hunger-rate <multiplier>` accelerates NPC hunger loss for short
+pressure tests without changing normal game balance.
+
 ## Playing
 
 Running the game opens the character and world menus. Create or select a
