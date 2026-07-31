@@ -14,6 +14,11 @@ visual overview, release history and installation links.
 See [the v0.2.0 release notes](release-notes/RELEASE_NOTES_0.2.md) for the complete feature
 summary.
 
+The long-term direction for autonomous characters is defined in the
+[NPC AI design direction](docs/NPC_AI_DESIGN.md). NPCs are independent people:
+they do not begin with privileged knowledge of the player, and any NPC may
+organize or lead others.
+
 ## Important asset requirement
 
 Island RPG reads compatible terrain, unit and environment graphics from the
