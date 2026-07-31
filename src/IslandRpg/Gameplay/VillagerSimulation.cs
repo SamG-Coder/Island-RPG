@@ -676,6 +676,79 @@ internal static class VillagerSimulation
                 characterId,
                 StringComparison.Ordinal));
 
+    public static string PerceivedName(
+        VillagerState observer,
+        string characterId,
+        string unknownName = "the stranger")
+    {
+        var known = KnownPerson(observer, characterId);
+        return known?.Stage >= AcquaintanceStage.Introduced &&
+               !string.IsNullOrWhiteSpace(known.StatedName)
+            ? known.StatedName!
+            : unknownName;
+    }
+
+    public static bool TryExtractIntroducedName(
+        string speech,
+        out string statedName)
+    {
+        statedName = "";
+        if (string.IsNullOrWhiteSpace(speech))
+            return false;
+        var markers = new[]
+        {
+            "my name is ",
+            "call me ",
+            "i'm ",
+            "i am "
+        };
+        foreach (var marker in markers)
+        {
+            var markerIndex = speech.IndexOf(
+                marker, StringComparison.OrdinalIgnoreCase);
+            if (markerIndex < 0) continue;
+            var claim = speech[(markerIndex + marker.Length)..]
+                .TrimStart();
+            var end = claim.IndexOfAny(['.', ',', '!', '?', ';', ':', '\r', '\n']);
+            if (end >= 0) claim = claim[..end];
+            claim = claim.Trim().Trim('\'', '"');
+            if (claim.Length is < 1 or > 32 ||
+                claim.Split(
+                    ' ', StringSplitOptions.RemoveEmptyEntries).Length > 4 ||
+                claim.Any(character =>
+                    !char.IsLetter(character) &&
+                    !char.IsWhiteSpace(character) &&
+                    character is not ('\'' or '-')))
+                continue;
+            if (marker is "i'm " or "i am " &&
+                !char.IsUpper(claim[0]))
+                continue;
+            statedName = claim;
+            return true;
+        }
+        return false;
+    }
+
+    public static VillagerState RecordIntroductionResponse(
+        VillagerState state,
+        string characterId,
+        string? statedName,
+        double gameSeconds) =>
+        string.IsNullOrWhiteSpace(statedName)
+            ? state with
+            {
+                NextSocialGameSeconds = gameSeconds +
+                    SocialRealCooldown(
+                        state, VillagerSocialIntent.Introduce) *
+                    GameSecondsPerRealSecond
+            }
+            : RecordConversation(
+                state,
+                characterId,
+                statedName,
+                VillagerSocialIntent.Introduce,
+                gameSeconds);
+
     public static VillagerState RecordConversation(
         VillagerState state,
         string characterId,

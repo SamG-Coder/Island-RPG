@@ -337,7 +337,8 @@ internal sealed partial class GameHostWindow
         if (_observeMode is null)
             _socialActorObservations.Add(new(
                 _activePlayer.Id,
-                _activePlayer.Name,
+                VillagerSimulation.PerceivedName(
+                    villager, _activePlayer.Id),
                 _player.Position,
                 _activeWorldLevel,
                 _activePlayer.Hunger,
@@ -346,7 +347,8 @@ internal sealed partial class GameHostWindow
         foreach (var actor in _villagers)
             _socialActorObservations.Add(new(
                 actor.Id,
-                actor.Name,
+                VillagerSimulation.PerceivedName(
+                    villager, actor.Id),
                 new(actor.PositionX, actor.PositionY),
                 actor.WorldLevel,
                 actor.Hunger,
@@ -420,6 +422,14 @@ internal sealed partial class GameHostWindow
             var partner = _socialActorObservations
                 .First(value =>
                     value.Id == conversationPartnerId);
+            var partnerIsPlayer = _activePlayer is not null &&
+                                  partner.Id == _activePlayer.Id;
+            var statedPartnerName = goal.Intent ==
+                    VillagerSocialIntent.Introduce &&
+                !partnerIsPlayer
+                ? _villagers.First(value =>
+                    value.Id == partner.Id).Name
+                : partner.Name;
             SpeakVillagerDialogue(
                 villager,
                 partner.Id,
@@ -427,12 +437,18 @@ internal sealed partial class GameHostWindow
                 goal.Intent,
                 speech);
             villager = _villagers[villagerIndex];
-            villager = VillagerSimulation.RecordConversation(
-                villager,
-                partner.Id,
-                partner.Name,
-                goal.Intent,
-                _worldGameSeconds);
+            villager = goal.Intent == VillagerSocialIntent.Introduce
+                ? VillagerSimulation.RecordIntroductionResponse(
+                    villager,
+                    partner.Id,
+                    partnerIsPlayer ? null : statedPartnerName,
+                    _worldGameSeconds)
+                : VillagerSimulation.RecordConversation(
+                    villager,
+                    partner.Id,
+                    statedPartnerName,
+                    goal.Intent,
+                    _worldGameSeconds);
             villager = villager with
             {
                 Need = VillagerNeed.Idle
@@ -462,7 +478,7 @@ internal sealed partial class GameHostWindow
             _villagersDirty = true;
         }
         if (goal.OtherActorId is null ||
-            goal.OtherActorId == _activePlayer.Id)
+            goal.OtherActorId == _activePlayer?.Id)
         {
             var updatedVillager = villager with
             {
@@ -1053,7 +1069,10 @@ internal sealed partial class GameHostWindow
             target = VillagerSimulation.ApplyDismissal(
                 target,
                 _activePlayer?.Id ?? "player",
-                _activePlayer?.Name ?? "Survivor",
+                _activePlayer is null
+                    ? "the stranger"
+                    : VillagerSimulation.PerceivedName(
+                        target, _activePlayer.Id),
                 text,
                 dismissalReply,
                 hostile ? -35 : -8,
@@ -1234,10 +1253,12 @@ internal sealed partial class GameHostWindow
         if (_activeInventorySlot == inventorySlot)
             _activeInventorySlot = -1;
         var itemName = ItemCatalog.Get(itemId).Name;
+        var playerAddress = VillagerSimulation.PerceivedName(
+            villager, _activePlayer.Id, "stranger");
         villager = VillagerSimulation.RecordGift(
             villager,
             _activePlayer.Id,
-            _activePlayer.Name,
+            playerAddress,
             itemInstanceId,
             itemId,
             _worldGameSeconds);
@@ -1246,14 +1267,14 @@ internal sealed partial class GameHostWindow
         villager = VillagerSimulation.RecordDialogueTurn(
             villager,
             _activePlayer.Id,
-            _activePlayer.Name,
+            playerAddress,
             giftSpeech,
             _worldGameSeconds);
         villager = VillagerSimulation.RecordDialogueTurn(
             villager,
             villager.Id,
             villager.Name,
-            $"Thank you, {_activePlayer.Name}.",
+            $"Thank you, {playerAddress}.",
             _worldGameSeconds + 1);
         _villagers[villagerIndex] = villager;
         _villagersDirty = true;
@@ -1267,7 +1288,7 @@ internal sealed partial class GameHostWindow
             $"{villager.Name}, this {itemName} is for you.");
         ShowVillagerSpeech(
             villagerIndex,
-            $"Thank you, {_activePlayer.Name}.",
+            $"Thank you, {playerAddress}.",
             _player.Position);
         _player.Stop();
     }

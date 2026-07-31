@@ -540,10 +540,20 @@ internal sealed partial class GameHostWindow
             _player is null ||
             (uint)villagerIndex >= (uint)_villagers.Count)
             return false;
-        var listener = VillagerSimulation.RecordDialogueTurn(
-            _villagers[villagerIndex],
+        var listener = _villagers[villagerIndex];
+        if (VillagerSimulation.TryExtractIntroducedName(
+                message, out var claimedName))
+            listener = VillagerSimulation.RecordIntroductionResponse(
+                listener,
+                _activePlayer.Id,
+                claimedName,
+                _worldGameSeconds);
+        var perceivedPlayerName = VillagerSimulation.PerceivedName(
+            listener, _activePlayer.Id, "Unknown survivor");
+        listener = VillagerSimulation.RecordDialogueTurn(
+            listener,
             _activePlayer.Id,
-            _activePlayer.Name,
+            perceivedPlayerName,
             message,
             _worldGameSeconds);
         _villagers[villagerIndex] = listener;
@@ -560,7 +570,7 @@ internal sealed partial class GameHostWindow
         {
             new(
                 _activePlayer.Id,
-                _activePlayer.Name,
+                perceivedPlayerName,
                 0,
                 _activePlayer.Hunger,
                 RelationshipDescription(
@@ -573,7 +583,8 @@ internal sealed partial class GameHostWindow
                 continue;
             nearby.Add(new(
                 actor.Id,
-                actor.Name,
+                VillagerSimulation.PerceivedName(
+                    listener, actor.Id, "Unknown survivor"),
                 Vector2.Distance(
                     new(listener.PositionX, listener.PositionY),
                     new(actor.PositionX, actor.PositionY)),
@@ -618,7 +629,7 @@ internal sealed partial class GameHostWindow
             .ToArray();
         var context = new NpcAiSpeechContext(
             _activePlayer.Id,
-            _activePlayer.Name,
+            perceivedPlayerName,
             listener.Id,
             listener.Name,
             message,
@@ -778,13 +789,6 @@ internal sealed partial class GameHostWindow
                 _ => villager
             };
         }
-        if (_activePlayer is not null)
-            villager = VillagerSimulation.RecordConversation(
-                villager,
-                _activePlayer.Id,
-                _activePlayer.Name,
-                VillagerSocialIntent.Introduce,
-                _worldGameSeconds);
         if (_activePlayer is not null &&
             interpretation.Sentiment != 0)
         {

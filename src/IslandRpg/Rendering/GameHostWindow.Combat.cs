@@ -291,7 +291,8 @@ internal sealed partial class GameHostWindow
         villager = VillagerSimulation.RecordAttack(
             villager,
             _activePlayer.Id,
-            _activePlayer.Name,
+            VillagerSimulation.PerceivedName(
+                villager, _activePlayer.Id),
             roll.Damage,
             _worldGameSeconds);
         _combatHitSplat = new(
@@ -368,9 +369,11 @@ internal sealed partial class GameHostWindow
             witness = VillagerSimulation.RecordWitnessedAttack(
                 witness,
                 _activePlayer.Id,
-                _activePlayer.Name,
+                VillagerSimulation.PerceivedName(
+                    witness, _activePlayer.Id),
                 victim.Id,
-                victim.Name,
+                VillagerSimulation.PerceivedName(
+                    witness, victim.Id),
                 _worldGameSeconds);
             _villagers[index] = witness;
             if (distance >= closestDistance) continue;
@@ -378,9 +381,13 @@ internal sealed partial class GameHostWindow
             closestWitnessIndex = index;
         }
         if (closestWitnessIndex >= 0)
+        {
+            var witness = _villagers[closestWitnessIndex];
             ShowVillagerCombatReaction(
                 closestWitnessIndex,
-                $"Stop attacking {victim.Name}!");
+                $"Stop attacking {VillagerSimulation.PerceivedName(
+                    witness, victim.Id)}!");
+        }
         _villagersDirty = true;
     }
 

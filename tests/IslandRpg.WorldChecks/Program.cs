@@ -931,6 +931,28 @@ Require(
         curiousVillager.Name,
         StringComparison.Ordinal) == true,
     "unknown nearby people must create a deliberate introduction goal");
+Require(
+    VillagerSimulation.PerceivedName(
+        curiousVillager, stranger.Id) == "the stranger" &&
+    !VillagerSimulation.TryExtractIntroducedName(
+        "Could you gather some wood?", out _) &&
+    VillagerSimulation.TryExtractIntroducedName(
+        "Hello, my name is Captain Reed.", out var claimedName) &&
+    claimedName == "Captain Reed" &&
+    VillagerSimulation.TryExtractIntroducedName(
+        "I'm Samantha.", out var similarName) &&
+    similarName == "Samantha" &&
+    !VillagerSimulation.TryExtractIntroducedName(
+        "I'm hungry.", out _),
+    "NPCs must not know profile names until an actor explicitly introduces themselves");
+var unansweredIntroduction =
+    VillagerSimulation.RecordIntroductionResponse(
+        curiousVillager, stranger.Id, null, 100);
+Require(
+    VillagerSimulation.KnownPerson(
+        unansweredIntroduction, stranger.Id) is null &&
+    unansweredIntroduction.NextSocialGameSeconds > 100,
+    "asking a stranger's name must apply a cooldown without inventing their answer");
 curiousVillager = VillagerSimulation.RecordConversation(
     curiousVillager,
     stranger.Id,
@@ -944,6 +966,8 @@ Require(
             StatedName: "Sam",
             ConversationCount: 1
         } &&
+    VillagerSimulation.PerceivedName(
+        curiousVillager, stranger.Id) == "Sam" &&
     curiousVillager.Memories?.Any(value =>
         value.Kind == "social-knowledge" &&
         value.SubjectId == stranger.Id) == true &&
