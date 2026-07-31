@@ -241,6 +241,10 @@ internal sealed partial class GameHostWindow
                     index, villager, tier))
                 continue;
             if (tier != VillagerSimulationTier.Distant &&
+                TryExecuteVillagerCapabilityAction(
+                    index, villager, tier))
+                continue;
+            if (tier != VillagerSimulationTier.Distant &&
                 TryExecuteVillagerWorldAction(
                     index, villager, tier))
                 continue;

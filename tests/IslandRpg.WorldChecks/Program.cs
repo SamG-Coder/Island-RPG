@@ -129,6 +129,26 @@ using (var interpretingAi = new NpcAiService(
                     StringComparison.OrdinalIgnoreCase)),
         "AI interpretations must validate actor references and clamp untrusted structured output");
 }
+var supportedNpcWorldActions = new[]
+{
+    "cut_tree", "gather_sticks", "gather_berries", "gather_fibre",
+    "fish", "craft", "build", "cook", "light_fire", "mine", "dig",
+    "enter_cave", "board_boat", "drop", "withdraw", "attack", "flee"
+};
+foreach (var expectedAction in supportedNpcWorldActions)
+{
+    using var actionAi = new NpcAiService(new HttpClient(
+        new StubHttpHandler(_ => StubHttpHandler.Json(
+            $$"""
+            {"response":"{\"addressedActorId\":\"mira\",\"action\":\"{{expectedAction}}\",\"reply\":\"I will try.\",\"decision\":\"accept\"}","done":true}
+            """))));
+    var parsed = await actionAi.InterpretAsync(
+        defaultAi,
+        new("speaker", "Sam", "mira", "Mira", "Please do that.",
+            [new("mira", "Mira", 2, 20, "neutral")], [], []));
+    Require(parsed is not null && parsed.Action == expectedAction,
+        $"NPC AI action '{expectedAction}' must survive structured validation");
+}
 using (var dialogueAi = new NpcAiService(
            new HttpClient(new StubHttpHandler(_ =>
                StubHttpHandler.Json(
@@ -520,6 +540,51 @@ Require(
     fedVillager.Health == expectedMeal.Health &&
     fedVillager.WellFedSeconds == expectedMeal.WellFedSeconds,
     "villager food hunger, healing, and well-fed effects must exactly match the player's shared meal result");
+
+var sharedGatherInventory = PlayerInventory.CreateStartingInventory();
+var sharedGather = ActorActionService.Gather(
+    sharedGatherInventory, ItemIds.PlantFibres, 3);
+Require(
+    sharedGather.Succeeded &&
+    sharedGather.Inventory.Count(value =>
+        value == ItemIds.PlantFibres) == 3,
+    "player and NPC gathering must share the same actor-neutral capacity mutation");
+var ropeRecipe = CraftingSkill.Recipes.Single(value =>
+    value.ResultItemId == ItemIds.Rope);
+var sharedCraft = ActorActionService.Craft(
+    sharedGather.Inventory,
+    ropeRecipe,
+    craftingLevel: 1,
+    stationAvailable: true);
+Require(
+    sharedCraft.Succeeded &&
+    sharedCraft.Inventory.Count(value => value == ItemIds.Rope) == 1 &&
+    sharedCraft.Inventory.All(value => value != ItemIds.PlantFibres),
+    "player and NPC crafting must execute the same CraftingService recipe and consumption rules");
+var cookingInventory = PlayerInventory.CreateStartingInventory();
+cookingInventory[0] = ItemIds.RawMinnows;
+var sharedCooking = ActorActionService.Cook(
+    cookingInventory, 0, cookingLevel: 100, roll: .99f);
+Require(
+    sharedCooking.Succeeded &&
+    sharedCooking.Inventory[0] == ItemIds.CookedMinnows,
+    "player and NPC cooking must share CookingSkill eligibility and result rules");
+var transferSource = PlayerInventory.CreateStartingInventory();
+var transferDestination = PlayerInventory.CreateStartingInventory();
+transferSource[3] = ItemIds.CookedMinnows;
+Require(
+    ActorActionService.TryTransfer(
+        transferSource,
+        transferDestination,
+        3,
+        out var transferredSource,
+        out var transferredDestination,
+        out var transferredItem) &&
+    transferredItem == ItemIds.CookedMinnows &&
+    transferredSource[3] is null &&
+    transferredDestination.Count(value =>
+        value == ItemIds.CookedMinnows) == 1,
+    "gifts and coordinated item hand-offs must use one atomic actor-neutral transfer");
 
 var observeOptions = AppOptions.Parse([
     "--observe", "--observe-seconds", "45",

@@ -166,17 +166,17 @@ internal sealed partial class GameHostWindow
         }
 
         var requested = Random.Shared.Next(1, 3);
-        var inventory = _activePlayer.Inventory;
-        var gathered = 0;
-        for (var index = 0; index < requested; index++)
-        {
-            if (!PlayerInventory.TryAdd(
-                    inventory, ItemIds.PlantFibres,
-                    out var updated))
-                break;
-            inventory = updated;
-            gathered++;
-        }
+        var previousInventory = PlayerInventory.Normalize(
+            _activePlayer.Inventory);
+        var harvest = ActorActionService.Gather(
+            previousInventory,
+            ItemIds.PlantFibres,
+            requested);
+        var inventory = harvest.Inventory;
+        var gathered = inventory.Count(value =>
+                           value == ItemIds.PlantFibres) -
+                       previousInventory.Count(value =>
+                           value == ItemIds.PlantFibres);
         if (gathered == 0)
         {
             ReportBlockedAction(

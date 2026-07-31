@@ -87,16 +87,13 @@ internal sealed partial class GameHostWindow
                         FarmingSkill.BonusBerryCount(
                             farmingLevel, sickle,
                             Random.Shared.NextSingle());
-        var inventory = _activePlayer.Inventory;
-        var gathered = 0;
-        for (var index = 0; index < requested; index++)
-        {
-            if (!PlayerInventory.TryAdd(
-                    inventory, itemId, out var updated))
-                break;
-            inventory = updated;
-            gathered++;
-        }
+        var previousInventory = PlayerInventory.Normalize(
+            _activePlayer.Inventory);
+        var harvest = ActorActionService.Gather(
+            previousInventory, itemId, requested);
+        var inventory = harvest.Inventory;
+        var gathered = inventory.Count(value => value == itemId) -
+                       previousInventory.Count(value => value == itemId);
         if (gathered == 0)
         {
             ReportBlockedAction(

@@ -127,7 +127,18 @@ internal sealed record VillagerState(
     IReadOnlyList<VillagerConversationTurn>? ConversationHistory = null,
     VillagerDeliberationTrace? LastDeliberation = null,
     int SurvivalTimeScaleVersion = 0,
-    float WellFedSeconds = 0);
+    float WellFedSeconds = 0,
+    int WoodcuttingExperience = 0,
+    int FarmingExperience = 0,
+    int CraftingExperience = 0,
+    int FishingExperience = 0,
+    int CookingExperience = 0,
+    int FiremakingExperience = 0,
+    int DiggingExperience = 0,
+    int MiningExperience = 0,
+    int AttackExperience = 0,
+    int StrengthExperience = 0,
+    int DefenceExperience = 0);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,

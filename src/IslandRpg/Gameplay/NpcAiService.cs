@@ -286,8 +286,12 @@ internal sealed class NpcAiService : IDisposable
                 "fields, but not for a relevant conversational reply. Sentiment is -100..100. " +
                 " Deliberate privately before deciding. Supported actions are: none, " +
                 "follow, come, wait, stop_following, go_away, gather, give, " +
-                "help_build, explore, seek_food, seek_shelter, " +
-                "rest, and clarify. Decision must be accept, refuse, negotiate, " +
+                "help_build, explore, seek_food, seek_shelter, rest, clarify, " +
+                "cut_tree, gather_sticks, gather_berries, gather_fibre, fish, " +
+                "craft, build, cook, light_fire, mine, dig, enter_cave, " +
+                "board_boat, drop, withdraw, attack, flee. Prefer a specific " +
+                "action over gather/build when the request makes it knowable. " +
+                "Decision must be accept, refuse, negotiate, " +
                 "clarify, or none. Weigh hunger, health, distance, ownership, tools, " +
                 "trust, promises, goals, risk, personal cost, and group benefit. " +
                 "privateThought is never spoken. Use only actor IDs, item IDs, and " +
@@ -669,7 +673,13 @@ internal sealed class NpcAiService : IDisposable
             "stop_following" or "go_away" or "gather" or
             "give" or "help_build" or "explore" or
             "seek_food" or "seek_shelter" or
-            "rest" or "clarify"
+            "rest" or "clarify" or "cut_tree" or
+            "gather_sticks" or "gather_berries" or
+            "gather_fibre" or "fish" or "craft" or
+            "build" or "cook" or "light_fire" or
+            "mine" or "dig" or "enter_cave" or
+            "board_boat" or "drop" or "withdraw" or
+            "attack" or "flee"
             ? action
             : "none";
     }

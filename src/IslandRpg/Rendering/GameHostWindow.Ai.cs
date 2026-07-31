@@ -754,6 +754,26 @@ internal sealed partial class GameHostWindow
                         _worldGameSeconds +
                         VillagerSimulation.NearbyDecisionSeconds
                 },
+                "gather" or "gather_sticks" or "gather_berries" or
+                "gather_fibre" or "fish" or "cook" or "withdraw" =>
+                    villager with
+                    {
+                        Need = VillagerNeed.Food,
+                        NextDecisionGameSeconds = _worldGameSeconds
+                    },
+                "cut_tree" or "craft" or "build" or "help_build" or
+                "light_fire" or "mine" or "dig" or "enter_cave" or
+                "board_boat" or "drop" or "give" => villager with
+                {
+                    Need = VillagerNeed.Safe,
+                    NextDecisionGameSeconds = _worldGameSeconds
+                },
+                "flee" => villager with
+                {
+                    FollowingActorId = null,
+                    Need = VillagerNeed.Safe,
+                    NextDecisionGameSeconds = _worldGameSeconds
+                },
                 _ => villager
             };
         }
