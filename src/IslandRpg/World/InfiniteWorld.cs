@@ -40,10 +40,12 @@ internal sealed record WorldGroundObject(
     int FiremakingLevel = 1,
     int Health = 0,
     int MaxHealth = 0,
-    WorldContainerContents? Container = null);
+    WorldContainerContents? Container = null,
+    string? OwnerId = null);
 internal sealed record WorldContainerContents(
     string?[] Items,
-    int[] Quantities);
+    int[] Quantities,
+    string?[]? OwnerIds = null);
 internal enum WorldVegetationKind : byte
 {
     Plant,
@@ -737,7 +739,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 5;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 24;
+    private const int ChunkPayloadVersion = 26;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -1011,7 +1013,13 @@ internal sealed class WorldChunkStore
                             slot < container.Quantities.Length
                                 ? container.Quantities[slot]
                                 : 0);
+                        writer.Write(
+                            container.OwnerIds is { } owners &&
+                            slot < owners.Length
+                                ? owners[slot] ?? ""
+                                : "");
                     }
+                writer.Write(groundObject.OwnerId ?? "");
             }
             writer.Write(chunk.FishRemaining.Count);
             foreach (var school in chunk.FishRemaining)
@@ -1189,6 +1197,7 @@ internal sealed class WorldChunkStore
                         {
                             var items = new string?[containerSlots];
                             var quantities = new int[containerSlots];
+                            var ownerIds = new string?[containerSlots];
                             for (var slot = 0;
                                  slot < containerSlots;
                                  slot++)
@@ -1196,7 +1205,11 @@ internal sealed class WorldChunkStore
                                 items[slot] =
                                     NullIfEmpty(reader.ReadString());
                                 quantities[slot] = reader.ReadInt32();
+                                if (payloadVersion >= 26)
+                                    ownerIds[slot] =
+                                        NullIfEmpty(reader.ReadString());
                                 if (items[slot]?.Length > 64 ||
+                                    ownerIds[slot]?.Length > 64 ||
                                     quantities[slot] < 0 ||
                                     (items[slot] is null) !=
                                     (quantities[slot] == 0))
@@ -1205,12 +1218,18 @@ internal sealed class WorldChunkStore
                             }
                             groundObject = groundObject with
                             {
-                                Container = new(items, quantities)
+                                Container = new(items, quantities, ownerIds)
                             };
                         }
                     }
+                    if (payloadVersion >= 25)
+                        groundObject = groundObject with
+                        {
+                            OwnerId = NullIfEmpty(reader.ReadString())
+                        };
                     if (string.IsNullOrWhiteSpace(groundObject.ItemId) ||
                         groundObject.ItemId.Length > 64 ||
+                        groundObject.OwnerId?.Length > 64 ||
                         groundObject.FuelItemId?.Length > 64 ||
                         !double.IsFinite(
                             groundObject.LitUntilGameSeconds) ||

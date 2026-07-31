@@ -8,6 +8,7 @@ internal enum SettingsTab
     Display,
     Game,
     Sound,
+    AI,
     Dev
 }
 
@@ -18,7 +19,12 @@ internal sealed class SettingsMenuState
     private const float BackButtonHeight = 40;
     private bool _developerModeEnabled;
     private static readonly SettingsTab[] StandardTabs =
-        [SettingsTab.Display, SettingsTab.Game, SettingsTab.Sound];
+        [
+            SettingsTab.Display,
+            SettingsTab.Game,
+            SettingsTab.Sound,
+            SettingsTab.AI
+        ];
     private static readonly SettingsTab[] AllTabs =
         Enum.GetValues<SettingsTab>();
     private static readonly string[] DisplayItems =
@@ -27,6 +33,8 @@ internal sealed class SettingsMenuState
         ["occluded-player-outline", "unlimited-zoom"];
     private static readonly string[] SoundItems =
         ["music-enabled", "music-volume", "effects-volume"];
+    private static readonly string[] AiItems =
+        ["ai-enabled", "ai-url", "ai-model", "ai-password", "ai-test"];
     private static readonly string[] DeveloperItems =
     [
         "developer-section-tools",
@@ -101,6 +109,7 @@ internal sealed class SettingsMenuState
             SettingsTab.Display => DisplayItems,
             SettingsTab.Game => GameItems,
             SettingsTab.Sound => SoundItems,
+            SettingsTab.AI => AiItems,
             _ => DeveloperItems
         };
         ContentList.Layout(

@@ -132,6 +132,19 @@ internal sealed partial class GameHostWindow : GameWindow
     private PlayerProfile? _selectedPlayer;
     private FrontendPage _frontendPage;
     private readonly TextBoxControlState _worldNameTextBox = new("New World");
+    private readonly ToggleControlState _newWorldAiToggle =
+        new(
+            "Enable AI survivors",
+            "Persistent simulated people");
+    private int _newWorldAiNpcCount = 1;
+    private readonly DropdownControlState _newWorldAiCountDropdown = new();
+    private static readonly DropdownOption[] NewWorldAiCountOptions =
+    [
+        new("0", "0 — Solo"),
+        new("1", "1 survivor"),
+        new("2", "2 survivors"),
+        new("3", "3 survivors")
+    ];
     private readonly TextBoxControlState _seedTextBox =
         new(Random.Shared.NextInt64().ToString());
     private readonly TextBoxControlState _playerNameTextBox = new();
@@ -458,8 +471,10 @@ internal sealed partial class GameHostWindow : GameWindow
                 ChatMessageStyle.Warning);
         }
         var settings = _saves.LoadSettings();
+        InitializeNpcAiSettingsFields(settings.EffectiveAi);
         _unlimitedZoomToggle.SetChecked(settings.UnlimitedZoom);
         ApplyDisplaySettings(settings);
+        BeginNpcAiCheck();
         InitializeMusic();
         var progress = new Progress<(int Done, int Total, string Name)>(value =>
         {
@@ -531,6 +546,7 @@ internal sealed partial class GameHostWindow : GameWindow
     protected override void OnUpdateFrame(FrameEventArgs e)
     {
         base.OnUpdateFrame(e);
+        UpdateNpcAi();
         _clock += e.Time;
         if (FinishLoadingTransition())
             return;
@@ -813,7 +829,10 @@ internal sealed partial class GameHostWindow : GameWindow
     private void UpdateFrontend()
     {
         if (_frontendPage == FrontendPage.NewWorld)
+        {
             UpdateNewWorldPreview();
+            UpdateAiWorldCreation();
+        }
         var textBox = FocusedTextBox();
         textBox?.UpdateKeyboard(
             KeyboardState,
@@ -915,6 +934,9 @@ internal sealed partial class GameHostWindow : GameWindow
                 else if (_settingsMenu.SelectedTab == SettingsTab.Sound &&
                          UpdateSoundSettings(pointer, settingsPanel))
                     break;
+                else if (_settingsMenu.SelectedTab == SettingsTab.AI &&
+                         UpdateAiSettings(pointer, settingsPanel))
+                    break;
                 else if (_settingsMenu.SelectedTab == SettingsTab.Dev &&
                          UpdateDeveloperSettings(pointer, settingsPanel))
                     break;
@@ -928,6 +950,18 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void UpdateNewWorldClick(Vector2 pointer)
     {
+        if (_pendingNewWorldCreation is not null)
+            return;
+        LayoutNewWorldAiControls();
+        if (_newWorldAiCountDropdown.TrySelect(
+                pointer, out var selectedCount))
+        {
+            _newWorldAiNpcCount = int.Parse(selectedCount.Id);
+            if (_newWorldAiNpcCount == 0)
+                _newWorldAiToggle.SetChecked(false);
+            _frontendError = null;
+            return;
+        }
         if (NewWorldFieldBounds(0).Contains(pointer))
             FocusTextBox(
                 _worldNameTextBox, NewWorldFieldBounds(0), pointer);
@@ -939,15 +973,45 @@ internal sealed partial class GameHostWindow : GameWindow
             _seedTextBox.SetText(Random.Shared.NextInt64().ToString());
             FocusTextBoxAtEnd(_seedTextBox);
         }
+        else if (_newWorldAiToggle.Bounds.Contains(pointer))
+        {
+            if (!_npcAiState.Ready)
+                _frontendError =
+                    "AI NPCs require an enabled, responding AI model.";
+            else
+            {
+                _newWorldAiToggle.ToggleAt(pointer);
+                if (_newWorldAiToggle.IsChecked &&
+                    _newWorldAiNpcCount == 0)
+                    _newWorldAiNpcCount = 1;
+                _newWorldAiCountDropdown.Close();
+                _frontendError = null;
+            }
+        }
+        else if (NewWorldAiCountBounds().Contains(pointer))
+        {
+            if (!_npcAiState.Ready)
+                _frontendError =
+                    "AI NPCs require an enabled, responding AI model.";
+            else
+            {
+                _newWorldAiCountDropdown.Toggle();
+                _frontendError = null;
+            }
+        }
         else if (CreateWorldButtonBounds().Contains(pointer))
             CreateAndEnterWorld();
         else if (BackButtonBounds().Contains(pointer))
         {
+            _newWorldAiCountDropdown.Close();
             _frontendPage = FrontendPage.Main;
             BlurTextBoxes();
         }
         else
+        {
+            _newWorldAiCountDropdown.Close();
             BlurTextBoxes();
+        }
     }
 
     private void UpdateCharacterCreateClick(Vector2 pointer)
@@ -1049,6 +1113,12 @@ internal sealed partial class GameHostWindow : GameWindow
                 return;
             }
             _worldList.ClearDeleteApproval();
+            if (world.AiNpcsEnabled && !_npcAiState.Ready)
+            {
+                _frontendError =
+                    $"Cannot load AI world: {_npcAiState.Message}";
+                return;
+            }
             if (_selectedPlayer is null)
             {
                 _frontendPage = FrontendPage.CharacterCreate;
@@ -1080,12 +1150,49 @@ internal sealed partial class GameHostWindow : GameWindow
         _worldSeed = seed;
         var spawn = FindPlayableSpawn();
         var player = _selectedPlayer;
+        var aiReady = _npcAiState.Ready;
+        var aiEnabled = aiReady &&
+            _newWorldAiToggle.IsChecked &&
+            _newWorldAiNpcCount > 0;
+        if (aiEnabled)
+        {
+            BeginAiWorldCreation(
+                _worldNameTextBox.Text,
+                seed,
+                spawn,
+                player,
+                _newWorldAiNpcCount);
+            return;
+        }
+        CompleteNewWorldCreation(
+            new(
+                _worldNameTextBox.Text,
+                seed,
+                spawn,
+                player,
+                0),
+            []);
+    }
+
+    private void CompleteNewWorldCreation(
+        PendingNewWorldCreation pending,
+        IReadOnlyList<VillagerPersona> personas)
+    {
         var world = _saves.CreateWorld(
-            _worldNameTextBox.Text, seed, player.Id);
+            pending.Name,
+            pending.Seed,
+            pending.Player.Id,
+            pending.Population > 0,
+            pending.Population,
+            personas);
         _saves.SaveWorldPlayer(
             world.Id,
-            new(player.Id, spawn.X, spawn.Y, DateTime.UtcNow));
-        EnterWorld(world, player);
+            new(
+                pending.Player.Id,
+                pending.Spawn.X,
+                pending.Spawn.Y,
+                DateTime.UtcNow));
+        EnterWorld(world, pending.Player);
     }
 
     private void EnterWorld(WorldProfile world, PlayerProfile? player = null)
@@ -1140,6 +1247,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _player = new WorldEntity(
             new Vector2(worldPlayer.PositionX, worldPlayer.PositionY),
             player.Gender);
+        LoadVillagers(spawn);
         InitializeFishingBoat(worldPlayer);
         _camera = Vector2.Zero;
         SetZoomImmediate(.8f);
@@ -1151,6 +1259,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void ReturnToMainMenu()
     {
+        SaveVillagers();
         SaveActivePlayerState();
         CancelWorldLevelWork(clearMinimap: true);
         foreach (var coordinate in _worldChunks.Keys.ToArray())
@@ -1164,6 +1273,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _modalScreen.Close(ModalScreenKind.Death);
         _skillLevelsObserved = false;
         _player = null;
+        _villagers.Clear();
         _fishingBoat = null;
         _fishingBoatBoarded = false;
         _queuedAction = null;
@@ -1188,6 +1298,7 @@ internal sealed partial class GameHostWindow : GameWindow
             _selectedPlayer = _activePlayer;
         if (_activeWorld is not null)
         {
+            SaveVillagers();
             _activeWorld = _activeWorld with
             {
                 ElapsedGameSeconds = _worldGameSeconds,
@@ -1325,7 +1436,11 @@ internal sealed partial class GameHostWindow : GameWindow
     }
 
     private TextBoxControlState? FocusedTextBox() =>
-        new[] { _worldNameTextBox, _seedTextBox, _playerNameTextBox }
+        new[]
+        {
+            _worldNameTextBox, _seedTextBox, _playerNameTextBox,
+            _aiUrlTextBox, _aiModelTextBox, _aiPasswordTextBox
+        }
             .FirstOrDefault(control => control.Focused);
 
     private void FocusTextBox(
@@ -1341,6 +1456,9 @@ internal sealed partial class GameHostWindow : GameWindow
         _worldNameTextBox.Blur();
         _seedTextBox.Blur();
         _playerNameTextBox.Blur();
+        _aiUrlTextBox.Blur();
+        _aiModelTextBox.Blur();
+        _aiPasswordTextBox.Blur();
     }
 
     private void FocusTextBoxAtEnd(TextBoxControlState control)
@@ -1603,13 +1721,14 @@ internal sealed partial class GameHostWindow : GameWindow
             _player.Position.X, _player.Position.Y);
         var nextTerrain = SamplePlayerTerrain(
             _player.Target.X, _player.Target.Y);
-        var uphill = Math.Max(
-            0, nextTerrain.Height - currentTerrain.Height);
         var playerBiome = currentTerrain.Biome;
         var wading = playerBiome is Biome.ShallowWater or
             Biome.RiverWater or Biome.MangroveShallows;
         _player.TerrainSpeedMultiplier =
-            (wading ? .62f : 1f) / (1f + uphill * .18f);
+            ActorMovementService.TerrainSpeedMultiplier(
+                wading,
+                currentTerrain.Height,
+                nextTerrain.Height);
         if (_fishingBoatBoarded && _fishingBoat is not null)
         {
             _fishingBoat.Update(elapsed);
@@ -1634,6 +1753,7 @@ internal sealed partial class GameHostWindow : GameWindow
             _activeWorldChunkBuffer,
             _player.Position,
             QueueChunkSave);
+        UpdateVillagers(elapsed);
         if (_moveMarker is not null)
         {
             var nextTime = _moveMarker.Time + elapsed;
@@ -3288,6 +3408,9 @@ internal sealed partial class GameHostWindow : GameWindow
             DrawTextField(controls[index]);
         }
         DrawMenuButton(RandomSeedButtonBounds(), "Random");
+        var aiReady = _npcAiState.Ready;
+        LayoutNewWorldAiControls();
+        RenderNewWorldAiControls(aiReady);
 
         var character = NewWorldCharacterBounds();
         DrawUiColor(character, new(.025f, .027f, .024f, .72f));
@@ -3341,7 +3464,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 new(.28f, .23f, .14f, 1));
         }
 
-        if (_frontendError is not null)
+        if (_frontendError is not null &&
+            _pendingNewWorldCreation is null)
             DrawCenteredUiText(
                 _frontendError,
                 new(panel.X + 40, panel.Y + panel.W - 132,
@@ -3351,8 +3475,126 @@ internal sealed partial class GameHostWindow : GameWindow
             new(panel.X + 36, panel.Y + panel.W - 108,
                 panel.Z - 72, 1),
             new(.25f, .20f, .11f, 1));
-        DrawMenuButton(CreateWorldButtonBounds(), "Create World");
+        DrawMenuButton(
+            CreateWorldButtonBounds(),
+            _pendingNewWorldCreation is null
+                ? "Create World"
+                : "Creating Survivors...");
         DrawMenuButton(BackButtonBounds(), "Back");
+        RenderNewWorldAiCountMenu();
+        if (_pendingNewWorldCreation is not null)
+            RenderNewWorldGenerationOverlay(panel);
+    }
+
+    private void RenderNewWorldAiControls(bool aiReady)
+    {
+        _newWorldAiToggle.Enabled = aiReady;
+        _newWorldAiToggle.Hovered =
+            _newWorldAiToggle.HitTest(MouseState.Position);
+        DrawToggleControl(_newWorldAiToggle);
+
+        var count = _newWorldAiCountDropdown.Bounds;
+        DrawUiText(
+            "AI NPC COUNT",
+            new(count.X, count.Y - 18),
+            new(176, 164, 132, 255));
+        DrawUiColor(
+            count,
+            aiReady
+                ? new(.045f, .041f, .031f, .98f)
+                : new(.027f, .026f, .023f, .82f));
+        DrawPanelOutline(
+            count, 1,
+            _newWorldAiCountDropdown.IsOpen
+                ? new(.52f, .40f, .16f, 1)
+                : new(.27f, .23f, .14f, 1));
+        var label = NewWorldAiCountOptions
+            .First(option =>
+                option.Id == _newWorldAiNpcCount.ToString()).Label;
+        DrawUiText(
+            label,
+            new(count.X + 10, count.Y + 12),
+            aiReady
+                ? new(221, 208, 169, 255)
+                : new(119, 117, 105, 255));
+        DrawCenteredUiText(
+            _newWorldAiCountDropdown.IsOpen ? "^" : "v",
+            new(count.X + count.Z - 28, count.Y, 24, count.W),
+            new(186, 172, 137, 255));
+    }
+
+    private void RenderNewWorldAiCountMenu()
+    {
+        if (!_newWorldAiCountDropdown.IsOpen) return;
+        var menu = _newWorldAiCountDropdown.MenuBounds;
+        DrawUiColor(menu, new(.025f, .023f, .019f, .998f));
+        DrawPanelOutline(menu, 2, new(.52f, .40f, .16f, 1));
+        for (var row = 0;
+             row < _newWorldAiCountDropdown.VisibleCount;
+             row++)
+        {
+            var index =
+                _newWorldAiCountDropdown.FirstVisibleIndex + row;
+            var bounds =
+                _newWorldAiCountDropdown.OptionBounds(row);
+            var hovered = bounds.Contains(MouseState.Position);
+            var selected =
+                NewWorldAiCountOptions[index].Id ==
+                _newWorldAiNpcCount.ToString();
+            if (hovered || selected)
+                DrawUiColor(
+                    bounds,
+                    hovered
+                        ? new(.19f, .145f, .055f, .99f)
+                        : new(.10f, .082f, .042f, .99f));
+            if (row > 0)
+                DrawUiColor(
+                    new(bounds.X + 5, bounds.Y,
+                        bounds.Z - 10, 1),
+                    new(.19f, .16f, .10f, 1));
+            DrawUiText(
+                NewWorldAiCountOptions[index].Label,
+                new(bounds.X + 10, bounds.Y + 8),
+                hovered
+                    ? new(244, 225, 171, 255)
+                    : new(205, 195, 160, 255));
+        }
+    }
+
+    private void RenderNewWorldGenerationOverlay(Vector4 panel)
+    {
+        DrawUiColor(
+            new(panel.X + 2, panel.Y + 2,
+                panel.Z - 4, panel.W - 4),
+            new(0, 0, 0, .68f));
+        var card = new Vector4(
+            panel.X + 120,
+            panel.Y + 210,
+            panel.Z - 240,
+            154);
+        DrawUiColor(card, new(.045f, .040f, .029f, .995f));
+        DrawPanelOutline(card, 2, new(.53f, .40f, .16f, 1));
+        DrawCenteredUiText(
+            "PREPARING YOUR SURVIVORS",
+            new(card.X + 18, card.Y + 18, card.Z - 36, 26),
+            new(235, 217, 166, 255));
+        DrawCenteredUiText(
+            "Generating grounded histories, personalities, and skills",
+            new(card.X + 20, card.Y + 52, card.Z - 40, 22),
+            new(167, 158, 132, 255));
+        var track = new Vector4(
+            card.X + 44, card.Y + 94, card.Z - 88, 8);
+        DrawRoundedUiColor(track, 4, new(.10f, .085f, .055f, 1));
+        var pulse = .22f + .58f *
+            (.5f + .5f * MathF.Sin((float)_clock * 2.8f));
+        DrawRoundedUiColor(
+            new(track.X, track.Y, track.Z * pulse, track.W),
+            4,
+            new(.58f, .42f, .14f, 1));
+        DrawCenteredUiText(
+            "This usually takes a few seconds",
+            new(card.X + 20, card.Y + 116, card.Z - 40, 20),
+            new(137, 132, 115, 255));
     }
 
     private void RenderSettingsMenu()
@@ -3552,13 +3794,41 @@ internal sealed partial class GameHostWindow : GameWindow
     private Vector4 NewWorldPreviewBounds()
     {
         var details = NewWorldDetailsBounds();
-        const float previewSize = 270;
+        const float previewSize = 200;
         return new(
             MathF.Round(
                 details.X + (details.Z - previewSize) * .5f),
             details.Y + 150,
             previewSize,
             previewSize);
+    }
+
+    private Vector4 NewWorldAiToggleBounds()
+    {
+        var details = NewWorldDetailsBounds();
+        return new(details.X + 18, details.Y + 376, 224, 50);
+    }
+
+    private Vector4 NewWorldAiCountBounds()
+    {
+        var details = NewWorldDetailsBounds();
+        return new(details.X + 250, details.Y + 380, 140, 42);
+    }
+
+    private void LayoutNewWorldAiControls()
+    {
+        var panel = FrontendPanel(760, 640);
+        _newWorldAiToggle.Layout(
+            NewWorldAiToggleBounds(),
+            horizontalInset: 0);
+        _newWorldAiCountDropdown.Layout(
+            NewWorldAiCountBounds(),
+            NewWorldAiCountOptions,
+            new(
+                panel.X + 20,
+                panel.Y + 78,
+                panel.Z - 40,
+                panel.W - 190));
     }
 
     private Vector4 NewWorldOptionBounds(int index)
@@ -3728,6 +3998,7 @@ internal sealed partial class GameHostWindow : GameWindow
         RenderDigSiteHealthBar(scene);
         RenderCombatTargetHealthBar(scene);
         RenderOverheadSpeech(scene);
+        RenderVillagerOverheadSpeech(scene);
         RenderMinimap();
         RenderPlayerStatus();
         RenderChatUi();
@@ -4886,6 +5157,8 @@ internal sealed partial class GameHostWindow : GameWindow
                     ChatMessageStyle.Reward => new FSColor(130, 224, 142, 255),
                     ChatMessageStyle.Monologue => new FSColor(196, 202, 218, 255),
                     ChatMessageStyle.Warning => new FSColor(236, 145, 112, 255),
+                    ChatMessageStyle.Player => new FSColor(128, 211, 255, 255),
+                    ChatMessageStyle.Npc => new FSColor(238, 220, 157, 255),
                     _ => new FSColor(218, 207, 166, 255)
                 };
                 DrawUiText(
@@ -5535,6 +5808,7 @@ internal sealed partial class GameHostWindow : GameWindow
             atlasVertices.Clear();
         }
         RenderGroundDropPreview();
+        DrawVillagers();
 
         void FlushAtlas()
         {
@@ -7566,6 +7840,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     protected override void OnUnload()
     {
+        _npcAi.Dispose();
         _uiColorBatch.Dispose();
         _soundEffects?.Dispose();
         _musicPlayer?.Dispose();

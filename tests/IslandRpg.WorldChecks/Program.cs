@@ -8,9 +8,859 @@ using OpenTK.Mathematics;
 
 WorldCheckProcess.DisableWindowsCrashDialogs();
 
+if (args.Contains(
+        "--live-ai-contract",
+        StringComparer.OrdinalIgnoreCase))
+{
+    var modelIndex = Array.FindIndex(
+        args, value => value == "--model");
+    var model = modelIndex >= 0 &&
+                modelIndex + 1 < args.Length
+        ? args[modelIndex + 1]
+        : new GameSettings().EffectiveAi.Model;
+    Environment.ExitCode =
+        await RunLiveAiContract(model) ? 0 : 1;
+    return;
+}
+
 Require(
     new GameSettings().UnlimitedZoom,
     "unlimited zoom must be enabled by default");
+var defaultAi = new GameSettings().EffectiveAi;
+Require(
+    defaultAi.Enabled &&
+    defaultAi.BaseUrl == "http://localhost:11434" &&
+    defaultAi.Model == "qwen3:4b",
+    "AI settings must default to the contract-tested local Qwen model while remaining runtime-gated");
+await NpcAiScenarioChecks.RunAsync();
+using (var disabledAi = new NpcAiService(
+           new HttpClient(new StubHttpHandler(_ =>
+               throw new InvalidOperationException(
+                   "disabled AI must not make requests")))))
+{
+    var disabledState = await disabledAi.CheckAsync(
+        defaultAi with { Enabled = false });
+    Require(
+        disabledState.Availability ==
+            NpcAiAvailability.Disabled,
+        "disabled AI must remain fail-closed without network work");
+}
+using (var missingAi = new NpcAiService(
+           new HttpClient(new StubHttpHandler(_ =>
+               StubHttpHandler.Json(
+                   """{"models":[]}""")))))
+{
+    var missingState = await missingAi.CheckAsync(defaultAi);
+    Require(
+        missingState.Availability ==
+            NpcAiAvailability.ModelMissing,
+        "AI startup must require the configured model to be installed");
+}
+using (var readyAi = new NpcAiService(
+           new HttpClient(new StubHttpHandler(request =>
+               request.RequestUri?.AbsolutePath == "/api/tags"
+                   ? StubHttpHandler.Json(
+                       """
+                       {"models":[{"name":"qwen3:4b","model":"qwen3:4b"}]}
+                       """)
+                   : StubHttpHandler.Json(
+                       """{"response":"READY","done":true}""")))))
+{
+    var readyState = await readyAi.CheckAsync(defaultAi);
+    Require(
+        readyState.Availability ==
+            NpcAiAvailability.Ready,
+        "AI runtime state must require a successful live model response");
+}
+using (var interpretingAi = new NpcAiService(
+           new HttpClient(new StubHttpHandler(_ =>
+               StubHttpHandler.Json(
+                   """
+                   {"response":"{\"addressedActorId\":\"mira\",\"referencedActorId\":\"invented\",\"desire\":\"food\",\"action\":\"give\",\"itemId\":\"cooked_minnows\",\"quantity\":999,\"sentiment\":-999,\"goal\":\"help Mira\",\"memory\":\"Mira asked for food\",\"reply\":\"I can help.\",\"freeformThought\":false}","done":true}
+                   """)))))
+{
+    var interpretation = await interpretingAi.InterpretAsync(
+        defaultAi,
+        new(
+            "speaker",
+            "Sam",
+            "mira",
+            "Mira",
+            "Can you give Mira food?",
+            [new("mira", "Mira", 2, 20, "neutral")],
+            [],
+            []));
+    Require(
+        interpretation is
+        {
+            AddressedActorId: "mira",
+            ReferencedActorId: "",
+            Quantity: 100,
+            Sentiment: -100,
+            Action: "give"
+        } &&
+        !typeof(NpcAiSpeechContext).GetProperties()
+            .Any(property =>
+                property.Name.Contains(
+                    "Player",
+                    StringComparison.OrdinalIgnoreCase)),
+        "AI interpretations must validate actor references and clamp untrusted structured output");
+}
+using (var dialogueAi = new NpcAiService(
+           new HttpClient(new StubHttpHandler(_ =>
+               StubHttpHandler.Json(
+                   """
+                   {"response":"{\"reply\":\"I'm Mira. Do you remember anything before the beach?\"}","done":true}
+                   """)))))
+{
+    var dialogue = await dialogueAi.ComposeDialogueAsync(
+        defaultAi,
+        new(
+            "Mira",
+            "Sam",
+            VillagerSocialIntent.Introduce.ToString(),
+            "I'm Mira. What's your name?",
+            82,
+            "neutral",
+            []));
+    Require(
+        dialogue ==
+            "I'm Mira. Do you remember anything before the beach?",
+        "the model must fill natural dialogue without controlling the underlying social intent");
+}
+using (var biographyDumpAi = new NpcAiService(
+           new HttpClient(new StubHttpHandler(_ =>
+               StubHttpHandler.Json(
+                   """
+                   {"response":"{\"addressedActorId\":\"mira\",\"referencedActorId\":\"speaker\",\"desire\":\"introduce\",\"action\":\"\",\"itemId\":\"\",\"quantity\":0,\"sentiment\":0,\"goal\":\"\",\"memory\":\"Samuel introduced himself\",\"reply\":\"Mira was a skilled cartographer from a coastal village where she spent her life mapping trade routes and remembering every detail of her former home.\",\"freeformThought\":false}","done":true}
+                   """)))))
+{
+    var interpretation = await biographyDumpAi.InterpretAsync(
+        defaultAi,
+        new(
+            "speaker", "Samuel", "mira", "Mira", "Samuel",
+            [new("mira", "Mira", 1, 80, "neutral")],
+            [], []));
+    Require(
+        interpretation is { Reply: "" },
+        "player-response interpretation must reject third-person biography dumps");
+}
+using (var echoingAi = new NpcAiService(
+           new HttpClient(new StubHttpHandler(_ =>
+               StubHttpHandler.Json(
+                   """
+                   {"response":"{\"addressedActorId\":\"mira\",\"referencedActorId\":\"speaker\",\"desire\":\"hostile\",\"action\":\"\",\"itemId\":\"\",\"quantity\":0,\"sentiment\":-40,\"goal\":\"\",\"memory\":\"Samuel insulted Mira\",\"reply\":\"Nice to meet you, fuck off.\",\"freeformThought\":false}","done":true}
+                   """)))))
+{
+    var interpretation = await echoingAi.InterpretAsync(
+        defaultAi,
+        new(
+            "speaker", "Samuel", "mira", "Mira", "fuck off",
+            [new("mira", "Mira", 1, 80, "neutral")],
+            [], []));
+    Require(
+        interpretation is { Reply: "", Sentiment: -40 },
+        "NPC replies must retain negative sentiment while rejecting echoed player abuse");
+}
+using (var placeholderDialogueAi = new NpcAiService(
+           new HttpClient(new StubHttpHandler(_ =>
+               StubHttpHandler.Json(
+                   """
+                   {"response":"{\"reply\":\"none\"}","done":true}
+                   """)))))
+{
+    Require(
+        await placeholderDialogueAi.ComposeDialogueAsync(
+            defaultAi,
+            new(
+                "Mira", "Sam", "AskOrigin",
+                "How did we get here?", 82, "neutral", [])) is null,
+        "placeholder model dialogue must be rejected so deterministic speech can take over");
+}
+using (var narrationDialogueAi = new NpcAiService(
+           new HttpClient(new StubHttpHandler(_ =>
+               StubHttpHandler.Json(
+                   """
+                   {"response":"{\"reply\":\"Mira walks closer and feels worried about the mysterious island.\"}","done":true}
+                   """)))))
+{
+    Require(
+        await narrationDialogueAi.ComposeDialogueAsync(
+            defaultAi,
+            new(
+                "Mira", "Sam", "Introduce",
+                "I'm Mira. What's your name?", 82, "neutral", [])) is null,
+        "third-person model narration must be rejected instead of appearing as NPC speech");
+}
+using (var repeatingDialogueAi = new NpcAiService(
+           new HttpClient(new StubHttpHandler(_ =>
+               StubHttpHandler.Json(
+                   """
+                   {"response":"{\"reply\":\"I'm Mira. What's your name? I'm Mira. What's your name?\"}","done":true}
+                   """)))))
+{
+    Require(
+        await repeatingDialogueAi.ComposeDialogueAsync(
+            defaultAi,
+            new(
+                "Mira", "Sam", "Introduce",
+                "I'm Mira. What's your name?", 82, "neutral", [])) is null,
+        "repeating model clauses must be rejected so the deterministic line appears once");
+}
+using (var personaAi = new NpcAiService(
+           new HttpClient(new StubHttpHandler(_ =>
+               StubHttpHandler.Json(
+                   """
+                   {"response":"{\"people\":[{\"backgroundStory\":\"A cooper who repaired water barrels in a harbour town.\",\"personality\":\"Curious but careful.\",\"priorTrade\":\"Cooper\",\"knownToolIds\":[\"stone_hammer\",\"laser_rifle\"],\"arrivalMemory\":\"Woke beside broken timber at dawn.\",\"socialDrive\":\"Needs to learn who remembers the wreck.\"}]}","done":true}
+                   """)))))
+{
+    var personas = await personaAi.GeneratePersonasAsync(
+        defaultAi, "Test Island", 42, ["Mira"]);
+    Require(
+        personas?.Single() is
+        {
+            PriorTrade: "Cooper",
+            KnownToolIds.Count: 1
+        } persona &&
+        persona.KnownToolIds[0] == ItemIds.StoneHammer,
+        "world creation must generate persistent grounded personas and reject invented tool knowledge");
+}
+
+var miraOwner = ItemOwner.Character("mira");
+var playerOwner = ItemOwner.Character("player");
+var privateAxe = new ItemOwnership(
+    miraOwner,
+    AcquiredBy: OwnershipAcquisition.Crafted);
+Require(
+    ItemOwnershipService.IsAuthorized(
+        privateAxe, "mira", OwnershipAction.Use) &&
+    !ItemOwnershipService.IsAuthorized(
+        privateAxe, "player", OwnershipAction.Take) &&
+    ItemOwnershipService.IsAuthorized(
+        ItemOwnership.Unclaimed, "player", OwnershipAction.Take) &&
+    ItemOwnershipService.Transfer(
+        privateAxe,
+        playerOwner,
+        OwnershipAcquisition.Gifted,
+        120).Owner == playerOwner,
+    "ownership authorization and explicit transfers must distinguish owner, access, and acquisition");
+var knowledge = new OwnershipKnowledge();
+var ownedAxeId = Guid.NewGuid();
+knowledge.Observe(new(
+    ownedAxeId,
+    "tomas",
+    "player",
+    "mira",
+    OwnershipEvidenceKind.Witnessed,
+    1,
+    140));
+Require(
+    knowledge.TryGet(ownedAxeId, out var axeBelief) &&
+    axeBelief.BelievedOwnerId == "mira" &&
+    axeBelief.SuspectedHolderId == "player" &&
+    axeBelief.Confidence == 1,
+    "villagers must learn ownership from evidence rather than global knowledge");
+var relationships = new RelationshipLedger();
+var theftIncident = new OwnershipIncident(
+    ownedAxeId,
+    ItemIds.BronzeAxe,
+    "mira",
+    "player",
+    1,
+    20,
+    1,
+    Returned: false,
+    WasEmergency: false);
+var damagedRelationship =
+    relationships.Apply("mira", "player", theftIncident);
+Require(
+    damagedRelationship.Trust < 0 &&
+    damagedRelationship.Resentment > 0 &&
+    ItemOwnershipService.Assess(
+        theftIncident, damagedRelationship) >=
+        OwnershipReaction.DemandCompensation &&
+    relationships.Get("player", "mira") == default,
+    "ownership incidents must change directional relationships and escalate reactions");
+var ownershipBenchmark = System.Diagnostics.Stopwatch.StartNew();
+for (var index = 0; index < 100_000; index++)
+{
+    _ = ItemOwnershipService.IsAuthorized(
+        privateAxe,
+        index % 2 == 0 ? "mira" : "player",
+        OwnershipAction.Take);
+    _ = relationships.Get("mira", "player");
+}
+ownershipBenchmark.Stop();
+Require(
+    ownershipBenchmark.ElapsedMilliseconds < 1000,
+    "indexed ownership and relationship checks must remain suitable for simulation hot paths");
+
+var villagerSpawnA = VillagerSimulation.CreateInitial(
+    2187, Vector2.Zero);
+var villagerSpawnB = VillagerSimulation.CreateInitial(
+    2187, Vector2.Zero);
+var soloVillagerSpawn = VillagerSimulation.CreateInitial(
+    2187, Vector2.Zero, population: 0);
+var twoVillagerSpawn = VillagerSimulation.CreateInitial(
+    2187, Vector2.Zero, population: 2);
+Require(soloVillagerSpawn.Length == 0,
+    "zero-population worlds must remain solo");
+Require(twoVillagerSpawn.Length == 2,
+    "villager spawning must respect the world's requested population");
+Require(
+    villagerSpawnA.Select(value => (
+            value.Id, value.Name,
+            value.PositionX, value.PositionY,
+            value.Sociability, value.Honesty, value.Boldness))
+        .SequenceEqual(villagerSpawnB.Select(value => (
+            value.Id, value.Name,
+            value.PositionX, value.PositionY,
+            value.Sociability, value.Honesty, value.Boldness))) &&
+    villagerSpawnA.Select(value => value.Id).Distinct().Count() ==
+        VillagerSimulation.InitialPopulation &&
+    villagerSpawnA.All(value =>
+        value.Inventory.Length == PlayerInventory.Capacity),
+    "initial villagers must have deterministic permanent identities and player-sized inventories");
+Require(
+    villagerSpawnA.All(value =>
+        value.Persona is not null &&
+        value.Persona.KnownToolIds.Count > 0 &&
+        VillagerSimulation.HoursOnIsland(
+            value,
+            value.AwakenedGameSeconds + 7200) == 2),
+    "villagers must retain tool knowledge and calculate what their timeline permits them to know");
+Require(
+    VillagerSimulation.Tier(
+        Vector2.Zero, Vector2.Zero) ==
+        VillagerSimulationTier.Nearby &&
+    VillagerSimulation.Tier(
+        new(64, 0), Vector2.Zero) ==
+        VillagerSimulationTier.Regional &&
+    VillagerSimulation.Tier(
+        new(256, 0), Vector2.Zero) ==
+        VillagerSimulationTier.Distant &&
+    VillagerSimulation.DecisionInterval(
+        VillagerSimulationTier.Distant) >
+        VillagerSimulation.DecisionInterval(
+            VillagerSimulationTier.Nearby),
+    "villager simulation frequency must decrease with distance");
+Require(
+    VillagerSimulation.NearbyDecisionSeconds >= 8 &&
+    VillagerSimulation.GatherPauseSeconds >= 45 &&
+    VillagerSimulation.SocialCooldownSeconds >= 90,
+    "ordinary decisions, gathering, and social speech must remain deliberately slow-paced");
+var hungryVillagerInventory = PlayerInventory.CreateStartingInventory();
+hungryVillagerInventory[0] = ItemIds.CookedMinnows;
+var hungryVillager = villagerSpawnA[0] with
+{
+    Hunger = 10,
+    Inventory = hungryVillagerInventory
+};
+var hungryDecision = VillagerSimulation.Decide(
+    hungryVillager, Vector2.Zero, 100);
+var fedVillager = VillagerSimulation.ApplyDecision(
+    hungryVillager,
+    hungryDecision,
+    VillagerSimulationTier.Nearby,
+    100);
+Require(
+    hungryDecision.Need == VillagerNeed.Food &&
+    hungryDecision.ConsumeSlot == 0 &&
+    fedVillager.Inventory[0] is null &&
+    fedVillager.Hunger > hungryVillager.Hunger,
+    "hungry villagers must intelligently consume available food");
+var offendedVillager =
+    VillagerSimulation.ObserveUnauthorizedTaking(
+        villagerSpawnA[0],
+        Guid.NewGuid(),
+        ItemIds.BronzeAxe,
+        villagerSpawnA[0].Id,
+        "player",
+        200,
+        1,
+        30,
+        out var villagerReaction);
+Require(
+    offendedVillager.Memories?.Single().Kind ==
+        "unauthorized-item-taken" &&
+    offendedVillager.Relationships?.Single()
+        .State.Trust < 0 &&
+    villagerReaction >= OwnershipReaction.DemandCompensation,
+    "a witnessing owner must remember theft, distrust the suspect, and confront them");
+var villagerBenchmark =
+    System.Diagnostics.Stopwatch.StartNew();
+var benchmarkVillager = villagerSpawnA[1];
+for (var index = 0; index < 100_000; index++)
+{
+    var tier = VillagerSimulation.Tier(
+        new(benchmarkVillager.PositionX,
+            benchmarkVillager.PositionY),
+        new(index & 255, index & 127));
+    _ = VillagerSimulation.DecisionInterval(tier);
+}
+villagerBenchmark.Stop();
+Require(
+    villagerBenchmark.ElapsedMilliseconds < 1000,
+    "villager tier selection must remain allocation-free and fast at scale");
+var nearbyRockId = Guid.NewGuid();
+var usefulFoodId = Guid.NewGuid();
+var playerOwnedToolId = Guid.NewGuid();
+var worldObjects = new VillagerWorldObject[]
+{
+    new(
+        nearbyRockId,
+        ItemIds.SmallRocks,
+        new(.5f, 0),
+        null,
+        IsStorage: false),
+    new(
+        usefulFoodId,
+        ItemIds.CookedMinnows,
+        new(6, 0),
+        null,
+        IsStorage: false),
+    new(
+        playerOwnedToolId,
+        ItemIds.BronzeAxe,
+        new(.25f, 0),
+        "player",
+        IsStorage: false)
+};
+var hungryWorldAction =
+    VillagerSimulation.SelectWorldAction(
+        hungryVillager with
+        {
+            PositionX = 0,
+            PositionY = 0,
+            Inventory =
+                PlayerInventory.CreateStartingInventory()
+        },
+        worldObjects);
+Require(
+    hungryWorldAction.Kind ==
+        VillagerWorldActionKind.ApproachItem &&
+    hungryWorldAction.ObjectId == usefulFoodId,
+    "a hungry villager must prioritize useful food while ignoring another character's property");
+var closeFoodAction =
+    VillagerSimulation.SelectWorldAction(
+        hungryVillager with
+        {
+            PositionX = 5.5f,
+            PositionY = 0,
+            Inventory =
+                PlayerInventory.CreateStartingInventory()
+        },
+        worldObjects);
+Require(
+    closeFoodAction.Kind ==
+        VillagerWorldActionKind.TakeItem &&
+    closeFoodAction.ObjectId == usefulFoodId,
+    "villagers must convert an approach goal into a take action inside interaction range");
+var fullVillagerInventory =
+    PlayerInventory.CreateStartingInventory();
+for (var index = 0;
+     index < VillagerSimulation.StorageDepositThreshold;
+     index++)
+    fullVillagerInventory[index] = ItemIds.SmallRocks;
+var ownStorageId = Guid.NewGuid();
+var storageAction =
+    VillagerSimulation.SelectWorldAction(
+        villagerSpawnA[0] with
+        {
+            PositionX = 0,
+            PositionY = 0,
+            Inventory = fullVillagerInventory
+        },
+        new VillagerWorldObject[]
+        {
+            new(
+                Guid.NewGuid(),
+                ItemIds.StorageChest,
+                new(.25f, 0),
+                "player",
+                IsStorage: true),
+            new(
+                ownStorageId,
+                ItemIds.StorageChest,
+                new(.5f, 0),
+                villagerSpawnA[0].Id,
+                IsStorage: true)
+        });
+Require(
+    storageAction.Kind ==
+        VillagerWorldActionKind.DepositItems &&
+    storageAction.ObjectId == ownStorageId,
+    "villagers must deposit only into storage they own");
+var stockedInventory =
+    PlayerInventory.CreateStartingInventory();
+stockedInventory[0] = ItemIds.Logs;
+stockedInventory[1] = ItemIds.OakLogs;
+var restrainedGathering =
+    VillagerSimulation.SelectWorldAction(
+        villagerSpawnA[0] with
+        {
+            Hunger = 90,
+            Inventory = stockedInventory
+        },
+        new VillagerWorldObject[]
+        {
+            new(
+                Guid.NewGuid(),
+                ItemIds.PineLogs,
+                new(.25f, 0),
+                null,
+                IsStorage: false),
+            new(
+                Guid.NewGuid(),
+                ItemIds.CookedMinnows,
+                new(.25f, .25f),
+                null,
+                IsStorage: false)
+        });
+Require(
+    restrainedGathering.Kind ==
+        VillagerWorldActionKind.None,
+    "well-fed villagers with enough wood must leave surplus ground resources alone");
+Require(
+    VillagerSimulation.FootBoxesOverlap(
+        Vector2.Zero,
+        new(
+            VillagerSimulation.FootBoxWidth * .5f,
+            VillagerSimulation.FootBoxDepth * .5f)) &&
+    !VillagerSimulation.FootBoxesOverlap(
+        Vector2.Zero,
+        new(VillagerSimulation.FootBoxWidth, 0)) &&
+    !VillagerSimulation.FootBoxesOverlap(
+        Vector2.Zero,
+        new(0, VillagerSimulation.FootBoxDepth)),
+    "villager collision must use compact ground-contact boxes rather than full sprite bounds");
+var socialFoodInventory =
+    PlayerInventory.CreateStartingInventory();
+socialFoodInventory[0] = ItemIds.CookedMinnows;
+socialFoodInventory[1] = ItemIds.CookedMinnows;
+var hungrySocialVillager = villagerSpawnA[0] with
+{
+    Hunger = 20,
+    Inventory = PlayerInventory.CreateStartingInventory(),
+    PositionX = 0,
+    PositionY = 0
+};
+var socialProvider = villagerSpawnA[1] with
+{
+    Inventory = socialFoodInventory,
+    PositionX = 2,
+    PositionY = 0
+};
+var socialGoal = VillagerSimulation.SelectSocialGoal(
+    hungrySocialVillager,
+    new SocialActorObservation[]
+    {
+        new(
+            hungrySocialVillager.Id,
+            hungrySocialVillager.Name,
+            Vector2.Zero,
+            0,
+            hungrySocialVillager.Hunger,
+            0),
+        new(
+            socialProvider.Id,
+            socialProvider.Name,
+            new(2, 0),
+            0,
+            socialProvider.Hunger,
+            2),
+        new(
+            "unlabelled-third-actor",
+            "Sam",
+            new(7, 0),
+            0,
+            100,
+            5)
+    });
+Require(
+    socialGoal.Intent ==
+        VillagerSocialIntent.RequestFood &&
+    socialGoal.OtherActorId == socialProvider.Id &&
+    socialGoal.Target is not null &&
+    !typeof(SocialActorObservation).GetProperties()
+        .Any(property =>
+            property.Name.Contains(
+                "Player",
+                StringComparison.OrdinalIgnoreCase)),
+    "social survival planning must select people by perceived needs and supplies without knowing who is player-controlled");
+var curiousVillager = villagerSpawnA[0] with
+{
+    PositionX = 0,
+    PositionY = 0,
+    NextSocialGameSeconds = 0
+};
+var stranger = new SocialActorObservation(
+    "stranger-id", "Unknown survivor", new(.5f, 0),
+    0, 90, 0);
+var introduction = VillagerSimulation.SelectSocialGoal(
+    curiousVillager, new[] { stranger }, gameSeconds: 100);
+Require(
+    introduction.Intent == VillagerSocialIntent.Introduce &&
+    introduction.Speech?.Contains(
+        curiousVillager.Name,
+        StringComparison.Ordinal) == true,
+    "unknown nearby people must create a deliberate introduction goal");
+curiousVillager = VillagerSimulation.RecordConversation(
+    curiousVillager,
+    stranger.Id,
+    "Sam",
+    introduction.Intent,
+    100);
+Require(
+    curiousVillager.KnownPeople?.Single() is
+        {
+            Stage: AcquaintanceStage.Introduced,
+            StatedName: "Sam",
+            ConversationCount: 1
+        } &&
+    curiousVillager.Memories?.Any(value =>
+        value.Kind == "social-knowledge" &&
+        value.SubjectId == stranger.Id) == true &&
+    curiousVillager.Relationships?.Single().CharacterId ==
+        stranger.Id &&
+    curiousVillager.Relationships.Single().State.Trust > 0 &&
+    VillagerSimulation.SelectSocialGoal(
+        curiousVillager,
+        new[] { stranger },
+        gameSeconds: 110).Intent ==
+        VillagerSocialIntent.None,
+    "introductions must become persistent knowledge and enforce a quiet social cooldown");
+var originQuestion = VillagerSimulation.SelectSocialGoal(
+    curiousVillager,
+    new[] { stranger },
+    gameSeconds: curiousVillager.NextSocialGameSeconds);
+Require(
+    originQuestion.Intent == VillagerSocialIntent.AskOrigin,
+    "acquaintances must gradually seek information about how they reached the island");
+var urgentSocialCooldown = VillagerSimulation.SocialCooldown(
+    curiousVillager with
+    {
+        Hunger = 15,
+        Need = VillagerNeed.Food,
+        Goals = [],
+        Promises = []
+    },
+    VillagerSocialIntent.RequestFood);
+var uncommittedCooldown = VillagerSimulation.SocialCooldown(
+    curiousVillager with
+    {
+        Goals = [],
+        Promises = []
+    },
+    VillagerSocialIntent.AskSurvival);
+var committedCooldown = VillagerSimulation.SocialCooldown(
+    curiousVillager,
+    VillagerSocialIntent.AskSurvival);
+Require(
+    urgentSocialCooldown == 15 &&
+    committedCooldown > uncommittedCooldown &&
+    VillagerSimulation.SocialRealCooldown(
+        curiousVillager,
+        VillagerSocialIntent.SeekCompany) >= 12,
+    "social cooldowns must shorten for urgent needs and lengthen when active goals require attention");
+var matureRelationship = curiousVillager with
+{
+    Need = VillagerNeed.Social,
+    NextSocialGameSeconds = 0,
+    KnownPeople =
+    [
+        new(
+            stranger.Id,
+            AcquaintanceStage.DiscussedSkills,
+            "Sam",
+            500,
+            4)
+    ]
+};
+Require(
+    VillagerSimulation.SelectSocialGoal(
+        matureRelationship,
+        new[] { stranger },
+        gameSeconds: 600).Intent ==
+        VillagerSocialIntent.None &&
+    VillagerSimulation.SelectSocialGoal(
+        matureRelationship,
+        new[] { stranger },
+        gameSeconds:
+            500 +
+            VillagerSimulation.RelationshipCheckInSeconds).Intent ==
+        VillagerSocialIntent.SeekCompany,
+    "completed acquaintances must not loop companionship dialogue and may only check in after a substantial interval");
+Require(
+    villagerSpawnA.All(value =>
+        value.Goals?.Count == 2 &&
+        value.Goals.All(goal =>
+            goal.Status == CommitmentStatus.Active)),
+    "new villagers must begin with persistent food and wood survival goals");
+Require(
+    VillagerCommitmentService.TryParseGatherRequest(
+        "Could you gather 3 logs for me?",
+        out var promisedItem,
+        out var promisedQuantity) &&
+    promisedItem == ItemIds.Logs &&
+    promisedQuantity == 3,
+    "natural chat requests must resolve to validated item commitments");
+var acceptance = VillagerCommitmentService.TryAccept(
+    villagerSpawnA[0],
+    "requester",
+    VillagerPromiseKind.GatherItem,
+    promisedItem,
+    promisedQuantity,
+    300);
+Require(
+    acceptance.Accepted &&
+    acceptance.Promise is
+    {
+        Status: CommitmentStatus.Active,
+        TargetQuantity: 3,
+        Progress: 0
+    },
+    "available villagers must accept bounded, measurable promises");
+var committedVillager =
+    VillagerCommitmentService.AddPromise(
+        villagerSpawnA[0],
+        acceptance.Promise!);
+var promisePriorityInventory =
+    PlayerInventory.CreateStartingInventory();
+promisePriorityInventory[0] = ItemIds.Logs;
+promisePriorityInventory[1] = ItemIds.OakLogs;
+committedVillager = committedVillager with
+{
+    Inventory = promisePriorityInventory
+};
+var promisedGatherAction =
+    VillagerSimulation.SelectWorldAction(
+        committedVillager,
+        new VillagerWorldObject[]
+        {
+            new(
+                Guid.NewGuid(),
+                ItemIds.Logs,
+                new(2, 0),
+                null,
+                IsStorage: false),
+            new(
+                Guid.NewGuid(),
+                ItemIds.SmallRocks,
+                new(.25f, 0),
+                null,
+                IsStorage: false)
+        });
+Require(
+    promisedGatherAction.ObjectId is not null &&
+    promisedGatherAction.Target is not null,
+    "accepted promises must override personal stock limits and drive real world actions");
+committedVillager =
+    VillagerCommitmentService.RecordAcquiredItem(
+        committedVillager, ItemIds.Logs, 2);
+Require(
+    committedVillager.Promises?.Single().Progress == 2 &&
+    committedVillager.Promises.Single().Status ==
+        CommitmentStatus.Active,
+    "promise progress must track actual acquired items");
+committedVillager =
+    VillagerCommitmentService.RecordAcquiredItem(
+        committedVillager, ItemIds.Logs);
+Require(
+    committedVillager.Promises?.Single().Status ==
+        CommitmentStatus.Fulfilled &&
+    VillagerCommitmentService.ApplyOutcome(
+        default,
+        CommitmentStatus.Fulfilled).Trust > 0,
+    "fulfilling a promise must complete it and improve trust");
+var brokenPromiseVillager =
+    VillagerCommitmentService.UpdateDeadlines(
+        VillagerCommitmentService.AddPromise(
+            villagerSpawnA[1],
+            acceptance.Promise! with
+            {
+                PromisorId = villagerSpawnA[1].Id,
+                DeadlineGameSeconds = 10
+            }),
+        11);
+Require(
+    brokenPromiseVillager.Promises?.Single().Status ==
+        CommitmentStatus.Broken &&
+    VillagerCommitmentService.ApplyOutcome(
+        default,
+        CommitmentStatus.Broken).Trust < 0,
+    "expired promises must become broken commitments with negative social consequences");
+var commitmentBenchmark =
+    System.Diagnostics.Stopwatch.StartNew();
+for (var index = 0; index < 100_000; index++)
+    _ = VillagerCommitmentService.UpdateDeadlines(
+        committedVillager, 301);
+commitmentBenchmark.Stop();
+Require(
+    commitmentBenchmark.ElapsedMilliseconds < 1000,
+    "bounded promise maintenance must remain cheap enough for large distant populations");
+var movementState = VillagerSimulation.ApplyDecision(
+    villagerSpawnA[0] with
+    {
+        PositionX = 0,
+        PositionY = 0
+    },
+    new(VillagerNeed.Explore, new(2, 0)),
+    VillagerSimulationTier.Nearby,
+    250);
+Require(
+    movementState.Action == EntityAction.Move &&
+    movementState.FacingX == 1 &&
+    movementState.FacingY == 0 &&
+    movementState.PositionX == 0 &&
+    movementState.TargetX == 2,
+    "villager plans must persist action and facing for shared animation rendering");
+var partiallyMovedVillager =
+    VillagerSimulation.AdvanceMovement(
+        movementState, .25f);
+var arrivedVillager =
+    VillagerSimulation.AdvanceMovement(
+        partiallyMovedVillager, 1);
+Require(
+    partiallyMovedVillager.PositionX > 0 &&
+    partiallyMovedVillager.PositionX < 1 &&
+    Math.Abs(partiallyMovedVillager.ActionTime - .25) < .0001 &&
+    MathF.Abs(
+        partiallyMovedVillager.PositionX -
+        ActorMovementService.BaseMoveSpeed * .25f) < .0001f &&
+    partiallyMovedVillager.Action == EntityAction.Move &&
+    arrivedVillager.PositionX == 2 &&
+    arrivedVillager.Action == EntityAction.Idle &&
+    arrivedVillager.ActionTime == 0 &&
+    arrivedVillager.TargetX is null,
+    "villagers must interpolate at a bounded speed and stop exactly at their destination");
+var movementProbeEntity = new WorldEntity(Vector2.Zero);
+Require(
+    movementProbeEntity.MoveSpeed ==
+        ActorMovementService.BaseMoveSpeed &&
+    ActorMovementService.TerrainSpeedMultiplier(
+        wading: true, 0, 0) == .62f &&
+    ActorMovementService.TerrainSpeedMultiplier(
+        wading: false, 0, 2) < 1,
+    "players and villagers must share base speed, wading slowdown, and uphill slowdown");
+var observationSet =
+    Enumerable.Range(0, 64)
+        .Select(index => new VillagerWorldObject(
+            Guid.NewGuid(),
+            ItemIds.SmallRocks,
+            new(index % 8, index / 8),
+            null,
+            IsStorage: false))
+        .ToArray();
+var plannerBenchmark =
+    System.Diagnostics.Stopwatch.StartNew();
+for (var index = 0; index < 10_000; index++)
+    _ = VillagerSimulation.SelectWorldAction(
+        villagerSpawnA[0], observationSet);
+plannerBenchmark.Stop();
+Require(
+    plannerBenchmark.ElapsedMilliseconds < 1000,
+    "villager resource scoring must remain fast across repeated active-region decisions");
 
 var playerCommandHints = ChatCommandRegistry.Filter("/h", false);
 var developerCommandHints = ChatCommandRegistry.Filter("/h", true);
@@ -1603,7 +2453,8 @@ var visibleSettingsTabs = settingsMenu.VisibleTabs;
 Require(
     visibleSettingsTabs.Contains(SettingsTab.Display) &&
     visibleSettingsTabs.Contains(SettingsTab.Game) &&
-    visibleSettingsTabs.Contains(SettingsTab.Sound),
+    visibleSettingsTabs.Contains(SettingsTab.Sound) &&
+    visibleSettingsTabs.Contains(SettingsTab.AI),
     "the settings menu must expose Display, Game, and Sound tabs");
 var volumeSlider = new SliderControlState();
 var volumeCommitted = -1f;
@@ -1631,7 +2482,10 @@ Require(settingsMenu.DeveloperModeEnabled &&
 var settingsPanel = new Vector4(360, 80, 560, 560);
 settingsMenu.SelectAt(
     settingsPanel,
-    SettingsMenuState.TabBounds(settingsPanel, 3, 4).Xy);
+    SettingsMenuState.TabBounds(
+        settingsPanel,
+        settingsMenu.VisibleTabs.Count - 1,
+        settingsMenu.VisibleTabs.Count).Xy);
 settingsMenu.LayoutContent(settingsPanel);
 var settingsList = settingsMenu.ContentList;
 Require(
@@ -1707,6 +2561,29 @@ Require(
     toggleControl.IsChecked &&
     !toggleControl.ToggleAt(settingsBack.Xy),
     "the reusable toggle control must change only from an enabled hit inside its bounds");
+var npcCountDropdown = new DropdownControlState();
+var npcCountOptions = new[]
+{
+    new DropdownOption("0", "0 — Solo"),
+    new DropdownOption("1", "1 survivor"),
+    new DropdownOption("2", "2 survivors"),
+    new DropdownOption("3", "3 survivors")
+};
+npcCountDropdown.Layout(
+    new(100, 100, 140, 42),
+    npcCountOptions,
+    new(0, 0, 400, 300));
+npcCountDropdown.Toggle();
+Require(
+    npcCountDropdown.IsOpen &&
+    npcCountDropdown.VisibleCount == 4 &&
+    npcCountDropdown.TrySelect(
+        npcCountDropdown.OptionBounds(3).Xy +
+        new Vector2(8, 8),
+        out var selectedNpcCount) &&
+    selectedNpcCount.Id == "3" &&
+    !npcCountDropdown.IsOpen,
+    "the AI NPC count dropdown must expose and select all supported 0-3 population choices");
 var developerMap = new DeveloperMapWindow();
 developerMap.Open();
 Require(developerMap.IsOpen,
@@ -2348,6 +3225,12 @@ Require(
 
 var boundedChat = new ChatUiControlState();
 boundedChat.Layout(new(0, 0, 1280, 720));
+boundedChat.SetInputText("hello");
+boundedChat.Submit();
+Require(
+    boundedChat.Messages.Single() is
+        { Text: "hello", Style: ChatMessageStyle.Player },
+    "submitted player dialogue must have a distinct chat style");
 for (var index = 0; index < 225; index++)
     boundedChat.AddMessage($"message {index}");
 Require(boundedChat.Messages.Count == 200 &&
@@ -3048,12 +3931,19 @@ try
         Guid.NewGuid(),
         ItemIds.StorageChest,
         undergroundCoordinate.X * WorldChunk.Size + 14.5f,
-        undergroundCoordinate.Y * WorldChunk.Size + 14.5f);
+        undergroundCoordinate.Y * WorldChunk.Size + 14.5f,
+        OwnerId: "mira");
     var persistentChestState =
         StorageContainerService.Open(persistentChest);
     Require(
-        persistentChestState.TryAdd(ItemIds.Coal, 100) &&
-        persistentChestState.TryAdd(ItemIds.BronzeBar, 4),
+        persistentChestState.TryAdd(
+            ItemIds.Coal, 100, ownerId: "mira") &&
+        persistentChestState.TryAdd(
+            ItemIds.Coal, 2, ownerId: "player") &&
+        persistentChestState.TryAdd(
+            ItemIds.BronzeBar, 4, ownerId: "mira") &&
+        persistentChestState.Items.Count(
+            item => item == ItemIds.Coal) == 2,
         "the persistence fixture must populate a storage chest");
     persistentChest = StorageContainerService.Save(
         persistentChest, persistentChestState);
@@ -3067,13 +3957,21 @@ try
     var reloadedChestState =
         StorageContainerService.Open(reloadedChest);
     Require(
+        reloadedChestState.Quantities.Zip(
+                reloadedChestState.OwnerIds)
+            .Any(value =>
+                value.First == 100 &&
+                value.Second == "mira") &&
+        reloadedChestState.Quantities.Zip(
+                reloadedChestState.OwnerIds)
+            .Any(value =>
+                value.First == 2 &&
+                value.Second == "player") &&
         reloadedChestState.Quantities[
             Array.IndexOf(
-                reloadedChestState.Items, ItemIds.Coal)] == 100 &&
-        reloadedChestState.Quantities[
-            Array.IndexOf(
-                reloadedChestState.Items, ItemIds.BronzeBar)] == 4,
-        "container item IDs and stack quantities must survive a chunk reload");
+                reloadedChestState.Items, ItemIds.BronzeBar)] == 4 &&
+        reloadedChest.OwnerId == "mira",
+        "container contents and placed-object ownership must survive a chunk reload");
     var collectedRock = undergroundWithOpenShaft.GroundObjects.First(
         value => value.ItemId == ItemIds.LargeRock);
     undergroundWithOpenShaft.GroundObjects.Remove(collectedRock);
@@ -3321,6 +4219,25 @@ try
     };
     saves.SavePlayer(player);
     var world = saves.CreateWorld("Test Realm", 4321, player.Id);
+    Require(!world.AiNpcsEnabled && world.AiNpcCount == 0,
+        "world creation must default to a solo world");
+    var aiWorld = saves.CreateWorld(
+        "AI Realm", 9876, player.Id,
+        aiNpcsEnabled: true, aiNpcCount: 2,
+        aiNpcPersonas:
+        [
+            VillagerSimulation.DefaultPersona(0),
+            VillagerSimulation.DefaultPersona(1)
+        ]);
+    Require(aiWorld.AiNpcsEnabled && aiWorld.AiNpcCount == 2 &&
+            aiWorld.AiNpcPersonas?.Count == 2,
+        "AI NPC world options must be stored on the world profile");
+    var clampedAiWorld = saves.CreateWorld(
+        "Crowded Realm", 6789, player.Id,
+        aiNpcsEnabled: true, aiNpcCount: 99);
+    Require(clampedAiWorld.AiNpcCount ==
+            VillagerSimulation.InitialPopulation,
+        "AI NPC population must be clamped to the supported maximum");
     saves.SaveWorldPlayer(
         world.Id, new(player.Id, 12.5f, -8.25f, DateTime.UtcNow));
     Require(saves.ListPlayers().Single() is var loadedPlayer &&
@@ -3343,13 +4260,65 @@ try
             loadedPlayer.Inventory[1] == "oak_logs" &&
             PlayerInventory.Count(loadedPlayer.Inventory) == 2,
         "character skills, quest progress, and inventory must persist independently");
-    Require(saves.ListWorlds().Single().Id == world.Id,
-        "named world profiles must round-trip");
+    var savedWorlds = saves.ListWorlds();
+    Require(savedWorlds.Single(value => value.Id == world.Id) is
+            { AiNpcsEnabled: false, AiNpcCount: 0 } &&
+            savedWorlds.Single(value => value.Id == aiWorld.Id) is
+            {
+                AiNpcsEnabled: true,
+                AiNpcCount: 2,
+                AiNpcPersonas.Count: 2
+            },
+        "named world profiles, AI population settings, and generated cast must round-trip");
     var worldPlayer = saves.LoadWorldPlayer(world.Id, player.Id);
     Require(worldPlayer is not null &&
             worldPlayer.PositionX == 12.5f &&
             worldPlayer.PositionY == -8.25f,
         "character position must be stored per world");
+    var persistedVillagers = VillagerSimulation.CreateInitial(
+        world.Seed, new(12.5f, -8.25f));
+    var rememberedVillager =
+        VillagerSimulation.ObserveUnauthorizedTaking(
+            persistedVillagers[0],
+            Guid.NewGuid(),
+            ItemIds.StoneAxe,
+            persistedVillagers[0].Id,
+            player.Id,
+            600,
+            1,
+            15,
+            out _);
+    var persistedPromise =
+        VillagerCommitmentService.TryAccept(
+            rememberedVillager,
+            player.Id,
+            VillagerPromiseKind.GatherItem,
+            ItemIds.Logs,
+            2,
+            700).Promise!;
+    rememberedVillager =
+        VillagerCommitmentService.AddPromise(
+            rememberedVillager,
+            persistedPromise) with
+        {
+            FollowingActorId = player.Id
+        };
+    persistedVillagers[0] = rememberedVillager;
+    saves.SaveVillagers(world.Id, persistedVillagers);
+    var loadedVillagers = saves.LoadVillagers(world.Id);
+    Require(
+        loadedVillagers.Count ==
+            VillagerSimulation.InitialPopulation &&
+        loadedVillagers[0].Id == rememberedVillager.Id &&
+        loadedVillagers[0].Memories?.Single().SubjectId ==
+            player.Id &&
+        loadedVillagers[0].Relationships?.Single()
+            .OwnershipOffences == 1 &&
+        loadedVillagers[0].Goals?.Count == 2 &&
+        loadedVillagers[0].Promises?.Single().Id ==
+            persistedPromise.Id &&
+        loadedVillagers[0].FollowingActorId == player.Id,
+        "villager identities, goals, promises, memories, and directional relationships must persist per world");
     var deathBase = DateTime.UtcNow.AddMinutes(-20);
     for (var index = 0;
          index < PlayerDeathService.MaximumRememberedDeaths + 3;
@@ -3383,6 +4352,8 @@ try
             saves.LoadPlayerDeaths(world.Id, player.Id).Count == 0,
         "deleting a character must remove its world-specific states");
     saves.DeleteWorld(world.Id);
+    saves.DeleteWorld(aiWorld.Id);
+    saves.DeleteWorld(clampedAiWorld.Id);
     Require(saves.ListWorlds().Count == 0,
         "confirmed world deletion must remove its saved world directory");
 }
@@ -3428,6 +4399,107 @@ static WorldChunk CloneAt(WorldChunk source, ChunkCoordinate coordinate) => new(
     Fish = source.Fish
 };
 
+static async Task<bool> RunLiveAiContract(string model)
+{
+    var failures = new List<string>();
+    var settings = new NpcAiSettings(Model: model);
+    using var ai = new NpcAiService();
+    var state = await ai.CheckAsync(settings);
+    if (!state.Ready)
+    {
+        Console.Error.WriteLine(
+            $"AI CONTRACT FAIL [{model}]: {state.Message}");
+        return false;
+    }
+
+    var introduction = await ai.ComposeDialogueAsync(
+        settings,
+        new(
+            "Mira",
+            "Samuel",
+            "Introduce",
+            "I'm Mira. What's your name?",
+            80,
+            "neutral",
+            [],
+            "A carpenter from a harbour town.",
+            "Careful and curious.",
+            "Carpenter",
+            [ItemIds.StoneAxe, ItemIds.StoneHammer],
+            "Woke on the beach this morning.",
+            .25));
+    if (introduction is null ||
+        !introduction.Contains(
+            "Mira", StringComparison.OrdinalIgnoreCase) ||
+        !(introduction.Contains(
+              "name", StringComparison.OrdinalIgnoreCase) ||
+          introduction.Contains('?')))
+        failures.Add(
+            $"introduction lost required meaning: {introduction ?? "<null>"}");
+
+    var toolQuestion = await ai.ComposeDialogueAsync(
+        settings,
+        new(
+            "Mira",
+            "Samuel",
+            "AskTools",
+            "I was a carpenter. Do you know how to use a stone hammer?",
+            80,
+            "neutral",
+            [],
+            "A carpenter from a harbour town.",
+            "Careful and curious.",
+            "Carpenter",
+            [ItemIds.StoneAxe, ItemIds.StoneHammer],
+            "Woke on the beach this morning.",
+            2));
+    if (toolQuestion is null ||
+        !toolQuestion.Contains(
+            "hammer", StringComparison.OrdinalIgnoreCase) ||
+        !toolQuestion.Contains('?'))
+        failures.Add(
+            $"tool question lost grounded action: {toolQuestion ?? "<null>"}");
+
+    var personas = await ai.GeneratePersonasAsync(
+        settings, "Contract Island", 741, ["Mira"]);
+    var persona = personas?.SingleOrDefault();
+    if (persona is null)
+        failures.Add("persona generation returned no valid cast");
+    else
+    {
+        var background = persona.BackgroundStory.ToLowerInvariant();
+        if (background.Contains("born on the island") ||
+            background.Contains("grew up on the island") ||
+            background.Contains("native to the island"))
+            failures.Add(
+                $"persona violated the day-one arrival timeline: {persona.BackgroundStory}");
+        var arrival = persona.ArrivalMemory.ToLowerInvariant();
+        if (!(arrival.Contains("wok") ||
+              arrival.Contains("wreck") ||
+              arrival.Contains("shore") ||
+              arrival.Contains("beach") ||
+              arrival.Contains("water") ||
+              arrival.Contains("ship") ||
+              arrival.Contains("overboard") ||
+              arrival.Contains("boat") ||
+              arrival.Contains("ocean") ||
+              arrival.Contains("wave") ||
+              arrival.Contains("salt")))
+            failures.Add(
+                $"arrival memory was not about arriving: {persona.ArrivalMemory}");
+    }
+
+    if (failures.Count == 0)
+    {
+        Console.WriteLine($"AI CONTRACT PASS [{model}]");
+        return true;
+    }
+    Console.Error.WriteLine($"AI CONTRACT FAIL [{model}]");
+    foreach (var failure in failures)
+        Console.Error.WriteLine($"- {failure}");
+    return false;
+}
+
 static class WorldCheckProcess
 {
     private const uint SemNoGpFaultErrorBox = 0x0002;
@@ -3442,4 +4514,23 @@ static class WorldCheckProcess
 
     [System.Runtime.InteropServices.DllImport("kernel32.dll")]
     private static extern uint SetErrorMode(uint mode);
+}
+
+sealed class StubHttpHandler(
+    Func<HttpRequestMessage, HttpResponseMessage> response)
+    : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(response(request));
+
+    public static HttpResponseMessage Json(string json) =>
+        new(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                json,
+                System.Text.Encoding.UTF8,
+                "application/json")
+        };
 }

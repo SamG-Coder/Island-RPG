@@ -215,6 +215,9 @@ internal sealed partial class GameHostWindow
                     "Game sounds",
                     soundSettings.EffectsVolume);
                 break;
+            case SettingsTab.AI:
+                RenderAiSettings();
+                break;
             case SettingsTab.Dev:
                 RenderDeveloperSettings();
                 break;

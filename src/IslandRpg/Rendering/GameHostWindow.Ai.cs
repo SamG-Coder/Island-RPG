@@ -1,0 +1,711 @@
+using IslandRpg.Gameplay;
+using IslandRpg.Persistence;
+using IslandRpg.Rendering.Ui;
+using OpenTK.Mathematics;
+
+namespace IslandRpg.Rendering;
+
+internal sealed partial class GameHostWindow
+{
+    private readonly TextBoxControlState _aiUrlTextBox =
+        new() { MaximumLength = 160 };
+    private readonly TextBoxControlState _aiModelTextBox =
+        new() { MaximumLength = 80 };
+    private readonly TextBoxControlState _aiPasswordTextBox =
+        new() { MaximumLength = 160 };
+    private readonly NpcAiService _npcAi = new();
+    private NpcAiRuntimeState _npcAiState = new(
+        NpcAiAvailability.Checking,
+        "AI has not been checked.",
+        DateTime.MinValue);
+    private Task<NpcAiRuntimeState>? _npcAiCheckTask;
+    private Task<NpcAiInterpretation?>? _npcAiSpeechTask;
+    private int _npcAiSpeechVillagerIndex = -1;
+    private string? _npcAiSpeechFallback;
+    private const string NpcAiSpeechFallback =
+        "Sorry, I didn't understand that. Could you say it another way?";
+    private Task<string?>? _npcAiDialogueTask;
+    private string? _npcAiDialogueSpeakerId;
+    private string? _npcAiDialogueListenerId;
+    private string? _npcAiDialogueFallback;
+    private Task<IReadOnlyList<VillagerPersona>?>?
+        _npcPersonaGenerationTask;
+    private PendingNewWorldCreation? _pendingNewWorldCreation;
+    private bool _aiFieldsWereFocused;
+    private sealed record PendingNewWorldCreation(
+        string Name,
+        long Seed,
+        Vector2 Spawn,
+        PlayerProfile Player,
+        int Population);
+
+    private void BeginNpcAiCheck()
+    {
+        if (_npcAiCheckTask is { IsCompleted: false })
+            return;
+        var settings = _saves.LoadSettings().EffectiveAi;
+        _npcAiState = settings.Enabled
+            ? new(
+                NpcAiAvailability.Checking,
+                "Checking AI server and model...",
+                DateTime.UtcNow)
+            : new(
+                NpcAiAvailability.Disabled,
+                "AI is disabled.",
+                DateTime.UtcNow);
+        _npcAiCheckTask = _npcAi.CheckAsync(settings);
+    }
+
+    private void BeginAiWorldCreation(
+        string name,
+        long seed,
+        Vector2 spawn,
+        PlayerProfile player,
+        int population)
+    {
+        if (_pendingNewWorldCreation is not null) return;
+        _pendingNewWorldCreation = new(
+            name, seed, spawn, player, population);
+        _frontendError =
+            "Creating survivor histories and personalities...";
+        _npcPersonaGenerationTask =
+            _npcAi.GeneratePersonasAsync(
+                _saves.LoadSettings().EffectiveAi,
+                name,
+                seed,
+                VillagerSimulation.NamesForPopulation(population));
+    }
+
+    private void UpdateAiWorldCreation()
+    {
+        if (_pendingNewWorldCreation is not { } pending ||
+            _npcPersonaGenerationTask is not { IsCompleted: true } task)
+            return;
+        IReadOnlyList<VillagerPersona>? personas = null;
+        if (task.IsCompletedSuccessfully)
+            personas = task.Result;
+        else
+            _ = task.Exception;
+        personas ??= Enumerable.Range(0, pending.Population)
+            .Select(VillagerSimulation.DefaultPersona)
+            .ToArray();
+        _pendingNewWorldCreation = null;
+        _npcPersonaGenerationTask = null;
+        CompleteNewWorldCreation(pending, personas);
+    }
+
+    private void InitializeNpcAiSettingsFields(
+        NpcAiSettings settings)
+    {
+        _aiUrlTextBox.SetText(settings.BaseUrl);
+        _aiModelTextBox.SetText(settings.Model);
+        _aiPasswordTextBox.SetText(settings.Password);
+    }
+
+    internal bool UpdateAiSettings(
+        Vector2 pointer,
+        Vector4 panel)
+    {
+        _settingsMenu.LayoutContent(panel);
+        var settings = _saves.LoadSettings();
+        var ai = settings.EffectiveAi;
+        if (_settingsMenu.OptionBounds(0).Contains(pointer))
+        {
+            ai = ai with { Enabled = !ai.Enabled };
+            SaveNpcAiSettings(settings, ai);
+            BeginNpcAiCheck();
+            return true;
+        }
+        if (AiFieldBounds(1).Contains(pointer))
+        {
+            FocusTextBox(
+                _aiUrlTextBox,
+                AiFieldBounds(1),
+                pointer);
+            return true;
+        }
+        if (AiFieldBounds(2).Contains(pointer))
+        {
+            FocusTextBox(
+                _aiModelTextBox,
+                AiFieldBounds(2),
+                pointer);
+            return true;
+        }
+        if (AiFieldBounds(3).Contains(pointer))
+        {
+            FocusTextBox(
+                _aiPasswordTextBox,
+                AiFieldBounds(3),
+                pointer);
+            return true;
+        }
+        if (!_settingsMenu.OptionBounds(4).Contains(pointer))
+            return false;
+        ai = ai with
+        {
+            BaseUrl = _aiUrlTextBox.Text.Trim(),
+            Model = _aiModelTextBox.Text.Trim(),
+            Password = _aiPasswordTextBox.Text
+        };
+        SaveNpcAiSettings(settings, ai);
+        BeginNpcAiCheck();
+        return true;
+    }
+
+    private void SaveNpcAiSettings(
+        GameSettings settings,
+        NpcAiSettings ai) =>
+        _saves.SaveSettings(settings with { Ai = ai });
+
+    private Vector4 AiFieldBounds(int option)
+    {
+        var row = _settingsMenu.OptionBounds(option);
+        return new(
+            row.X + 120,
+            row.Y,
+            row.Z - 120,
+            row.W);
+    }
+
+    private void RenderAiSettings()
+    {
+        var settings = _saves.LoadSettings().EffectiveAi;
+        DrawMenuButton(
+            _settingsMenu.OptionBounds(0),
+            $"AI enabled: {(settings.Enabled ? "On" : "Off")} — " +
+            _npcAiState.Availability);
+        RenderAiField(1, "URL", _aiUrlTextBox);
+        RenderAiField(2, "Model", _aiModelTextBox);
+        RenderAiField(
+            3,
+            "Password",
+            _aiPasswordTextBox,
+            mask: true);
+        DrawMenuButton(
+            _settingsMenu.OptionBounds(4),
+            _npcAiState.Availability ==
+                NpcAiAvailability.Checking
+                ? "Checking AI..."
+                : "Save and test — " +
+                  _npcAiState.Message);
+    }
+
+    private void RenderAiField(
+        int option,
+        string label,
+        TextBoxControlState field,
+        bool mask = false)
+    {
+        var row = _settingsMenu.OptionBounds(option);
+        DrawUiText(
+            label,
+            new(row.X + 10, row.Y + 12),
+            new(226, 214, 175, 255));
+        field.Bounds = AiFieldBounds(option);
+        if (!mask)
+        {
+            DrawTextField(field);
+            return;
+        }
+        DrawAoEPanelBorder(field.Bounds);
+        var value = new string('•', field.Text.Length);
+        DrawUiText(
+            value,
+            VerticallyCenteredTextPosition(
+                value, field.Bounds, 14),
+            new(226, 214, 175, 255));
+    }
+
+    private void UpdateNpcAi()
+    {
+        var fieldsFocused =
+            _aiUrlTextBox.Focused ||
+            _aiModelTextBox.Focused ||
+            _aiPasswordTextBox.Focused;
+        if (_aiFieldsWereFocused && !fieldsFocused)
+        {
+            var settings = _saves.LoadSettings();
+            SaveNpcAiSettings(
+                settings,
+                settings.EffectiveAi with
+                {
+                    BaseUrl = _aiUrlTextBox.Text.Trim(),
+                    Model = _aiModelTextBox.Text.Trim(),
+                    Password = _aiPasswordTextBox.Text
+                });
+        }
+        _aiFieldsWereFocused = fieldsFocused;
+        if (_npcAiCheckTask is { IsCompletedSuccessfully: true })
+        {
+            _npcAiState = _npcAiCheckTask.Result;
+            _npcAiCheckTask = null;
+        }
+        else if (_npcAiCheckTask is { IsFaulted: true })
+        {
+            _npcAiState = new(
+                NpcAiAvailability.ServerUnavailable,
+                "AI availability check failed.",
+                DateTime.UtcNow);
+            _npcAiCheckTask = null;
+        }
+        CompleteNpcAiDialogue();
+        if (_npcAiSpeechTask is { IsFaulted: true })
+        {
+            var failedIndex = _npcAiSpeechVillagerIndex;
+            _npcAiState = new(
+                NpcAiAvailability.ModelUnresponsive,
+                "AI stopped responding at runtime.",
+                DateTime.UtcNow);
+            _npcAiSpeechTask = null;
+            _npcAiSpeechVillagerIndex = -1;
+            var fallback = _npcAiSpeechFallback ??
+                           NpcAiSpeechFallback;
+            _npcAiSpeechFallback = null;
+            if ((uint)failedIndex < (uint)_villagers.Count)
+                ShowVillagerSpeech(
+                    failedIndex,
+                    fallback,
+                    _player?.Position ??
+                    new(
+                        _villagers[failedIndex].PositionX,
+                        _villagers[failedIndex].PositionY));
+            return;
+        }
+        if (_npcAiSpeechTask is not
+            { IsCompletedSuccessfully: true })
+            return;
+        var interpretation = _npcAiSpeechTask.Result;
+        _npcAiSpeechTask = null;
+        var index = _npcAiSpeechVillagerIndex;
+        _npcAiSpeechVillagerIndex = -1;
+        var speechFallback = _npcAiSpeechFallback ??
+                             NpcAiSpeechFallback;
+        _npcAiSpeechFallback = null;
+        if (interpretation is null)
+        {
+            _npcAiState = new(
+                NpcAiAvailability.ModelUnresponsive,
+                "AI returned no valid runtime response.",
+                DateTime.UtcNow);
+            if ((uint)index < (uint)_villagers.Count)
+                ShowVillagerSpeech(
+                    index,
+                    speechFallback,
+                    _player?.Position ??
+                    new(
+                        _villagers[index].PositionX,
+                        _villagers[index].PositionY));
+            return;
+        }
+        if (
+            (uint)index >= (uint)_villagers.Count)
+            return;
+        ApplyNpcAiInterpretation(
+            index, interpretation, speechFallback);
+    }
+
+    private void CompleteNpcAiDialogue()
+    {
+        if (_npcAiDialogueTask is not { IsCompleted: true })
+            return;
+        var line = _npcAiDialogueTask.IsCompletedSuccessfully
+            ? _npcAiDialogueTask.Result
+            : null;
+        var speakerId = _npcAiDialogueSpeakerId;
+        var listenerId = _npcAiDialogueListenerId;
+        var fallback = _npcAiDialogueFallback;
+        _npcAiDialogueTask = null;
+        _npcAiDialogueSpeakerId = null;
+        _npcAiDialogueListenerId = null;
+        _npcAiDialogueFallback = null;
+        line = string.IsNullOrWhiteSpace(line)
+            ? fallback
+            : line;
+        if (string.IsNullOrWhiteSpace(speakerId) ||
+            string.IsNullOrWhiteSpace(line))
+            return;
+        var speakerIndex = _villagers.FindIndex(value =>
+            value.Id == speakerId);
+        if (speakerIndex < 0) return;
+        var listenerPosition =
+            _activePlayer is not null &&
+            listenerId == _activePlayer.Id &&
+            _player is not null
+                ? _player.Position
+                : _villagers
+                    .Where(value => value.Id == listenerId)
+                    .Select(value => new Vector2(
+                        value.PositionX, value.PositionY))
+                    .FirstOrDefault(new Vector2(
+                        _villagers[speakerIndex].PositionX,
+                        _villagers[speakerIndex].PositionY));
+        var listenerIndex = _villagers.FindIndex(value =>
+            value.Id == listenerId);
+        if (listenerIndex >= 0)
+            HoldVillagerConversation(
+                listenerIndex,
+                new(
+                    _villagers[speakerIndex].PositionX,
+                    _villagers[speakerIndex].PositionY),
+                ConversationLineSeconds(line));
+        ShowVillagerSpeech(
+            speakerIndex, line, listenerPosition);
+    }
+
+    private void SpeakVillagerDialogue(
+        VillagerState speaker,
+        string listenerId,
+        string listenerName,
+        VillagerSocialIntent intent,
+        string fallback)
+    {
+        if (!_npcAiState.Ready ||
+            _npcAiDialogueTask is { IsCompleted: false })
+        {
+            var speakerIndex = _villagers.FindIndex(value =>
+                value.Id == speaker.Id);
+            var listenerPosition =
+                _activePlayer?.Id == listenerId &&
+                _player is not null
+                    ? _player.Position
+                    : _villagers
+                        .Where(value => value.Id == listenerId)
+                        .Select(value => new Vector2(
+                            value.PositionX, value.PositionY))
+                        .FirstOrDefault(new Vector2(
+                            speaker.PositionX,
+                            speaker.PositionY));
+            ShowVillagerSpeech(
+                speakerIndex, fallback, listenerPosition);
+            return;
+        }
+        var settings = _saves.LoadSettings().EffectiveAi;
+        _npcAiDialogueSpeakerId = speaker.Id;
+        _npcAiDialogueListenerId = listenerId;
+        _npcAiDialogueFallback = fallback;
+        var currentSpeakerIndex = _villagers.FindIndex(value =>
+            value.Id == speaker.Id);
+        var currentListenerPosition =
+            _activePlayer?.Id == listenerId &&
+            _player is not null
+                ? _player.Position
+                : _villagers
+                    .Where(value => value.Id == listenerId)
+                    .Select(value => new Vector2(
+                        value.PositionX, value.PositionY))
+                    .FirstOrDefault(new Vector2(
+                        speaker.PositionX,
+                        speaker.PositionY));
+        HoldVillagerConversation(
+            currentSpeakerIndex,
+            currentListenerPosition,
+            double.PositiveInfinity);
+        var currentListenerIndex = _villagers.FindIndex(value =>
+            value.Id == listenerId);
+        if (currentListenerIndex >= 0)
+            HoldVillagerConversation(
+                currentListenerIndex,
+                new(speaker.PositionX, speaker.PositionY),
+                double.PositiveInfinity);
+        TakeConversationFloor(
+            speaker.Id,
+            double.PositiveInfinity);
+        _npcAiDialogueTask = _npcAi.ComposeDialogueAsync(
+            settings,
+            new(
+                speaker.Name,
+                listenerName,
+                intent.ToString(),
+                fallback,
+                speaker.Hunger,
+                RelationshipDescription(speaker, listenerId),
+                [],
+                speaker.Persona?.BackgroundStory ?? "",
+                speaker.Persona?.Personality ?? "",
+                speaker.Persona?.PriorTrade ?? "",
+                speaker.Persona?.KnownToolIds ?? [],
+                speaker.Persona?.ArrivalMemory ?? "",
+                VillagerSimulation.HoursOnIsland(
+                    speaker, _worldGameSeconds)));
+    }
+
+    private bool TryBeginNpcAiSpeech(
+        int villagerIndex,
+        string message)
+    {
+        if (!_npcAiState.Ready ||
+            _npcAiSpeechTask is { IsCompleted: false } ||
+            _activePlayer is null ||
+            _player is null ||
+            (uint)villagerIndex >= (uint)_villagers.Count)
+            return false;
+        var listener = _villagers[villagerIndex];
+        HoldVillagerConversation(
+            villagerIndex,
+            _player.Position,
+            double.PositiveInfinity);
+        TakeConversationFloor(
+            listener.Id,
+            double.PositiveInfinity);
+        var nearby = new List<NpcAiActor>(
+            _villagers.Count + 1)
+        {
+            new(
+                _activePlayer.Id,
+                _activePlayer.Name,
+                0,
+                _activePlayer.Hunger,
+                RelationshipDescription(
+                    listener, _activePlayer.Id))
+        };
+        foreach (var actor in _villagers)
+        {
+            if (actor.Id == listener.Id ||
+                actor.WorldLevel != listener.WorldLevel)
+                continue;
+            nearby.Add(new(
+                actor.Id,
+                actor.Name,
+                Vector2.Distance(
+                    new(listener.PositionX, listener.PositionY),
+                    new(actor.PositionX, actor.PositionY)),
+                actor.Hunger,
+                RelationshipDescription(listener, actor.Id)));
+        }
+        var context = new NpcAiSpeechContext(
+            _activePlayer.Id,
+            _activePlayer.Name,
+            listener.Id,
+            listener.Name,
+            message,
+            nearby,
+            listener.Goals?
+                .Where(goal =>
+                    goal.Status == CommitmentStatus.Active)
+                .Select(goal => goal.Kind.ToString())
+                .Take(4)
+                .ToArray() ?? [],
+            listener.Memories?
+                .OrderByDescending(memory =>
+                    memory.GameSeconds)
+                .Select(memory =>
+                    memory.Summary ?? memory.Kind)
+                .Take(6)
+                .ToArray() ?? [],
+            listener.Persona?.BackgroundStory ?? "",
+            listener.Persona?.Personality ?? "",
+            listener.Persona?.PriorTrade ?? "",
+            listener.Persona?.KnownToolIds ?? [],
+            listener.Persona?.ArrivalMemory ?? "",
+            VillagerSimulation.HoursOnIsland(
+                listener, _worldGameSeconds));
+        _npcAiSpeechVillagerIndex = villagerIndex;
+        _npcAiSpeechFallback =
+            FallbackNpcReply(listener, message);
+        _npcAiSpeechTask = _npcAi.InterpretAsync(
+            _saves.LoadSettings().EffectiveAi,
+            context);
+        _chatUi.AddMessage(
+            $"{listener.Name} considers what you said...",
+            ChatMessageStyle.Monologue);
+        return true;
+    }
+
+    private void ApplyNpcAiInterpretation(
+        int villagerIndex,
+        NpcAiInterpretation interpretation,
+        string speechFallback)
+    {
+        var villager = _villagers[villagerIndex];
+        if (_activePlayer is not null)
+            villager = VillagerSimulation.RecordConversation(
+                villager,
+                _activePlayer.Id,
+                _activePlayer.Name,
+                VillagerSocialIntent.Introduce,
+                _worldGameSeconds);
+        if (_activePlayer is not null &&
+            interpretation.Sentiment != 0)
+        {
+            var relationships =
+                villager.Relationships?.ToList() ?? [];
+            var relationshipIndex =
+                relationships.FindIndex(value =>
+                    value.CharacterId == _activePlayer.Id);
+            var existing = relationshipIndex >= 0
+                ? relationships[relationshipIndex]
+                : new VillagerRelationship(
+                    _activePlayer.Id, default);
+            var amount = MathF.Abs(
+                interpretation.Sentiment) / 20f;
+            var state = interpretation.Sentiment > 0
+                ? (existing.State with
+                {
+                    Trust = existing.State.Trust + amount,
+                    Affection =
+                        existing.State.Affection + amount * .5f
+                }).Clamp()
+                : (existing.State with
+                {
+                    Trust = existing.State.Trust - amount,
+                    Resentment =
+                        existing.State.Resentment + amount
+                }).Clamp();
+            var updated = existing with { State = state };
+            if (relationshipIndex >= 0)
+                relationships[relationshipIndex] = updated;
+            else
+                relationships.Add(updated);
+            villager = villager with
+            {
+                Relationships = relationships
+            };
+        }
+        if (!string.IsNullOrWhiteSpace(
+                interpretation.Memory))
+        {
+            var memories = villager.Memories?.ToList() ?? [];
+            memories.Add(new(
+                Guid.NewGuid(),
+                "conversation",
+                interpretation.ReferencedActorId,
+                null,
+                1,
+                _worldGameSeconds,
+                interpretation.Sentiment,
+                interpretation.Memory));
+            if (memories.Count >
+                VillagerSimulation.MaximumMemories)
+                memories.RemoveRange(
+                    0,
+                    memories.Count -
+                    VillagerSimulation.MaximumMemories);
+            villager = villager with
+            {
+                Memories = memories
+            };
+        }
+        if (!interpretation.FreeformThought &&
+            !string.IsNullOrWhiteSpace(
+                interpretation.Goal))
+        {
+            var goals = villager.Goals?.ToList() ?? [];
+            if (goals.Count >=
+                VillagerCommitmentService.MaximumGoals)
+                goals.RemoveAt(0);
+            goals.Add(new(
+                Guid.NewGuid(),
+                VillagerGoalKind.HelpPerson,
+                string.IsNullOrWhiteSpace(
+                    interpretation.ItemId)
+                    ? null
+                    : interpretation.ItemId,
+                Math.Max(1, interpretation.Quantity),
+                0,
+                _worldGameSeconds,
+                PartnerId:
+                    interpretation.ReferencedActorId));
+            villager = villager with { Goals = goals };
+        }
+        if (!interpretation.FreeformThought &&
+            interpretation.Action is
+                "gather" or "give" &&
+            ItemCatalog.TryGet(
+                interpretation.ItemId, out _) &&
+            _activePlayer is not null)
+        {
+            var kind = interpretation.Action == "give"
+                ? VillagerPromiseKind.GiveItem
+                : VillagerPromiseKind.GatherItem;
+            var acceptance =
+                VillagerCommitmentService.TryAccept(
+                    villager,
+                    _activePlayer.Id,
+                    kind,
+                    interpretation.ItemId,
+                    Math.Max(1, interpretation.Quantity),
+                    _worldGameSeconds);
+            if (acceptance.Accepted &&
+                acceptance.Promise is { } promise)
+                villager =
+                    VillagerCommitmentService.AddPromise(
+                        villager, promise);
+        }
+        _villagers[villagerIndex] = villager;
+        _villagersDirty = true;
+        ShowVillagerSpeech(
+            villagerIndex,
+            string.IsNullOrWhiteSpace(interpretation.Reply)
+                ? speechFallback
+                : interpretation.Reply,
+            _player?.Position ??
+            new Vector2(
+                villager.PositionX,
+                villager.PositionY));
+    }
+
+    private static string FallbackNpcReply(
+        VillagerState listener,
+        string message)
+    {
+        var text = message.Trim();
+        var lower = text.ToLowerInvariant();
+        var words = text.Split(
+            ' ',
+            StringSplitOptions.RemoveEmptyEntries);
+        if (lower.Contains("your name") ||
+            lower.Contains("who are you"))
+            return $"My name is {listener.Name}.";
+        if (lower is "hello" or "hi" or "hey")
+            return $"Hello. I'm {listener.Name}.";
+        if (lower.Contains("fuck") ||
+            lower.Contains("ugly") ||
+            lower.Contains("hate you") ||
+            lower.Contains("shut up") ||
+            lower.Contains("go away"))
+            return listener.Relationships?.Any(value =>
+                       value.State.Resentment > 15) == true
+                ? "Leave me alone."
+                : "There's no need to speak to me like that.";
+        if (LooksLikePersonalName(words))
+            return $"Nice to meet you, {text}.";
+        return "I heard you. What would you like to know?";
+    }
+
+    private static bool LooksLikePersonalName(string[] words)
+    {
+        if (words.Length is < 1 or > 3)
+            return false;
+        var stopWords = new HashSet<string>(
+            [
+                "yes", "no", "okay", "ok", "thanks", "please",
+                "food", "wood", "help", "come", "follow", "wait"
+            ],
+            StringComparer.OrdinalIgnoreCase);
+        if (words.Any(stopWords.Contains))
+            return false;
+        if (words.Length > 1 &&
+            words.Any(word =>
+                word.Length == 0 ||
+                !char.IsUpper(word[0])))
+            return false;
+        return words.All(word =>
+            word.All(character =>
+                char.IsLetter(character) ||
+                character is '-' or '\''));
+    }
+
+    private static string RelationshipDescription(
+        VillagerState observer,
+        string subjectId)
+    {
+        var relationship =
+            observer.Relationships?.FirstOrDefault(value =>
+                value.CharacterId == subjectId)?.State ??
+            default;
+        if (relationship.Trust < -20) return "distrusts";
+        if (relationship.Trust > 20) return "trusts";
+        return "neutral";
+    }
+}

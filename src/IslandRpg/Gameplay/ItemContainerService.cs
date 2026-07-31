@@ -27,12 +27,14 @@ internal sealed record ItemContainerDefinition(
 internal sealed record ItemContainerSaveState(
     Guid Id,
     string?[] Items,
-    int[] Quantities);
+    int[] Quantities,
+    string?[]? OwnerIds = null);
 
 internal sealed class ItemContainerState
 {
     private readonly string?[] _items;
     private readonly int[] _quantities;
+    private readonly string?[] _ownerIds;
     private readonly bool[] _spacers;
 
     public ItemContainerState(ItemContainerDefinition definition)
@@ -40,6 +42,7 @@ internal sealed class ItemContainerState
         Definition = definition;
         _items = new string?[definition.Capacity];
         _quantities = new int[definition.Capacity];
+        _ownerIds = new string?[definition.Capacity];
         _spacers = new bool[definition.Capacity];
     }
 
@@ -64,12 +67,16 @@ internal sealed class ItemContainerState
             _quantities[slot] = definition.AllowStacking
                 ? saved.Quantities[slot]
                 : 1;
+            if (saved.OwnerIds is { } owners &&
+                slot < owners.Length)
+                _ownerIds[slot] = owners[slot];
         }
     }
 
     public ItemContainerDefinition Definition { get; }
     public string?[] Items => _items;
     public int[] Quantities => _quantities;
+    public string?[] OwnerIds => _ownerIds;
     public bool IsSpacer(int slot) =>
         (uint)slot < (uint)_spacers.Length && _spacers[slot];
 
@@ -77,17 +84,29 @@ internal sealed class ItemContainerState
         new(
             Definition.Id,
             (string?[])_items.Clone(),
-            (int[])_quantities.Clone());
+            (int[])_quantities.Clone(),
+            (string?[])_ownerIds.Clone());
 
-    public bool TryAdd(string itemId, int quantity = 1)
+    public bool TryAdd(
+        string itemId,
+        int quantity = 1,
+        string? ownerId = null)
     {
         if (quantity <= 0) return true;
         if (Definition.AllowStacking)
         {
-            var existing = Array.FindIndex(
-                _items,
-                item => string.Equals(
-                    item, itemId, StringComparison.OrdinalIgnoreCase));
+            var existing = -1;
+            for (var slot = 0; slot < _items.Length; slot++)
+                if (string.Equals(
+                        _items[slot], itemId,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(
+                        _ownerIds[slot], ownerId,
+                        StringComparison.Ordinal))
+                {
+                    existing = slot;
+                    break;
+                }
             if (existing >= 0)
             {
                 _quantities[existing] =
@@ -102,6 +121,7 @@ internal sealed class ItemContainerState
             if (empty < 0) return false;
             _items[empty] = itemId;
             _quantities[empty] = quantity;
+            _ownerIds[empty] = ownerId;
             return true;
         }
 
@@ -113,6 +133,7 @@ internal sealed class ItemContainerState
             var empty = FindEmptySlot();
             _items[empty] = itemId;
             _quantities[empty] = 1;
+            _ownerIds[empty] = ownerId;
         }
         return true;
     }
@@ -128,7 +149,10 @@ internal sealed class ItemContainerState
         itemId = value;
         _quantities[slot] -= quantity;
         if (_quantities[slot] == 0)
+        {
             _items[slot] = null;
+            _ownerIds[slot] = null;
+        }
         return true;
     }
 

@@ -117,6 +117,9 @@ internal sealed partial class GameHostWindow
             else if (window._settingsMenu.SelectedTab == SettingsTab.Sound &&
                      window.UpdateSoundSettings(pointer, panel))
                 return;
+            else if (window._settingsMenu.SelectedTab == SettingsTab.AI &&
+                     window.UpdateAiSettings(pointer, panel))
+                return;
             else if (window._settingsMenu.SelectedTab == SettingsTab.Dev &&
                      window.UpdateDeveloperSettings(pointer, panel))
                 return;

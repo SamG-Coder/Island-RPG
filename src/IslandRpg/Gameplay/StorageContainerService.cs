@@ -17,7 +17,8 @@ internal static class StorageContainerService
             new(
                 storage.Id,
                 contents.Items,
-                contents.Quantities));
+                contents.Quantities,
+                contents.OwnerIds));
     }
 
     public static WorldGroundObject Save(
@@ -32,7 +33,10 @@ internal static class StorageContainerService
         var saved = container.Save();
         return storage with
         {
-            Container = new(saved.Items, saved.Quantities)
+            Container = new(
+                saved.Items,
+                saved.Quantities,
+                saved.OwnerIds)
         };
     }
 

@@ -13,6 +13,8 @@ internal enum ChatChannel
 internal enum ChatMessageStyle
 {
     Normal,
+    Player,
+    Npc,
     Action,
     Damage,
     Miss,
@@ -168,7 +170,7 @@ internal sealed class ChatUiControlState
     {
         if (!Input.Focused || string.IsNullOrWhiteSpace(InputText)) return;
         var message = InputText.Trim();
-        AddMessage(message);
+        AddMessage(message, ChatMessageStyle.Player);
         InputText = "";
         Submitted?.Invoke(message);
     }

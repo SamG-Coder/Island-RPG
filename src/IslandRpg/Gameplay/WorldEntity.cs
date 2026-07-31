@@ -2,6 +2,21 @@ using OpenTK.Mathematics;
 
 namespace IslandRpg.Gameplay;
 
+internal static class ActorMovementService
+{
+    public const float BaseMoveSpeed = 2.8f;
+
+    public static float TerrainSpeedMultiplier(
+        bool wading,
+        float currentHeight,
+        float targetHeight)
+    {
+        var uphill = Math.Max(0, targetHeight - currentHeight);
+        return (wading ? .62f : 1f) /
+               (1f + uphill * .18f);
+    }
+}
+
 internal enum EntityGender { Male, Female }
 
 internal enum EntityAction
@@ -30,7 +45,8 @@ internal sealed class WorldEntity
     public EntityGender Gender { get; private set; }
     public EntityAction Action { get; private set; } = EntityAction.Idle;
     public double ActionTime { get; private set; }
-    public float MoveSpeed { get; set; } = 2.8f;
+    public float MoveSpeed { get; set; } =
+        ActorMovementService.BaseMoveSpeed;
     public float TerrainSpeedMultiplier { get; set; } = 1f;
 
     public WorldEntity(Vector2 position, EntityGender gender = EntityGender.Male)

@@ -24,7 +24,7 @@ internal sealed partial class GameHostWindow
     {
         var panel = WorldSelectionPanel();
         _worldList.Layout(
-            new(panel.X + 44, panel.Y + 164, panel.Z - 88, 324),
+            new(panel.X + 44, panel.Y + 164, panel.Z - 88, 286),
             worlds.Select(world => world.Id).ToArray(),
             rowHeight: 58,
             rowGap: 8,
@@ -49,6 +49,15 @@ internal sealed partial class GameHostWindow
 
         RenderListScrollbar(_worldList);
         var back = WorldSelectionBackButtonBounds();
+        if (_frontendError is not null)
+            DrawCenteredUiText(
+                _frontendError,
+                new(
+                    panel.X + 44,
+                    back.Y - 43,
+                    panel.Z - 104,
+                    24),
+                new(220, 104, 82, 255));
         DrawUiColor(
             new(panel.X + 44, back.Y - 14,
                 panel.Z - 104, 1),
@@ -144,7 +153,7 @@ internal sealed partial class GameHostWindow
                     ? new FSColor(246, 226, 167, 255)
                     : new FSColor(218, 205, 166, 255));
             DrawUiText(
-                $"SEED {world.Seed}   |   {WorldLastPlayed(world.UpdatedUtc)}",
+                WorldRowDetails(world),
                 new(row.X + 16, row.Y + 34),
                 new FSColor(142, 136, 116, 255));
 
@@ -181,6 +190,16 @@ internal sealed partial class GameHostWindow
                     ? new FSColor(239, 174, 145, 255)
                     : new FSColor(139, 130, 110, 255));
         }
+    }
+
+    private static string WorldRowDetails(WorldProfile world)
+    {
+        var ai = world.AiNpcsEnabled
+            ? $"AI NPCS {world.AiNpcCount}"
+            : "SOLO";
+        return
+            $"SEED {world.Seed}   |   {ai}   |   " +
+            WorldLastPlayed(world.UpdatedUtc);
     }
 
     private static string WorldLastPlayed(DateTime updatedUtc)

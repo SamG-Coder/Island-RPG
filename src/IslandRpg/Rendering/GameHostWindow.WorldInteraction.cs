@@ -247,6 +247,7 @@ internal sealed partial class GameHostWindow
             return;
         }
         if (!chunk.Chunk.GroundObjects.Remove(groundObject)) return;
+        NotifyVillagersOfTaking(groundObject);
         _activePlayer = _activePlayer with
         {
             Inventory = inventory,
@@ -630,7 +631,8 @@ internal sealed partial class GameHostWindow
             Guid.NewGuid(),
             drop.ItemId,
             drop.Target.X,
-            drop.Target.Y));
+            drop.Target.Y,
+            OwnerId: _activePlayer.Id));
         _activePlayer = _activePlayer with
         {
             Inventory = inventory,

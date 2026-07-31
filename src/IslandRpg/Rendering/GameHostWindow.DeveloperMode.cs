@@ -16,6 +16,8 @@ internal sealed partial class GameHostWindow
         var text = message.Trim();
         if (!text.StartsWith('/'))
         {
+            if (TryQueuePlayerConversationTurn(message))
+                return;
             ShowOverheadSpeech(message);
             return;
         }

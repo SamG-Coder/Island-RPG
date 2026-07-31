@@ -11,7 +11,10 @@ internal sealed record WorldProfile(
     DateTime CreatedUtc,
     DateTime UpdatedUtc,
     string? LastPlayerId = null,
-    double ElapsedGameSeconds = 8 * 60 * 60);
+    double ElapsedGameSeconds = 8 * 60 * 60,
+    bool AiNpcsEnabled = false,
+    int AiNpcCount = 0,
+    IReadOnlyList<VillagerPersona>? AiNpcPersonas = null);
 
 internal sealed record PlayerProfile(
     string Id,
@@ -82,7 +85,12 @@ internal sealed record GameSettings(
     bool MusicEnabled = true,
     float EffectsVolume = .85f,
     bool UseTestAssets = false,
-    bool UnlimitedZoom = true);
+    bool UnlimitedZoom = true,
+    NpcAiSettings? Ai = null)
+{
+    public NpcAiSettings EffectiveAi =>
+        Ai ?? new();
+}
 
 internal sealed class GameSaveRepository
 {
@@ -118,12 +126,24 @@ internal sealed class GameSaveRepository
             .OrderByDescending(profile => profile.UpdatedUtc)
             .ToArray();
 
-    public WorldProfile CreateWorld(string name, long seed, string? playerId)
+    public WorldProfile CreateWorld(
+        string name,
+        long seed,
+        string? playerId,
+        bool aiNpcsEnabled = false,
+        int aiNpcCount = 0,
+        IReadOnlyList<VillagerPersona>? aiNpcPersonas = null)
     {
         var now = DateTime.UtcNow;
         var id = UniqueId(WorldsRoot, name);
+        aiNpcCount = aiNpcsEnabled
+            ? Math.Clamp(aiNpcCount, 0, 3)
+            : 0;
         var profile = new WorldProfile(
-            id, CleanName(name, "New World"), seed, now, now, playerId);
+            id, CleanName(name, "New World"), seed, now, now, playerId,
+            AiNpcsEnabled: aiNpcsEnabled && aiNpcCount > 0,
+            AiNpcCount: aiNpcCount,
+            AiNpcPersonas: aiNpcPersonas?.Take(aiNpcCount).ToArray());
         SaveWorld(profile);
         return profile;
     }
@@ -204,6 +224,17 @@ internal sealed class GameSaveRepository
             Path.Combine(
                 WorldsRoot, worldId, "players", state.PlayerId + ".json"),
             state with { UpdatedUtc = DateTime.UtcNow });
+
+    public IReadOnlyList<VillagerState> LoadVillagers(string worldId) =>
+        ReadJson<List<VillagerState>>(Path.Combine(
+            WorldsRoot, worldId, "villagers.json")) ?? [];
+
+    public void SaveVillagers(
+        string worldId,
+        IReadOnlyList<VillagerState> villagers) =>
+        WriteJson(
+            Path.Combine(WorldsRoot, worldId, "villagers.json"),
+            villagers);
 
     public IReadOnlyList<PlayerDeathMarker> LoadPlayerDeaths(
         string worldId,
