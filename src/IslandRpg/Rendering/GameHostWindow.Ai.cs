@@ -714,7 +714,11 @@ internal sealed partial class GameHostWindow
                     listener.Persona.ArrivalMemory)}"
                 : "I'm not certain. We should ask the others what they remember.";
         if (lower.Contains("fuck") ||
+            lower.Contains("bitch") ||
             lower.Contains("ugly") ||
+            lower.Contains("rude") ||
+            lower.Contains("idiot") ||
+            lower.Contains("stupid") ||
             lower.Contains("hate you") ||
             lower.Contains("shut up") ||
             lower.Contains("go away"))
@@ -724,7 +728,9 @@ internal sealed partial class GameHostWindow
                 : "There's no need to speak to me like that.";
         if (LooksLikePersonalName(words))
             return $"Nice to meet you, {text}.";
-        return "I heard you. What would you like to know?";
+        return text.EndsWith('?')
+            ? "I'm not sure I understand the question. Can you say it another way?"
+            : "I'm not sure what you mean by that.";
     }
 
     private static string LowercaseFirst(string value) =>

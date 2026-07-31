@@ -764,6 +764,75 @@ internal static class VillagerSimulation
         };
     }
 
+    public static VillagerState ApplyDismissal(
+        VillagerState villager,
+        string actorId,
+        string actorName,
+        string actorSpeech,
+        string reply,
+        int sentiment,
+        double gameSeconds)
+    {
+        var relationships =
+            villager.Relationships?.ToList() ?? [];
+        var index = relationships.FindIndex(value =>
+            value.CharacterId == actorId);
+        var existing = index >= 0
+            ? relationships[index]
+            : new VillagerRelationship(actorId, default);
+        var amount = MathF.Abs(sentiment) / 20f;
+        var updated = existing with
+        {
+            State = (existing.State with
+            {
+                Trust = existing.State.Trust - amount,
+                Resentment =
+                    existing.State.Resentment + amount
+            }).Clamp()
+        };
+        if (index >= 0)
+            relationships[index] = updated;
+        else
+            relationships.Add(updated);
+        var memories = villager.Memories?.ToList() ?? [];
+        memories.Add(new(
+            Guid.NewGuid(),
+            "social-conflict",
+            actorId,
+            null,
+            .9f,
+            gameSeconds,
+            sentiment,
+            $"{actorName} dismissed or insulted {villager.Name}."));
+        if (memories.Count > MaximumMemories)
+            memories.RemoveAt(0);
+        villager = villager with
+        {
+            Relationships = relationships,
+            Memories = memories,
+            FollowingActorId = null,
+            Need = VillagerNeed.Idle,
+            Action = EntityAction.Idle,
+            ActionTime = 0,
+            TargetX = null,
+            TargetY = null,
+            NextDecisionGameSeconds =
+                gameSeconds + NearbyDecisionSeconds
+        };
+        villager = RecordDialogueTurn(
+            villager,
+            actorId,
+            actorName,
+            actorSpeech,
+            gameSeconds);
+        return RecordDialogueTurn(
+            villager,
+            villager.Id,
+            villager.Name,
+            reply,
+            gameSeconds);
+    }
+
     public static IReadOnlyList<VillagerMemory> RecallMemories(
         VillagerState state,
         string? partnerId,

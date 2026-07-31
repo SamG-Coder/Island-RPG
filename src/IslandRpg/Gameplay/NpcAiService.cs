@@ -343,7 +343,9 @@ internal sealed class NpcAiService : IDisposable
             var valid = !EchoesPlayerSpeech(
                             reply ?? "", context.Text) &&
                         !RepeatsRecentReply(
-                            reply ?? "", context)
+                            reply ?? "", context) &&
+                        ReplyMatchesSpeechIntent(
+                            reply ?? "", context.Text)
                 ? reply
                 : null;
             return valid is not null || attempt >= 1
@@ -365,6 +367,18 @@ internal sealed class NpcAiService : IDisposable
     private static string FocusedReplyInstruction(string speech)
     {
         var lower = speech.ToLowerInvariant();
+        if (lower.Contains("go away") ||
+            lower.Contains("leave me alone"))
+            return "Acknowledge the dismissal, say you will give them space, " +
+                   "and respond briefly to any insult without discussing history.";
+        if (lower.Contains("fuck") ||
+            lower.Contains("bitch") ||
+            lower.Contains("ugly") ||
+            lower.Contains("rude") ||
+            lower.Contains("idiot") ||
+            lower.Contains("stupid"))
+            return "Respond briefly to the insult with an emotional boundary; " +
+                   "do not discuss arrival memories, plans, or biography.";
         if (lower.Contains("storm") ||
             lower.Contains("wreck") ||
             lower.Contains("crash"))
@@ -538,6 +552,8 @@ internal sealed class NpcAiService : IDisposable
             reply = "";
         if (RepeatsRecentReply(reply, context))
             reply = "";
+        if (!ReplyMatchesSpeechIntent(reply, context.Text))
+            reply = "";
         return value with
         {
             AddressedActorId = knownIds.Contains(
@@ -696,6 +712,37 @@ internal sealed class NpcAiService : IDisposable
             (NormalizeDialogue(turn.Text) == normalized ||
              DialogueSimilarity(turn.Text, reply) >= .72f));
     }
+
+    private static bool ReplyMatchesSpeechIntent(
+        string reply,
+        string speech)
+    {
+        if (reply.Length == 0) return true;
+        var lower = speech.ToLowerInvariant();
+        var hostileOrDismissive =
+            lower.Contains("go away") ||
+            lower.Contains("leave me alone") ||
+            lower.Contains("fuck") ||
+            lower.Contains("bitch") ||
+            lower.Contains("ugly") ||
+            lower.Contains("rude") ||
+            lower.Contains("idiot") ||
+            lower.Contains("stupid");
+        return !hostileOrDismissive ||
+               ContainsAny(
+                   reply,
+                   "leave", "alone", "away", "space", "fine",
+                   "rude", "speak", "talk", "insult", "sorry",
+                   "need", "stop", "won't", "will not");
+    }
+
+    private static bool ContainsAny(
+        string value,
+        params string[] terms) =>
+        terms.Any(term =>
+            value.Contains(
+                term,
+                StringComparison.OrdinalIgnoreCase));
 
     private static string NormalizeDialogue(string value) =>
         new(value

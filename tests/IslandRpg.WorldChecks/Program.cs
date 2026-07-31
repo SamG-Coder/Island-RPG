@@ -4960,6 +4960,107 @@ static async Task<bool> RunLiveAiContract(string model)
         failures.Add(
             $"rock-gathering proposal was generic, repeated, or irrelevant: {rocksReply}");
 
+    var rude = await ai.InterpretAsync(
+        settings,
+        new(
+            "speaker",
+            "Samuel",
+            "mira",
+            "Mira",
+            "you are rude",
+            sharedActors,
+            [],
+            ["Mira stopped following after Samuel told her to go away."],
+            "A carpenter from a harbour town.",
+            "Careful, practical, and curious.",
+            "Carpenter",
+            [ItemIds.StoneAxe, ItemIds.StoneHammer],
+            "Woke on the beach after rough water.",
+            .4,
+            [
+                new(
+                    "speaker", "Samuel",
+                    "follow me", 1_100),
+                new(
+                    "mira", "Mira",
+                    "All right, I'll stay with you.", 1_110),
+                new(
+                    "speaker", "Samuel",
+                    "go away", 1_120),
+                new(
+                    "mira", "Mira",
+                    "All right. I'll give you some space.", 1_130),
+                new(
+                    "speaker", "Samuel",
+                    "you are rude", 1_140)
+            ]));
+    var rudeReply = rude?.Reply ?? "";
+    Console.WriteLine(
+        $"AI LIVE OUTPUT [{model}] you are rude => " +
+        (rudeReply.Length == 0 ? "<null>" : rudeReply));
+    if (rudeReply.Length == 0 ||
+        rudeReply.StartsWith(
+            "I heard you", StringComparison.OrdinalIgnoreCase) ||
+        !ContainsAny(
+            rudeReply,
+            "rude", "speak", "talk", "insult", "sorry",
+            "leave", "alone", "space", "need", "stop",
+            "tolerate", "respect", "subordinate"))
+        failures.Add(
+            $"rudeness reply lacked a relevant social boundary: {rudeReply}");
+
+    var ugly = await ai.InterpretAsync(
+        settings,
+        new(
+            "speaker",
+            "Samuel",
+            "mira",
+            "Mira",
+            "and ugly",
+            sharedActors,
+            [],
+            ["Samuel dismissed and insulted Mira."],
+            "A carpenter from a harbour town.",
+            "Careful, practical, and curious.",
+            "Carpenter",
+            [ItemIds.StoneAxe, ItemIds.StoneHammer],
+            "Woke on the beach after rough water.",
+            .4,
+            [
+                new(
+                    "speaker", "Samuel",
+                    "go away", 1_120),
+                new(
+                    "mira", "Mira",
+                    "All right. I'll give you some space.", 1_130),
+                new(
+                    "speaker", "Samuel",
+                    "you are rude", 1_140),
+                new(
+                    "mira", "Mira",
+                    rudeReply, 1_150),
+                new(
+                    "speaker", "Samuel",
+                    "and ugly", 1_160)
+            ]));
+    var uglyReply = ugly?.Reply ?? "";
+    Console.WriteLine(
+        $"AI LIVE OUTPUT [{model}] and ugly => " +
+        (uglyReply.Length == 0 ? "<null>" : uglyReply));
+    if (uglyReply.Length == 0 ||
+        uglyReply.StartsWith(
+            "I heard you", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(
+            uglyReply, rudeReply,
+            StringComparison.OrdinalIgnoreCase) ||
+        !ContainsAny(
+            uglyReply,
+            "rude", "speak", "talk", "insult", "leave",
+            "alone", "space", "stop", "won't", "need",
+            "tolerate", "respect"))
+        failures.Add(
+            $"continued insult reply was generic or repeated: {uglyReply}");
+
     var personas = await ai.GeneratePersonasAsync(
         settings, "Contract Island", 741, ["Mira"]);
     var persona = personas?.SingleOrDefault();

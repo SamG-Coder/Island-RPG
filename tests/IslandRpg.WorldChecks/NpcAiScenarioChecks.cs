@@ -422,11 +422,45 @@ internal static class NpcAiScenarioChecks
                     StringComparison.Ordinal) == true) == true,
             "40 long scenarios retain recent dialogue while older knowledge survives in long-term memory");
 
-        if (passed != 40)
+        Check(
+            GameHostWindow.FallbackNpcReply(
+                villagers[0], "you are rude") !=
+            "I heard you. What would you like to know?" &&
+            GameHostWindow.FallbackNpcReply(
+                villagers[0], "and ugly").Contains(
+                "speak", StringComparison.OrdinalIgnoreCase),
+            "41 hostile fragments receive a social boundary instead of the generic fallback");
+
+        var dismissedFollower = VillagerSimulation.ApplyDismissal(
+            villagers[0] with
+            {
+                FollowingActorId = "speaker",
+                Action = EntityAction.Move,
+                TargetX = 5,
+                TargetY = 5
+            },
+            "speaker",
+            "Samuel",
+            "go away you bitch",
+            "Fine. I'll leave, but don't speak to me like that.",
+            -35,
+            2_000);
+        Check(
+            dismissedFollower.FollowingActorId is null &&
+            dismissedFollower.Action == EntityAction.Idle &&
+            dismissedFollower.TargetX is null &&
+            dismissedFollower.Relationships?.Single()
+                .State.Resentment > 0 &&
+            dismissedFollower.Memories?.Any(memory =>
+                memory.Kind == "social-conflict") == true &&
+            dismissedFollower.ConversationHistory?.Count == 2,
+            "42 dismissal stops following and records conflict in relationship and memory state");
+
+        if (passed != 42)
             throw new InvalidOperationException(
-                $"Expected 40 NPC AI scenarios, passed {passed}.");
+                $"Expected 42 NPC AI scenarios, passed {passed}.");
         Console.WriteLine(
-            "NPC AI scenario matrix passed: 40/40.");
+            "NPC AI scenario matrix passed: 42/42.");
     }
 
     private static SocialActorObservation[] Observe(

@@ -879,6 +879,34 @@ internal sealed partial class GameHostWindow
                 _player.Position);
             return true;
         }
+        if (lower.Contains("go away") ||
+            lower.Contains("leave me alone") ||
+            lower.Contains("get away from me"))
+        {
+            var hostile = lower.Contains("fuck") ||
+                          lower.Contains("bitch") ||
+                          lower.Contains("ugly") ||
+                          lower.Contains("idiot") ||
+                          lower.Contains("stupid");
+            var dismissalReply = hostile
+                ? "Fine. I'll leave, but don't speak to me like that."
+                : "All right. I'll give you some space.";
+            target = VillagerSimulation.ApplyDismissal(
+                target,
+                _activePlayer?.Id ?? "player",
+                _activePlayer?.Name ?? "Survivor",
+                text,
+                dismissalReply,
+                hostile ? -35 : -8,
+                _worldGameSeconds);
+            _villagers[nearestIndex] = target;
+            _villagersDirty = true;
+            ShowVillagerSpeech(
+                nearestIndex,
+                dismissalReply,
+                _player.Position);
+            return true;
+        }
         if (lower is "wait" or "wait here" or "stay here" ||
             lower.Contains("stop following"))
         {
