@@ -126,7 +126,8 @@ internal sealed record VillagerState(
     int BlockedMoveAttempts = 0,
     IReadOnlyList<VillagerConversationTurn>? ConversationHistory = null,
     VillagerDeliberationTrace? LastDeliberation = null,
-    int SurvivalTimeScaleVersion = 0);
+    int SurvivalTimeScaleVersion = 0,
+    float WellFedSeconds = 0);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,
@@ -343,11 +344,15 @@ internal static class VillagerSimulation
         var realSeconds =
             elapsed / GameSecondsPerRealSecond;
         var survival = SurvivalService.Advance(
-            state.Hunger, 0, state.Health, (float)realSeconds);
+            state.Hunger,
+            state.WellFedSeconds,
+            state.Health,
+            (float)realSeconds);
         return state with
         {
             Hunger = survival.Hunger,
             Health = survival.Health,
+            WellFedSeconds = survival.WellFedSeconds,
             LastSimulatedGameSeconds = gameSeconds
         };
     }
@@ -1210,15 +1215,23 @@ internal static class VillagerSimulation
     {
         var inventory = state.Inventory;
         var hunger = state.Hunger;
+        var health = state.Health;
+        var wellFedSeconds = state.WellFedSeconds;
         if ((uint)decision.ConsumeSlot < (uint)inventory.Length &&
             inventory[decision.ConsumeSlot] is { } food &&
             SurvivalService.TryFoodEffect(food, out var effect))
         {
             inventory = (string?[])inventory.Clone();
             inventory[decision.ConsumeSlot] = null;
-            hunger = Math.Min(
-                SurvivalService.MaximumHunger,
-                hunger + effect.HungerRestored);
+            var eaten = SurvivalService.Eat(
+                effect,
+                hunger,
+                wellFedSeconds,
+                health,
+                AdventureService.BaseMaximumHealth);
+            hunger = eaten.Hunger;
+            health = eaten.Health;
+            wellFedSeconds = eaten.WellFedSeconds;
         }
         var previous = new Vector2(
             state.PositionX, state.PositionY);
@@ -1244,6 +1257,8 @@ internal static class VillagerSimulation
         {
             Inventory = inventory,
             Hunger = hunger,
+            Health = health,
+            WellFedSeconds = wellFedSeconds,
             Need = decision.Need,
             Action = action,
             ActionTime = state.Action == action
