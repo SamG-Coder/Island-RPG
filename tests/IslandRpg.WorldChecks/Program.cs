@@ -577,6 +577,39 @@ Require(
     roleAssignments["woodworker"] == VillagerWorkRole.Wood &&
     roleAssignments.Values.Distinct().Count() == 3,
     "temporary roles must cover urgent food, best-equipped wood work, and a complementary third job");
+var stableRoles = VillagerWorkCoordinator.AssignRoles([
+    hungryVillager with
+    {
+        Id = "food-incumbent",
+        Hunger = 70,
+        WorkRole = VillagerWorkRole.Food
+    },
+    hungryVillager with
+    {
+        Id = "wood-incumbent",
+        Hunger = 65,
+        WorkRole = VillagerWorkRole.Wood
+    }
+]);
+var urgentRoleChange = VillagerWorkCoordinator.AssignRoles([
+    hungryVillager with
+    {
+        Id = "food-incumbent",
+        Hunger = 70,
+        WorkRole = VillagerWorkRole.Food
+    },
+    hungryVillager with
+    {
+        Id = "wood-incumbent",
+        Hunger = 40,
+        WorkRole = VillagerWorkRole.Wood
+    }
+]);
+Require(
+    stableRoles["food-incumbent"] == VillagerWorkRole.Food &&
+    stableRoles["wood-incumbent"] == VillagerWorkRole.Wood &&
+    urgentRoleChange["wood-incumbent"] == VillagerWorkRole.Food,
+    "work roles must survive small hunger differences but still change for a material food emergency");
 var foodSupplyInventory = PlayerInventory.CreateStartingInventory();
 foodSupplyInventory[0] = ItemIds.PlantFibres;
 foodSupplyInventory[1] = ItemIds.PlantFibres;
@@ -863,17 +896,20 @@ var stockedInventory =
     PlayerInventory.CreateStartingInventory();
 stockedInventory[0] = ItemIds.Logs;
 stockedInventory[1] = ItemIds.OakLogs;
+var stockpileLogId = Guid.NewGuid();
 var restrainedGathering =
     VillagerSimulation.SelectWorldAction(
         villagerSpawnA[0] with
         {
+            PositionX = 0,
+            PositionY = 0,
             Hunger = 90,
             Inventory = stockedInventory
         },
         new VillagerWorldObject[]
         {
             new(
-                Guid.NewGuid(),
+                stockpileLogId,
                 ItemIds.PineLogs,
                 new(.25f, 0),
                 null,
@@ -887,8 +923,9 @@ var restrainedGathering =
         });
 Require(
     restrainedGathering.Kind ==
-        VillagerWorldActionKind.None,
-    "well-fed villagers with enough wood must leave surplus ground resources alone");
+        VillagerWorldActionKind.TakeItem &&
+    restrainedGathering.ObjectId == stockpileLogId,
+    "an unfinished stockpile goal must override passive resource limits");
 Require(
     VillagerSimulation.FootBoxesOverlap(
         Vector2.Zero,
@@ -902,6 +939,22 @@ Require(
         Vector2.Zero,
         new(0, VillagerSimulation.FootBoxDepth)),
     "villager collision must use compact ground-contact boxes rather than full sprite bounds");
+var collisionObstacle = new Vector2(
+    VillagerSimulation.FootBoxWidth + .01f,
+    0);
+Require(
+    VillagerSimulation.TryCollisionSidestep(
+        Vector2.Zero,
+        new(.02f, 0),
+        Vector2.UnitX,
+        collisionObstacle,
+        _ => true,
+        out var collisionSidestep) &&
+    !VillagerSimulation.FootBoxesOverlap(
+        collisionSidestep,
+        collisionObstacle) &&
+    MathF.Abs(collisionSidestep.Y) > .001f,
+    "villagers must sidestep an actor blocking a valid movement target before abandoning it");
 var socialFoodInventory =
     PlayerInventory.CreateStartingInventory();
 socialFoodInventory[0] = ItemIds.CookedMinnows;
@@ -973,6 +1026,23 @@ Require(
         curiousVillager.Name,
         StringComparison.Ordinal) == true,
     "unknown nearby people must create a deliberate introduction goal");
+var diagonalStranger = stranger with { Position = Vector2.One };
+var diagonalIntroduction = VillagerSimulation.SelectSocialGoal(
+    curiousVillager, new[] { diagonalStranger }, gameSeconds: 100);
+Require(
+    diagonalIntroduction.Speech is not null &&
+    diagonalIntroduction.Target is null,
+    "diagonal-adjacent villagers must be close enough to speak without entering a blocked approach loop");
+var distantStranger = stranger with { Position = new(2, 0) };
+var introductionApproach = VillagerSimulation.SelectSocialGoal(
+    curiousVillager, new[] { distantStranger }, gameSeconds: 100);
+Require(
+    introductionApproach.Target is { } introductionTarget &&
+    Vector2.Distance(
+        introductionTarget,
+        distantStranger.Position) >=
+        VillagerSimulation.InteractionRange * .85f,
+    "social approaches must stop at conversation range instead of walking into or swapping through the other actor");
 Require(
     VillagerSimulation.PerceivedName(
         curiousVillager, stranger.Id) == "the stranger" &&
@@ -1089,6 +1159,57 @@ Require(
         value.Goals.All(goal =>
             goal.Status == CommitmentStatus.Active)),
     "new villagers must begin with persistent food and wood survival goals");
+var goalProgressVillager = VillagerCommitmentService.RecordAcquiredItem(
+    villagerSpawnA[0], ItemIds.WildBerries, 2);
+goalProgressVillager = VillagerCommitmentService.RecordAcquiredItem(
+    goalProgressVillager, ItemIds.OakLogs, 4);
+Require(
+    goalProgressVillager.Goals?.Single(goal =>
+        goal.Kind == VillagerGoalKind.StockpileFood).Progress == 2 &&
+    goalProgressVillager.Goals.Single(goal =>
+        goal.Kind == VillagerGoalKind.StockpileWood).Status ==
+        CommitmentStatus.Fulfilled,
+    "actual food and any log acquisitions must advance persistent survival goals");
+var explorationResourceVillager = villagerSpawnA[0] with
+{
+    PositionX = 0,
+    PositionY = 0,
+    WorkRole = VillagerWorkRole.Exploration,
+    Inventory = PlayerInventory.CreateStartingInventory()
+};
+Require(
+    VillagerResourcePriority.Score(
+        explorationResourceVillager, ItemIds.ClamShell) == 0 &&
+    VillagerResourcePriority.Score(
+        explorationResourceVillager, ItemIds.LargeRock) > 0 &&
+    VillagerResourcePriority.Score(
+        explorationResourceVillager, ItemIds.Sticks) > 0 &&
+    !VillagerCraftPlanner.PriorityFor(VillagerWorkRole.Exploration)
+        .Contains(ItemIds.Rope) &&
+    VillagerCraftPlanner.PriorityFor(VillagerWorkRole.Food)
+        .Contains(ItemIds.Rope),
+    "role supply plans must reject decorative shoreline items and reserve rope for roles that use it");
+var prerequisiteRockId = Guid.NewGuid();
+var prerequisiteAction = VillagerSimulation.SelectWorldAction(
+    explorationResourceVillager,
+    new VillagerWorldObject[]
+    {
+        new(Guid.NewGuid(), ItemIds.ClamShell, new(.1f, 0), null, false),
+        new(prerequisiteRockId, ItemIds.LargeRock, new(.5f, 0), null, false)
+    });
+Require(
+    prerequisiteAction.Kind == VillagerWorldActionKind.TakeItem &&
+    prerequisiteAction.ObjectId == prerequisiteRockId,
+    "NPC world targeting must choose a required primitive-tool material over a nearer irrelevant collectible");
+Require(
+    DialogueResponseService.Resolve(
+        "It's good to meet you, M",
+        "It's good to meet you, Mira.") ==
+        "It's good to meet you, Mira." &&
+    DialogueResponseService.Resolve(
+        "I can gather wood.",
+        "Fallback") == "I can gather wood.",
+    "truncated dialogue must fall back without replacing complete model responses");
 Require(
     VillagerCommitmentService.TryParseGatherRequest(
         "Could you gather 3 logs for me?",

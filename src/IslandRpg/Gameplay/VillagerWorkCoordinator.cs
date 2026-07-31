@@ -20,6 +20,7 @@ internal readonly record struct VillagerTargetReservation(
 /// </summary>
 internal sealed class VillagerWorkCoordinator
 {
+    public const float FoodRoleHungerHysteresis = 15;
     public const double ReservationSeconds = 20 * 60;
 
     private readonly Dictionary<string, VillagerTargetReservation> _targets =
@@ -106,16 +107,29 @@ internal sealed class VillagerWorkCoordinator
             living.Length, StringComparer.Ordinal);
         if (living.Length == 0) return roles;
 
-        var food = living
+        var hungriest = living
             .OrderBy(value => value.Hunger)
             .ThenBy(value => value.Id, StringComparer.Ordinal)
             .First();
+        var incumbentFood = living
+            .Where(value => value.WorkRole == VillagerWorkRole.Food)
+            .OrderBy(value => value.Id, StringComparer.Ordinal)
+            .FirstOrDefault();
+        var food = incumbentFood is not null &&
+                   incumbentFood.Hunger <=
+                   hungriest.Hunger + FoodRoleHungerHysteresis
+            ? incumbentFood
+            : hungriest;
         roles[food.Id] = VillagerWorkRole.Food;
 
         var remaining = living.Where(value => value.Id != food.Id).ToArray();
         if (remaining.Length > 0)
         {
-            var wood = remaining
+            var incumbentWood = remaining
+                .Where(value => value.WorkRole == VillagerWorkRole.Wood)
+                .OrderBy(value => value.Id, StringComparer.Ordinal)
+                .FirstOrDefault();
+            var wood = incumbentWood ?? remaining
                 .OrderByDescending(value =>
                     PlayerInventory.BestAxe(value.Inventory) is not null)
                 .ThenByDescending(value => value.WoodcuttingExperience)

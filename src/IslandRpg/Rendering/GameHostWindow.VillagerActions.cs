@@ -57,8 +57,7 @@ internal sealed partial class GameHostWindow
                 TryVillagerPlaceObject(index, villager) ||
                 TryVillagerPlaceOrTendCampfire(index, villager),
             VillagerWorkRole.Exploration =>
-                TryVillagerMine(index, villager, tier) ||
-                TryVillagerForage(index, villager, tier),
+                TryVillagerMine(index, villager, tier),
             _ => false
         };
     }
@@ -119,15 +118,17 @@ internal sealed partial class GameHostWindow
             {
                 SticksRemaining = best.Value.Tree.SticksRemaining - 1
             };
-        _villagers[index] = villager with
-        {
-            Inventory = gathered.Inventory,
-            Action = EntityAction.Gather,
-            ActionTime = 0,
-            NextDecisionGameSeconds = _worldGameSeconds +
-                VillagerSimulation.GatherPauseSeconds,
-            LastSimulatedGameSeconds = _worldGameSeconds
-        };
+        _villagers[index] = VillagerCommitmentService.RecordAcquiredItem(
+            villager with
+            {
+                Inventory = gathered.Inventory,
+                Action = EntityAction.Gather,
+                ActionTime = 0,
+                NextDecisionGameSeconds = _worldGameSeconds +
+                    VillagerSimulation.GatherPauseSeconds,
+                LastSimulatedGameSeconds = _worldGameSeconds
+            },
+            ItemIds.Sticks);
         QueueChunkSave(best.Value.Gpu.Chunk);
         _villagerWork.ReleaseTarget(reservationKey, villager.Id);
         ObserveLog("world_action_succeeded", villager.Id, new
@@ -242,17 +243,20 @@ internal sealed partial class GameHostWindow
             ? FarmingSkill.AwardExperience(
                 villager.FarmingExperience, 18 * amount).Experience
             : villager.FarmingExperience;
-        _villagers[index] = villager with
-        {
-            Inventory = gathered.Inventory,
-            FarmingExperience = farming,
-            Need = berries ? VillagerNeed.Food : VillagerNeed.Explore,
-            Action = EntityAction.Gather,
-            ActionTime = 0,
-            NextDecisionGameSeconds = _worldGameSeconds +
-                VillagerSimulation.GatherPauseSeconds,
-            LastSimulatedGameSeconds = _worldGameSeconds
-        };
+        _villagers[index] = VillagerCommitmentService.RecordAcquiredItem(
+            villager with
+            {
+                Inventory = gathered.Inventory,
+                FarmingExperience = farming,
+                Need = berries ? VillagerNeed.Food : VillagerNeed.Explore,
+                Action = EntityAction.Gather,
+                ActionTime = 0,
+                NextDecisionGameSeconds = _worldGameSeconds +
+                    VillagerSimulation.GatherPauseSeconds,
+                LastSimulatedGameSeconds = _worldGameSeconds
+            },
+            itemId,
+            amount);
         SetVegetationCooldown(
             best.Value.Gpu.Chunk,
             best.Value.Key,
@@ -393,16 +397,18 @@ internal sealed partial class GameHostWindow
             : catchProfile.SchoolSize;
         best.Value.Gpu.Chunk.FishRemaining[
             best.Value.Fish.StableKey] = remainingFish - 1;
-        _villagers[index] = villager with
-        {
-            Inventory = gathered.Inventory,
-            FishingExperience = award.Experience,
-            Action = EntityAction.Fish,
-            ActionTime = 0,
-            NextDecisionGameSeconds = _worldGameSeconds +
-                VillagerSimulation.GatherPauseSeconds,
-            LastSimulatedGameSeconds = _worldGameSeconds
-        };
+        _villagers[index] = VillagerCommitmentService.RecordAcquiredItem(
+            villager with
+            {
+                Inventory = gathered.Inventory,
+                FishingExperience = award.Experience,
+                Action = EntityAction.Fish,
+                ActionTime = 0,
+                NextDecisionGameSeconds = _worldGameSeconds +
+                    VillagerSimulation.GatherPauseSeconds,
+                LastSimulatedGameSeconds = _worldGameSeconds
+            },
+            catchProfile.ItemId);
         QueueChunkSave(best.Value.Gpu.Chunk);
         _villagerWork.ReleaseTarget(reservationKey, villager.Id);
         ObserveLog("world_action_succeeded", villager.Id, new
@@ -483,7 +489,7 @@ internal sealed partial class GameHostWindow
         var xp = SkillService.AwardExperience(
             villager.WoodcuttingExperience,
             damage + (felled ? Math.Max(10, best.Value.Tree.MaxHealth / 5) : 0));
-        _villagers[index] = villager with
+        var updatedVillager = villager with
         {
             Inventory = inventory,
             WoodcuttingExperience = xp.Experience,
@@ -493,6 +499,10 @@ internal sealed partial class GameHostWindow
                 VillagerSimulation.NearbyDecisionSeconds,
             LastSimulatedGameSeconds = _worldGameSeconds
         };
+        _villagers[index] = felled
+            ? VillagerCommitmentService.RecordAcquiredItem(
+                updatedVillager, ItemIds.Logs)
+            : updatedVillager;
         QueueChunkSave(best.Value.Gpu.Chunk);
         if (felled)
             _villagerWork.ReleaseTarget(reservationKey, villager.Id);
@@ -575,7 +585,7 @@ internal sealed partial class GameHostWindow
             damage + (health == 0
                 ? best.Value.Definition.CompletionExperience
                 : 0));
-        _villagers[index] = villager with
+        var updatedVillager = villager with
         {
             Inventory = inventory,
             MiningExperience = xp.Experience,
@@ -585,6 +595,12 @@ internal sealed partial class GameHostWindow
                 VillagerSimulation.NearbyDecisionSeconds,
             LastSimulatedGameSeconds = _worldGameSeconds
         };
+        _villagers[index] =
+            health == 0 &&
+            best.Value.Definition.RewardItemId is { } acquiredReward
+                ? VillagerCommitmentService.RecordAcquiredItem(
+                    updatedVillager, acquiredReward)
+                : updatedVillager;
         QueueChunkSave(best.Value.Gpu.Chunk);
         if (health == 0)
             _villagerWork.ReleaseTarget(reservationKey, villager.Id);

@@ -6,6 +6,15 @@ namespace IslandRpg.Gameplay;
 /// </summary>
 internal static class VillagerWorkSupplyPlanner
 {
+    public static bool NeedsItem(VillagerState villager, string itemId) =>
+        itemId switch
+        {
+            ItemIds.PlantFibres => NeedsFibre(villager),
+            ItemIds.Sticks => NeedsSticks(villager),
+            ItemIds.LargeRock => NeedsPrimitiveRocks(villager),
+            _ => false
+        };
+
     public static bool NeedsFibre(VillagerState villager)
     {
         var count = Count(villager.Inventory, ItemIds.PlantFibres);
@@ -33,6 +42,25 @@ internal static class VillagerWorkSupplyPlanner
             VillagerWorkRole.Crafting =>
                 HasTag(villager.Inventory, ItemTag.Knife) &&
                 !HasTag(villager.Inventory, ItemTag.Hammer),
+            VillagerWorkRole.Exploration =>
+                PlayerInventory.BestPickaxe(villager.Inventory) is null,
+            _ => false
+        };
+    }
+
+    public static bool NeedsPrimitiveRocks(VillagerState villager)
+    {
+        if (Count(villager.Inventory, ItemIds.LargeRock) >= 2 ||
+            villager.Inventory.Contains(ItemIds.MediumRock) ||
+            villager.Inventory.Contains(ItemIds.SharpenedRock))
+            return false;
+        return villager.WorkRole switch
+        {
+            VillagerWorkRole.Wood =>
+                PlayerInventory.BestAxe(villager.Inventory) is null,
+            VillagerWorkRole.Crafting =>
+                PlayerInventory.BestKnife(villager.Inventory) is null ||
+                PlayerInventory.BestHammer(villager.Inventory) is null,
             VillagerWorkRole.Exploration =>
                 PlayerInventory.BestPickaxe(villager.Inventory) is null,
             _ => false

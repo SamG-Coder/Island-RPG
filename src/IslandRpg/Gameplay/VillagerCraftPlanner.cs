@@ -9,21 +9,16 @@ internal static class VillagerCraftPlanner
         ItemIds.SmallRocks
     ];
 
-    private static readonly string[] Infrastructure =
-    [
-        ItemIds.Rope,
-        ItemIds.Campfire,
-        ItemIds.Workbench,
-        ItemIds.StorageChest
-    ];
-
     private static readonly IReadOnlyDictionary<
         VillagerWorkRole, string[]> RolePriorities =
         new Dictionary<VillagerWorkRole, string[]>
         {
             [VillagerWorkRole.Food] =
             [
+                ItemIds.Rope,
                 ItemIds.PrimitiveFishingNet,
+                ItemIds.Campfire,
+                ItemIds.Workbench,
                 ItemIds.ReinforcedFishingNet,
                 ItemIds.AdvancedFishingNet,
                 ItemIds.BronzeSickle,
@@ -33,8 +28,12 @@ internal static class VillagerCraftPlanner
             [ItemIds.StoneAxe, ItemIds.BronzeAxe, ItemIds.IronAxe],
             [VillagerWorkRole.Crafting] =
             [
+                ItemIds.Rope,
                 ItemIds.StoneKnife,
                 ItemIds.StoneHammer,
+                ItemIds.Campfire,
+                ItemIds.Workbench,
+                ItemIds.StorageChest,
                 ItemIds.Bloomery,
                 ItemIds.BronzeBar,
                 ItemIds.SmithingAnvil,
@@ -60,8 +59,7 @@ internal static class VillagerCraftPlanner
         Foundation.Concat(
             RolePriorities.TryGetValue(role, out var roleItems)
                 ? roleItems
-                : [])
-            .Concat(Infrastructure);
+                : []);
 
     public static bool Needs(string itemId, string?[] inventory)
     {

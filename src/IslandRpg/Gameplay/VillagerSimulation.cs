@@ -208,7 +208,7 @@ internal static class VillagerSimulation
         120 * GameSecondsPerRealSecond;
     public const int MaximumMemories = 64;
     public const int MaximumConversationTurns = 12;
-    public const float InteractionRange = 1.35f;
+    public const float InteractionRange = 1.5f;
     public const float ResourceSearchRadius = 24;
     public const int StorageDepositThreshold = 8;
     public const float FootBoxWidth = .46f;
@@ -483,16 +483,10 @@ internal static class VillagerSimulation
             if (distanceSquared >
                 ResourceSearchRadius * ResourceSearchRadius)
                 continue;
-            var usefulFood =
-                state.Hunger <= 55 &&
-                SurvivalService.TryFoodEffect(
-                    candidate.ItemId, out _);
+            var priority = VillagerResourcePriority.Score(
+                state, candidate.ItemId);
             var score = distanceSquared -
-                        (usefulFood ? 256 : 0) -
-                        (IsPromisedItem(
-                            state, candidate.ItemId)
-                            ? 512
-                            : 0) -
+                        priority * 8 -
                         (candidate.Id == state.GoalObjectId
                             ? 32
                             : 0);
@@ -1589,6 +1583,39 @@ internal static class VillagerSimulation
         MathF.Abs(first.X - second.X) < FootBoxWidth &&
         MathF.Abs(first.Y - second.Y) < FootBoxDepth;
 
+    public static bool TryCollisionSidestep(
+        in Vector2 previous,
+        in Vector2 attempted,
+        in Vector2 target,
+        in Vector2 obstacle,
+        Func<Vector2, bool> canOccupy,
+        out Vector2 resolved)
+    {
+        resolved = previous;
+        var step = Vector2.Distance(previous, attempted);
+        var forward = target - previous;
+        if (step <= .0001f || forward.LengthSquared <= .0001f)
+            return false;
+        forward = forward.Normalized();
+        var perpendicular = new Vector2(-forward.Y, forward.X);
+        if (Vector2.Dot(perpendicular, previous - obstacle) < 0)
+            perpendicular = -perpendicular;
+        for (var side = 0; side < 2; side++)
+        {
+            var offset = (forward * .25f + perpendicular * .97f)
+                .Normalized() * step;
+            var candidate = previous + offset;
+            if (!FootBoxesOverlap(candidate, obstacle) &&
+                canOccupy(candidate))
+            {
+                resolved = candidate;
+                return true;
+            }
+            perpendicular = -perpendicular;
+        }
+        return false;
+    }
+
     public static VillagerState ObserveUnauthorizedTaking(
         VillagerState observer,
         Guid itemId,
@@ -1701,42 +1728,18 @@ internal static class VillagerSimulation
     {
         var displacement = target - origin;
         var distance = displacement.Length;
-        return distance <= 2
-            ? target
-            : origin + displacement / distance * 2;
+        if (distance <= InteractionRange)
+            return origin;
+        var travel = MathF.Min(
+            2,
+            distance - InteractionRange * .9f);
+        return origin + displacement / distance * travel;
     }
 
     private static bool ShouldGather(
         VillagerState state,
-        ItemDefinition item)
-    {
-        if (IsPromisedItem(state, item.Id))
-            return true;
-        if (SurvivalService.TryFoodEffect(item.Id, out _))
-            return state.Hunger <= 65 &&
-                   CountMatching(
-                       state.Inventory,
-                       candidate =>
-                           SurvivalService.TryFoodEffect(
-                               candidate.Id, out _)) < 2;
-        if (item.HasTag(ItemTag.Log))
-            return CountMatching(
-                state.Inventory,
-                candidate => candidate.HasTag(ItemTag.Log)) < 2;
-        if (item.HasTag(ItemTag.NaturalMaterial) ||
-            item.HasTag(ItemTag.WoodcuttingMaterial) ||
-            item.HasTag(ItemTag.MiningMaterial) ||
-            item.HasTag(ItemTag.Mineral))
-            return CountMatching(
-                state.Inventory,
-                candidate =>
-                    candidate.HasTag(ItemTag.NaturalMaterial) ||
-                    candidate.HasTag(
-                        ItemTag.WoodcuttingMaterial) ||
-                    candidate.HasTag(ItemTag.MiningMaterial) ||
-                    candidate.HasTag(ItemTag.Mineral)) < 3;
-        return false;
-    }
+        ItemDefinition item) =>
+        VillagerResourcePriority.Score(state, item.Id) > 0;
 
     private static bool IsPromisedItem(
         VillagerState state,

@@ -232,13 +232,36 @@ internal sealed partial class GameHostWindow
                 if (!VillagerSimulation.FootBoxesOverlap(
                         movedPosition, otherPosition))
                     continue;
-                villager = VillagerSimulation.BlockMovement(
-                    villager with
+                var previousPosition = new Vector2(
+                    previous.PositionX, previous.PositionY);
+                var movementTarget = new Vector2(
+                    previous.TargetX ?? previous.PositionX,
+                    previous.TargetY ?? previous.PositionY);
+                if (VillagerSimulation.TryCollisionSidestep(
+                        previousPosition,
+                        movedPosition,
+                        movementTarget,
+                        otherPosition,
+                        candidate => WorldLevelNavigation.IsWalkable(
+                            _worldSeed,
+                            (int)MathF.Floor(candidate.X),
+                            (int)MathF.Floor(candidate.Y),
+                            previous.WorldLevel),
+                        out var sidestep))
+                    villager = villager with
                     {
-                        PositionX = previous.PositionX,
-                        PositionY = previous.PositionY
-                    },
-                    _worldGameSeconds);
+                        PositionX = sidestep.X,
+                        PositionY = sidestep.Y,
+                        BlockedMoveAttempts = 0
+                    };
+                else
+                    villager = VillagerSimulation.BlockMovement(
+                        villager with
+                        {
+                            PositionX = previous.PositionX,
+                            PositionY = previous.PositionY
+                        },
+                        _worldGameSeconds);
                 break;
             }
             if (!ReferenceEquals(previous, villager))
@@ -404,7 +427,7 @@ internal sealed partial class GameHostWindow
                     VillagerSimulation.BlockMovement(
                         villager, _worldGameSeconds);
                 _villagersDirty = true;
-                return true;
+                return false;
             }
             _villagers[villagerIndex] =
                 VillagerSimulation.ApplyDecision(
@@ -621,7 +644,7 @@ internal sealed partial class GameHostWindow
                     VillagerSimulation.BlockMovement(
                         villager, _worldGameSeconds);
                 _villagersDirty = true;
-                return true;
+                return false;
             }
             var decision = new VillagerDecision(
                 action.Kind ==

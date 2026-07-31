@@ -330,16 +330,15 @@ internal sealed partial class GameHostWindow
         _npcAiDialogueFallback = null;
         _npcAiDialogueReplyPending = false;
         _npcAiDialogueReadyAt = 0;
-        line = string.IsNullOrWhiteSpace(line)
-            ? fallback
-            : line;
+        line = DialogueResponseService.Resolve(line, fallback);
         ObserveLog("ai_dialogue_response", speakerId, new
         {
             ListenerId = listenerId,
             Intent = intent.ToString(),
             RawResponse = rawResponse,
             ResolvedLine = line,
-            UsedFallback = string.IsNullOrWhiteSpace(rawResponse)
+            UsedFallback = !string.Equals(
+                rawResponse, line, StringComparison.Ordinal)
         });
         if (string.IsNullOrWhiteSpace(speakerId) ||
             string.IsNullOrWhiteSpace(line))

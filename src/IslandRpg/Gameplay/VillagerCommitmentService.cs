@@ -203,13 +203,39 @@ internal static class VillagerCommitmentService
         string itemId,
         int quantity = 1)
     {
-        if (quantity <= 0 ||
-            state.Promises is not { Count: > 0 })
-            return state;
-        List<VillagerPromise>? updated = null;
+        if (quantity <= 0) return state;
+        var item = ItemCatalog.Get(itemId);
+        List<VillagerLongTermGoal>? updatedGoals = null;
+        if (state.Goals is { Count: > 0 })
+            for (var index = 0; index < state.Goals.Count; index++)
+            {
+                var goal = state.Goals[index];
+                if (goal.Status != CommitmentStatus.Active ||
+                    goal.Progress >= goal.TargetQuantity ||
+                    !MatchesGoal(goal, item))
+                    continue;
+                updatedGoals ??= state.Goals.ToList();
+                var progress = Math.Min(
+                    goal.TargetQuantity,
+                    goal.Progress + quantity);
+                updatedGoals[index] = goal with
+                {
+                    Progress = progress,
+                    Status = progress >= goal.TargetQuantity
+                        ? CommitmentStatus.Fulfilled
+                        : CommitmentStatus.Active
+                };
+            }
+
+        List<VillagerPromise>? updatedPromises = null;
+        var remainingPromiseQuantity = quantity;
+        if (state.Promises is not { Count: > 0 })
+            return updatedGoals is null
+                ? state
+                : state with { Goals = updatedGoals };
         for (var index = 0;
              index < state.Promises.Count &&
-             quantity > 0;
+             remainingPromiseQuantity > 0;
              index++)
         {
             var promise = state.Promises[index];
@@ -219,24 +245,38 @@ internal static class VillagerCommitmentService
                     promise.ItemId, itemId,
                     StringComparison.OrdinalIgnoreCase))
                 continue;
-            updated ??= state.Promises.ToList();
+            updatedPromises ??= state.Promises.ToList();
             var applied = Math.Min(
-                quantity,
+                remainingPromiseQuantity,
                 promise.TargetQuantity - promise.Progress);
             var progress = promise.Progress + applied;
-            updated[index] = promise with
+            updatedPromises[index] = promise with
             {
                 Progress = progress,
                 Status = progress >= promise.TargetQuantity
                     ? CommitmentStatus.Fulfilled
                     : CommitmentStatus.Active
             };
-            quantity -= applied;
+            remainingPromiseQuantity -= applied;
         }
-        return updated is null
-            ? state
-            : state with { Promises = updated };
+        return state with
+        {
+            Goals = updatedGoals ?? state.Goals,
+            Promises = updatedPromises ?? state.Promises
+        };
     }
+
+    private static bool MatchesGoal(
+        VillagerLongTermGoal goal, ItemDefinition item) =>
+        goal.Kind switch
+        {
+            VillagerGoalKind.StockpileFood =>
+                SurvivalService.TryFoodEffect(item.Id, out _),
+            VillagerGoalKind.StockpileWood => item.HasTag(ItemTag.Log),
+            _ => string.Equals(
+                goal.ItemId, item.Id,
+                StringComparison.OrdinalIgnoreCase)
+        };
 
     public static VillagerState UpdateDeadlines(
         VillagerState state,
