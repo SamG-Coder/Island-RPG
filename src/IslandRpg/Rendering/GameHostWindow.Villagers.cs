@@ -1161,6 +1161,14 @@ internal sealed partial class GameHostWindow
         var graphic = animation.Graphic;
         var rawFrame = (int)(
             villager.ActionTime / animation.SecondsPerFrame);
+        if (villager.Action == EntityAction.Die)
+        {
+            var framesPerAngle = Math.Max(
+                1, graphic.Sprite.Frames.Count /
+                   storedVillagerAngles);
+            rawFrame = Math.Min(
+                rawFrame, framesPerAngle - 1);
+        }
         var directional = VillagerDirectionRig.Resolve(
             new Vector2(
                 villager.FacingX,
@@ -1186,6 +1194,45 @@ internal sealed partial class GameHostWindow
             teamColor: villager.TeamColor);
     }
 
+    private bool TryVillagerSpriteBounds(
+        VillagerState villager,
+        out (float Left, float Top, float Right, float Bottom) bounds)
+    {
+        const int storedVillagerAngles = 5;
+        if (!_entityAnimations.TryGetValue(
+                (villager.Gender, villager.Action),
+                out var animation))
+        {
+            bounds = default;
+            return false;
+        }
+        var rawFrame = (int)(
+            villager.ActionTime / animation.SecondsPerFrame);
+        if (villager.Action == EntityAction.Die)
+        {
+            var framesPerAngle = Math.Max(
+                1, animation.Graphic.Sprite.Frames.Count /
+                   storedVillagerAngles);
+            rawFrame = Math.Min(
+                rawFrame, framesPerAngle - 1);
+        }
+        var directional = VillagerDirectionRig.Resolve(
+            new(villager.FacingX, villager.FacingY),
+            animation.Graphic.Sprite.Frames.Count,
+            storedVillagerAngles,
+            rawFrame);
+        var terrain = SamplePlayerTerrain(
+            villager.PositionX, villager.PositionY);
+        bounds = SpriteBounds(
+            animation.Graphic.Sprite.Frames[directional.Index],
+            IsometricTerrainProjection.Project(
+                villager.PositionX,
+                villager.PositionY,
+                terrain.Height),
+            directional.Mirror);
+        return true;
+    }
+
     private bool TryGetVillagerUnderMouse(
         Vector2 mouse,
         out VillagerState villager)
@@ -1195,27 +1242,9 @@ internal sealed partial class GameHostWindow
             var candidate = _villagers[index];
             if (candidate.WorldLevel != _activeWorldLevel ||
                 candidate.Health <= 0 ||
-                !_entityAnimations.TryGetValue(
-                    (candidate.Gender, candidate.Action),
-                    out var animation))
+                !TryVillagerSpriteBounds(
+                    candidate, out var bounds))
                 continue;
-            var frameIndex = (int)(
-                candidate.ActionTime / animation.SecondsPerFrame);
-            var directional = VillagerDirectionRig.Resolve(
-                new(candidate.FacingX, candidate.FacingY),
-                animation.Graphic.Sprite.Frames.Count,
-                5,
-                frameIndex);
-            var terrain = SamplePlayerTerrain(
-                candidate.PositionX, candidate.PositionY);
-            var projected = IsometricTerrainProjection.Project(
-                candidate.PositionX,
-                candidate.PositionY,
-                terrain.Height);
-            var bounds = SpriteBounds(
-                animation.Graphic.Sprite.Frames[directional.Index],
-                projected,
-                directional.Mirror);
             if (mouse.X < bounds.Left || mouse.X > bounds.Right ||
                 mouse.Y < bounds.Top || mouse.Y > bounds.Bottom)
                 continue;

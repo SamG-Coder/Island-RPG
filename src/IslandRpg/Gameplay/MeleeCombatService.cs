@@ -21,6 +21,18 @@ internal static class MeleeCombatService
     public const float AttackIntervalSeconds = 2.4f;
     public const float HitSplatSeconds = 1.15f;
     public const int TrainingDummyMaximumHealth = 100;
+    public const float MovingTargetRepathSeconds = .35f;
+    public const float MovingTargetRepathDistance = .5f;
+
+    public static bool ShouldRepathMovingTarget(
+        double clock,
+        double nextRepathAt,
+        in Vector2 previousTarget,
+        in Vector2 currentTarget) =>
+        clock >= nextRepathAt ||
+        Vector2.DistanceSquared(
+            previousTarget, currentTarget) >
+        MovingTargetRepathDistance * MovingTargetRepathDistance;
 
     public static float InteractionRange(Vector2 direction)
     {

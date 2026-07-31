@@ -970,7 +970,57 @@ internal static class VillagerSimulation
                 : EntityAction.Idle,
             ActionTime = 0,
             TargetX = null,
-            TargetY = null
+            TargetY = null,
+            NextDecisionGameSeconds = gameSeconds
+        };
+    }
+
+    public static VillagerState RecordWitnessedAttack(
+        VillagerState witness,
+        string attackerId,
+        string attackerName,
+        string victimId,
+        string victimName,
+        double gameSeconds)
+    {
+        var relationships =
+            witness.Relationships?.ToList() ?? [];
+        var relationshipIndex = relationships.FindIndex(value =>
+            value.CharacterId == attackerId);
+        var relationship = relationshipIndex >= 0
+            ? relationships[relationshipIndex]
+            : new VillagerRelationship(attackerId, default);
+        relationship = relationship with
+        {
+            State = (relationship.State with
+            {
+                Trust = relationship.State.Trust - 2,
+                Resentment = relationship.State.Resentment + 3
+            }).Clamp()
+        };
+        if (relationshipIndex >= 0)
+            relationships[relationshipIndex] = relationship;
+        else
+            relationships.Add(relationship);
+        var memories = witness.Memories?.ToList() ?? [];
+        memories.Add(new(
+            Guid.NewGuid(),
+            "witnessed-violence",
+            attackerId,
+            null,
+            1,
+            gameSeconds,
+            -30,
+            $"{witness.Name} saw {attackerName} attack {victimName}."));
+        if (memories.Count > MaximumMemories)
+            memories.RemoveRange(
+                0, memories.Count - MaximumMemories);
+        return witness with
+        {
+            Relationships = relationships,
+            Memories = memories,
+            Need = VillagerNeed.Safe,
+            NextDecisionGameSeconds = gameSeconds
         };
     }
 

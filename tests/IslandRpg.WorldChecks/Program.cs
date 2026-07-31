@@ -1011,6 +1011,50 @@ Require(
     attackedVillager.Relationships?.Single(value =>
         value.CharacterId == "player").State.Resentment > 0,
     "attacking a villager must damage them, stop following, and create a hostile memory");
+var attackWitness =
+    VillagerSimulation.RecordWitnessedAttack(
+        villagerSpawnA[1],
+        "player",
+        "Samuel",
+        attackedVillager.Id,
+        attackedVillager.Name,
+        262);
+var defeatedVillager = VillagerSimulation.RecordAttack(
+    attackedVillager,
+    "player",
+    "Samuel",
+    10_000,
+    263);
+Require(
+    attackWitness.Memories?.Any(memory =>
+        memory.Kind == "witnessed-violence" &&
+        memory.SubjectId == "player") == true &&
+    attackWitness.Relationships?.Single(value =>
+        value.CharacterId == "player").State.Resentment > 0 &&
+    defeatedVillager.Health == 0 &&
+    defeatedVillager.Action == EntityAction.Die &&
+    VillagerSimulation.CatchUp(
+        defeatedVillager, 10_000).Health == 0,
+    "nearby villagers must remember witnessed violence and defeated villagers must remain permanently dead");
+Require(
+    !MeleeCombatService.ShouldRepathMovingTarget(
+        1,
+        2,
+        new(4, 4),
+        new(4.1f, 4.1f)) &&
+    MeleeCombatService.ShouldRepathMovingTarget(
+        2,
+        2,
+        new(4, 4),
+        new(4.1f, 4.1f)) &&
+    MeleeCombatService.ShouldRepathMovingTarget(
+        1,
+        2,
+        new(4, 4),
+        new(
+            4 + MeleeCombatService.MovingTargetRepathDistance + .01f,
+            4)),
+    "moving combat targets must repath on a bounded timer or meaningful displacement");
 var conversationState = VillagerSimulation.BeginConversation(
     movementState,
     "player",

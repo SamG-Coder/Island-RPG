@@ -10,6 +10,10 @@ internal sealed partial class GameHostWindow
 {
     private Guid? _combatTargetId;
     private string? _combatVillagerId;
+    private double _villagerCombatRepathAt;
+    private Vector2 _villagerCombatPathTarget;
+    private readonly Dictionary<string, double>
+        _villagerAttackReactionAt = [];
     private double _nextMeleeAttackAt;
     private double _swingStartedForAttackAt;
     private double _meleeReturnToIdleAt;
@@ -17,7 +21,7 @@ internal sealed partial class GameHostWindow
     private CombatHitSplat? _combatHitSplat;
 
     private readonly record struct CombatHitSplat(
-        Guid TargetId,
+        string TargetKey,
         int Damage,
         bool Hit,
         double ShownAt);
@@ -64,14 +68,14 @@ internal sealed partial class GameHostWindow
         var villager = _villagers[index];
         var target = new Vector2(
             villager.PositionX, villager.PositionY);
+        _combatTargetId = null;
+        _combatVillagerId = villager.Id;
         if (Vector2.Distance(_player.Position, target) >
             MeleeCombatService.AttackRange + .3f)
         {
             _worldActions.QueueVillagerAttack(villager);
             return;
         }
-        _combatTargetId = null;
-        _combatVillagerId = villager.Id;
         _nextMeleeAttackAt = _clock + MeleeImpactDelay();
         _swingStartedForAttackAt = _nextMeleeAttackAt;
         _player.RestartAttackAt(target);
@@ -86,6 +90,7 @@ internal sealed partial class GameHostWindow
             return;
         _combatTargetId = null;
         _combatVillagerId = null;
+        _villagerCombatRepathAt = 0;
         // The ready time is global combat state. Movement or target changes
         // cancel targeting without granting an immediate fresh attack.
         _meleeReturnToIdleAt = 0;
@@ -152,13 +157,13 @@ internal sealed partial class GameHostWindow
         if (!roll.Hit)
         {
             _combatHitSplat = new(
-                targetId, 0, false, _clock);
+                targetId.ToString("N"), 0, false, _clock);
             _chatUi.AddMessage("You miss.", ChatMessageStyle.Action);
             return;
         }
 
         _combatHitSplat = new(
-            targetId, roll.Damage, true, _clock);
+            targetId.ToString("N"), roll.Damage, true, _clock);
         var health = location.Object.Health <= 0
             ? MeleeCombatService.TrainingDummyMaximumHealth
             : location.Object.Health;
@@ -233,7 +238,18 @@ internal sealed partial class GameHostWindow
         if (Vector2.Distance(_player.Position, target) >
             MeleeCombatService.AttackRange + .22f)
         {
-            CancelMeleeCombat();
+            if (MeleeCombatService.ShouldRepathMovingTarget(
+                    _clock,
+                    _villagerCombatRepathAt,
+                    _villagerCombatPathTarget,
+                    target))
+            {
+                _villagerCombatRepathAt =
+                    _clock +
+                    MeleeCombatService.MovingTargetRepathSeconds;
+                _villagerCombatPathTarget = target;
+                _worldActions.QueueVillagerAttack(villager);
+            }
             return;
         }
         var impactDelay = MeleeImpactDelay();
@@ -265,6 +281,8 @@ internal sealed partial class GameHostWindow
             Random.Shared.NextSingle());
         if (!roll.Hit)
         {
+            _combatHitSplat = new(
+                villager.Id, 0, false, _clock);
             _chatUi.AddMessage(
                 $"You miss {villager.Name}.",
                 ChatMessageStyle.Miss);
@@ -276,8 +294,11 @@ internal sealed partial class GameHostWindow
             _activePlayer.Name,
             roll.Damage,
             _worldGameSeconds);
+        _combatHitSplat = new(
+            villager.Id, roll.Damage, true, _clock);
         _villagers[index] = villager;
         _villagersDirty = true;
+        ReactToVillagerAttack(index);
         _chatUi.AddMessage(
             $"You hit {villager.Name} for {roll.Damage}.",
             ChatMessageStyle.Damage);
@@ -288,6 +309,94 @@ internal sealed partial class GameHostWindow
                 ChatMessageStyle.Warning);
             CancelMeleeCombat();
         }
+    }
+
+    private void ReactToVillagerAttack(int victimIndex)
+    {
+        if (_activePlayer is null || _player is null ||
+            (uint)victimIndex >= (uint)_villagers.Count)
+            return;
+        var victim = _villagers[victimIndex];
+        if (_villagerAttackReactionAt.TryGetValue(
+                victim.Id, out var nextReactionAt) &&
+            _clock < nextReactionAt)
+            return;
+        _villagerAttackReactionAt[victim.Id] = _clock + 8;
+
+        if (victim.Health > 0)
+        {
+            var victimPosition = new Vector2(
+                victim.PositionX, victim.PositionY);
+            var away = victimPosition - _player.Position;
+            if (away.LengthSquared <= .0001f)
+                away = Vector2.UnitX;
+            else
+                away = away.Normalized();
+            var fleeTarget =
+                WorldLevelNavigation.ReachableWalkableTarget(
+                    _worldSeed,
+                    victimPosition,
+                    victimPosition + away * 4,
+                    victim.WorldLevel,
+                    maximumRadius: 2);
+            victim = VillagerSimulation.ApplyDecision(
+                victim,
+                new(VillagerNeed.Safe, fleeTarget),
+                VillagerSimulationTier.Nearby,
+                _worldGameSeconds);
+            _villagers[victimIndex] = victim;
+            ShowVillagerCombatReaction(
+                victimIndex,
+                "Stop! Why are you attacking me?");
+        }
+
+        var closestWitnessIndex = -1;
+        var closestDistance = float.MaxValue;
+        var attackedPosition = new Vector2(
+            victim.PositionX, victim.PositionY);
+        for (var index = 0; index < _villagers.Count; index++)
+        {
+            if (index == victimIndex) continue;
+            var witness = _villagers[index];
+            if (witness.Health <= 0 ||
+                witness.WorldLevel != victim.WorldLevel)
+                continue;
+            var distance = Vector2.DistanceSquared(
+                new(witness.PositionX, witness.PositionY),
+                attackedPosition);
+            if (distance > 10 * 10) continue;
+            witness = VillagerSimulation.RecordWitnessedAttack(
+                witness,
+                _activePlayer.Id,
+                _activePlayer.Name,
+                victim.Id,
+                victim.Name,
+                _worldGameSeconds);
+            _villagers[index] = witness;
+            if (distance >= closestDistance) continue;
+            closestDistance = distance;
+            closestWitnessIndex = index;
+        }
+        if (closestWitnessIndex >= 0)
+            ShowVillagerCombatReaction(
+                closestWitnessIndex,
+                $"Stop attacking {victim.Name}!");
+        _villagersDirty = true;
+    }
+
+    private void ShowVillagerCombatReaction(
+        int villagerIndex,
+        string message)
+    {
+        if ((uint)villagerIndex >= (uint)_villagers.Count)
+            return;
+        var villager = _villagers[villagerIndex];
+        var seconds = ConversationLineSeconds(message);
+        _villagerSpeechBubbles[villager.Id] =
+            new(message, _clock + seconds);
+        _chatUi.AddMessage(
+            $"{villager.Name}: {message}",
+            ChatMessageStyle.Warning);
     }
 
     private void UpdateCombatPanelInput(Vector2 pointer, bool leftDown)
@@ -331,6 +440,32 @@ internal sealed partial class GameHostWindow
 
     private void RenderCombatTargetHealthBar(Vector4 scene)
     {
+        var displayedVillagerId = _combatVillagerId;
+        if (displayedVillagerId is null &&
+            _combatHitSplat is { } recentSplat &&
+            _clock - recentSplat.ShownAt <
+            MeleeCombatService.HitSplatSeconds &&
+            _villagers.Any(value =>
+                value.Id == recentSplat.TargetKey))
+            displayedVillagerId = recentSplat.TargetKey;
+        if (displayedVillagerId is { } villagerId)
+        {
+            var villager = _villagers.FirstOrDefault(value =>
+                value.Id == villagerId &&
+                value.WorldLevel == _activeWorldLevel);
+            if (villager is null ||
+                !TryVillagerSpriteBounds(
+                    villager, out var villagerBounds))
+                return;
+            DrawWorldHealthBar(
+                scene,
+                villagerBounds,
+                villager.Health /
+                (float)AdventureService.BaseMaximumHealth);
+            RenderCombatHitSplat(
+                scene, villagerBounds, villager.Id);
+            return;
+        }
         if (_combatTargetId is not { } targetId ||
             FindGroundObjectLocation(targetId) is not { } location ||
             !TryGroundItemVisual(
@@ -349,15 +484,17 @@ internal sealed partial class GameHostWindow
             health / (float)maximum);
         RenderCombatHitSplat(
             scene,
-            SpriteBounds(frame, GroundObjectWorld(location.Object)));
+            SpriteBounds(frame, GroundObjectWorld(location.Object)),
+            targetId.ToString("N"));
     }
 
     private void RenderCombatHitSplat(
         Vector4 scene,
-        (float Left, float Top, float Right, float Bottom) targetBounds)
+        (float Left, float Top, float Right, float Bottom) targetBounds,
+        string targetKey)
     {
         if (_combatHitSplat is not { } splat ||
-            splat.TargetId != _combatTargetId)
+            splat.TargetKey != targetKey)
             return;
         var age = (float)(_clock - splat.ShownAt);
         if (age >= MeleeCombatService.HitSplatSeconds)

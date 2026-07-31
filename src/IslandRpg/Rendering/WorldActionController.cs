@@ -80,9 +80,15 @@ internal sealed partial class GameHostWindow
 
     public void QueueVillagerAttack(VillagerState villager)
     {
-        if (window._combatVillagerId == villager.Id)
-            return;
-        window.CancelMeleeCombat();
+        if (window._combatVillagerId != villager.Id)
+            window.CancelMeleeCombat();
+        window._combatTargetId = null;
+        window._combatVillagerId = villager.Id;
+        window._villagerCombatPathTarget = new(
+            villager.PositionX, villager.PositionY);
+        window._villagerCombatRepathAt =
+            window._clock +
+            MeleeCombatService.MovingTargetRepathSeconds;
         QueuePath(
             new(villager.PositionX, villager.PositionY),
             MeleeCombatService.AttackRange,
@@ -191,7 +197,9 @@ internal sealed partial class GameHostWindow
         bool clearTreeActions = false)
     {
         if (window._player is null) return;
-        if (type != GameHostWindow.WorldActionType.AttackTrainingDummy)
+        if (type is not (
+                GameHostWindow.WorldActionType.AttackTrainingDummy or
+                GameHostWindow.WorldActionType.AttackVillager))
             window.CancelMeleeCombat();
         if (clearTreeActions)
         {
