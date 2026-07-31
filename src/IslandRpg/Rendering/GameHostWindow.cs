@@ -124,6 +124,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly string _install;
     private readonly bool _useTestAssets;
     private readonly bool _cannotLocateAoeAssets;
+    private readonly ObserveModeOptions? _observeMode;
     private readonly WorldRenderQueue _worldRenderQueue = new();
     private readonly ShaderUniformCache _shaderUniforms = new();
     private readonly UiColorBatch _uiColorBatch = new();
@@ -412,7 +413,8 @@ internal sealed partial class GameHostWindow : GameWindow
         PreviewMode mode = PreviewMode.Assets,
         long worldSeed = 2187,
         bool useTestAssets = false,
-        bool cannotLocateAoeAssets = false) : base(
+        bool cannotLocateAoeAssets = false,
+        ObserveModeOptions? observeMode = null) : base(
         GameWindowSettings.Default,
         new NativeWindowSettings
         {
@@ -425,6 +427,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _worldSeed = worldSeed;
         _useTestAssets = useTestAssets;
         _cannotLocateAoeAssets = cannotLocateAoeAssets;
+        _observeMode = observeMode;
         _pauseMenu = new(this);
         _worldActions = new(this);
         _levelUpParticleAdder = AddLevelUpParticle;
@@ -438,6 +441,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _groundObjectContext.Selected +=
             HandleGroundObjectContextSelection;
         _chatUi.Submitted += HandleChatSubmission;
+        _chatUi.MessageAdded += ObserveChatMessage;
         _gameUi.CraftingButton.Clicked += () =>
             OpenCraftingWindow();
         _gameUi.QuestButton.Clicked += () =>
@@ -552,7 +556,10 @@ internal sealed partial class GameHostWindow : GameWindow
         UpdateNpcAi();
         _clock += e.Time;
         if (FinishLoadingTransition())
+        {
+            TryBeginObserveMode();
             return;
+        }
         _musicPlayer?.Update();
         _waterTime = (_waterTime + (float)e.Time) % 10000f;
         if (KeyboardState.IsKeyPressed(Keys.Escape))
@@ -759,8 +766,10 @@ internal sealed partial class GameHostWindow : GameWindow
             {
                 if (_mode == PreviewMode.Game)
                 {
-                    UpdateGameUi();
+                    if (_observeMode is null)
+                        UpdateGameUi();
                     UpdateGame((float)e.Time);
+                    UpdateObserveMode();
                 }
                 else
                     UpdateCamera((float)e.Time);
@@ -1504,6 +1513,22 @@ internal sealed partial class GameHostWindow : GameWindow
             UpdateGameSimulation(Math.Clamp(elapsed, 0, .25f));
             return;
         }
+        if (_observeMode is not null)
+        {
+            _gameSimulationAccumulator = Math.Min(
+                .25,
+                _gameSimulationAccumulator +
+                Math.Clamp(elapsed, 0, .25f));
+            const float observeSimulationStep =
+                1f / (float)DisplaySettingsController.SimulationUpdatesPerSecond;
+            while (_gameSimulationAccumulator + .0000001 >=
+                   observeSimulationStep)
+            {
+                UpdateGameSimulation(observeSimulationStep);
+                _gameSimulationAccumulator -= observeSimulationStep;
+            }
+            return;
+        }
         _worldActions.ProcessPendingPath();
 
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
@@ -1733,7 +1758,8 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         _worldGameSeconds = WorldTime.Advance(
             _worldGameSeconds, elapsed);
-        UpdateSurvival(elapsed);
+        if (_observeMode is null)
+            UpdateSurvival(elapsed);
         UpdateExpiredCampfires();
         var currentTerrain = SamplePlayerTerrain(
             _player.Position.X, _player.Position.Y);
@@ -1763,13 +1789,13 @@ internal sealed partial class GameHostWindow : GameWindow
         _activeWorldChunkBuffer.Clear();
         foreach (var gpu in _worldChunks.Values)
         {
-            if (IsActiveWorldChunk(gpu))
+            if (IsActiveSimulationChunk(gpu))
                 _activeWorldChunkBuffer.Add(gpu.Chunk);
         }
         _coastalRespawns.Update(
             elapsed,
             _activeWorldChunkBuffer,
-            _player.Position,
+            ObservationFocusPosition(),
             QueueChunkSave);
         UpdateVillagers(elapsed);
         if (_moveMarker is not null)
@@ -2531,10 +2557,11 @@ internal sealed partial class GameHostWindow : GameWindow
     private void FollowPlayer()
     {
         if (_player is null) return;
+        var focus = ObservationFocusPosition();
         var elevation = SamplePlayerTerrain(
-            _player.Position.X, _player.Position.Y).Height;
+            focus.X, focus.Y).Height;
         var projected = IsometricTerrainProjection.Project(
-            _player.Position.X, _player.Position.Y, elevation);
+            focus.X, focus.Y, elevation);
         _camera = -projected * _zoom;
     }
 
@@ -3098,7 +3125,8 @@ internal sealed partial class GameHostWindow : GameWindow
             RenderFrontend();
         }
         else if (_screen == ScreenState.WorldPreview &&
-            _mode == PreviewMode.Game && !_atlasOpen)
+            _mode == PreviewMode.Game && !_atlasOpen &&
+            _observeMode is null)
         {
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
             if (_modalScreen.BlursBackground) BlurComposedFrame();
@@ -5623,7 +5651,9 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         if (_mode == PreviewMode.Game) DrawMoveMarker();
 
-        var player = _mode == PreviewMode.Game ? GetPlayerVisual() : null;
+        var player = _mode == PreviewMode.Game && _observeMode is null
+            ? GetPlayerVisual()
+            : null;
         var distantDetailOpacity = Math.Clamp(
             (_zoom - .16f) / .06f, 0, 1);
         var renderGroundObjectsAndFish = distantDetailOpacity > .001f;
@@ -7291,15 +7321,20 @@ internal sealed partial class GameHostWindow : GameWindow
         WorldChunkCachePolicy.IsActiveLevel(
             gpu.Chunk.Coordinate, _activeWorldLevel);
 
+    private bool IsActiveSimulationChunk(GpuWorldChunk gpu) =>
+        IsActiveWorldChunk(gpu) &&
+        (_observeMode is null || IsChunkInsideWorldRenderCircle(gpu));
+
     private bool IsChunkInsideWorldRenderCircle(GpuWorldChunk gpu)
     {
         if (_mode != PreviewMode.Game || _player is null)
             return true;
         const int renderRadius = 5;
+        var focus = ObservationFocusPosition();
         var playerChunkX = FloorDiv(
-            (int)MathF.Floor(_player.Position.X), WorldChunk.Size);
+            (int)MathF.Floor(focus.X), WorldChunk.Size);
         var playerChunkY = FloorDiv(
-            (int)MathF.Floor(_player.Position.Y), WorldChunk.Size);
+            (int)MathF.Floor(focus.Y), WorldChunk.Size);
         var deltaX = gpu.Chunk.Coordinate.X - playerChunkX;
         var deltaY = gpu.Chunk.Coordinate.Y - playerChunkY;
         return deltaX * deltaX + deltaY * deltaY <=

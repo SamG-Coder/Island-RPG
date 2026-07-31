@@ -1,0 +1,231 @@
+using System.Text.Json;
+using IslandRpg.Gameplay;
+using IslandRpg.Rendering.Ui;
+using OpenTK.Mathematics;
+
+namespace IslandRpg.Rendering;
+
+internal sealed record ObserveModeOptions(
+    string WorldId,
+    string PlayerId,
+    double DurationSeconds = 0,
+    double LogIntervalSeconds = 2);
+
+internal static class ObserveModePolicy
+{
+    public const int RequiredVillagerCount = 2;
+    public static bool ObserverParticipatesInSimulation => false;
+
+    public static Vector2 Focus(
+        IReadOnlyList<VillagerState> villagers,
+        int worldLevel,
+        Vector2 fallback)
+    {
+        var living = villagers.Where(value =>
+            value.Health > 0 && value.WorldLevel == worldLevel).ToArray();
+        return living.Length == 0
+            ? fallback
+            : new(
+                living.Average(value => value.PositionX),
+                living.Average(value => value.PositionY));
+    }
+}
+
+internal static class ObserveEventLog
+{
+    public static string Serialize(
+        double realSeconds,
+        double gameSeconds,
+        string gameTime,
+        string? villagerId,
+        string eventType,
+        object? data) =>
+        "[OBSERVE] " + JsonSerializer.Serialize(new
+        {
+            RealSeconds = realSeconds,
+            GameSeconds = gameSeconds,
+            GameTime = gameTime,
+            VillagerId = villagerId,
+            EventType = eventType,
+            Data = data
+        });
+
+    public static void Write(
+        TextWriter writer,
+        double realSeconds,
+        double gameSeconds,
+        string gameTime,
+        string? villagerId,
+        string eventType,
+        object? data)
+    {
+        writer.WriteLine(Serialize(
+            realSeconds, gameSeconds, gameTime,
+            villagerId, eventType, data));
+        writer.Flush();
+    }
+}
+
+internal sealed partial class GameHostWindow
+{
+    private bool _observeStarted;
+    private double _observeStartedAt;
+    private double _observeNextLogAt;
+    private readonly Dictionary<string, string> _observeState = [];
+
+    private void TryBeginObserveMode()
+    {
+        if (_observeMode is null || _observeStarted ||
+            _screen != ScreenState.MainMenu)
+            return;
+        var world = _saves.ListWorlds().FirstOrDefault(value =>
+            value.Id == _observeMode.WorldId) ??
+            throw new InvalidOperationException(
+                "Observe world no longer exists.");
+        var player = _saves.ListPlayers().FirstOrDefault(value =>
+            value.Id == _observeMode.PlayerId) ??
+            throw new InvalidOperationException(
+                "Observe character no longer exists.");
+        if (!world.AiNpcsEnabled ||
+            world.AiNpcCount != ObserveModePolicy.RequiredVillagerCount)
+            throw new InvalidOperationException(
+                "Observe mode requires exactly two enabled AI villagers.");
+
+        EnterWorld(world, player);
+        _observeStarted = true;
+        _observeStartedAt = _clock;
+        _observeNextLogAt = _clock;
+        ObserveLog("session_started", null, new
+        {
+            world.Id,
+            world.Name,
+            world.Seed,
+            ObserverId = player.Id,
+            VillagerCount = _villagers.Count,
+            ObserverVisible = false,
+            ObserverPerceived = false
+        });
+    }
+
+    private Vector2 ObservationFocusPosition()
+    {
+        var fallback = _player?.Position ?? Vector2.Zero;
+        return _observeMode is null
+            ? fallback
+            : ObserveModePolicy.Focus(
+                _villagers, _activeWorldLevel, fallback);
+    }
+
+    private void UpdateObserveMode()
+    {
+        if (_observeMode is null || !_observeStarted) return;
+        if (_clock >= _observeNextLogAt)
+        {
+            LogObserveSnapshot();
+            _observeNextLogAt = _clock +
+                _observeMode.LogIntervalSeconds;
+        }
+        if (_observeMode.DurationSeconds <= 0 ||
+            _clock - _observeStartedAt < _observeMode.DurationSeconds)
+            return;
+        SaveVillagers();
+        ObserveLog("session_finished", null, new
+        {
+            DurationSeconds = _clock - _observeStartedAt,
+            LivingVillagers = _villagers.Count(value => value.Health > 0)
+        });
+        Close();
+    }
+
+    private void LogObserveSnapshot()
+    {
+        var focus = ObservationFocusPosition();
+        var time = WorldTime.At(_worldGameSeconds);
+        var nearby = _worldChunks.Values
+            .Where(IsActiveSimulationChunk)
+            .SelectMany(value => value.Chunk.GroundObjects)
+            .Select(value => new
+            {
+                value.Id,
+                value.ItemId,
+                value.OwnerId,
+                Distance = Vector2.Distance(
+                    focus, new(value.X, value.Y))
+            })
+            .Where(value => value.Distance <= 16)
+            .OrderBy(value => value.Distance)
+            .Take(12)
+            .ToArray();
+        ObserveLog("world_snapshot", null, new
+        {
+            Day = time.Day,
+            time.Hour,
+            time.Minute,
+            Focus = new { X = focus.X, Y = focus.Y },
+            ActiveChunks = _worldChunks.Values.Count(IsActiveSimulationChunk),
+            NearbyResources = nearby
+        });
+        foreach (var villager in _villagers)
+        {
+            var state = string.Join('|',
+                villager.Health, MathF.Round(villager.Hunger, 2),
+                villager.Need, villager.Activity, villager.Action,
+                villager.GoalObjectId, villager.ConversationPartnerId,
+                villager.Inventory.Count(value => value is not null),
+                villager.Memories?.Count ?? 0);
+            if (!_observeState.TryGetValue(villager.Id, out var previous) ||
+                previous != state)
+            {
+                ObserveLog("state_changed", villager.Id, new
+                {
+                    Previous = previous,
+                    Current = state
+                });
+                _observeState[villager.Id] = state;
+            }
+            ObserveLog("villager_snapshot", villager.Id, new
+            {
+                villager.Name,
+                Position = new { X = villager.PositionX, Y = villager.PositionY },
+                villager.WorldLevel,
+                villager.Health,
+                villager.Hunger,
+                villager.WellFedSeconds,
+                villager.Need,
+                villager.Activity,
+                villager.Action,
+                villager.GoalObjectId,
+                villager.ConversationPartnerId,
+                villager.FollowingActorId,
+                Inventory = villager.Inventory,
+                Goals = villager.Goals,
+                Promises = villager.Promises,
+                Relationships = villager.Relationships,
+                Memories = villager.Memories?.TakeLast(8),
+                Conversation = villager.ConversationHistory?.TakeLast(8),
+                villager.LastDeliberation
+            });
+        }
+    }
+
+    private void ObserveChatMessage(ChatMessage message) =>
+        ObserveLog("chat", null, new
+        {
+            Style = message.Style.ToString(),
+            message.Text
+        });
+
+    private void ObserveLog(string eventType, string? villagerId, object? data)
+    {
+        if (_observeMode is null) return;
+        var time = WorldTime.At(_worldGameSeconds);
+        ObserveEventLog.Write(
+            Console.Out,
+            Math.Max(0, _clock - _observeStartedAt),
+            _worldGameSeconds,
+            $"Day {time.Day} {time.Hour:00}:{time.Minute:00}",
+            villagerId,
+            eventType,
+            data);
+    }
+}

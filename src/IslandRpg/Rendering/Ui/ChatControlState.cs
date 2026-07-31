@@ -58,6 +58,7 @@ internal sealed class ChatUiControlState
     public IReadOnlyList<ChatMessage> Messages => _messages;
     public bool IsAtBottom => FirstVisibleLine >= MaximumFirstLine;
     public event Action<string>? Submitted;
+    public event Action<ChatMessage>? MessageAdded;
 
     private int MaximumFirstLine => Math.Max(0, _messages.Count - VisibleRows);
 
@@ -183,7 +184,8 @@ internal sealed class ChatUiControlState
         string message, ChatMessageStyle style = ChatMessageStyle.Normal)
     {
         var keepAtBottom = IsAtBottom;
-        _messages.Add(new(message, style));
+        var chatMessage = new ChatMessage(message, style);
+        _messages.Add(chatMessage);
         var removed = Math.Max(0, _messages.Count - MaximumMessages);
         if (removed > 0)
         {
@@ -192,6 +194,7 @@ internal sealed class ChatUiControlState
         }
         if (keepAtBottom) FirstVisibleLine = MaximumFirstLine;
         UpdateThumbBounds();
+        MessageAdded?.Invoke(chatMessage);
     }
 
     private void PageToward(float pointerY)

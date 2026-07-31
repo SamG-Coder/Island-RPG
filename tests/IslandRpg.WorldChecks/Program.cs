@@ -230,6 +230,28 @@ using (var repeatingDialogueAi = new NpcAiService(
                 "I'm Mira. What's your name?", 82, "neutral", [])) is null,
         "repeating model clauses must be rejected so the deterministic line appears once");
 }
+using (var embeddedSpeakerEchoAi = new NpcAiService(
+           new HttpClient(new StubHttpHandler(_ =>
+               StubHttpHandler.Json(
+                   """
+                   {"response":"{\"reply\":\"I'm Tomas. It's good to meet you, M: I'm Mira. What's your name?\"}","done":true}
+                   """)))))
+{
+    Require(
+        await embeddedSpeakerEchoAi.ComposeDialogueAsync(
+            defaultAi,
+            new(
+                "Tomas", "Mira", "Introduce",
+                "I'm Tomas. It's good to meet you, Mira.",
+                99, "neutral", [],
+                RecentConversation:
+                [
+                    new(
+                        "mira", "Mira",
+                        "I'm Mira. What's your name?", 1)
+                ])) is null,
+        "the exact embedded speaker-label echo seen in live Observe mode must be rejected");
+}
 using (var personaAi = new NpcAiService(
            new HttpClient(new StubHttpHandler(_ =>
                StubHttpHandler.Json(
@@ -338,6 +360,50 @@ Require(
     oneRealMinuteLater.Health ==
         AdventureService.BaseMaximumHealth,
     "villager survival catch-up must convert accelerated game time back to real seconds");
+var sharedMinute = SurvivalService.Advance(
+    villagerSpawnA[0].Hunger,
+    villagerSpawnA[0].WellFedSeconds,
+    villagerSpawnA[0].Health,
+    60);
+Require(
+    MathF.Abs(oneRealMinuteLater.Hunger - sharedMinute.Hunger) < .001f &&
+    oneRealMinuteLater.Health == sharedMinute.Health &&
+    MathF.Abs(oneRealMinuteLater.WellFedSeconds -
+              sharedMinute.WellFedSeconds) < .001f,
+    "villager hunger, health, and well-fed catch-up must exactly use the player's shared survival result");
+var wellFedStart = villagerSpawnA[0] with
+{
+    Hunger = 70,
+    Health = 80,
+    WellFedSeconds = 120
+};
+var wellFedVillagerMinute = VillagerSimulation.CatchUp(
+    wellFedStart,
+    wellFedStart.LastSimulatedGameSeconds +
+    VillagerSimulation.GameSecondsPerRealSecond * 60);
+var wellFedPlayerMinute = SurvivalService.Advance(70, 120, 80, 60);
+Require(
+    MathF.Abs(wellFedVillagerMinute.Hunger -
+              wellFedPlayerMinute.Hunger) < .001f &&
+    wellFedVillagerMinute.Health == wellFedPlayerMinute.Health &&
+    MathF.Abs(wellFedVillagerMinute.WellFedSeconds -
+              wellFedPlayerMinute.WellFedSeconds) < .001f,
+    "villager well-fed duration and hunger protection must match the player exactly");
+var starvingStart = villagerSpawnA[0] with
+{
+    Hunger = 0,
+    Health = 5,
+    WellFedSeconds = 0
+};
+var starvedVillager = VillagerSimulation.CatchUp(
+    starvingStart,
+    starvingStart.LastSimulatedGameSeconds +
+    VillagerSimulation.GameSecondsPerRealSecond * 10);
+var starvedPlayer = SurvivalService.Advance(0, 0, 5, 10);
+Require(
+    starvedVillager.Health == starvedPlayer.Health &&
+    starvedVillager.Health == 0,
+    "villager starvation damage and death must match the player exactly");
 var repairedLegacyStarvation =
     VillagerSimulation.CatchUp(
         villagerSpawnA[0] with
@@ -417,10 +483,13 @@ Require(
             VillagerSimulationTier.Nearby),
     "villager simulation frequency must decrease with distance");
 Require(
-    VillagerSimulation.NearbyDecisionSeconds >= 8 &&
-    VillagerSimulation.GatherPauseSeconds >= 45 &&
-    VillagerSimulation.SocialCooldownSeconds >= 90,
-    "ordinary decisions, gathering, and social speech must remain deliberately slow-paced");
+    VillagerSimulation.NearbyDecisionSeconds /
+        VillagerSimulation.GameSecondsPerRealSecond >= 8 &&
+    VillagerSimulation.GatherPauseSeconds /
+        VillagerSimulation.GameSecondsPerRealSecond >= 45 &&
+    VillagerSimulation.SocialCooldownSeconds /
+        VillagerSimulation.GameSecondsPerRealSecond >= 90,
+    "ordinary decisions, gathering, and social speech cooldowns must be authored in real-time seconds");
 var hungryVillagerInventory = PlayerInventory.CreateStartingInventory();
 hungryVillagerInventory[0] = ItemIds.CookedMinnows;
 var hungryVillager = villagerSpawnA[0] with
@@ -435,12 +504,75 @@ var fedVillager = VillagerSimulation.ApplyDecision(
     hungryDecision,
     VillagerSimulationTier.Nearby,
     100);
+SurvivalService.TryFoodEffect(
+    ItemIds.CookedMinnows, out var sharedFoodEffect);
+var expectedMeal = SurvivalService.Eat(
+    sharedFoodEffect,
+    hungryVillager.Hunger,
+    hungryVillager.WellFedSeconds,
+    hungryVillager.Health,
+    AdventureService.BaseMaximumHealth);
 Require(
     hungryDecision.Need == VillagerNeed.Food &&
     hungryDecision.ConsumeSlot == 0 &&
     fedVillager.Inventory[0] is null &&
-    fedVillager.Hunger > hungryVillager.Hunger,
-    "hungry villagers must intelligently consume available food");
+    fedVillager.Hunger == expectedMeal.Hunger &&
+    fedVillager.Health == expectedMeal.Health &&
+    fedVillager.WellFedSeconds == expectedMeal.WellFedSeconds,
+    "villager food hunger, healing, and well-fed effects must exactly match the player's shared meal result");
+
+var observeOptions = AppOptions.Parse([
+    "--observe", "--observe-seconds", "45",
+    "--observe-log-interval", "1.5"
+]);
+Require(
+    observeOptions.Observe && observeOptions.Game &&
+    observeOptions.ObserveSeconds == 45 &&
+    observeOptions.ObserveLogIntervalSeconds == 1.5 &&
+    ObserveModePolicy.RequiredVillagerCount == 2 &&
+    !ObserveModePolicy.ObserverParticipatesInSimulation,
+    "Observe CLI configuration must request exactly two villagers and exclude the hidden observer");
+var observeFocus = ObserveModePolicy.Focus(
+    [
+        villagerSpawnA[0] with { PositionX = 10, PositionY = 20 },
+        villagerSpawnA[1] with { PositionX = 14, PositionY = 24 },
+        villagerSpawnA[2] with { PositionX = 999, PositionY = 999, Health = 0 }
+    ],
+    (int)WorldLevel.Overworld,
+    new(-500, -500));
+Require(
+    observeFocus == new Vector2(12, 22),
+    "Observe camera and chunk focus must track the centroid of living villagers, never the hidden player");
+var observeJson = ObserveEventLog.Serialize(
+    1.25, 28875, "Day 1 08:01", villagerSpawnA[0].Id,
+    "world_decision", new { Action = "TakeItem" });
+using (var observeDocument = System.Text.Json.JsonDocument.Parse(
+           observeJson["[OBSERVE] ".Length..]))
+{
+    var observeRoot = observeDocument.RootElement;
+    Require(
+        observeRoot.GetProperty("RealSeconds").GetDouble() == 1.25 &&
+        observeRoot.GetProperty("GameSeconds").GetDouble() == 28875 &&
+        observeRoot.GetProperty("GameTime").GetString() == "Day 1 08:01" &&
+        observeRoot.GetProperty("VillagerId").GetString() == villagerSpawnA[0].Id &&
+        observeRoot.GetProperty("EventType").GetString() == "world_decision" &&
+        observeRoot.GetProperty("Data").GetProperty("Action").GetString() == "TakeItem",
+        "Observe logs must be machine-readable and contain time, identity, event type, and data");
+}
+using (var capturedObserveOutput = new StringWriter())
+{
+    ObserveEventLog.Write(
+        capturedObserveOutput,
+        2, 28920, "Day 1 08:02", villagerSpawnA[1].Id,
+        "state_changed", new { Need = "Food" });
+    Require(
+        capturedObserveOutput.ToString().StartsWith(
+            "[OBSERVE] {", StringComparison.Ordinal) &&
+        capturedObserveOutput.ToString().Contains(
+            "\"EventType\":\"state_changed\"",
+            StringComparison.Ordinal),
+        "automated tests must be able to capture Observe console events live through a TextWriter");
+}
 var offendedVillager =
     VillagerSimulation.ObserveUnauthorizedTaking(
         villagerSpawnA[0],

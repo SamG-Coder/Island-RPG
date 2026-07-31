@@ -1,4 +1,5 @@
 using IslandRpg.Assets;
+using IslandRpg.Gameplay;
 using IslandRpg.Persistence;
 using IslandRpg.Rendering;
 
@@ -6,6 +7,78 @@ try
 {
     var options = AppOptions.Parse(args);
     var saves = new GameSaveRepository();
+    ObserveModeOptions? observeMode = null;
+    if (options.Observe)
+    {
+        var settings = saves.LoadSettings();
+        var aiSettings = settings.EffectiveAi with { Enabled = true };
+        saves.SaveSettings(settings with { Ai = aiSettings });
+        using var ai = new NpcAiService();
+        var availability = ai.CheckAsync(aiSettings)
+            .GetAwaiter().GetResult();
+        ObserveEventLog.Write(
+            Console.Out, 0, 8 * 60 * 60, "Day 1 08:00", null,
+            "ai_availability_response", new
+            {
+                Availability = availability.Availability.ToString(),
+                availability.Message,
+                aiSettings.BaseUrl,
+                aiSettings.Model
+            });
+        if (!availability.Ready)
+            throw new InvalidOperationException(
+                "Observe mode requires a responding AI model: " +
+                availability.Message);
+        var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+        var observer = saves.CreatePlayer(
+            $"Observer-{stamp}", EntityGender.Male, 2, 0);
+        ObserveEventLog.Write(
+            Console.Out, 0, 8 * 60 * 60, "Day 1 08:00", null,
+            "ai_persona_request", new
+            {
+                WorldName = $"Observation-{stamp}",
+                WorldSeed = options.Seed,
+                Names = VillagerSimulation.NamesForPopulation(
+                    ObserveModePolicy.RequiredVillagerCount),
+                aiSettings.Model
+            });
+        var personas = ai.GeneratePersonasAsync(
+                aiSettings,
+                $"Observation-{stamp}",
+                options.Seed,
+                VillagerSimulation.NamesForPopulation(
+                    ObserveModePolicy.RequiredVillagerCount))
+            .GetAwaiter().GetResult() ?? [];
+        ObserveEventLog.Write(
+            Console.Out, 0, 8 * 60 * 60, "Day 1 08:00", null,
+            "ai_persona_response", new
+            {
+                Count = personas.Count,
+                Personas = personas
+            });
+        var world = saves.CreateWorld(
+            $"Observation-{stamp}",
+            options.Seed,
+            observer.Id,
+            aiNpcsEnabled: true,
+            aiNpcCount: ObserveModePolicy.RequiredVillagerCount,
+            aiNpcPersonas: personas);
+        observeMode = new(
+            world.Id,
+            observer.Id,
+            options.ObserveSeconds,
+            options.ObserveLogIntervalSeconds);
+        ObserveEventLog.Write(
+            Console.Out, 0, world.ElapsedGameSeconds, "Day 1 08:00", null,
+            "world_created", new
+            {
+                WorldId = world.Id,
+                ObserverId = observer.Id,
+                AiEnabled = world.AiNpcsEnabled,
+                NpcCount = world.AiNpcCount,
+                aiSettings.Model
+            });
+    }
     var gameMode = options.Catalog && options.Game;
     var foundAoeAssets = Age2InstallLocator.TryFind(
         options.Age2Path,
@@ -54,7 +127,8 @@ try
                     : GameHostWindow.PreviewMode.Assets,
                 options.Seed,
                 useTestAssets,
-                cannotLocateAoeAssets);
+                cannotLocateAoeAssets,
+                observeMode);
             host.Run();
             assetCatalog = host.Catalog ??
                            throw new InvalidOperationException("The asset catalogue did not finish loading.");
@@ -119,6 +193,7 @@ catch (Exception ex)
     Console.Error.WriteLine(ex.Message);
     Console.Error.WriteLine(
         "Usage: IslandRpg [--game | --world] [--seed <number>] [--island | --catalog] " +
+        "[--observe [--observe-seconds <seconds>] [--observe-log-interval <seconds>]] " +
         "[--age2-path <folder>] [--graphic <SLP id> | --graphic-name <DAT name>]");
     Environment.ExitCode = 1;
 }
@@ -132,7 +207,10 @@ internal sealed record AppOptions(
     bool Island,
     bool World,
     bool Game,
-    long Seed)
+    long Seed,
+    bool Observe,
+    double ObserveSeconds,
+    double ObserveLogIntervalSeconds)
 {
     public static AppOptions Parse(string[] args)
     {
@@ -146,6 +224,9 @@ internal sealed record AppOptions(
         var island = false;
         var world = false;
         var game = true;
+        var observe = false;
+        double observeSeconds = 0;
+        double observeLogIntervalSeconds = 2;
         long seed = 2187;
         for (var i = 0; i < args.Length; i++)
         {
@@ -192,11 +273,40 @@ internal sealed record AppOptions(
                 world = false;
                 game = true;
             }
+            else if (args[i] == "--observe")
+            {
+                observe = true;
+                catalog = true;
+                island = false;
+                world = false;
+                game = true;
+            }
+            else if (args[i] == "--observe-seconds" &&
+                     i + 1 < args.Length &&
+                     double.TryParse(
+                         args[++i],
+                         System.Globalization.NumberStyles.Float,
+                         System.Globalization.CultureInfo.InvariantCulture,
+                         out var parsedObserveSeconds) &&
+                     parsedObserveSeconds >= 0)
+                observeSeconds = parsedObserveSeconds;
+            else if (args[i] == "--observe-log-interval" &&
+                     i + 1 < args.Length &&
+                     double.TryParse(
+                         args[++i],
+                         System.Globalization.NumberStyles.Float,
+                         System.Globalization.CultureInfo.InvariantCulture,
+                         out var parsedLogInterval) &&
+                     parsedLogInterval > 0)
+                observeLogIntervalSeconds = parsedLogInterval;
             else if (args[i] == "--seed" && i + 1 < args.Length &&
                      long.TryParse(args[++i], out var parsedSeed)) seed = parsedSeed;
             else if (args[i] == "--validate") validateOnly = true;
             else throw new ArgumentException($"Unknown or incomplete argument: {args[i]}");
         }
-        return new(path, graphic, graphicName, validateOnly, catalog, island, world, game, seed);
+        return new(
+            path, graphic, graphicName, validateOnly,
+            catalog, island, world, game, seed,
+            observe, observeSeconds, observeLogIntervalSeconds);
     }
 }

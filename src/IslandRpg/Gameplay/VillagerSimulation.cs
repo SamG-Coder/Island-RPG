@@ -187,9 +187,12 @@ internal static class VillagerSimulation
     public const int InitialPopulation = 3;
     public const float NearbyRadius = 28;
     public const float RegionalRadius = 128;
-    public const double NearbyDecisionSeconds = 8;
-    public const double RegionalDecisionSeconds = 30;
-    public const double DistantDecisionSeconds = 120;
+    public const double NearbyDecisionSeconds =
+        8 * GameSecondsPerRealSecond;
+    public const double RegionalDecisionSeconds =
+        30 * GameSecondsPerRealSecond;
+    public const double DistantDecisionSeconds =
+        120 * GameSecondsPerRealSecond;
     public const int MaximumMemories = 64;
     public const int MaximumConversationTurns = 12;
     public const float InteractionRange = 1.35f;
@@ -197,9 +200,12 @@ internal static class VillagerSimulation
     public const int StorageDepositThreshold = 8;
     public const float FootBoxWidth = .46f;
     public const float FootBoxDepth = .34f;
-    public const double GatherPauseSeconds = 45;
-    public const double SocialCooldownSeconds = 120;
-    public const double IntroductionCooldownSeconds = 45;
+    public const double GatherPauseSeconds =
+        45 * GameSecondsPerRealSecond;
+    public const double SocialCooldownSeconds =
+        120 * GameSecondsPerRealSecond;
+    public const double IntroductionCooldownSeconds =
+        45 * GameSecondsPerRealSecond;
     public const double RelationshipCheckInSeconds = 6 * 60 * 60;
     public const float SocialRange = 8;
     public const float FollowStopDistance = 1.8f;

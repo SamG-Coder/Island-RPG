@@ -920,6 +920,7 @@ internal sealed class NpcAiService : IDisposable
         if (line.StartsWith(
                 speakerName + " ",
                 StringComparison.OrdinalIgnoreCase) ||
+            HasEmbeddedSpeakerLabel(line) ||
             line.Contains('\n') ||
             line.Split(
                 ' ',
@@ -928,6 +929,16 @@ internal sealed class NpcAiService : IDisposable
             return null;
         return Limit(line, 160);
     }
+
+    private static bool HasEmbeddedSpeakerLabel(string line) =>
+        line.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Any(word =>
+            {
+                var label = word.Trim('"', '\'', '(', '[', '{');
+                return label.EndsWith(':') &&
+                       label.Length is >= 2 and <= 22 &&
+                       label[..^1].All(char.IsLetter);
+            });
 
     private static bool HasRepeatedPhrase(string line)
     {

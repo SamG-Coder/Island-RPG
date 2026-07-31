@@ -232,8 +232,9 @@ internal sealed partial class GameHostWindow
                 continue;
             var position = new Vector2(
                 villager.PositionX, villager.PositionY);
+            var simulationFocus = ObservationFocusPosition();
             var tier = VillagerSimulation.Tier(
-                position, _player.Position);
+                position, simulationFocus);
             villager = VillagerSimulation.CatchUp(
                 villager, _worldGameSeconds);
             if (TryExecuteVillagerSocialGoal(
@@ -244,7 +245,17 @@ internal sealed partial class GameHostWindow
                     index, villager, tier))
                 continue;
             var decision = VillagerSimulation.Decide(
-                villager, _player.Position, _worldGameSeconds);
+                villager, simulationFocus, _worldGameSeconds);
+            ObserveLog("autonomous_decision", villager.Id, new
+            {
+                Need = decision.Need.ToString(),
+                MoveTarget = decision.MoveTarget is { } moveTarget
+                    ? new { X = moveTarget.X, Y = moveTarget.Y }
+                    : null,
+                decision.ConsumeSlot,
+                decision.Speech,
+                Tier = tier.ToString()
+            });
             if (decision.MoveTarget is { } requestedTarget)
             {
                 var safeTarget =
@@ -296,14 +307,15 @@ internal sealed partial class GameHostWindow
         if (ConversationFloorBusy)
             return false;
         _socialActorObservations.Clear();
-        _socialActorObservations.Add(new(
-            _activePlayer.Id,
-            _activePlayer.Name,
-            _player.Position,
-            _activeWorldLevel,
-            _activePlayer.Hunger,
-            VillagerSimulation.CountFood(
-                _activePlayer.Inventory ?? [])));
+        if (_observeMode is null)
+            _socialActorObservations.Add(new(
+                _activePlayer.Id,
+                _activePlayer.Name,
+                _player.Position,
+                _activeWorldLevel,
+                _activePlayer.Hunger,
+                VillagerSimulation.CountFood(
+                    _activePlayer.Inventory ?? [])));
         foreach (var actor in _villagers)
             _socialActorObservations.Add(new(
                 actor.Id,
@@ -318,6 +330,27 @@ internal sealed partial class GameHostWindow
             CollectionsMarshal.AsSpan(
                 _socialActorObservations),
             _worldGameSeconds);
+        ObserveLog("social_decision", villager.Id, new
+        {
+            Intent = goal.Intent.ToString(),
+            goal.OtherActorId,
+            Target = goal.Target is { } socialTarget
+                ? new { X = socialTarget.X, Y = socialTarget.Y }
+                : null,
+            goal.Speech,
+            Candidates = _socialActorObservations.Select(value => new
+            {
+                value.Id,
+                value.Name,
+                Position = new
+                {
+                    X = value.Position.X,
+                    Y = value.Position.Y
+                },
+                value.Hunger,
+                value.FoodCount
+            }).ToArray()
+        });
         if (goal.Intent == VillagerSocialIntent.None)
             return false;
         if (goal.Target is { } target)
@@ -333,6 +366,11 @@ internal sealed partial class GameHostWindow
                     new(villager.PositionX, villager.PositionY),
                     safeTarget) <= .01f)
             {
+                ObserveLog("social_action_failed", villager.Id, new
+                {
+                    Intent = goal.Intent.ToString(),
+                    Reason = "no_reachable_approach"
+                });
                 _villagers[villagerIndex] =
                     VillagerSimulation.BlockMovement(
                         villager, _worldGameSeconds);
@@ -483,7 +521,7 @@ internal sealed partial class GameHostWindow
         _villagerWorldObjects.Clear();
         foreach (var gpu in _worldChunks.Values)
         {
-            if (!IsActiveWorldChunk(gpu)) continue;
+            if (!IsActiveSimulationChunk(gpu)) continue;
             foreach (var item in gpu.Chunk.GroundObjects)
             {
                 if (_villagerReservedObjects.Contains(item.Id) &&
@@ -501,6 +539,15 @@ internal sealed partial class GameHostWindow
         var action = VillagerSimulation.SelectWorldAction(
             villager,
             CollectionsMarshal.AsSpan(_villagerWorldObjects));
+        ObserveLog("world_decision", villager.Id, new
+        {
+            Kind = action.Kind.ToString(),
+            action.ObjectId,
+            Target = action.Target is { } worldTarget
+                ? new { X = worldTarget.X, Y = worldTarget.Y }
+                : null,
+            VisibleObjects = _villagerWorldObjects.Count
+        });
         if (action.Kind == VillagerWorldActionKind.None)
             return false;
         if (action.ObjectId is { } reservedId)
@@ -521,6 +568,12 @@ internal sealed partial class GameHostWindow
                     new(villager.PositionX, villager.PositionY),
                     safeTarget) <= .01f)
             {
+                ObserveLog("world_action_failed", villager.Id, new
+                {
+                    Action = action.Kind.ToString(),
+                    action.ObjectId,
+                    Reason = "no_reachable_approach"
+                });
                 _villagers[villagerIndex] =
                     VillagerSimulation.BlockMovement(
                         villager, _worldGameSeconds);
@@ -547,12 +600,21 @@ internal sealed partial class GameHostWindow
         }
 
         var targetGpu = _worldChunks.Values.FirstOrDefault(gpu =>
-            IsActiveWorldChunk(gpu) &&
+            IsActiveSimulationChunk(gpu) &&
             gpu.Chunk.GroundObjects.Any(item =>
                 item.Id == action.ObjectId));
         var target = targetGpu?.Chunk.GroundObjects.FirstOrDefault(
             item => item.Id == action.ObjectId);
-        if (targetGpu is null || target is null) return false;
+        if (targetGpu is null || target is null)
+        {
+            ObserveLog("world_action_cancelled", villager.Id, new
+            {
+                Action = action.Kind.ToString(),
+                action.ObjectId,
+                Reason = "target_disappeared"
+            });
+            return false;
+        }
         if (action.Kind == VillagerWorldActionKind.TakeItem)
         {
             if (target.OwnerId is { Length: > 0 } owner &&
@@ -563,9 +625,28 @@ internal sealed partial class GameHostWindow
                     villager.Inventory,
                     target.ItemId,
                     out var inventory))
+            {
+                ObserveLog("world_action_failed", villager.Id, new
+                {
+                    Action = action.Kind.ToString(),
+                    target.Id,
+                    target.ItemId,
+                    Reason = target.OwnerId is { Length: > 0 }
+                        ? "owned_by_another_actor"
+                        : "inventory_full"
+                });
                 return false;
+            }
             if (!targetGpu.Chunk.GroundObjects.Remove(target))
+            {
+                ObserveLog("world_action_cancelled", villager.Id, new
+                {
+                    Action = action.Kind.ToString(),
+                    target.Id,
+                    Reason = "target_changed"
+                });
                 return false;
+            }
             var updatedVillager = villager with
             {
                 Inventory = inventory,
@@ -583,6 +664,13 @@ internal sealed partial class GameHostWindow
             _villagers[villagerIndex] =
                 VillagerCommitmentService.RecordAcquiredItem(
                     updatedVillager, target.ItemId);
+            ObserveLog("world_action_succeeded", villager.Id, new
+            {
+                Action = action.Kind.ToString(),
+                target.Id,
+                target.ItemId,
+                PreviousOwner = target.OwnerId
+            });
             QueueChunkSave(targetGpu.Chunk);
             _villagersDirty = true;
             return true;
@@ -593,7 +681,15 @@ internal sealed partial class GameHostWindow
             !string.Equals(
                 target.OwnerId, villager.Id,
                 StringComparison.Ordinal))
+        {
+            ObserveLog("world_action_failed", villager.Id, new
+            {
+                Action = action.Kind.ToString(),
+                target.Id,
+                Reason = "storage_not_owned"
+            });
             return false;
+        }
         var container = StorageContainerService.Open(target);
         var depositedInventory =
             (string?[])villager.Inventory.Clone();
@@ -609,7 +705,16 @@ internal sealed partial class GameHostWindow
             depositedInventory[slot] = null;
             moved++;
         }
-        if (moved == 0) return false;
+        if (moved == 0)
+        {
+            ObserveLog("world_action_failed", villager.Id, new
+            {
+                Action = action.Kind.ToString(),
+                target.Id,
+                Reason = "nothing_depositable"
+            });
+            return false;
+        }
         var savedStorage = StorageContainerService.Save(
             target, container);
         var targetIndex =
@@ -626,6 +731,13 @@ internal sealed partial class GameHostWindow
                 VillagerSimulation.DecisionInterval(tier),
             LastSimulatedGameSeconds = _worldGameSeconds
         };
+        ObserveLog("world_action_succeeded", villager.Id, new
+        {
+            Action = action.Kind.ToString(),
+            target.Id,
+            target.ItemId,
+            ItemsMoved = moved
+        });
         QueueChunkSave(targetGpu.Chunk);
         _villagersDirty = true;
         return true;

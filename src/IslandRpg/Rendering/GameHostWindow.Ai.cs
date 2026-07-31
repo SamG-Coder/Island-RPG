@@ -318,6 +318,7 @@ internal sealed partial class GameHostWindow
         var line = _npcAiDialogueTask.IsCompletedSuccessfully
             ? _npcAiDialogueTask.Result
             : null;
+        var rawResponse = line;
         var speakerId = _npcAiDialogueSpeakerId;
         var listenerId = _npcAiDialogueListenerId;
         var fallback = _npcAiDialogueFallback;
@@ -332,6 +333,14 @@ internal sealed partial class GameHostWindow
         line = string.IsNullOrWhiteSpace(line)
             ? fallback
             : line;
+        ObserveLog("ai_dialogue_response", speakerId, new
+        {
+            ListenerId = listenerId,
+            Intent = intent.ToString(),
+            RawResponse = rawResponse,
+            ResolvedLine = line,
+            UsedFallback = string.IsNullOrWhiteSpace(rawResponse)
+        });
         if (string.IsNullOrWhiteSpace(speakerId) ||
             string.IsNullOrWhiteSpace(line))
             return;
@@ -452,6 +461,15 @@ internal sealed partial class GameHostWindow
                 VillagerSimulation.HoursOnIsland(
                     speaker, _worldGameSeconds),
                 speaker.ConversationHistory);
+        ObserveLog("ai_dialogue_request", speaker.Id, new
+        {
+            ListenerId = listenerId,
+            ListenerName = listenerName,
+            Intent = intent.ToString(),
+            Fallback = fallback,
+            Context = context,
+            ModelEnabled = _npcAiState.Ready
+        });
         _npcAiDialogueTask = _npcAiState.Ready
             ? _npcAi.ComposeDialogueAsync(
                 settings, context)
