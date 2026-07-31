@@ -20,7 +20,6 @@ internal sealed partial class GameHostWindow
     private readonly Dictionary<string, VillagerSpeechBubble>
         _villagerSpeechBubbles = [];
     private readonly Queue<string> _queuedPlayerConversationTurns = [];
-    private string? _pendingPlayerConversationMessage;
     private string? _conversationFloorSpeakerId;
     private double _conversationFloorUntil;
     private sealed record VillagerSpeechBubble(
@@ -31,7 +30,6 @@ internal sealed partial class GameHostWindow
         _villagers.Clear();
         _villagerSpeechBubbles.Clear();
         _queuedPlayerConversationTurns.Clear();
-        _pendingPlayerConversationMessage = null;
         _conversationFloorSpeakerId = null;
         _conversationFloorUntil = 0;
         if (_activeWorld is null) return;
@@ -118,30 +116,54 @@ internal sealed partial class GameHostWindow
                     previous.PositionX, previous.PositionY);
                 var distanceSquared = Vector2.DistanceSquared(
                     followerPosition, _player.Position);
-                var followTarget =
-                    WorldLevelNavigation.ReachableWalkableTarget(
-                        _worldSeed,
-                        followerPosition,
-                        _player.Position,
-                        previous.WorldLevel,
-                        maximumRadius: 3);
-                if (distanceSquared > 2.2f * 2.2f &&
-                    Vector2.DistanceSquared(
-                        followerPosition, followTarget) <= .01f)
-                    previous = VillagerSimulation.BlockMovement(
-                        previous, _worldGameSeconds);
-                else if (distanceSquared > 2.2f * 2.2f)
-                    previous =
-                        VillagerSimulation.RetargetFollowing(
-                            previous,
-                            followTarget,
-                            _worldGameSeconds);
+                var shouldMove =
+                    distanceSquared >
+                    VillagerSimulation.FollowResumeDistance *
+                    VillagerSimulation.FollowResumeDistance ||
+                    previous.Action == EntityAction.Move &&
+                    distanceSquared >
+                    VillagerSimulation.FollowStopDistance *
+                    VillagerSimulation.FollowStopDistance;
+                if (shouldMove)
+                {
+                    var desiredFollowTarget =
+                        VillagerSimulation.FollowTarget(
+                            followerPosition,
+                            _player.Position);
+                    if (VillagerSimulation.NeedsFollowRetarget(
+                            previous, desiredFollowTarget))
+                    {
+                        var followTarget =
+                            WorldLevelNavigation.ReachableWalkableTarget(
+                                _worldSeed,
+                                followerPosition,
+                                desiredFollowTarget,
+                                previous.WorldLevel,
+                                maximumRadius: 3);
+                        if (Vector2.DistanceSquared(
+                                followerPosition,
+                                followTarget) <= .01f)
+                            previous =
+                                VillagerSimulation.BlockMovement(
+                                    previous,
+                                    _worldGameSeconds);
+                        else
+                            previous =
+                                VillagerSimulation.RetargetFollowing(
+                                    previous,
+                                    followTarget,
+                                    _worldGameSeconds);
+                    }
+                }
                 else
                     previous = previous with
                     {
                         Activity = VillagerActivity.Following,
                         Action = EntityAction.Idle,
-                        ActionTime = 0,
+                        ActionTime =
+                            previous.Action == EntityAction.Idle
+                                ? previous.ActionTime
+                                : 0,
                         TargetX = null,
                         TargetY = null
                     };
@@ -670,8 +692,8 @@ internal sealed partial class GameHostWindow
             return false;
         if (_queuedPlayerConversationTurns.Count < 8)
             _queuedPlayerConversationTurns.Enqueue(message);
-        if (!ConversationFloorBusy &&
-            _pendingPlayerConversationMessage is null)
+        ShowOverheadSpeech(message);
+        if (!ConversationFloorBusy)
             StartNextPlayerConversationTurn();
         return true;
     }
@@ -680,12 +702,6 @@ internal sealed partial class GameHostWindow
     {
         if (ConversationFloorBusy) return;
         _conversationFloorSpeakerId = null;
-        if (_pendingPlayerConversationMessage is { } message)
-        {
-            _pendingPlayerConversationMessage = null;
-            TryHandleVillagerChat(message);
-            return;
-        }
         StartNextPlayerConversationTurn();
     }
 
@@ -695,11 +711,7 @@ internal sealed partial class GameHostWindow
             _queuedPlayerConversationTurns.Count == 0)
             return;
         var message = _queuedPlayerConversationTurns.Dequeue();
-        _pendingPlayerConversationMessage = message;
-        ShowOverheadSpeech(message);
-        TakeConversationFloor(
-            _activePlayer.Id,
-            ConversationLineSeconds(message));
+        TryHandleVillagerChat(message);
     }
 
     private void HoldVillagerConversation(

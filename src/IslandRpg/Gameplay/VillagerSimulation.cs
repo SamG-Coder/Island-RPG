@@ -201,6 +201,9 @@ internal static class VillagerSimulation
     public const double IntroductionCooldownSeconds = 45;
     public const double RelationshipCheckInSeconds = 6 * 60 * 60;
     public const float SocialRange = 8;
+    public const float FollowStopDistance = 1.8f;
+    public const float FollowResumeDistance = 2.4f;
+    public const float FollowRetargetDistance = .6f;
     public const double GameSecondsPerRealSecond = 60;
     public const double MinimumReflectionRealSeconds = 2.5;
     public const double MaximumReflectionRealSeconds = 6;
@@ -1238,6 +1241,50 @@ internal static class VillagerSimulation
             LastSimulatedGameSeconds = gameSeconds
         };
     }
+
+    public static Vector2 FollowTarget(
+        in Vector2 follower,
+        in Vector2 leader)
+    {
+        var away = follower - leader;
+        if (away.LengthSquared <= .0001f)
+            away = Vector2.UnitX;
+        else
+            away = away.Normalized();
+        return leader + away * FollowStopDistance;
+    }
+
+    public static bool NeedsFollowRetarget(
+        VillagerState state,
+        in Vector2 target) =>
+        state.Action != EntityAction.Move ||
+        state.TargetX is not { } targetX ||
+        state.TargetY is not { } targetY ||
+        Vector2.DistanceSquared(
+            new(targetX, targetY), target) >=
+        FollowRetargetDistance * FollowRetargetDistance;
+
+    public static (
+        VillagerState Speaker,
+        VillagerState Listener) RecordSharedDialogueLine(
+        VillagerState speaker,
+        VillagerState listener,
+        string text,
+        double gameSeconds) =>
+        (
+            RecordDialogueTurn(
+                speaker,
+                speaker.Id,
+                speaker.Name,
+                text,
+                gameSeconds),
+            RecordDialogueTurn(
+                listener,
+                speaker.Id,
+                speaker.Name,
+                text,
+                gameSeconds)
+        );
 
     public static VillagerState AdvanceMovement(
         VillagerState state,

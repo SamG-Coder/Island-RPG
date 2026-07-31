@@ -29,6 +29,9 @@ internal sealed partial class GameHostWindow
     private string? _npcAiDialogueSpeakerId;
     private string? _npcAiDialogueListenerId;
     private string? _npcAiDialogueFallback;
+    private VillagerSocialIntent _npcAiDialogueIntent;
+    private bool _npcAiDialogueReplyPending;
+    private double _npcAiDialogueReadyAt;
     private Task<IReadOnlyList<VillagerPersona>?>?
         _npcPersonaGenerationTask;
     private PendingNewWorldCreation? _pendingNewWorldCreation;
@@ -310,16 +313,22 @@ internal sealed partial class GameHostWindow
     {
         if (_npcAiDialogueTask is not { IsCompleted: true })
             return;
+        if (_clock < _npcAiDialogueReadyAt)
+            return;
         var line = _npcAiDialogueTask.IsCompletedSuccessfully
             ? _npcAiDialogueTask.Result
             : null;
         var speakerId = _npcAiDialogueSpeakerId;
         var listenerId = _npcAiDialogueListenerId;
         var fallback = _npcAiDialogueFallback;
+        var intent = _npcAiDialogueIntent;
+        var replyPending = _npcAiDialogueReplyPending;
         _npcAiDialogueTask = null;
         _npcAiDialogueSpeakerId = null;
         _npcAiDialogueListenerId = null;
         _npcAiDialogueFallback = null;
+        _npcAiDialogueReplyPending = false;
+        _npcAiDialogueReadyAt = 0;
         line = string.IsNullOrWhiteSpace(line)
             ? fallback
             : line;
@@ -343,6 +352,8 @@ internal sealed partial class GameHostWindow
                         _villagers[speakerIndex].PositionY));
         var listenerIndex = _villagers.FindIndex(value =>
             value.Id == listenerId);
+        RecordVillagerDialogueLine(
+            speakerIndex, listenerIndex, line);
         if (listenerIndex >= 0)
             HoldVillagerConversation(
                 listenerIndex,
@@ -352,6 +363,23 @@ internal sealed partial class GameHostWindow
                 ConversationLineSeconds(line));
         ShowVillagerSpeech(
             speakerIndex, line, listenerPosition);
+        if (replyPending && listenerIndex >= 0)
+        {
+            var replyingVillager = _villagers[listenerIndex];
+            var originalSpeaker = _villagers[speakerIndex];
+            SpeakVillagerDialogue(
+                replyingVillager,
+                originalSpeaker.Id,
+                originalSpeaker.Name,
+                intent,
+                VillagerReplyFallback(
+                    replyingVillager,
+                    originalSpeaker,
+                    intent),
+                allowNpcReply: false,
+                readyAt:
+                    _clock + ConversationLineSeconds(line));
+        }
     }
 
     private void SpeakVillagerDialogue(
@@ -359,32 +387,21 @@ internal sealed partial class GameHostWindow
         string listenerId,
         string listenerName,
         VillagerSocialIntent intent,
-        string fallback)
+        string fallback,
+        bool allowNpcReply = true,
+        double readyAt = 0)
     {
-        if (!_npcAiState.Ready ||
-            _npcAiDialogueTask is { IsCompleted: false })
-        {
-            var speakerIndex = _villagers.FindIndex(value =>
-                value.Id == speaker.Id);
-            var listenerPosition =
-                _activePlayer?.Id == listenerId &&
-                _player is not null
-                    ? _player.Position
-                    : _villagers
-                        .Where(value => value.Id == listenerId)
-                        .Select(value => new Vector2(
-                            value.PositionX, value.PositionY))
-                        .FirstOrDefault(new Vector2(
-                            speaker.PositionX,
-                            speaker.PositionY));
-            ShowVillagerSpeech(
-                speakerIndex, fallback, listenerPosition);
+        if (_npcAiDialogueTask is { IsCompleted: false })
             return;
-        }
         var settings = _saves.LoadSettings().EffectiveAi;
         _npcAiDialogueSpeakerId = speaker.Id;
         _npcAiDialogueListenerId = listenerId;
         _npcAiDialogueFallback = fallback;
+        _npcAiDialogueIntent = intent;
+        _npcAiDialogueReplyPending =
+            allowNpcReply &&
+            _villagers.Any(value => value.Id == listenerId);
+        _npcAiDialogueReadyAt = readyAt;
         var currentSpeakerIndex = _villagers.FindIndex(value =>
             value.Id == speaker.Id);
         var currentListenerPosition =
@@ -412,24 +429,88 @@ internal sealed partial class GameHostWindow
         TakeConversationFloor(
             speaker.Id,
             double.PositiveInfinity);
-        _npcAiDialogueTask = _npcAi.ComposeDialogueAsync(
-            settings,
-            new(
+        var context = new NpcAiDialogueContext(
                 speaker.Name,
                 listenerName,
                 intent.ToString(),
                 fallback,
                 speaker.Hunger,
                 RelationshipDescription(speaker, listenerId),
-                [],
+                VillagerSimulation.RecallMemories(
+                        speaker,
+                        listenerId,
+                        fallback,
+                        _worldGameSeconds)
+                    .Select(memory =>
+                        memory.Summary ?? memory.Kind)
+                    .ToArray(),
                 speaker.Persona?.BackgroundStory ?? "",
                 speaker.Persona?.Personality ?? "",
                 speaker.Persona?.PriorTrade ?? "",
                 speaker.Persona?.KnownToolIds ?? [],
                 speaker.Persona?.ArrivalMemory ?? "",
                 VillagerSimulation.HoursOnIsland(
-                    speaker, _worldGameSeconds)));
+                    speaker, _worldGameSeconds),
+                speaker.ConversationHistory);
+        _npcAiDialogueTask = _npcAiState.Ready
+            ? _npcAi.ComposeDialogueAsync(
+                settings, context)
+            : Task.FromResult<string?>(fallback);
     }
+
+    private void RecordVillagerDialogueLine(
+        int speakerIndex,
+        int listenerIndex,
+        string line)
+    {
+        if ((uint)speakerIndex >= (uint)_villagers.Count)
+            return;
+        if ((uint)listenerIndex >= (uint)_villagers.Count)
+        {
+            var speaker = _villagers[speakerIndex];
+            _villagers[speakerIndex] =
+                VillagerSimulation.RecordDialogueTurn(
+                    speaker,
+                    speaker.Id,
+                    speaker.Name,
+                    line,
+                    _worldGameSeconds);
+            _villagersDirty = true;
+            return;
+        }
+        var exchange =
+            VillagerSimulation.RecordSharedDialogueLine(
+                _villagers[speakerIndex],
+                _villagers[listenerIndex],
+                line,
+                _worldGameSeconds);
+        _villagers[speakerIndex] = exchange.Speaker;
+        _villagers[listenerIndex] = exchange.Listener;
+        _villagersDirty = true;
+    }
+
+    private static string VillagerReplyFallback(
+        VillagerState listener,
+        VillagerState speaker,
+        VillagerSocialIntent intent) =>
+        intent switch
+        {
+            VillagerSocialIntent.Introduce =>
+                $"I'm {listener.Name}. It's good to meet you, {speaker.Name}.",
+            VillagerSocialIntent.AskOrigin =>
+                "I remember waking here, but not how I arrived.",
+            VillagerSocialIntent.AskSurvival =>
+                "We should share what we learn about food, water, and shelter.",
+            VillagerSocialIntent.AskTools =>
+                listener.Persona is { } persona
+                    ? $"I was a {persona.PriorTrade}; I know a few useful tools."
+                    : "I know a few useful tools, but we still need supplies.",
+            VillagerSocialIntent.RequestFood =>
+                "I'll help if I have enough food to share.",
+            VillagerSocialIntent.OfferFood =>
+                "Thank you. I'll remember that you shared with me.",
+            _ => $"I'm holding up, {speaker.Name}. It's good not to be alone."
+        };
 
     private bool TryBeginNpcAiSpeech(
         int villagerIndex,

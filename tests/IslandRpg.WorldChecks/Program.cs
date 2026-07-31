@@ -925,6 +925,57 @@ Require(
     followingState.TargetX == 3.25f &&
     followingState.TargetY == 1.25f,
     "retargeting a moving follower must preserve its walk-cycle time");
+var stableFollowTarget = VillagerSimulation.FollowTarget(
+    new(0, 0),
+    new(4, 0));
+var routedFollower = VillagerSimulation.RetargetFollowing(
+    followingState,
+    stableFollowTarget,
+    253);
+Require(
+    MathF.Abs(
+        Vector2.Distance(stableFollowTarget, new(4, 0)) -
+        VillagerSimulation.FollowStopDistance) < .001f &&
+    !VillagerSimulation.NeedsFollowRetarget(
+        routedFollower,
+        stableFollowTarget + new Vector2(.1f, 0)) &&
+    VillagerSimulation.NeedsFollowRetarget(
+        routedFollower,
+        stableFollowTarget +
+        new Vector2(
+            VillagerSimulation.FollowRetargetDistance,
+            0)),
+    "followers must hold a personal-space target and avoid rebuilding nearly identical routes");
+var dialogueExchange =
+    VillagerSimulation.RecordSharedDialogueLine(
+        villagerSpawnA[0],
+        villagerSpawnA[1],
+        "We should look for fresh water.",
+        254);
+dialogueExchange =
+    VillagerSimulation.RecordSharedDialogueLine(
+        dialogueExchange.Listener,
+        dialogueExchange.Speaker,
+        "Agreed. I'll search near the trees.",
+        255);
+Require(
+    dialogueExchange.Speaker.ConversationHistory?.Count == 2 &&
+    dialogueExchange.Listener.ConversationHistory?.Count == 2 &&
+    dialogueExchange.Speaker.ConversationHistory
+        .Select(turn => turn.Text)
+        .SequenceEqual(
+        [
+            "We should look for fresh water.",
+            "Agreed. I'll search near the trees."
+        ]) &&
+    dialogueExchange.Listener.ConversationHistory
+        .Select(turn => turn.Text)
+        .SequenceEqual(
+        [
+            "We should look for fresh water.",
+            "Agreed. I'll search near the trees."
+        ]),
+    "both villagers must remember both sides of their conversation in order");
 var giftItemId = Guid.NewGuid();
 var giftedVillager = VillagerSimulation.RecordGift(
     villagerSpawnA[0],

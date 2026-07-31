@@ -115,7 +115,8 @@ internal sealed record NpcAiDialogueContext(
     string PriorTrade = "",
     IReadOnlyList<string>? KnownToolIds = null,
     string ArrivalMemory = "",
-    double HoursOnIsland = 0);
+    double HoursOnIsland = 0,
+    IReadOnlyList<VillagerConversationTurn>? RecentConversation = null);
 
 internal sealed class NpcAiService : IDisposable
 {
@@ -475,8 +476,17 @@ internal sealed class NpcAiService : IDisposable
                 "context, invent facts, mention AI, or output none. Use the supplied " +
                 "personality and priorTrade only when relevant. Any time reference " +
                 "must agree with hoursOnIsland, and tools must come from knownToolIds. " +
+                "Reply to the newest line in recentConversation when it is supplied. " +
                 "Never repeat a word sequence or restate the sentence. Maximum 18 words.",
-            prompt = JsonSerializer.Serialize(context, JsonOptions),
+            prompt = JsonSerializer.Serialize(
+                context with
+                {
+                    RelevantMemories = CompactStrings(
+                        context.RelevantMemories, 6, 480),
+                    RecentConversation = CompactConversation(
+                        context.RecentConversation)
+                },
+                JsonOptions),
             stream = false,
             think = false,
             keep_alive = "5m",
