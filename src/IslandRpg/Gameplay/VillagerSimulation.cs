@@ -84,7 +84,8 @@ internal sealed record VillagerDeliberationTrace(
     int EstimatedCost,
     int Risk,
     int Priority,
-    double GameSeconds);
+    double GameSeconds,
+    string ItemId = "");
 
 internal sealed record VillagerState(
     string Id,

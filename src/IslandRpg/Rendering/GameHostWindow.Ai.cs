@@ -704,7 +704,8 @@ internal sealed partial class GameHostWindow
                 interpretation.EstimatedCost,
                 interpretation.Risk,
                 interpretation.Priority,
-                _worldGameSeconds)
+                _worldGameSeconds,
+                interpretation.ItemId)
         };
         var permitsAction =
             interpretation.Decision is not

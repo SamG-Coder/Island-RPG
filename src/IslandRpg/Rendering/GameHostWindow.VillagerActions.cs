@@ -30,6 +30,7 @@ internal sealed partial class GameHostWindow
     {
         if (TryVillagerDefendSelf(index, villager, tier) ||
             TryVillagerEat(index, villager, tier) ||
+            TryVillagerCookStew(index, villager) ||
             TryVillagerCook(index, villager) ||
             TryVillagerWithdrawFood(index, villager) ||
             TryVillagerGatherTreeSticks(index, villager, tier) ||
@@ -40,6 +41,8 @@ internal sealed partial class GameHostWindow
             TryVillagerCraft(index, villager) ||
             TryVillagerPlaceObject(index, villager) ||
             TryVillagerPlaceOrTendCampfire(index, villager) ||
+            TryVillagerTakeCampfireFuel(index, villager) ||
+            TryVillagerDropRequestedItem(index, villager) ||
             TryVillagerFulfilGift(index, villager))
             return true;
         return false;
@@ -732,6 +735,120 @@ internal sealed partial class GameHostWindow
             NextDecisionGameSeconds = _worldGameSeconds +
                 VillagerSimulation.GatherPauseSeconds
         };
+        _villagersDirty = true;
+        return true;
+    }
+
+    private bool TryVillagerCookStew(int index, VillagerState villager)
+    {
+        var level = CookingSkill.LevelForExperience(
+            villager.CookingExperience);
+        if (level < StewCookingService.RequiredLevel ||
+            !StewCookingService.HasIngredients(villager.Inventory))
+            return false;
+        var pot = NearbyGroundObjects(villager, 3)
+            .FirstOrDefault(value =>
+                value.Object.ItemId == ItemIds.CookingPot &&
+                HasNearbyLitCampfire(value.Object));
+        if (pot.Object is null) return false;
+        var cooked = ActorActionService.CookStew(
+            villager.Inventory, level);
+        if (!cooked.Succeeded) return false;
+        var xp = CookingSkill.AwardExperience(
+            villager.CookingExperience,
+            StewCookingService.Experience);
+        _villagers[index] = villager with
+        {
+            Inventory = cooked.Inventory,
+            CookingExperience = xp.Experience,
+            Action = EntityAction.Work,
+            ActionTime = 0,
+            NextDecisionGameSeconds = _worldGameSeconds +
+                VillagerSimulation.GatherPauseSeconds
+        };
+        ObserveLog("world_action_succeeded", villager.Id, new
+        {
+            Action = "cook_stew",
+            ItemId = ItemIds.FishBerryStew
+        });
+        _villagersDirty = true;
+        return true;
+    }
+
+    private bool TryVillagerTakeCampfireFuel(
+        int index, VillagerState villager)
+    {
+        if (!RequestedVillagerAction(villager, "withdraw") ||
+            PlayerInventory.IsFull(villager.Inventory))
+            return false;
+        var fire = NearbyGroundObjects(villager, 3)
+            .FirstOrDefault(value =>
+                (value.Object.OwnerId is null ||
+                 value.Object.OwnerId == villager.Id) &&
+                CampfireService.CanRemoveFuel(
+                    value.Object, _worldGameSeconds));
+        if (fire.Object?.FuelItemId is not { } fuelItemId ||
+            !PlayerInventory.TryAdd(
+                villager.Inventory, fuelItemId, out var inventory))
+            return false;
+        ReplaceGroundObject(
+            fire.Gpu, fire.Object,
+            CampfireService.RemoveFuel(
+                fire.Object, _worldGameSeconds));
+        _villagers[index] = villager with
+        {
+            Inventory = inventory,
+            Action = EntityAction.Gather,
+            LastDeliberation = villager.LastDeliberation is { } trace
+                ? trace with { Action = "none", ItemId = "" }
+                : null,
+            NextDecisionGameSeconds = _worldGameSeconds +
+                VillagerSimulation.NearbyDecisionSeconds
+        };
+        QueueChunkSave(fire.Gpu.Chunk);
+        _villagersDirty = true;
+        return true;
+    }
+
+    private bool TryVillagerDropRequestedItem(
+        int index, VillagerState villager)
+    {
+        if (!RequestedVillagerAction(villager, "drop")) return false;
+        var requestedItem = villager.LastDeliberation?.ItemId;
+        var slot = string.IsNullOrWhiteSpace(requestedItem)
+            ? Array.FindLastIndex(villager.Inventory, item => item is not null)
+            : Array.FindIndex(villager.Inventory, item =>
+                string.Equals(item, requestedItem,
+                    StringComparison.OrdinalIgnoreCase));
+        if (slot < 0 || villager.Inventory[slot] is not { } itemId ||
+            !PlayerInventory.CanDrop(itemId) ||
+            !TryGroundItemVisual(itemId, out _, out _, out _, out _) ||
+            !TryFindGroundObjectDrop(
+                new(villager.PositionX, villager.PositionY),
+                out var gpu, out var position, out _) ||
+            !PlayerInventory.TryRemove(
+                villager.Inventory, slot, out var inventory))
+            return false;
+        gpu.Chunk.GroundObjects.Add(new(
+            Guid.NewGuid(), itemId, position.X, position.Y,
+            OwnerId: villager.Id));
+        _villagers[index] = villager with
+        {
+            Inventory = inventory,
+            Action = EntityAction.Gather,
+            LastDeliberation = villager.LastDeliberation is { } trace
+                ? trace with { Action = "none", ItemId = "" }
+                : null,
+            NextDecisionGameSeconds = _worldGameSeconds +
+                VillagerSimulation.NearbyDecisionSeconds
+        };
+        QueueChunkSave(gpu.Chunk);
+        ObserveLog("world_action_succeeded", villager.Id, new
+        {
+            Action = "drop",
+            ItemId = itemId,
+            OwnerId = villager.Id
+        });
         _villagersDirty = true;
         return true;
     }

@@ -59,6 +59,21 @@ internal static class ActorActionService
         return new(true, updated, cooked.ItemId);
     }
 
+    public static ActorInventoryResult CookStew(
+        string?[]? inventory, int cookingLevel)
+    {
+        var unchanged = PlayerInventory.Normalize(inventory);
+        if (cookingLevel < StewCookingService.RequiredLevel)
+            return new(false, unchanged, Failure: "level_locked");
+        return StewCookingService.TryPrepare(
+            unchanged,
+            out var updated,
+            out _,
+            out _)
+            ? new(true, updated, ItemIds.FishBerryStew)
+            : new(false, unchanged, Failure: "missing_ingredients");
+    }
+
     public static bool TryTransfer(
         string?[]? source,
         string?[]? destination,

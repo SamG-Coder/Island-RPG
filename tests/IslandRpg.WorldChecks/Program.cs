@@ -569,6 +569,27 @@ Require(
     sharedCooking.Succeeded &&
     sharedCooking.Inventory[0] == ItemIds.CookedMinnows,
     "player and NPC cooking must share CookingSkill eligibility and result rules");
+var sharedStewInventory = PlayerInventory.CreateStartingInventory();
+sharedStewInventory[0] = ItemIds.RawMinnows;
+sharedStewInventory[1] = ItemIds.WildBerries;
+var sharedStew = ActorActionService.CookStew(
+    sharedStewInventory, StewCookingService.RequiredLevel);
+Require(
+    sharedStew.Succeeded &&
+    sharedStew.Inventory.Count(value =>
+        value == ItemIds.FishBerryStew) == 1 &&
+    sharedStew.Inventory.All(value =>
+        value != ItemIds.RawMinnows &&
+        value != ItemIds.WildBerries),
+    "player and NPC stew cooking must share ingredient consumption and output rules");
+var lockedStew = ActorActionService.CookStew(
+    sharedStewInventory, StewCookingService.RequiredLevel - 1);
+Require(
+    !lockedStew.Succeeded &&
+    lockedStew.Failure == "level_locked" &&
+    lockedStew.Inventory[0] == ItemIds.RawMinnows &&
+    lockedStew.Inventory[1] == ItemIds.WildBerries,
+    "failed actor-neutral stew cooking must not consume ingredients");
 var transferSource = PlayerInventory.CreateStartingInventory();
 var transferDestination = PlayerInventory.CreateStartingInventory();
 transferSource[3] = ItemIds.CookedMinnows;
