@@ -18,6 +18,18 @@ internal enum VillagerSimulationTier : byte
     Distant
 }
 
+internal enum VillagerActivity : byte
+{
+    Idle,
+    Conversing,
+    Reflecting,
+    Following,
+    Socializing,
+    SeekingResource,
+    Exploring,
+    Blocked
+}
+
 internal sealed record VillagerMemory(
     Guid EventId,
     string Kind,
@@ -58,6 +70,12 @@ internal sealed record VillagerPersona(
     string ArrivalMemory,
     string SocialDrive);
 
+internal sealed record VillagerConversationTurn(
+    string SpeakerId,
+    string SpeakerName,
+    string Text,
+    double GameSeconds);
+
 internal sealed record VillagerState(
     string Id,
     string Name,
@@ -91,7 +109,12 @@ internal sealed record VillagerState(
     double NextSocialGameSeconds = 0,
     string? FollowingActorId = null,
     VillagerPersona? Persona = null,
-    double AwakenedGameSeconds = 8 * 60 * 60);
+    double AwakenedGameSeconds = 8 * 60 * 60,
+    VillagerActivity Activity = VillagerActivity.Idle,
+    double ActivityUntilGameSeconds = 0,
+    string? ConversationPartnerId = null,
+    int BlockedMoveAttempts = 0,
+    IReadOnlyList<VillagerConversationTurn>? ConversationHistory = null);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,
@@ -155,6 +178,7 @@ internal static class VillagerSimulation
     public const double RegionalDecisionSeconds = 30;
     public const double DistantDecisionSeconds = 120;
     public const int MaximumMemories = 64;
+    public const int MaximumConversationTurns = 12;
     public const float InteractionRange = 1.35f;
     public const float ResourceSearchRadius = 24;
     public const int StorageDepositThreshold = 8;
@@ -165,6 +189,9 @@ internal static class VillagerSimulation
     public const double IntroductionCooldownSeconds = 45;
     public const double RelationshipCheckInSeconds = 6 * 60 * 60;
     public const float SocialRange = 8;
+    public const double GameSecondsPerRealSecond = 60;
+    public const double MinimumReflectionRealSeconds = 2.5;
+    public const double MaximumReflectionRealSeconds = 6;
 
     private static readonly string[] Names = ["Mira", "Tomas", "Rowan"];
 
@@ -693,8 +720,160 @@ internal static class VillagerSimulation
             Memories = memories,
             Relationships = relationships,
             NextSocialGameSeconds = gameSeconds +
-                SocialCooldown(state, intent)
+                SocialRealCooldown(state, intent) *
+                GameSecondsPerRealSecond
         };
+    }
+
+    public static VillagerState RecordDialogueTurn(
+        VillagerState state,
+        string speakerId,
+        string speakerName,
+        string text,
+        double gameSeconds)
+    {
+        text = text.Trim();
+        if (text.Length == 0) return state;
+        if (text.Length > 160) text = text[..160];
+        var history = state.ConversationHistory?.ToList() ?? [];
+        history.Add(new(
+            speakerId,
+            speakerName.Trim(),
+            text,
+            gameSeconds));
+        var memories = state.Memories?.ToList() ?? [];
+        if (history.Count > MaximumConversationTurns)
+        {
+            var displacedCount =
+                history.Count - MaximumConversationTurns;
+            for (var index = 0;
+                 index < displacedCount;
+                 index++)
+                ConsolidateDialogueMemory(
+                    memories, history[index]);
+            history.RemoveRange(
+                0, displacedCount);
+        }
+        if (memories.Count > MaximumMemories)
+            memories.RemoveRange(
+                0, memories.Count - MaximumMemories);
+        return state with
+        {
+            ConversationHistory = history,
+            Memories = memories
+        };
+    }
+
+    public static IReadOnlyList<VillagerMemory> RecallMemories(
+        VillagerState state,
+        string? partnerId,
+        string query,
+        double gameSeconds,
+        int maximum = 8)
+    {
+        if (state.Memories is not { Count: > 0 } ||
+            maximum <= 0)
+            return [];
+        var queryWords = SignificantWords(query);
+        return state.Memories
+            .Select(memory => (
+                Memory: memory,
+                Score: RecallScore(
+                    memory,
+                    partnerId,
+                    queryWords,
+                    gameSeconds)))
+            .OrderByDescending(value => value.Score)
+            .ThenByDescending(value =>
+                value.Memory.GameSeconds)
+            .Take(maximum)
+            .Select(value => value.Memory)
+            .ToArray();
+    }
+
+    private static void ConsolidateDialogueMemory(
+        List<VillagerMemory> memories,
+        VillagerConversationTurn turn)
+    {
+        var summary = $"{turn.SpeakerName} said: {turn.Text}";
+        var existingIndex = memories.FindIndex(memory =>
+            memory.Kind == "conversation-heard" &&
+            string.Equals(
+                memory.SubjectId,
+                turn.SpeakerId,
+                StringComparison.Ordinal) &&
+            string.Equals(
+                memory.Summary,
+                summary,
+                StringComparison.OrdinalIgnoreCase));
+        if (existingIndex >= 0)
+        {
+            var existing = memories[existingIndex];
+            memories[existingIndex] = existing with
+            {
+                Confidence = Math.Min(
+                    1, existing.Confidence + .08f),
+                GameSeconds = Math.Max(
+                    existing.GameSeconds,
+                    turn.GameSeconds)
+            };
+            return;
+        }
+        memories.Add(new(
+            Guid.NewGuid(),
+            "conversation-heard",
+            turn.SpeakerId,
+            null,
+            .72f,
+            turn.GameSeconds,
+            Summary: summary));
+    }
+
+    private static float RecallScore(
+        VillagerMemory memory,
+        string? partnerId,
+        HashSet<string> queryWords,
+        double gameSeconds)
+    {
+        var score = Math.Clamp(memory.Confidence, 0, 1) * 40;
+        if (!string.IsNullOrWhiteSpace(partnerId) &&
+            string.Equals(
+                memory.SubjectId,
+                partnerId,
+                StringComparison.Ordinal))
+            score += 32;
+        score += Math.Min(30, Math.Abs(memory.Sentiment) * .3f);
+        var ageDays = Math.Max(
+            0, gameSeconds - memory.GameSeconds) /
+            WorldTime.GameSecondsPerDay;
+        score += 18 / (1 + (float)ageDays);
+        if (memory.Summary is { } summary &&
+            queryWords.Count > 0)
+        {
+            var memoryWords = SignificantWords(summary);
+            score += queryWords.Count(memoryWords.Contains) * 18;
+        }
+        return score;
+    }
+
+    private static HashSet<string> SignificantWords(string value)
+    {
+        var ignored = new HashSet<string>(
+            [
+                "the", "and", "that", "this", "with", "from",
+                "have", "there", "what", "when", "where", "who",
+                "you", "your", "was", "were", "are", "for"
+            ],
+            StringComparer.Ordinal);
+        return value
+            .ToLowerInvariant()
+            .Split(
+                [' ', '.', ',', '!', '?', ';', ':', '"', '\''],
+                StringSplitOptions.RemoveEmptyEntries |
+                StringSplitOptions.TrimEntries)
+            .Where(word => word.Length >= 3 &&
+                           !ignored.Contains(word))
+            .ToHashSet(StringComparer.Ordinal);
     }
 
     public static double SocialCooldown(
@@ -782,6 +961,15 @@ internal static class VillagerSimulation
         var action = decision.MoveTarget is null
             ? EntityAction.Idle
             : EntityAction.Move;
+        var activity = decision.MoveTarget is null
+            ? VillagerActivity.Idle
+            : decision.Need switch
+            {
+                VillagerNeed.Social => VillagerActivity.Socializing,
+                VillagerNeed.Food => VillagerActivity.SeekingResource,
+                VillagerNeed.Explore => VillagerActivity.Exploring,
+                _ => VillagerActivity.Exploring
+            };
         return state with
         {
             Inventory = inventory,
@@ -795,6 +983,9 @@ internal static class VillagerSimulation
             FacingY = direction.Y,
             TargetX = decision.MoveTarget?.X,
             TargetY = decision.MoveTarget?.Y,
+            Activity = activity,
+            ActivityUntilGameSeconds = 0,
+            ConversationPartnerId = null,
             NextDecisionGameSeconds =
                 gameSeconds + DecisionInterval(tier),
             LastSimulatedGameSeconds = gameSeconds
@@ -804,7 +995,9 @@ internal static class VillagerSimulation
     public static VillagerState AdvanceMovement(
         VillagerState state,
         float elapsed,
-        float terrainSpeedMultiplier = 1)
+        float terrainSpeedMultiplier = 1,
+        Func<Vector2, bool>? canOccupy = null,
+        double gameSeconds = 0)
     {
         if (elapsed <= 0)
             return state;
@@ -825,6 +1018,9 @@ internal static class VillagerSimulation
             Math.Clamp(terrainSpeedMultiplier, .35f, 1f) *
             elapsed;
         if (distance <= Math.Max(.03f, maximumStep))
+        {
+            if (canOccupy is not null && !canOccupy(target))
+                return BlockMovement(state, gameSeconds);
             return state with
             {
                 PositionX = target.X,
@@ -832,17 +1028,107 @@ internal static class VillagerSimulation
                 Action = EntityAction.Idle,
                 ActionTime = 0,
                 TargetX = null,
-                TargetY = null
+                TargetY = null,
+                Activity = VillagerActivity.Idle,
+                BlockedMoveAttempts = 0
             };
+        }
         var facing = displacement / distance;
-        position += facing * maximumStep;
+        var nextPosition = position + facing * maximumStep;
+        if (canOccupy is not null && !canOccupy(nextPosition))
+            return BlockMovement(state, gameSeconds);
         return state with
         {
-            PositionX = position.X,
-            PositionY = position.Y,
+            PositionX = nextPosition.X,
+            PositionY = nextPosition.Y,
             ActionTime = state.ActionTime + elapsed,
             FacingX = facing.X,
             FacingY = facing.Y
+        };
+    }
+
+    public static VillagerState BeginConversation(
+        VillagerState state,
+        string? partnerId,
+        double gameSeconds,
+        double realSeconds)
+    {
+        var holdRealSeconds = double.IsFinite(realSeconds)
+            ? Math.Max(0, realSeconds)
+            : double.MaxValue;
+        var until = holdRealSeconds == double.MaxValue
+            ? double.MaxValue
+            : gameSeconds +
+              holdRealSeconds * GameSecondsPerRealSecond;
+        return state with
+        {
+            Activity = VillagerActivity.Conversing,
+            ActivityUntilGameSeconds = until,
+            ConversationPartnerId = partnerId,
+            Action = EntityAction.Idle,
+            ActionTime = 0,
+            TargetX = null,
+            TargetY = null,
+            NextDecisionGameSeconds = until
+        };
+    }
+
+    public static VillagerState CompleteConversation(
+        VillagerState state,
+        double gameSeconds)
+    {
+        var reflectionSeconds = MathHelper.Lerp(
+            (float)MaximumReflectionRealSeconds,
+            (float)MinimumReflectionRealSeconds,
+            Math.Clamp(state.Boldness * .6f + state.Sociability * .4f, 0, 1));
+        var until =
+            gameSeconds + reflectionSeconds * GameSecondsPerRealSecond;
+        return state with
+        {
+            Activity = VillagerActivity.Reflecting,
+            ActivityUntilGameSeconds = until,
+            ConversationPartnerId = null,
+            Action = EntityAction.Idle,
+            ActionTime = 0,
+            TargetX = null,
+            TargetY = null,
+            NextDecisionGameSeconds = until
+        };
+    }
+
+    public static VillagerState CompleteReflection(
+        VillagerState state,
+        double gameSeconds) =>
+        state.Activity == VillagerActivity.Reflecting &&
+        gameSeconds >= state.ActivityUntilGameSeconds
+            ? state with
+            {
+                Activity = VillagerActivity.Idle,
+                ActivityUntilGameSeconds = 0,
+                NextDecisionGameSeconds = gameSeconds
+            }
+            : state;
+
+    public static VillagerState BlockMovement(
+        VillagerState state,
+        double gameSeconds)
+    {
+        var attempts = Math.Min(8, state.BlockedMoveAttempts + 1);
+        return state with
+        {
+            Activity = VillagerActivity.Blocked,
+            ActivityUntilGameSeconds =
+                gameSeconds + (1.5 + attempts * .5) *
+                GameSecondsPerRealSecond,
+            Action = EntityAction.Idle,
+            ActionTime = 0,
+            TargetX = null,
+            TargetY = null,
+            GoalObjectId = null,
+            BlockedMoveAttempts = attempts,
+            NextDecisionGameSeconds =
+                gameSeconds + (1.5 + attempts * .5) *
+                GameSecondsPerRealSecond
         };
     }
 

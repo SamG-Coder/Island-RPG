@@ -440,7 +440,14 @@ internal sealed partial class GameHostWindow
             _player is null ||
             (uint)villagerIndex >= (uint)_villagers.Count)
             return false;
-        var listener = _villagers[villagerIndex];
+        var listener = VillagerSimulation.RecordDialogueTurn(
+            _villagers[villagerIndex],
+            _activePlayer.Id,
+            _activePlayer.Name,
+            message,
+            _worldGameSeconds);
+        _villagers[villagerIndex] = listener;
+        _villagersDirty = true;
         HoldVillagerConversation(
             villagerIndex,
             _player.Position,
@@ -473,6 +480,12 @@ internal sealed partial class GameHostWindow
                 actor.Hunger,
                 RelationshipDescription(listener, actor.Id)));
         }
+        var recalledMemories =
+            VillagerSimulation.RecallMemories(
+                listener,
+                _activePlayer.Id,
+                message,
+                _worldGameSeconds);
         var context = new NpcAiSpeechContext(
             _activePlayer.Id,
             _activePlayer.Name,
@@ -486,20 +499,28 @@ internal sealed partial class GameHostWindow
                 .Select(goal => goal.Kind.ToString())
                 .Take(4)
                 .ToArray() ?? [],
-            listener.Memories?
-                .OrderByDescending(memory =>
-                    memory.GameSeconds)
+            recalledMemories
                 .Select(memory =>
                     memory.Summary ?? memory.Kind)
-                .Take(6)
-                .ToArray() ?? [],
+                .ToArray(),
             listener.Persona?.BackgroundStory ?? "",
             listener.Persona?.Personality ?? "",
             listener.Persona?.PriorTrade ?? "",
             listener.Persona?.KnownToolIds ?? [],
             listener.Persona?.ArrivalMemory ?? "",
             VillagerSimulation.HoursOnIsland(
-                listener, _worldGameSeconds));
+                listener, _worldGameSeconds),
+            listener.ConversationHistory,
+            recalledMemories
+                .Where(memory =>
+                    !string.IsNullOrWhiteSpace(memory.Summary))
+                .Select(memory => new NpcAiKnownFact(
+                    memory.Summary!,
+                    memory.SubjectId,
+                    memory.Confidence,
+                    memory.Sentiment,
+                    memory.GameSeconds))
+                .ToArray());
         _npcAiSpeechVillagerIndex = villagerIndex;
         _npcAiSpeechFallback =
             FallbackNpcReply(listener, message);
@@ -632,20 +653,28 @@ internal sealed partial class GameHostWindow
                     VillagerCommitmentService.AddPromise(
                         villager, promise);
         }
+        var reply = string.IsNullOrWhiteSpace(
+                interpretation.Reply)
+            ? speechFallback
+            : interpretation.Reply;
+        villager = VillagerSimulation.RecordDialogueTurn(
+            villager,
+            villager.Id,
+            villager.Name,
+            reply,
+            _worldGameSeconds);
         _villagers[villagerIndex] = villager;
         _villagersDirty = true;
         ShowVillagerSpeech(
             villagerIndex,
-            string.IsNullOrWhiteSpace(interpretation.Reply)
-                ? speechFallback
-                : interpretation.Reply,
+            reply,
             _player?.Position ??
             new Vector2(
                 villager.PositionX,
                 villager.PositionY));
     }
 
-    private static string FallbackNpcReply(
+    internal static string FallbackNpcReply(
         VillagerState listener,
         string message)
     {
@@ -659,6 +688,31 @@ internal sealed partial class GameHostWindow
             return $"My name is {listener.Name}.";
         if (lower is "hello" or "hi" or "hey")
             return $"Hello. I'm {listener.Name}.";
+        if (lower.Contains("what should we do") ||
+            lower.Contains("what do we do") ||
+            lower.Contains("what now"))
+            return listener.Hunger <= 35
+                ? "We should find food first, then stay together and look for shelter."
+                : "We should stay together, check our supplies, and find a safe place for shelter.";
+        if ((lower.Contains("let's") ||
+             lower.Contains("lets") ||
+             lower.Contains("we should")) &&
+            lower.Contains("rock"))
+            return "Good idea. Let's collect some rocks together, but leave enough time to find food and shelter.";
+        if (lower.Contains("storm") ||
+            lower.Contains("shipwreck") ||
+            lower.Contains("wreck"))
+            return listener.Persona?.ArrivalMemory is { Length: > 0 }
+                ? $"That could be it. I remember {LowercaseFirst(
+                    listener.Persona.ArrivalMemory)}"
+                : "That could explain it. We should compare what each of us remembers.";
+        if (lower.Contains("how we ended up") ||
+            lower.Contains("how did we get") ||
+            lower.Contains("what happened"))
+            return listener.Persona?.ArrivalMemory is { Length: > 0 }
+                ? $"I'm not certain. I remember {LowercaseFirst(
+                    listener.Persona.ArrivalMemory)}"
+                : "I'm not certain. We should ask the others what they remember.";
         if (lower.Contains("fuck") ||
             lower.Contains("ugly") ||
             lower.Contains("hate you") ||
@@ -672,6 +726,11 @@ internal sealed partial class GameHostWindow
             return $"Nice to meet you, {text}.";
         return "I heard you. What would you like to know?";
     }
+
+    private static string LowercaseFirst(string value) =>
+        value.Length == 0
+            ? value
+            : char.ToLowerInvariant(value[0]) + value[1..];
 
     private static bool LooksLikePersonalName(string[] words)
     {

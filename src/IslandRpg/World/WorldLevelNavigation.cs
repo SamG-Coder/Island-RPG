@@ -20,19 +20,61 @@ internal static class WorldLevelNavigation
         var caveContext = level == (int)WorldLevel.Underground
             ? new CaveHydrologyField.SamplingContext(seed)
             : null;
-        for (var radius = 0; radius <= maximumRadius; radius++)
-        for (var y = -radius; y <= radius; y++)
-        for (var x = -radius; x <= radius; x++)
+        var found = false;
+        var best = fallback;
+        var bestDistanceSquared = float.MaxValue;
+        var bestTieBreak = ulong.MaxValue;
+        for (var y = -maximumRadius; y <= maximumRadius; y++)
+        for (var x = -maximumRadius; x <= maximumRadius; x++)
         {
-            if (Math.Max(Math.Abs(x), Math.Abs(y)) != radius)
-                continue;
             var tileX = originX + x;
             var tileY = originY + y;
             if (!IsWalkable(seed, tileX, tileY, level, caveContext))
                 continue;
-            return new(tileX + .5f, tileY + .5f);
+            var candidate = new Vector2(tileX + .5f, tileY + .5f);
+            var distanceSquared =
+                Vector2.DistanceSquared(destination, candidate);
+            var tieBreak = CoordinateHash(seed, tileX, tileY);
+            if (distanceSquared > bestDistanceSquared + .0001f ||
+                MathF.Abs(distanceSquared - bestDistanceSquared) <= .0001f &&
+                tieBreak >= bestTieBreak)
+                continue;
+            found = true;
+            best = candidate;
+            bestDistanceSquared = distanceSquared;
+            bestTieBreak = tieBreak;
         }
-        return fallback;
+        return found ? best : fallback;
+    }
+
+    public static Vector2 ReachableWalkableTarget(
+        long seed,
+        Vector2 origin,
+        Vector2 destination,
+        int level,
+        int maximumRadius = 2)
+    {
+        var safeDestination = NearestWalkable(
+            seed, destination, origin, level, maximumRadius);
+        var displacement = safeDestination - origin;
+        var distance = displacement.Length;
+        if (distance <= .001f) return origin;
+
+        var steps = Math.Max(1, (int)MathF.Ceiling(distance / .25f));
+        var lastReachable = origin;
+        for (var step = 1; step <= steps; step++)
+        {
+            var candidate = Vector2.Lerp(
+                origin, safeDestination, step / (float)steps);
+            if (!IsWalkable(
+                    seed,
+                    (int)MathF.Floor(candidate.X),
+                    (int)MathF.Floor(candidate.Y),
+                    level))
+                break;
+            lastReachable = candidate;
+        }
+        return lastReachable;
     }
 
     public static bool IsWalkable(
@@ -54,5 +96,18 @@ internal static class WorldLevelNavigation
         return biome is not (
             Biome.DeepWater or Biome.ShallowWater or
             Biome.RiverWater or Biome.MangroveShallows);
+    }
+
+    private static ulong CoordinateHash(long seed, int x, int y)
+    {
+        var value = unchecked(
+            (ulong)seed ^
+            (ulong)(uint)x * 0x9E3779B185EBCA87UL ^
+            (ulong)(uint)y * 0xC2B2AE3D27D4EB4FUL);
+        value ^= value >> 30;
+        value *= 0xBF58476D1CE4E5B9UL;
+        value ^= value >> 27;
+        value *= 0x94D049BB133111EBUL;
+        return value ^ value >> 31;
     }
 }

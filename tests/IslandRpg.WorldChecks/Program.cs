@@ -9,6 +9,21 @@ using OpenTK.Mathematics;
 WorldCheckProcess.DisableWindowsCrashDialogs();
 
 if (args.Contains(
+        "--live-arrival-scenario",
+        StringComparer.OrdinalIgnoreCase))
+{
+    var modelIndex = Array.FindIndex(
+        args, value => value == "--model");
+    var model = modelIndex >= 0 &&
+                modelIndex + 1 < args.Length
+        ? args[modelIndex + 1]
+        : new GameSettings().EffectiveAi.Model;
+    Environment.ExitCode =
+        await RunLiveArrivalScenario(model) ? 0 : 1;
+    return;
+}
+
+if (args.Contains(
         "--live-ai-contract",
         StringComparer.OrdinalIgnoreCase))
 {
@@ -834,6 +849,48 @@ Require(
     arrivedVillager.ActionTime == 0 &&
     arrivedVillager.TargetX is null,
     "villagers must interpolate at a bounded speed and stop exactly at their destination");
+var conversationState = VillagerSimulation.BeginConversation(
+    movementState,
+    "player",
+    gameSeconds: 1_000,
+    realSeconds: 4);
+Require(
+    conversationState.Activity == VillagerActivity.Conversing &&
+    conversationState.ConversationPartnerId == "player" &&
+    conversationState.TargetX is null &&
+    conversationState.NextDecisionGameSeconds == 1_240,
+    "conversation must be an explicit activity that cancels movement and postpones decisions");
+var reflectionState = VillagerSimulation.CompleteConversation(
+    conversationState, 1_240);
+Require(
+    reflectionState.Activity == VillagerActivity.Reflecting &&
+    reflectionState.NextDecisionGameSeconds >
+    conversationState.NextDecisionGameSeconds &&
+    VillagerSimulation.CompleteReflection(
+        reflectionState,
+        reflectionState.ActivityUntilGameSeconds - 1).Activity ==
+    VillagerActivity.Reflecting,
+    "villagers must pause to orient after a conversation instead of immediately choosing a task");
+var reflectedState = VillagerSimulation.CompleteReflection(
+    reflectionState,
+    reflectionState.ActivityUntilGameSeconds);
+Require(
+    reflectedState.Activity == VillagerActivity.Idle &&
+    reflectedState.NextDecisionGameSeconds ==
+    reflectionState.ActivityUntilGameSeconds,
+    "reflection must release into a deliberate decision at its scheduled time");
+var blockedState = VillagerSimulation.AdvanceMovement(
+    movementState,
+    .25f,
+    canOccupy: _ => false,
+    gameSeconds: 2_000);
+Require(
+    blockedState.Activity == VillagerActivity.Blocked &&
+    blockedState.Action == EntityAction.Idle &&
+    blockedState.TargetX is null &&
+    blockedState.BlockedMoveAttempts == 1 &&
+    blockedState.NextDecisionGameSeconds > 2_000,
+    "blocked movement must clear stale targets and schedule a bounded replan");
 var movementProbeEntity = new WorldEntity(Vector2.Zero);
 Require(
     movementProbeEntity.MoveSpeed ==
@@ -2604,6 +2661,54 @@ var developerFallback = Enumerable.Range(-160, 321)
             (int)MathF.Floor(position.Y)) is not
             (Biome.DeepWater or Biome.ShallowWater or
              Biome.RiverWater or Biome.MangroveShallows));
+const long navigationSeed = 2187;
+var shorelineWater = Enumerable.Range(-160, 321)
+    .SelectMany(y => Enumerable.Range(-160, 321)
+        .Select(x => new Vector2(x + .5f, y + .5f)))
+    .First(position =>
+        !WorldLevelNavigation.IsWalkable(
+            navigationSeed,
+            (int)MathF.Floor(position.X),
+            (int)MathF.Floor(position.Y),
+            (int)WorldLevel.Overworld) &&
+        Enumerable.Range(-2, 5).Any(offsetY =>
+            Enumerable.Range(-2, 5).Any(offsetX =>
+                WorldLevelNavigation.IsWalkable(
+                    navigationSeed,
+                    (int)MathF.Floor(position.X) + offsetX,
+                    (int)MathF.Floor(position.Y) + offsetY,
+                    (int)WorldLevel.Overworld))));
+var resolvedShoreline = WorldLevelNavigation.NearestWalkable(
+    navigationSeed,
+    shorelineWater,
+    developerFallback,
+    (int)WorldLevel.Overworld,
+    maximumRadius: 2);
+var nearestShoreDistance = Enumerable.Range(-2, 5)
+    .SelectMany(offsetY => Enumerable.Range(-2, 5)
+        .Select(offsetX => new Vector2(
+            MathF.Floor(shorelineWater.X) + offsetX + .5f,
+            MathF.Floor(shorelineWater.Y) + offsetY + .5f)))
+    .Where(candidate => WorldLevelNavigation.IsWalkable(
+        navigationSeed,
+        (int)MathF.Floor(candidate.X),
+        (int)MathF.Floor(candidate.Y),
+        (int)WorldLevel.Overworld))
+    .Min(candidate =>
+        Vector2.DistanceSquared(shorelineWater, candidate));
+Require(
+    MathF.Abs(
+        Vector2.DistanceSquared(
+            shorelineWater, resolvedShoreline) -
+        nearestShoreDistance) < .0001f &&
+    resolvedShoreline ==
+    WorldLevelNavigation.NearestWalkable(
+        navigationSeed,
+        shorelineWater,
+        developerFallback,
+        (int)WorldLevel.Overworld,
+        maximumRadius: 2),
+    "shoreline fallback must choose a genuinely nearest tile with a stable tie-break, not a north-first scan");
 var developerDestination = DeveloperMapWindow.ResolveDestination(
     Vector2.Zero, Vector2.Zero, Vector2.Zero, 1, 2187,
     developerFallback);
@@ -4304,6 +4409,14 @@ try
             FollowingActorId = player.Id
         };
     persistedVillagers[0] = rememberedVillager;
+    for (var turn = 0; turn < 20; turn++)
+        persistedVillagers[1] =
+            VillagerSimulation.RecordDialogueTurn(
+                persistedVillagers[1],
+                player.Id,
+                player.Name,
+                $"persistent conversation fact {turn}",
+                800 + turn);
     saves.SaveVillagers(world.Id, persistedVillagers);
     var loadedVillagers = saves.LoadVillagers(world.Id);
     Require(
@@ -4317,7 +4430,12 @@ try
         loadedVillagers[0].Goals?.Count == 2 &&
         loadedVillagers[0].Promises?.Single().Id ==
             persistedPromise.Id &&
-        loadedVillagers[0].FollowingActorId == player.Id,
+        loadedVillagers[0].FollowingActorId == player.Id &&
+        loadedVillagers[1].ConversationHistory?.Count ==
+            VillagerSimulation.MaximumConversationTurns &&
+        loadedVillagers[1].Memories?.Any(memory =>
+            memory.Kind == "conversation-heard" &&
+            memory.SubjectId == player.Id) == true,
         "villager identities, goals, promises, memories, and directional relationships must persist per world");
     var deathBase = DateTime.UtcNow.AddMinutes(-20);
     for (var index = 0;
@@ -4399,6 +4517,182 @@ static WorldChunk CloneAt(WorldChunk source, ChunkCoordinate coordinate) => new(
     Fish = source.Fish
 };
 
+static async Task<bool> RunLiveArrivalScenario(string model)
+{
+    var failures = new List<string>();
+    var settings = new NpcAiSettings(Model: model);
+    using var ai = new NpcAiService();
+    var state = await ai.CheckAsync(settings);
+    if (!state.Ready)
+    {
+        Console.Error.WriteLine(
+            $"ARRIVAL SCENARIO FAIL [{model}]: {state.Message}");
+        return false;
+    }
+
+    var history = new List<VillagerConversationTurn>();
+    var memories = new List<string>();
+    var replies = new List<string>();
+    var actors = new[]
+    {
+        new NpcAiActor(
+            "samuel", "Samuel", 1, 82, "unknown survivor"),
+        new NpcAiActor(
+            "mira", "Mira", 0, 78, "unknown survivor")
+    };
+    const string background =
+        "A carpenter from a small harbour town.";
+    const string personality =
+        "Careful, observant, practical, and willing to cooperate.";
+    const string arrivalMemory =
+        "Woke on the beach after rough water, cold and confused, " +
+        "with no clear memory of the wreck.";
+
+    var opening = await ai.ComposeDialogueAsync(
+        settings,
+        new(
+            "Mira",
+            "Samuel",
+            "ArrivalOrientation",
+            "I just woke on this beach. Are you hurt, and what is your name?",
+            78,
+            "unknown survivor",
+            [],
+            background,
+            personality,
+            "Carpenter",
+            [ItemIds.StoneAxe, ItemIds.StoneHammer],
+            arrivalMemory,
+            0));
+    var openingReply = opening ?? "";
+    Console.WriteLine(
+        $"ARRIVAL LIVE [{model}] 00:00 Mira => " +
+        (openingReply.Length == 0 ? "<null>" : openingReply));
+    if (openingReply.Length == 0 ||
+        !ContainsAny(
+            openingReply,
+            "woke", "beach", "hurt", "name", "where"))
+        failures.Add(
+            $"00:00 failed to orient toward the nearby survivor: {openingReply}");
+    history.Add(new(
+        "mira", "Mira", openingReply, 0));
+    replies.Add(openingReply);
+
+    async Task Ask(
+        int elapsedSeconds,
+        string speech,
+        string label,
+        params string[] expectedTerms)
+    {
+        var gameSeconds =
+            elapsedSeconds *
+            VillagerSimulation.GameSecondsPerRealSecond;
+        history.Add(new(
+            "samuel", "Samuel", speech, gameSeconds));
+        var interpretation = await ai.InterpretAsync(
+            settings,
+            new(
+                "samuel",
+                "Samuel",
+                "mira",
+                "Mira",
+                speech,
+                actors,
+                ["Stay alive", "Learn who can be trusted"],
+                memories,
+                background,
+                personality,
+                "Carpenter",
+                [ItemIds.StoneAxe, ItemIds.StoneHammer],
+                arrivalMemory,
+                elapsedSeconds / 3600d,
+                history));
+        var reply = interpretation?.Reply ?? "";
+        Console.WriteLine(
+            $"ARRIVAL LIVE [{model}] " +
+            $"{elapsedSeconds / 60:00}:{elapsedSeconds % 60:00} " +
+            $"Samuel: {speech} => Mira: " +
+            (reply.Length == 0 ? "<null>" : reply));
+        if (reply.Length == 0 ||
+            reply.StartsWith(
+                "I heard you", StringComparison.OrdinalIgnoreCase) ||
+            replies.Any(previous =>
+                string.Equals(
+                    previous,
+                    reply,
+                    StringComparison.OrdinalIgnoreCase)) ||
+            !ContainsAny(reply, expectedTerms))
+            failures.Add(
+                $"{label} was empty, generic, repeated, or off-topic: {reply}");
+        history.Add(new(
+            "mira", "Mira", reply, gameSeconds + 1));
+        replies.Add(reply);
+        if (!string.IsNullOrWhiteSpace(
+                interpretation?.Memory))
+            memories.Add(interpretation.Memory);
+    }
+
+    await Ask(
+        30,
+        "I'm Samuel. Are you hurt?",
+        "00:30 injury and identity response",
+        "Mira", "hurt", "fine", "okay", "cold", "confused",
+        "injured", "Samuel");
+    await Ask(
+        60,
+        "Do you remember how we got here?",
+        "01:00 arrival-memory response",
+        "remember", "water", "beach", "wreck", "woke",
+        "storm", "ship");
+    await Ask(
+        90,
+        "We need to work together.",
+        "01:30 cooperation response",
+        "together", "agree", "help", "survive", "safe",
+        "shelter");
+    await Ask(
+        120,
+        "We should find food, fresh water, and shelter.",
+        "02:00 survival-priority response",
+        "food", "water", "shelter", "supplies", "agree",
+        "first");
+    await Ask(
+        150,
+        "Let's gather rocks and wood for a shelter.",
+        "02:30 shared-task response",
+        "rock", "stone", "wood", "gather", "collect",
+        "shelter", "axe");
+    await Ask(
+        180,
+        "I'll look nearby. Stay close.",
+        "03:00 coordinated-action response",
+        "close", "stay", "careful", "nearby", "together",
+        "watch", "safe");
+
+    if (history.Count != 13)
+        failures.Add(
+            $"context brain lost arrival turns: expected 13, got {history.Count}");
+    var compact = NpcAiService.CompactConversation(history);
+    if (compact.Count != 8 ||
+        compact[^1].Text != replies[^1])
+        failures.Add(
+            "three-minute transcript did not compact to the newest coherent turns");
+
+    if (failures.Count == 0)
+    {
+        Console.WriteLine(
+            $"ARRIVAL SCENARIO PASS [{model}] " +
+            $"(7 NPC turns, {history.Count} total turns, " +
+            $"{compact.Count} prompt turns)");
+        return true;
+    }
+    Console.Error.WriteLine(
+        $"ARRIVAL SCENARIO FAIL [{model}]");
+    foreach (var failure in failures)
+        Console.Error.WriteLine($"- {failure}");
+    return false;
+}
+
 static async Task<bool> RunLiveAiContract(string model)
 {
     var failures = new List<string>();
@@ -4460,6 +4754,212 @@ static async Task<bool> RunLiveAiContract(string model)
         failures.Add(
             $"tool question lost grounded action: {toolQuestion ?? "<null>"}");
 
+    var sharedActors = new[]
+    {
+        new NpcAiActor(
+            "speaker", "Samuel", 1, 80, "new acquaintance"),
+        new NpcAiActor(
+            "mira", "Mira", 0, 80, "new acquaintance")
+    };
+    var planning = await ai.InterpretAsync(
+        settings,
+        new(
+            "speaker",
+            "Samuel",
+            "mira",
+            "Mira",
+            "what should we do?",
+            sharedActors,
+            ["Survive together"],
+            ["Samuel and Mira have just met on the beach."],
+            "A carpenter from a harbour town.",
+            "Careful, practical, and curious.",
+            "Carpenter",
+            [ItemIds.StoneAxe, ItemIds.StoneHammer],
+            "Woke on the beach after rough water and remembers no clear wreck.",
+            .25,
+            [
+                new(
+                    "speaker", "Samuel",
+                    "what should we do?", 900)
+            ]));
+    var planningReply = planning?.Reply ?? "";
+    Console.WriteLine(
+        $"AI LIVE OUTPUT [{model}] what should we do? => " +
+        (planningReply.Length == 0 ? "<null>" : planningReply));
+    if (planning is not null)
+        Console.WriteLine(
+            $"AI LIVE STRUCTURED [{model}] planning => " +
+            System.Text.Json.JsonSerializer.Serialize(planning));
+    if (planningReply.Length == 0 ||
+        planningReply.StartsWith(
+            "I heard you", StringComparison.OrdinalIgnoreCase) ||
+        !ContainsAny(
+            planningReply,
+            "food", "water", "shelter", "supplies", "safe",
+            "together", "explore", "wood", "fire"))
+        failures.Add(
+            $"planning reply was generic or irrelevant: {planningReply}");
+
+    var storm = await ai.InterpretAsync(
+        settings,
+        new(
+            "speaker",
+            "Samuel",
+            "mira",
+            "Mira",
+            "I think there was a storm",
+            sharedActors,
+            ["Survive together"],
+            [
+                "Samuel asked what they should do next.",
+                $"Mira replied: {planningReply}"
+            ],
+            "A carpenter from a harbour town.",
+            "Careful, practical, and curious.",
+            "Carpenter",
+            [ItemIds.StoneAxe, ItemIds.StoneHammer],
+            "Woke on the beach after rough water and remembers no clear wreck.",
+            .25,
+            [
+                new(
+                    "speaker", "Samuel",
+                    "what should we do?", 900),
+                new(
+                    "mira", "Mira",
+                    planningReply, 910),
+                new(
+                    "speaker", "Samuel",
+                    "I think there was a storm", 920)
+            ]));
+    var stormReply = storm?.Reply ?? "";
+    Console.WriteLine(
+        $"AI LIVE OUTPUT [{model}] I think there was a storm => " +
+        (stormReply.Length == 0 ? "<null>" : stormReply));
+    if (storm is not null)
+        Console.WriteLine(
+            $"AI LIVE STRUCTURED [{model}] storm => " +
+            System.Text.Json.JsonSerializer.Serialize(storm));
+    if (stormReply.Length == 0 ||
+        stormReply.StartsWith(
+            "I heard you", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(
+            stormReply.Trim().TrimEnd('.', '!', '?'),
+            "I think there was a storm",
+            StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(
+            stormReply, planningReply,
+            StringComparison.OrdinalIgnoreCase) ||
+        !ContainsAny(
+            stormReply,
+            "storm", "wreck", "water", "wave", "weather",
+            "remember", "possible", "could", "might"))
+        failures.Add(
+            $"storm reply was generic, repeated, or irrelevant: {stormReply}");
+
+    var cooperation = await ai.InterpretAsync(
+        settings,
+        new(
+            "speaker",
+            "Samuel",
+            "mira",
+            "Mira",
+            "we need to work together",
+            sharedActors,
+            ["Survive together"],
+            [
+                "Samuel and Mira agreed that a storm may have caused the wreck."
+            ],
+            "A carpenter from a harbour town.",
+            "Careful, practical, and curious.",
+            "Carpenter",
+            [ItemIds.StoneAxe, ItemIds.StoneHammer],
+            "Woke on the beach after rough water and remembers no clear wreck.",
+            .3,
+            [
+                new(
+                    "speaker", "Samuel",
+                    "Do you remember your family?", 1_000),
+                new(
+                    "mira", "Mira",
+                    "I don't remember my family, only the ship breaking apart before I woke here.",
+                    1_010),
+                new(
+                    "speaker", "Samuel",
+                    "we need to work together", 1_020)
+            ]));
+    var cooperationReply = cooperation?.Reply ?? "";
+    Console.WriteLine(
+        $"AI LIVE OUTPUT [{model}] we need to work together => " +
+        (cooperationReply.Length == 0
+            ? "<null>"
+            : cooperationReply));
+    if (cooperationReply.Length == 0 ||
+        cooperationReply.StartsWith(
+            "I heard you", StringComparison.OrdinalIgnoreCase) ||
+        !ContainsAny(
+            cooperationReply,
+            "together", "agree", "help", "survive", "plan",
+            "shelter", "supplies", "safe"))
+        failures.Add(
+            $"cooperation reply was generic or irrelevant: {cooperationReply}");
+
+    var rocks = await ai.InterpretAsync(
+        settings,
+        new(
+            "speaker",
+            "Samuel",
+            "mira",
+            "Mira",
+            "lets get rocks",
+            sharedActors,
+            ["Survive together"],
+            [
+                "Samuel and Mira agreed that a storm may have caused the wreck.",
+                "Samuel proposed working together."
+            ],
+            "A carpenter from a harbour town.",
+            "Careful, practical, and curious.",
+            "Carpenter",
+            [ItemIds.StoneAxe, ItemIds.StoneHammer],
+            "Woke on the beach after rough water and remembers no clear wreck.",
+            .3,
+            [
+                new(
+                    "speaker", "Samuel",
+                    "Do you remember your family?", 1_000),
+                new(
+                    "mira", "Mira",
+                    "I don't remember my family, only the ship breaking apart before I woke here.",
+                    1_010),
+                new(
+                    "speaker", "Samuel",
+                    "we need to work together", 1_020),
+                new(
+                    "mira", "Mira",
+                    cooperationReply, 1_030),
+                new(
+                    "speaker", "Samuel",
+                    "lets get rocks", 1_040)
+            ]));
+    var rocksReply = rocks?.Reply ?? "";
+    Console.WriteLine(
+        $"AI LIVE OUTPUT [{model}] lets get rocks => " +
+        (rocksReply.Length == 0 ? "<null>" : rocksReply));
+    if (rocksReply.Length == 0 ||
+        rocksReply.StartsWith(
+            "I heard you", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(
+            rocksReply,
+            cooperationReply,
+            StringComparison.OrdinalIgnoreCase) ||
+        !ContainsAny(
+            rocksReply,
+            "rock", "stone", "gather", "collect", "find",
+            "get them", "good idea", "all right", "okay"))
+        failures.Add(
+            $"rock-gathering proposal was generic, repeated, or irrelevant: {rocksReply}");
+
     var personas = await ai.GeneratePersonasAsync(
         settings, "Contract Island", 741, ["Mira"]);
     var persona = personas?.SingleOrDefault();
@@ -4483,6 +4983,10 @@ static async Task<bool> RunLiveAiContract(string model)
               arrival.Contains("overboard") ||
               arrival.Contains("boat") ||
               arrival.Contains("ocean") ||
+              arrival.Contains("sea") ||
+              arrival.Contains("crash") ||
+              arrival.Contains("vessel") ||
+              arrival.Contains("coral") ||
               arrival.Contains("wave") ||
               arrival.Contains("salt")))
             failures.Add(
@@ -4499,6 +5003,10 @@ static async Task<bool> RunLiveAiContract(string model)
         Console.Error.WriteLine($"- {failure}");
     return false;
 }
+
+static bool ContainsAny(string value, params string[] terms) =>
+    terms.Any(term =>
+        value.Contains(term, StringComparison.OrdinalIgnoreCase));
 
 static class WorldCheckProcess
 {

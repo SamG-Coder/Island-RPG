@@ -36,6 +36,13 @@ internal sealed record NpcAiActor(
     float Hunger,
     string Relationship);
 
+internal sealed record NpcAiKnownFact(
+    string Summary,
+    string SourceId,
+    float Confidence,
+    int Sentiment,
+    double LearnedGameSeconds);
+
 internal sealed record NpcAiSpeechContext(
     string SpeakerId,
     string SpeakerName,
@@ -50,7 +57,9 @@ internal sealed record NpcAiSpeechContext(
     string PriorTrade = "",
     IReadOnlyList<string>? KnownToolIds = null,
     string ArrivalMemory = "",
-    double HoursOnIsland = 0);
+    double HoursOnIsland = 0,
+    IReadOnlyList<VillagerConversationTurn>? RecentConversation = null,
+    IReadOnlyList<NpcAiKnownFact>? KnownFacts = null);
 
 internal sealed record NpcAiInterpretation(
     string AddressedActorId,
@@ -195,7 +204,18 @@ internal sealed class NpcAiService : IDisposable
         using var timeout = CancellationTokenSource
             .CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(12));
-        var prompt = JsonSerializer.Serialize(context, JsonOptions);
+        var compactContext = context with
+        {
+            RelevantMemories = CompactStrings(
+                context.RelevantMemories, 6, 560),
+            KnownGoals = CompactStrings(
+                context.KnownGoals, 4, 240),
+            RecentConversation = CompactConversation(
+                context.RecentConversation),
+            KnownFacts = CompactFacts(context.KnownFacts)
+        };
+        var prompt = JsonSerializer.Serialize(
+            compactContext, JsonOptions);
         using var request = Request(
             HttpMethod.Post,
             new(baseUri, "api/generate"),
@@ -210,7 +230,15 @@ internal sealed class NpcAiService : IDisposable
                 "and general statements to a hint. Do not invent items or actions. " +
                 "Respect biography, tool knowledge, memories, and hoursOnIsland; " +
                 "do not claim knowledge from before it was learned. " +
-                "Use empty strings when unknown. Sentiment is -100..100.",
+                "When the speaker addresses the listener, reply with one short " +
+                "first-person sentence that directly answers a question or responds " +
+                "to a theory using known context. Treat every general observation or " +
+                "theory as a conversational hint to the listener and reply to it. " +
+                "The reply field is mandatory and must never be empty. It is the most " +
+                "important output field. " +
+                "Never use a generic acknowledgement " +
+                "or ask what they want to know. Use empty strings for unknown structured " +
+                "fields, but not for a relevant conversational reply. Sentiment is -100..100.",
             prompt,
             stream = false,
             think = false,
@@ -234,7 +262,16 @@ internal sealed class NpcAiService : IDisposable
                 return null;
             var result = JsonSerializer.Deserialize<NpcAiInterpretation>(
                 generated.Response, JsonOptions);
-            return Validate(result, context);
+            var validated = Validate(result, compactContext);
+            if (validated is null ||
+                !string.IsNullOrWhiteSpace(validated.Reply))
+                return validated;
+            var focusedReply = await ComposeSpeechReplyAsync(
+                settings, compactContext, cancellationToken);
+            return validated with
+            {
+                Reply = focusedReply ?? ""
+            };
         }
         catch (Exception exception) when (
             exception is OperationCanceledException or
@@ -242,6 +279,105 @@ internal sealed class NpcAiService : IDisposable
         {
             return null;
         }
+    }
+
+    private async Task<string?> ComposeSpeechReplyAsync(
+        NpcAiSettings settings,
+        NpcAiSpeechContext context,
+        CancellationToken cancellationToken,
+        int attempt = 0)
+    {
+        if (!TryBaseUri(settings.BaseUrl, out var baseUri))
+            return null;
+        using var timeout = CancellationTokenSource
+            .CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(8));
+        using var request = Request(
+            HttpMethod.Post,
+            new(baseUri, "api/generate"),
+            settings.Password);
+        request.Content = JsonContent.Create(new
+        {
+            model = settings.Model,
+            system =
+                "You are the addressed island survivor. Reply to the newest " +
+                "speaker in one short, natural first-person sentence. Use only " +
+                "facts in the compact context brain: personal history, arrival " +
+                "memory, known goals, remembered facts, and recentConversation. " +
+                "Answer questions and respond to theories directly. Do not narrate, " +
+                "quote or repeat the newest speaker, repeat a prior line, ask what " +
+                "they want to know, invent certainty, " +
+                "prepend a name, or output none. When responding to a theory, say " +
+                "whether it seems possible and add one relevant remembered detail " +
+                "from arrivalMemory. When responding to a proposed task, accept or " +
+                "decline it and name the task or resource. Maximum 20 words.",
+            prompt = JsonSerializer.Serialize(new
+            {
+                instruction = FocusedReplyInstruction(context.Text),
+                context
+            }, JsonOptions),
+            stream = false,
+            think = false,
+            keep_alive = "5m",
+            format = DialogueSchema,
+            options = new
+            {
+                temperature = .15,
+                num_predict = 56
+            }
+        });
+        try
+        {
+            using var response = await _http.SendAsync(
+                request, timeout.Token);
+            if (!response.IsSuccessStatusCode) return null;
+            var generated = await response.Content
+                .ReadFromJsonAsync<OllamaGenerate>(
+                    JsonOptions, timeout.Token);
+            if (string.IsNullOrWhiteSpace(generated?.Response))
+                return null;
+            var result = JsonSerializer.Deserialize<NpcAiDialogue>(
+                generated.Response, JsonOptions);
+            var reply = ValidateDialogue(
+                result?.Reply, context.ListenerName);
+            var valid = !EchoesPlayerSpeech(
+                            reply ?? "", context.Text) &&
+                        !RepeatsRecentReply(
+                            reply ?? "", context)
+                ? reply
+                : null;
+            return valid is not null || attempt >= 1
+                ? valid
+                : await ComposeSpeechReplyAsync(
+                    settings,
+                    context,
+                    cancellationToken,
+                    attempt + 1);
+        }
+        catch (Exception exception) when (
+            exception is OperationCanceledException or
+                HttpRequestException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string FocusedReplyInstruction(string speech)
+    {
+        var lower = speech.ToLowerInvariant();
+        if (lower.Contains("storm") ||
+            lower.Contains("wreck") ||
+            lower.Contains("crash"))
+            return "Say whether that cause seems possible, then mention one " +
+                   "relevant arrival memory without repeating the speaker.";
+        if (lower.Contains("let's") ||
+            lower.Contains("lets") ||
+            lower.Contains("we should") ||
+            lower.Contains("we need to"))
+            return "Accept or decline the proposal naturally and name the " +
+                   "specific shared task or resource.";
+        return "Respond directly to the newest conversational turn and add " +
+               "one relevant fact that the listener knows.";
     }
 
     public async Task<string?> ComposeDialogueAsync(
@@ -400,6 +536,8 @@ internal sealed class NpcAiService : IDisposable
             context.ListenerName) ?? "";
         if (EchoesPlayerSpeech(reply, context.Text))
             reply = "";
+        if (RepeatsRecentReply(reply, context))
+            reply = "";
         return value with
         {
             AddressedActorId = knownIds.Contains(
@@ -465,12 +603,122 @@ internal sealed class NpcAiService : IDisposable
             : value.Trim()[..Math.Min(
                 value.Trim().Length, length)];
 
+    internal static IReadOnlyList<VillagerConversationTurn>
+        CompactConversation(
+            IReadOnlyList<VillagerConversationTurn>? turns,
+            int maximumTurns = 8,
+            int maximumCharacters = 720)
+    {
+        if (turns is not { Count: > 0 }) return [];
+        var compact = new List<VillagerConversationTurn>(
+            Math.Min(maximumTurns, turns.Count));
+        var characters = 0;
+        for (var index = turns.Count - 1;
+             index >= 0 && compact.Count < maximumTurns;
+             index--)
+        {
+            var turn = turns[index];
+            var text = Limit(turn.Text, 160);
+            var cost = turn.SpeakerName.Length + text.Length + 2;
+            if (compact.Count > 0 &&
+                characters + cost > maximumCharacters)
+                break;
+            compact.Add(turn with { Text = text });
+            characters += cost;
+        }
+        compact.Reverse();
+        return compact;
+    }
+
+    private static IReadOnlyList<string> CompactStrings(
+        IReadOnlyList<string> values,
+        int maximumItems,
+        int maximumCharacters)
+    {
+        if (values.Count == 0) return [];
+        var result = new List<string>(
+            Math.Min(maximumItems, values.Count));
+        var characters = 0;
+        for (var index = values.Count - 1;
+             index >= 0 && result.Count < maximumItems;
+             index--)
+        {
+            var value = Limit(values[index], 160);
+            if (result.Count > 0 &&
+                characters + value.Length > maximumCharacters)
+                break;
+            result.Add(value);
+            characters += value.Length;
+        }
+        result.Reverse();
+        return result;
+    }
+
+    private static IReadOnlyList<NpcAiKnownFact> CompactFacts(
+        IReadOnlyList<NpcAiKnownFact>? facts)
+    {
+        if (facts is not { Count: > 0 }) return [];
+        return facts
+            .OrderByDescending(fact =>
+                Math.Clamp(fact.Confidence, 0, 1) * 100 +
+                Math.Abs(fact.Sentiment) * .25 +
+                fact.LearnedGameSeconds * .000001)
+            .Take(8)
+            .Select(fact => fact with
+            {
+                Summary = Limit(fact.Summary, 140),
+                Confidence = Math.Clamp(fact.Confidence, 0, 1),
+                Sentiment = Math.Clamp(fact.Sentiment, -100, 100)
+            })
+            .ToArray();
+    }
+
     private static bool IsPlaceholder(string? value) =>
         string.IsNullOrWhiteSpace(value) ||
         value.Trim().Equals(
             "none", StringComparison.OrdinalIgnoreCase) ||
         value.Trim().Equals(
             "null", StringComparison.OrdinalIgnoreCase);
+
+    private static bool RepeatsRecentReply(
+        string reply,
+        NpcAiSpeechContext context)
+    {
+        if (reply.Length == 0 ||
+            context.RecentConversation is not { Count: > 0 })
+            return false;
+        var normalized = NormalizeDialogue(reply);
+        return context.RecentConversation.Any(turn =>
+            string.Equals(
+                turn.SpeakerId,
+                context.ListenerId,
+                StringComparison.Ordinal) &&
+            (NormalizeDialogue(turn.Text) == normalized ||
+             DialogueSimilarity(turn.Text, reply) >= .72f));
+    }
+
+    private static string NormalizeDialogue(string value) =>
+        new(value
+            .Where(char.IsLetterOrDigit)
+            .Select(char.ToLowerInvariant)
+            .ToArray());
+
+    private static float DialogueSimilarity(
+        string first,
+        string second)
+    {
+        var firstWords = NormalizeWords(first)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .ToHashSet(StringComparer.Ordinal);
+        var secondWords = NormalizeWords(second)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .ToHashSet(StringComparer.Ordinal);
+        if (firstWords.Count < 4 || secondWords.Count < 4)
+            return 0;
+        var intersection = firstWords.Count(secondWords.Contains);
+        var union = firstWords.Count + secondWords.Count - intersection;
+        return union == 0 ? 0 : intersection / (float)union;
+    }
 
     private static string? ValidateDialogue(
         string? value,

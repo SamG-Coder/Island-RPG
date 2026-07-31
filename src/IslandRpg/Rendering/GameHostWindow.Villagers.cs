@@ -17,10 +17,6 @@ internal sealed partial class GameHostWindow
         _socialActorObservations = [];
     private double _villagersNextSaveAt;
     private bool _villagersDirty;
-    private readonly Dictionary<string, double>
-        _villagerTalkingUntil = [];
-    private readonly Dictionary<string, double>
-        _villagerSocialAvailableAt = [];
     private readonly Dictionary<string, VillagerSpeechBubble>
         _villagerSpeechBubbles = [];
     private readonly Queue<string> _queuedPlayerConversationTurns = [];
@@ -33,8 +29,6 @@ internal sealed partial class GameHostWindow
     private void LoadVillagers(Vector2 spawn)
     {
         _villagers.Clear();
-        _villagerTalkingUntil.Clear();
-        _villagerSocialAvailableAt.Clear();
         _villagerSpeechBubbles.Clear();
         _queuedPlayerConversationTurns.Clear();
         _pendingPlayerConversationMessage = null;
@@ -82,26 +76,54 @@ internal sealed partial class GameHostWindow
         for (var index = 0; index < _villagers.Count; index++)
         {
             var previous = _villagers[index];
+            if (previous.Activity == VillagerActivity.Conversing &&
+                _worldGameSeconds >=
+                previous.ActivityUntilGameSeconds)
+            {
+                previous = VillagerSimulation.CompleteConversation(
+                    previous, _worldGameSeconds);
+            }
+            previous = VillagerSimulation.CompleteReflection(
+                previous, _worldGameSeconds);
             if (_activePlayer is not null &&
                 previous.FollowingActorId == _activePlayer.Id &&
-                (!_villagerTalkingUntil.TryGetValue(
-                     previous.Id, out var followingTalkUntil) ||
-                 _clock >= followingTalkUntil))
+                (previous.Activity != VillagerActivity.Blocked ||
+                 _worldGameSeconds >=
+                 previous.NextDecisionGameSeconds) &&
+                previous.Activity != VillagerActivity.Conversing &&
+                previous.Activity != VillagerActivity.Reflecting)
             {
                 var followerPosition = new Vector2(
                     previous.PositionX, previous.PositionY);
                 var distanceSquared = Vector2.DistanceSquared(
                     followerPosition, _player.Position);
-                previous = distanceSquared > 2.2f * 2.2f
-                    ? VillagerSimulation.ApplyDecision(
-                        previous,
-                        new(
-                            VillagerNeed.Social,
-                            _player.Position),
-                        VillagerSimulationTier.Nearby,
-                        _worldGameSeconds)
-                    : previous with
+                var followTarget =
+                    WorldLevelNavigation.ReachableWalkableTarget(
+                        _worldSeed,
+                        followerPosition,
+                        _player.Position,
+                        previous.WorldLevel,
+                        maximumRadius: 3);
+                if (distanceSquared > 2.2f * 2.2f &&
+                    Vector2.DistanceSquared(
+                        followerPosition, followTarget) <= .01f)
+                    previous = VillagerSimulation.BlockMovement(
+                        previous, _worldGameSeconds);
+                else if (distanceSquared > 2.2f * 2.2f)
+                    previous = VillagerSimulation.ApplyDecision(
+                            previous,
+                            new(
+                                VillagerNeed.Social,
+                                followTarget),
+                            VillagerSimulationTier.Nearby,
+                            _worldGameSeconds) with
                     {
+                        Activity = VillagerActivity.Following
+                    };
+                else
+                    previous = previous with
+                    {
+                        Activity = VillagerActivity.Following,
                         Action = EntityAction.Idle,
                         ActionTime = 0,
                         TargetX = null,
@@ -123,7 +145,13 @@ internal sealed partial class GameHostWindow
                 ActorMovementService.TerrainSpeedMultiplier(
                     wading,
                     currentTerrain.Height,
-                    targetTerrain.Height));
+                    targetTerrain.Height),
+                candidate => WorldLevelNavigation.IsWalkable(
+                    _worldSeed,
+                    (int)MathF.Floor(candidate.X),
+                    (int)MathF.Floor(candidate.Y),
+                    previous.WorldLevel),
+                _worldGameSeconds);
             villager =
                 VillagerCommitmentService.UpdateDeadlines(
                     villager, _worldGameSeconds);
@@ -143,11 +171,13 @@ internal sealed partial class GameHostWindow
                 if (!VillagerSimulation.FootBoxesOverlap(
                         movedPosition, otherPosition))
                     continue;
-                villager = villager with
-                {
-                    PositionX = previous.PositionX,
-                    PositionY = previous.PositionY
-                };
+                villager = VillagerSimulation.BlockMovement(
+                    villager with
+                    {
+                        PositionX = previous.PositionX,
+                        PositionY = previous.PositionY
+                    },
+                    _worldGameSeconds);
                 break;
             }
             if (!ReferenceEquals(previous, villager))
@@ -155,9 +185,9 @@ internal sealed partial class GameHostWindow
                 _villagers[index] = villager;
                 _villagersDirty = true;
             }
-            if (_villagerTalkingUntil.TryGetValue(
-                    villager.Id, out var talkingUntil) &&
-                _clock < talkingUntil)
+            if (villager.Activity is
+                VillagerActivity.Conversing or
+                VillagerActivity.Reflecting)
                 continue;
             if (villager.WorldLevel != _activeWorldLevel ||
                 _worldGameSeconds < villager.NextDecisionGameSeconds)
@@ -179,16 +209,28 @@ internal sealed partial class GameHostWindow
                 villager, _player.Position, _worldGameSeconds);
             if (decision.MoveTarget is { } requestedTarget)
             {
-                var safeTarget = WorldLevelNavigation.NearestWalkable(
+                var safeTarget =
+                    WorldLevelNavigation.ReachableWalkableTarget(
                     _worldSeed,
-                    requestedTarget,
                     position,
+                    requestedTarget,
                     villager.WorldLevel,
                     maximumRadius: 2);
                 decision = decision with
                 {
                     MoveTarget = safeTarget
                 };
+                if (Vector2.DistanceSquared(
+                        position, safeTarget) <= .01f &&
+                    Vector2.DistanceSquared(
+                        position, requestedTarget) > .01f)
+                {
+                    _villagers[index] =
+                        VillagerSimulation.BlockMovement(
+                            villager, _worldGameSeconds);
+                    _villagersDirty = true;
+                    continue;
+                }
             }
             villager = VillagerSimulation.ApplyDecision(
                 villager, decision, tier, _worldGameSeconds);
@@ -214,10 +256,6 @@ internal sealed partial class GameHostWindow
             tier == VillagerSimulationTier.Distant)
             return false;
         if (ConversationFloorBusy)
-            return false;
-        if (_villagerSocialAvailableAt.TryGetValue(
-                villager.Id, out var socialAvailableAt) &&
-            _clock < socialAvailableAt)
             return false;
         _socialActorObservations.Clear();
         _socialActorObservations.Add(new(
@@ -246,12 +284,23 @@ internal sealed partial class GameHostWindow
             return false;
         if (goal.Target is { } target)
         {
-            var safeTarget = WorldLevelNavigation.NearestWalkable(
+            var safeTarget =
+                WorldLevelNavigation.ReachableWalkableTarget(
                 _worldSeed,
-                target,
                 new(villager.PositionX, villager.PositionY),
-                villager.WorldLevel,
-                maximumRadius: 2);
+                target,
+                    villager.WorldLevel,
+                    maximumRadius: 2);
+            if (Vector2.DistanceSquared(
+                    new(villager.PositionX, villager.PositionY),
+                    safeTarget) <= .01f)
+            {
+                _villagers[villagerIndex] =
+                    VillagerSimulation.BlockMovement(
+                        villager, _worldGameSeconds);
+                _villagersDirty = true;
+                return true;
+            }
             _villagers[villagerIndex] =
                 VillagerSimulation.ApplyDecision(
                     villager,
@@ -274,6 +323,7 @@ internal sealed partial class GameHostWindow
                 partner.Name,
                 goal.Intent,
                 speech);
+            villager = _villagers[villagerIndex];
             villager = VillagerSimulation.RecordConversation(
                 villager,
                 partner.Id,
@@ -285,10 +335,6 @@ internal sealed partial class GameHostWindow
                 Need = VillagerNeed.Idle
             };
             _villagers[villagerIndex] = villager;
-            _villagerSocialAvailableAt[villager.Id] =
-                _clock +
-                VillagerSimulation.SocialRealCooldown(
-                    villager, goal.Intent);
             var otherVillagerIndex = _villagers.FindIndex(value =>
                 value.Id == partner.Id);
             if (otherVillagerIndex >= 0)
@@ -305,10 +351,6 @@ internal sealed partial class GameHostWindow
                         Need = VillagerNeed.Idle
                     };
                 _villagers[otherVillagerIndex] = listener;
-                _villagerSocialAvailableAt[listener.Id] =
-                    _clock +
-                    VillagerSimulation.SocialRealCooldown(
-                        listener, goal.Intent);
                 HoldVillagerConversation(
                     otherVillagerIndex,
                     new(villager.PositionX, villager.PositionY),
@@ -429,13 +471,24 @@ internal sealed partial class GameHostWindow
             VillagerWorldActionKind.ApproachItem or
             VillagerWorldActionKind.ApproachStorage)
         {
-            var safeTarget = WorldLevelNavigation.NearestWalkable(
+            var safeTarget =
+                WorldLevelNavigation.ReachableWalkableTarget(
                 _worldSeed,
+                new(villager.PositionX, villager.PositionY),
                 action.Target ?? new(
                     villager.PositionX, villager.PositionY),
-                new(villager.PositionX, villager.PositionY),
                 villager.WorldLevel,
                 maximumRadius: 2);
+            if (Vector2.DistanceSquared(
+                    new(villager.PositionX, villager.PositionY),
+                    safeTarget) <= .01f)
+            {
+                _villagers[villagerIndex] =
+                    VillagerSimulation.BlockMovement(
+                        villager, _worldGameSeconds);
+                _villagersDirty = true;
+                return true;
+            }
             var decision = new VillagerDecision(
                 action.Kind ==
                 VillagerWorldActionKind.ApproachItem
@@ -636,7 +689,8 @@ internal sealed partial class GameHostWindow
     private void HoldVillagerConversation(
         int villagerIndex,
         Vector2 listenerPosition,
-        double seconds)
+        double seconds,
+        string? partnerId = null)
     {
         if ((uint)villagerIndex >= (uint)_villagers.Count)
             return;
@@ -646,19 +700,16 @@ internal sealed partial class GameHostWindow
         var direction = listenerPosition - position;
         if (direction.LengthSquared > .0001f)
             direction = direction.Normalized();
-        villager = villager with
-        {
-            Action = EntityAction.Idle,
-            ActionTime = 0,
-            FacingX = direction.X,
-            FacingY = direction.Y,
-            TargetX = null,
-            TargetY = null
-        };
+        villager = VillagerSimulation.BeginConversation(
+            villager with
+            {
+                FacingX = direction.X,
+                FacingY = direction.Y
+            },
+            partnerId,
+            _worldGameSeconds,
+            seconds);
         _villagers[villagerIndex] = villager;
-        _villagerTalkingUntil[villager.Id] = double.IsPositiveInfinity(seconds)
-            ? double.PositiveInfinity
-            : _clock + seconds;
         _villagersDirty = true;
     }
 

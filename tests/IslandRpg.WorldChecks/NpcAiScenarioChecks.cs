@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using IslandRpg.Gameplay;
+using IslandRpg.Rendering;
 using OpenTK.Mathematics;
 
 internal static class NpcAiScenarioChecks
@@ -248,11 +249,184 @@ internal static class NpcAiScenarioChecks
                     villager.AwakenedGameSeconds + 3600) == 1),
             "30 persona tool knowledge and island timeline persist");
 
-        if (passed != 30)
+        var planningReply = GameHostWindow.FallbackNpcReply(
+            villagers[0], "what should we do?");
+        var stormReply = GameHostWindow.FallbackNpcReply(
+            villagers[0], "I think there was a storm");
+        Check(
+            (planningReply.Contains(
+                 "supplies", StringComparison.OrdinalIgnoreCase) ||
+             planningReply.Contains(
+                 "food", StringComparison.OrdinalIgnoreCase) ||
+             planningReply.Contains(
+                 "shelter", StringComparison.OrdinalIgnoreCase)) &&
+            stormReply.Contains(
+                "remember", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(
+                planningReply,
+                stormReply,
+                StringComparison.OrdinalIgnoreCase) &&
+            !planningReply.StartsWith(
+                "I heard you", StringComparison.OrdinalIgnoreCase) &&
+            !stormReply.StartsWith(
+                "I heard you", StringComparison.OrdinalIgnoreCase),
+            "31 island planning and storm hypothesis produce relevant progressive replies");
+
+        var brain = villagers[0];
+        for (var turn = 0; turn < 20; turn++)
+            brain = VillagerSimulation.RecordDialogueTurn(
+                brain,
+                turn % 2 == 0 ? "speaker" : brain.Id,
+                turn % 2 == 0 ? "Samuel" : brain.Name,
+                $"conversation turn {turn}",
+                turn);
+        var compactBrain = NpcAiService.CompactConversation(
+            brain.ConversationHistory,
+            maximumTurns: 6,
+            maximumCharacters: 180);
+        Check(
+            brain.ConversationHistory?.Count ==
+                VillagerSimulation.MaximumConversationTurns &&
+            compactBrain.Count == 6 &&
+            compactBrain[0].Text == "conversation turn 14" &&
+            compactBrain[^1].Text == "conversation turn 19",
+            "32 context brain retains bounded history and compacts the newest coherent turns");
+
+        Check(
+            brain.Memories?.Any(memory =>
+                memory.Kind == "conversation-heard" &&
+                memory.Summary?.Contains(
+                    "conversation turn 0",
+                    StringComparison.Ordinal) == true) == true,
+            "33 displaced working turns consolidate into long-term memory");
+
+        Check(
+            brain.Memories?.Any(memory =>
+                memory.SubjectId == "speaker" &&
+                memory.Summary?.StartsWith(
+                    "Samuel said:",
+                    StringComparison.Ordinal) == true) == true,
+            "34 consolidated memories preserve who supplied the information");
+
+        var repeatedBrain = villagers[0];
+        for (var turn = 0; turn < 30; turn++)
+            repeatedBrain = VillagerSimulation.RecordDialogueTurn(
+                repeatedBrain,
+                "speaker",
+                "Samuel",
+                "The western beach has fresh water.",
+                turn);
+        Check(
+            repeatedBrain.Memories?.Count(memory =>
+                memory.Summary ==
+                "Samuel said: The western beach has fresh water.") == 1 &&
+            repeatedBrain.Memories.Single(memory =>
+                memory.Summary ==
+                "Samuel said: The western beach has fresh water.")
+                .Confidence > .72f,
+            "35 repeated information strengthens one memory instead of creating duplicates");
+
+        var crowdedBrain = villagers[0];
+        for (var turn = 0; turn < 100; turn++)
+            crowdedBrain = VillagerSimulation.RecordDialogueTurn(
+                crowdedBrain,
+                "speaker",
+                "Samuel",
+                $"unique long-term fact {turn}",
+                turn);
+        Check(
+            crowdedBrain.Memories?.Count ==
+                VillagerSimulation.MaximumMemories,
+            "36 long-term memory remains bounded across many conversations");
+
+        var partnerMemories = villagers[0] with
+        {
+            Memories =
+            [
+                new(
+                    Guid.NewGuid(), "conversation-heard",
+                    "samuel", null, .7f, 100,
+                    Summary: "Samuel said the north path is safe."),
+                new(
+                    Guid.NewGuid(), "conversation-heard",
+                    "rowan", null, .9f, 200,
+                    Summary: "Rowan discussed a fishing net.")
+            ]
+        };
+        Check(
+            VillagerSimulation.RecallMemories(
+                partnerMemories,
+                "samuel",
+                "Do you remember what I said?",
+                300,
+                maximum: 1).Single().SubjectId == "samuel",
+            "37 the current partner cues shared memories");
+
+        var topicalMemories = villagers[0] with
+        {
+            Memories =
+            [
+                new(
+                    Guid.NewGuid(), "conversation-heard",
+                    "samuel", null, .65f, 100,
+                    Summary:
+                    "Samuel said a storm wrecked the boat near the beach."),
+                new(
+                    Guid.NewGuid(), "conversation-heard",
+                    "samuel", null, .95f, 1_000,
+                    Summary:
+                    "Samuel said the berries tasted ordinary.")
+            ]
+        };
+        Check(
+            VillagerSimulation.RecallMemories(
+                topicalMemories,
+                "samuel",
+                "What do you remember about the storm and wreck?",
+                1_100,
+                maximum: 1).Single().Summary?.Contains(
+                    "storm", StringComparison.Ordinal) == true,
+            "38 topic relevance can retrieve an older memory over newer small talk");
+
+        var emotionalMemories = villagers[0] with
+        {
+            Memories =
+            [
+                new(
+                    Guid.NewGuid(), "danger",
+                    "rowan", null, .8f, 100, -90,
+                    "Rowan threatened to take our food."),
+                new(
+                    Guid.NewGuid(), "conversation-heard",
+                    "rowan", null, .8f, 500, 0,
+                    "Rowan mentioned the warm afternoon.")
+            ]
+        };
+        Check(
+            VillagerSimulation.RecallMemories(
+                emotionalMemories,
+                "rowan",
+                "What do I remember about Rowan?",
+                600,
+                maximum: 1).Single().Kind == "danger",
+            "39 emotionally significant events remain more accessible than mundane details");
+
+        Check(
+            crowdedBrain.ConversationHistory?.First().Text ==
+                "unique long-term fact 88" &&
+            crowdedBrain.ConversationHistory[^1].Text ==
+                "unique long-term fact 99" &&
+            crowdedBrain.Memories?.Any(memory =>
+                memory.Summary?.Contains(
+                    "fact 50",
+                    StringComparison.Ordinal) == true) == true,
+            "40 long scenarios retain recent dialogue while older knowledge survives in long-term memory");
+
+        if (passed != 40)
             throw new InvalidOperationException(
-                $"Expected 30 NPC AI scenarios, passed {passed}.");
+                $"Expected 40 NPC AI scenarios, passed {passed}.");
         Console.WriteLine(
-            "NPC AI scenario matrix passed: 30/30.");
+            "NPC AI scenario matrix passed: 40/40.");
     }
 
     private static SocialActorObservation[] Observe(
