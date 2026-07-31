@@ -96,7 +96,8 @@ internal sealed partial class GameHostWindow
             villager.AttackExperience,
             villager.StrengthExperience,
             DeterministicRoll(villager.Id, $"npc-hit:{target.Id}"),
-            DeterministicRoll(villager.Id, $"npc-damage:{target.Id}"));
+            DeterministicRoll(villager.Id, $"npc-damage:{target.Id}"),
+            villager.Inventory);
         var attackXp = SkillService.AwardExperience(
             villager.AttackExperience, roll.Experience);
         _villagers[index] = villager with

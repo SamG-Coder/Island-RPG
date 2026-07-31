@@ -33,7 +33,8 @@ internal enum ItemTag
     ProgressionSprite = 1 << 26,
     Sickle = 1 << 27,
     AdvancedToolSprite = 1 << 28,
-    FishingNetUpgradeSprite = 1 << 29
+    FishingNetUpgradeSprite = 1 << 29,
+    Weapon = 1 << 30
 }
 
 internal sealed record ItemDefinition(
@@ -271,7 +272,7 @@ internal static class ItemCatalog
             [ItemIds.StoneKnife] = new(
                 ItemIds.StoneKnife, "stone knife", "Stone knife",
                 "A primitive cutting tool with a stone blade bound to a wooden grip.",
-                3, Tags: ItemTag.Tool | ItemTag.Knife |
+                3, Tags: ItemTag.Tool | ItemTag.Knife | ItemTag.Weapon |
                          ItemTag.StoneToolSprite,
                 KnifePower: 1),
             [ItemIds.BluntStoneHammer] = new(
@@ -617,7 +618,8 @@ internal static class ItemCatalog
         int toolPower = 0) =>
         new(
             id, name, caption, examine, cell,
-            Tags: ItemTag.Tool | toolTag | ItemTag.AdvancedToolSprite,
+            Tags: ItemTag.Tool | toolTag | ItemTag.AdvancedToolSprite |
+                  (toolTag == ItemTag.Knife ? ItemTag.Weapon : ItemTag.None),
             FarmingPower: farmingPower,
             DiggingPower: diggingPower,
             HammerPower: toolTag == ItemTag.Hammer ? toolPower : 0,

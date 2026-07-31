@@ -2038,11 +2038,32 @@ var meleeMiss = MeleeCombatService.Roll(
     strengthExperience: 0,
     hitRoll: .99f,
     damageRoll: 0);
+var knifeMeleeHit = MeleeCombatService.Roll(
+    attackExperience: 0,
+    strengthExperience: 0,
+    hitRoll: 0,
+    damageRoll: 0,
+    inventory:
+    [
+        ItemIds.StoneKnife,
+        ItemIds.IronKnife,
+        ItemIds.IronKnife
+    ]);
+var nonKnifeWeaponHit = MeleeCombatService.Roll(
+    attackExperience: 0,
+    strengthExperience: 0,
+    hitRoll: 0,
+    damageRoll: 0,
+    inventory: [ItemIds.IronAxe]);
 Require(
     meleeHit is { Hit: true, Damage: 1, Experience: 4 } &&
     !meleeMiss.Hit &&
+    knifeMeleeHit.Damage == 4 &&
+    nonKnifeWeaponHit.Damage == meleeHit.Damage &&
+    MeleeCombatService.KnifeDamageBonus(
+        [ItemIds.StoneKnife, ItemIds.IronKnife, ItemIds.IronKnife]) == 3 &&
     MeleeCombatService.AttackIntervalSeconds == 2.4f,
-    "unarmed melee must resolve deterministic hits on fixed combat ticks");
+    "melee must apply only one best-knife damage bonus and leave other carried tools unarmed");
 Require(
     PlaceableObjectCatalog.TryGet(
         ItemIds.TrainingDummy, out var dummyDefinition) &&
@@ -2635,12 +2656,15 @@ Require(
     PlayerInventory.BestKnife(
         [ItemIds.StoneKnife, ItemIds.BronzeKnife])?.Id ==
         ItemIds.BronzeKnife &&
+    ItemCatalog.Get(ItemIds.StoneKnife).HasTag(ItemTag.Weapon) &&
+    ItemCatalog.Get(ItemIds.BronzeKnife).HasTag(ItemTag.Weapon) &&
+    ItemCatalog.Get(ItemIds.IronKnife).HasTag(ItemTag.Weapon) &&
     PlayerInventory.TryBreakRock(
         [ItemIds.BronzeHammer, ItemIds.LargeRock], 0, 1,
         out var bronzeHammerSplit) &&
     bronzeHammerSplit[0] == ItemIds.BronzeHammer &&
     bronzeHammerSplit.Count(item => item == ItemIds.MediumRock) == 2,
-    "powered hammer and knife selection must prefer upgrades and metal hammers must work in shared tool actions");
+    "knife selection must prefer one best weapon while metal hammers continue using shared tool actions");
 var bronzeHammerRecipe = CraftingSkill.Recipes.Single(recipe =>
     recipe.ResultItemId == ItemIds.BronzeHammer);
 Require(
@@ -3247,6 +3271,7 @@ Require(ItemCatalog.Get(ItemIds.StoneKnife) is var knifeDefinition &&
         knifeDefinition.SpriteCell == 3 &&
         knifeDefinition.HasTag(ItemTag.Tool) &&
         knifeDefinition.HasTag(ItemTag.Knife) &&
+        knifeDefinition.HasTag(ItemTag.Weapon) &&
         knifeDefinition.HasTag(ItemTag.StoneToolSprite),
     "the stone knife must use the fourth stone-tool sprite and knife capability");
 Require(ItemCatalog.Get(ItemIds.PlantFibres) is var fibreDefinition &&

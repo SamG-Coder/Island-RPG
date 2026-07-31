@@ -153,7 +153,8 @@ internal sealed partial class GameHostWindow
             _activePlayer.AttackExperience,
             _activePlayer.StrengthExperience,
             Random.Shared.NextSingle(),
-            Random.Shared.NextSingle());
+            Random.Shared.NextSingle(),
+            _activePlayer.Inventory);
         if (!roll.Hit)
         {
             _combatHitSplat = new(
@@ -278,7 +279,8 @@ internal sealed partial class GameHostWindow
             _activePlayer.AttackExperience,
             _activePlayer.StrengthExperience,
             Random.Shared.NextSingle(),
-            Random.Shared.NextSingle());
+            Random.Shared.NextSingle(),
+            _activePlayer.Inventory);
         if (!roll.Hit)
         {
             _combatHitSplat = new(

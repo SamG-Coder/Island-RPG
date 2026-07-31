@@ -798,7 +798,8 @@ internal sealed partial class GameHostWindow
             villager.AttackExperience,
             villager.StrengthExperience,
             DeterministicRoll(villager.Id, "combat-hit"),
-            DeterministicRoll(villager.Id, "combat-damage"));
+            DeterministicRoll(villager.Id, "combat-damage"),
+            villager.Inventory);
         if (roll.Hit)
             ApplyPlayerDamage(roll.Damage, villager.Name);
         var attackXp = SkillService.AwardExperience(
