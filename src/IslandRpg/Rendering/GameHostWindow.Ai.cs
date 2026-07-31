@@ -31,6 +31,7 @@ internal sealed partial class GameHostWindow
     private string? _npcAiDialogueFallback;
     private VillagerSocialIntent _npcAiDialogueIntent;
     private bool _npcAiDialogueReplyPending;
+    private string? _npcAiDialogueReplyFallback;
     private double _npcAiDialogueReadyAt;
     private Task<IReadOnlyList<VillagerPersona>?>?
         _npcPersonaGenerationTask;
@@ -324,11 +325,13 @@ internal sealed partial class GameHostWindow
         var fallback = _npcAiDialogueFallback;
         var intent = _npcAiDialogueIntent;
         var replyPending = _npcAiDialogueReplyPending;
+        var replyFallback = _npcAiDialogueReplyFallback;
         _npcAiDialogueTask = null;
         _npcAiDialogueSpeakerId = null;
         _npcAiDialogueListenerId = null;
         _npcAiDialogueFallback = null;
         _npcAiDialogueReplyPending = false;
+        _npcAiDialogueReplyFallback = null;
         _npcAiDialogueReadyAt = 0;
         line = DialogueResponseService.Resolve(line, fallback);
         ObserveLog("ai_dialogue_response", speakerId, new
@@ -380,10 +383,8 @@ internal sealed partial class GameHostWindow
                 originalSpeaker.Id,
                 originalSpeaker.Name,
                 intent,
-                VillagerReplyFallback(
-                    replyingVillager,
-                    originalSpeaker,
-                    intent),
+                replyFallback ?? VillagerReplyFallback(
+                    replyingVillager, originalSpeaker, intent),
                 allowNpcReply: false,
                 readyAt:
                     _clock + ConversationLineSeconds(line));
@@ -397,7 +398,8 @@ internal sealed partial class GameHostWindow
         VillagerSocialIntent intent,
         string fallback,
         bool allowNpcReply = true,
-        double readyAt = 0)
+        double readyAt = 0,
+        string? replyFallback = null)
     {
         if (_npcAiDialogueTask is { IsCompleted: false })
             return;
@@ -409,6 +411,7 @@ internal sealed partial class GameHostWindow
         _npcAiDialogueReplyPending =
             allowNpcReply &&
             _villagers.Any(value => value.Id == listenerId);
+        _npcAiDialogueReplyFallback = replyFallback;
         _npcAiDialogueReadyAt = readyAt;
         var currentSpeakerIndex = _villagers.FindIndex(value =>
             value.Id == speaker.Id);

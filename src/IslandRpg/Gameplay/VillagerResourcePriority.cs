@@ -5,6 +5,13 @@ internal static class VillagerResourcePriority
     public static int Score(VillagerState villager, string itemId)
     {
         if (!ItemCatalog.TryGet(itemId, out var item)) return 0;
+        if (villager.LastDeliberation is
+            { Action: "seek_trade", ItemId: { Length: > 0 } tradeItem } &&
+            !villager.Inventory.Contains(tradeItem) &&
+            string.Equals(
+                tradeItem, itemId,
+                StringComparison.OrdinalIgnoreCase))
+            return 95;
         if (IsPromised(villager, itemId)) return 100;
         if (MatchesActiveGoal(villager, item)) return 80;
         if (VillagerWorkSupplyPlanner.NeedsItem(villager, itemId))

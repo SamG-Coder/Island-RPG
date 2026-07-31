@@ -499,6 +499,8 @@ internal sealed partial class GameHostWindow
             return true;
         }
 
+        VillagerRequestApproval? requestApproval = null;
+        VillagerRefusalPlan? refusalPlan = null;
         if (goal.Speech is { } speech &&
             goal.OtherActorId is { } conversationPartnerId)
         {
@@ -513,12 +515,41 @@ internal sealed partial class GameHostWindow
                 ? _villagers.First(value =>
                     value.Id == partner.Id).Name
                 : partner.Name;
+            if (goal.Intent == VillagerSocialIntent.RequestFood &&
+                !partnerIsPlayer)
+            {
+                var owner = _villagers.First(value =>
+                    value.Id == partner.Id);
+                requestApproval =
+                    VillagerRequestApprovalService.EvaluateFoodRequest(
+                        villager, owner, _worldGameSeconds);
+                if (!requestApproval.Value.Approved)
+                    refusalPlan =
+                        VillagerRequestApprovalService.PlanAfterRefusal(
+                            villager, owner);
+                ObserveLog("approval_request", villager.Id, new
+                {
+                    OwnerId = owner.Id,
+                    ItemId = ItemIds.CookedMinnows,
+                    Quantity = 1
+                });
+                ObserveLog("approval_response", owner.Id, new
+                {
+                    RequesterId = villager.Id,
+                    requestApproval.Value.Approved,
+                    requestApproval.Value.Score,
+                    requestApproval.Value.Reason,
+                    requestApproval.Value.Reply,
+                    RefusalStrategy = refusalPlan?.Strategy.ToString()
+                });
+            }
             SpeakVillagerDialogue(
                 villager,
                 partner.Id,
                 partner.Name,
                 goal.Intent,
-                speech);
+                speech,
+                replyFallback: requestApproval?.Reply);
             villager = _villagers[villagerIndex];
             villager = goal.Intent == VillagerSocialIntent.Introduce
                 ? VillagerSimulation.RecordIntroductionResponse(
@@ -594,7 +625,31 @@ internal sealed partial class GameHostWindow
                 : villagerIndex;
         var donor = _villagers[donorIndex];
         var receiver = _villagers[receiverIndex];
-        if (VillagerSimulation.CountFood(donor.Inventory) <= 1)
+        var forcedTaking = requestApproval is
+            { Approved: false } && refusalPlan is
+            { Strategy: VillagerRefusalStrategy.TakeByForce };
+        if (requestApproval is { Approved: false } &&
+            refusalPlan is { } rejectedPlan)
+        {
+            var refusal = VillagerRequestApprovalService.ApplyRefusal(
+                receiver, donor, rejectedPlan, _worldGameSeconds);
+            receiver = refusal.Requester;
+            donor = refusal.Owner;
+            _villagers[receiverIndex] = receiver;
+            _villagers[donorIndex] = donor;
+            ObserveLog("refusal_branch", receiver.Id, new
+            {
+                OwnerId = donor.Id,
+                Strategy = rejectedPlan.Strategy.ToString(),
+                rejectedPlan.Thought,
+                rejectedPlan.Action,
+                rejectedPlan.TradeItemId
+            });
+            _villagersDirty = true;
+            if (!forcedTaking) return true;
+        }
+        if (!forcedTaking &&
+            VillagerSimulation.CountFood(donor.Inventory) <= 1)
             return true;
         var foodSlot = Array.FindIndex(
             donor.Inventory,
@@ -611,6 +666,29 @@ internal sealed partial class GameHostWindow
                 foodSlot,
                 out var donorInventory))
             return true;
+        string? completedTradeItem = null;
+        if (requestApproval is { Approved: true, Reason: "trade_offer" } &&
+            receiver.LastDeliberation is
+                { Action: "seek_trade", ItemId: { Length: > 0 } tradeItem })
+        {
+            var tradeSlot = Array.FindIndex(
+                receiverInventory,
+                item => string.Equals(
+                    item, tradeItem,
+                    StringComparison.OrdinalIgnoreCase));
+            if (tradeSlot >= 0 &&
+                PlayerInventory.TryAdd(
+                    donorInventory, tradeItem,
+                    out var tradedDonorInventory) &&
+                PlayerInventory.TryRemove(
+                    receiverInventory, tradeSlot,
+                    out var tradedReceiverInventory))
+            {
+                donorInventory = tradedDonorInventory;
+                receiverInventory = tradedReceiverInventory;
+                completedTradeItem = tradeItem;
+            }
+        }
         _villagers[donorIndex] = donor with
         {
             Inventory = donorInventory,
@@ -619,7 +697,10 @@ internal sealed partial class GameHostWindow
             ActionTime = 0,
             NextDecisionGameSeconds =
                 _worldGameSeconds +
-                VillagerSimulation.SocialCooldownSeconds,
+                    VillagerSimulation.SocialCooldownSeconds,
+            LastDeliberation = completedTradeItem is null
+                ? receiver.LastDeliberation
+                : null,
             LastSimulatedGameSeconds =
                 _worldGameSeconds
         };
@@ -636,6 +717,20 @@ internal sealed partial class GameHostWindow
                 _worldGameSeconds
         };
         _villagersDirty = true;
+        if (forcedTaking)
+            ObserveLog("drastic_action", receiver.Id, new
+            {
+                Action = "take_food_by_force",
+                OwnerId = donor.Id,
+                ItemId = donor.Inventory[foodSlot]
+            });
+        if (completedTradeItem is not null)
+            ObserveLog("trade_completed", receiver.Id, new
+            {
+                PartnerId = donor.Id,
+                OfferedItemId = completedTradeItem,
+                ReceivedItemId = donor.Inventory[foodSlot]
+            });
         return true;
     }
 

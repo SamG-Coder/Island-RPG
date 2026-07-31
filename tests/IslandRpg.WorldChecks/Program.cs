@@ -722,7 +722,8 @@ var observeOptions = AppOptions.Parse([
     "--observe", "--observe-seconds", "45",
     "--observe-log-interval", "1.5",
     "--observe-scenario", ObserveScenarioService.DesertSurplus,
-    "--observe-hunger-rate", "4"
+    "--observe-hunger-rate", "4",
+    "--observe-food-count", "3"
 ]);
 Require(
     observeOptions.Observe && observeOptions.Game &&
@@ -731,6 +732,7 @@ Require(
     observeOptions.ObserveScenario ==
         ObserveScenarioService.DesertSurplus &&
     observeOptions.ObserveHungerRateMultiplier == 4 &&
+    observeOptions.ObserveStartingFoodCount == 3 &&
     ObserveModePolicy.RequiredVillagerCount == 2 &&
     !ObserveModePolicy.ObserverParticipatesInSimulation,
     "Observe CLI configuration must request exactly two villagers and exclude the hidden observer");
@@ -796,6 +798,84 @@ Require(
     proactiveFoodGoal.Speech?.Contains(
         "plan", StringComparison.OrdinalIgnoreCase) == true,
     "a forecast food shortage must create a proactive sharing request before current hunger reaches crisis level");
+var scarceOwnerInventory = PlayerInventory.CreateStartingInventory();
+scarceOwnerInventory[0] = ItemIds.CookedMinnows;
+var requestOwner = villagerSpawnA[1] with
+{
+    Inventory = scarceOwnerInventory,
+    Hunger = 30
+};
+var politeRequester = decliningNeedMemory with
+{
+    Honesty = .1f,
+    Boldness = .2f
+};
+var traderRequester = decliningNeedMemory with
+{
+    Honesty = .8f,
+    Boldness = .2f
+};
+var threateningRequester = decliningNeedMemory with
+{
+    Hunger = 15,
+    Boldness = .6f
+};
+var drasticRequester = decliningNeedMemory with
+{
+    Hunger = 5,
+    Boldness = .8f
+};
+var refusedFood = VillagerRequestApprovalService.EvaluateFoodRequest(
+    traderRequester, requestOwner, gameSeconds: 800);
+var surplusOwnerInventory = PlayerInventory.CreateStartingInventory();
+for (var surplusSlot = 0; surplusSlot < 20; surplusSlot++)
+    surplusOwnerInventory[surplusSlot] = ItemIds.CookedMinnows;
+var approvedFood = VillagerRequestApprovalService.EvaluateFoodRequest(
+    traderRequester,
+    requestOwner with
+    {
+        Hunger = 90,
+        Inventory = surplusOwnerInventory
+    },
+    gameSeconds: 800);
+var politePlan = VillagerRequestApprovalService.PlanAfterRefusal(
+    politeRequester, requestOwner);
+var tradePlan = VillagerRequestApprovalService.PlanAfterRefusal(
+    traderRequester, requestOwner);
+var threatPlan = VillagerRequestApprovalService.PlanAfterRefusal(
+    threateningRequester, requestOwner);
+var drasticPlan = VillagerRequestApprovalService.PlanAfterRefusal(
+    drasticRequester, requestOwner);
+Require(
+    !refusedFood.Approved &&
+    refusedFood.Reason == "protected_reserve" &&
+    approvedFood.Approved &&
+    approvedFood.Reason == "surplus_available" &&
+    politePlan.Strategy == VillagerRefusalStrategy.BeNice &&
+    tradePlan.Strategy == VillagerRefusalStrategy.SeekTrade &&
+    tradePlan.TradeItemId is not null &&
+    threatPlan.Strategy == VillagerRefusalStrategy.Threaten &&
+    drasticPlan.Strategy == VillagerRefusalStrategy.TakeByForce,
+    "food requests must require owner approval and refusal must branch by urgency, personality, and fair alternatives");
+var refusalStates = VillagerRequestApprovalService.ApplyRefusal(
+    drasticRequester, requestOwner, drasticPlan, gameSeconds: 800);
+Require(
+    refusalStates.Requester.LastDeliberation is
+        { Action: "take_food", Risk: 95 } &&
+    refusalStates.Requester.Memories?.Any(memory =>
+        memory.Kind == "request-refused" &&
+        memory.SubjectId == requestOwner.Id) == true &&
+    refusalStates.Owner.Relationships?.Single(value =>
+        value.CharacterId == drasticRequester.Id).State is
+        { Fear: > 0, Resentment: > 0, Trust: < 0 },
+    "drastic refusal branches must persist thought, memory, fear, resentment, and lost trust");
+var tradeSeekingState = VillagerRequestApprovalService.ApplyRefusal(
+    traderRequester, requestOwner, tradePlan, gameSeconds: 800).Requester;
+Require(
+    tradePlan.TradeItemId is { } wantedTradeItem &&
+    VillagerResourcePriority.Score(
+        tradeSeekingState, wantedTradeItem) == 95,
+    "a fair-trade refusal branch must turn the proposed trade item into a concrete gathering priority");
 var desertScenarioVillagers = ObserveScenarioService.Configure(
     ObserveScenarioService.DesertSurplus,
     2187,
@@ -816,9 +896,19 @@ Require(
             desertScenarioVillagers[1].PositionY)) == 1 &&
     VillagerSimulation.CountFood(
         desertScenarioVillagers[0].Inventory) == 20 &&
+    desertScenarioVillagers[1].Hunger == 70 &&
     desertScenarioVillagers[1].Inventory.Count(value =>
         value == ItemIds.StoneKnife) == 1,
     "desert-surplus must start two adjacent desert survivors with asymmetric food and knife resources");
+var scarceScenarioVillagers = ObserveScenarioService.Configure(
+    ObserveScenarioService.DesertSurplus,
+    2187,
+    twoVillagerSpawn,
+    startingFoodCount: 1);
+Require(
+    VillagerSimulation.CountFood(
+        scarceScenarioVillagers[0].Inventory) == 1,
+    "observe scenarios must support controlled starting-food scarcity without changing their biome or actors");
 var observeFocus = ObserveModePolicy.Focus(
     [
         villagerSpawnA[0] with { PositionX = 10, PositionY = 20 },

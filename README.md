@@ -110,13 +110,15 @@ imbalance produces cooperation, bargaining, separation or conflict.
 ```powershell
 dotnet run --project src/IslandRpg -- --observe `
   --observe-scenario desert-surplus --observe-seconds 300 `
-  --observe-hunger-rate 4 --seed 2187
+  --observe-hunger-rate 4 --observe-food-count 20 --seed 2187
 ```
 
 Use `--observe-log-interval <seconds>` to adjust snapshot frequency. Scenario
 events include the exact starting biome, positions and inventories.
 `--observe-hunger-rate <multiplier>` accelerates NPC hunger loss for short
 pressure tests without changing normal game balance.
+`--observe-food-count <0-28>` varies the scenario's starting food supply for
+controlled scarcity comparisons.
 
 ## Playing
 

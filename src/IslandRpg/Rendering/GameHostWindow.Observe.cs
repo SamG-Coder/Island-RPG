@@ -71,7 +71,8 @@ internal sealed record ObserveModeOptions(
     double DurationSeconds = 0,
     double LogIntervalSeconds = 2,
     string Scenario = ObserveScenarioService.Default,
-    float HungerRateMultiplier = 1);
+    float HungerRateMultiplier = 1,
+    int StartingFoodCount = 20);
 
 internal static class ObserveModePolicy
 {
@@ -157,13 +158,17 @@ internal sealed partial class GameHostWindow
         if (_observeMode.Scenario != ObserveScenarioService.Default)
         {
             var configured = ObserveScenarioService.Configure(
-                _observeMode.Scenario, _worldSeed, _villagers);
+                _observeMode.Scenario,
+                _worldSeed,
+                _villagers,
+                _observeMode.StartingFoodCount);
             _villagers.Clear();
             _villagers.AddRange(configured);
             _villagersDirty = true;
             ObserveLog("scenario_started", null, new
             {
                 _observeMode.Scenario,
+                _observeMode.StartingFoodCount,
                 Biome = InfiniteWorldGenerator.BiomeAt(
                     _worldSeed,
                     (int)MathF.Floor(_villagers[0].PositionX),
@@ -189,6 +194,7 @@ internal sealed partial class GameHostWindow
             VillagerCount = _villagers.Count,
             _observeMode.Scenario,
             _observeMode.HungerRateMultiplier,
+            _observeMode.StartingFoodCount,
             ObserverVisible = false,
             ObserverPerceived = false
         });

@@ -15,7 +15,8 @@ internal static class ObserveScenarioService
     public static IReadOnlyList<VillagerState> Configure(
         string scenario,
         long seed,
-        IReadOnlyList<VillagerState> villagers)
+        IReadOnlyList<VillagerState> villagers,
+        int startingFoodCount = 20)
     {
         if (scenario == Default) return villagers;
         if (scenario != DesertSurplus || villagers.Count != 2)
@@ -24,7 +25,9 @@ internal static class ObserveScenarioService
 
         var positions = FindDesertPair(seed);
         var food = PlayerInventory.CreateStartingInventory();
-        for (var slot = 0; slot < 20; slot++)
+        startingFoodCount = Math.Clamp(
+            startingFoodCount, 0, PlayerInventory.Capacity);
+        for (var slot = 0; slot < startingFoodCount; slot++)
             food[slot] = ItemIds.CookedMinnows;
         var knife = PlayerInventory.CreateStartingInventory();
         knife[0] = ItemIds.StoneKnife;
@@ -40,7 +43,8 @@ internal static class ObserveScenarioService
             {
                 PositionX = positions.KnifeHolder.X,
                 PositionY = positions.KnifeHolder.Y,
-                Inventory = knife
+                Inventory = knife,
+                Hunger = 70
             }
         ];
     }

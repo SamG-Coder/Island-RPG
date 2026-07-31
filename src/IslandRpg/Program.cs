@@ -71,7 +71,8 @@ try
             options.ObserveSeconds,
             options.ObserveLogIntervalSeconds,
             options.ObserveScenario,
-            options.ObserveHungerRateMultiplier);
+            options.ObserveHungerRateMultiplier,
+            options.ObserveStartingFoodCount);
         ObserveEventLog.Write(
             Console.Out, 0, world.ElapsedGameSeconds, "Day 1 08:00", null,
             "world_created", new
@@ -82,6 +83,7 @@ try
                 NpcCount = world.AiNpcCount,
                 Scenario = options.ObserveScenario,
                 options.ObserveHungerRateMultiplier,
+                options.ObserveStartingFoodCount,
                 aiSettings.Model
             });
     }
@@ -199,7 +201,7 @@ catch (Exception ex)
     Console.Error.WriteLine(ex.Message);
     Console.Error.WriteLine(
         "Usage: IslandRpg [--game | --world] [--seed <number>] [--island | --catalog] " +
-        "[--observe [--observe-seconds <seconds>] [--observe-log-interval <seconds>] [--observe-scenario <name>] [--observe-hunger-rate <multiplier>]] " +
+        "[--observe [--observe-seconds <seconds>] [--observe-log-interval <seconds>] [--observe-scenario <name>] [--observe-hunger-rate <multiplier>] [--observe-food-count <count>]] " +
         "[--age2-path <folder>] [--graphic <SLP id> | --graphic-name <DAT name>]");
     Environment.ExitCode = 1;
 }
@@ -218,7 +220,8 @@ internal sealed record AppOptions(
     double ObserveSeconds,
     double ObserveLogIntervalSeconds,
     string ObserveScenario,
-    float ObserveHungerRateMultiplier)
+    float ObserveHungerRateMultiplier,
+    int ObserveStartingFoodCount)
 {
     public static AppOptions Parse(string[] args)
     {
@@ -237,6 +240,7 @@ internal sealed record AppOptions(
         double observeLogIntervalSeconds = 2;
         var observeScenario = ObserveScenarioService.Default;
         float observeHungerRateMultiplier = 1;
+        var observeStartingFoodCount = 20;
         long seed = 2187;
         for (var i = 0; i < args.Length; i++)
         {
@@ -322,6 +326,11 @@ internal sealed record AppOptions(
                          out var parsedHungerRate) &&
                      parsedHungerRate > 0)
                 observeHungerRateMultiplier = parsedHungerRate;
+            else if (args[i] == "--observe-food-count" &&
+                     i + 1 < args.Length &&
+                     int.TryParse(args[++i], out var parsedFoodCount) &&
+                     parsedFoodCount is >= 0 and <= PlayerInventory.Capacity)
+                observeStartingFoodCount = parsedFoodCount;
             else if (args[i] == "--seed" && i + 1 < args.Length &&
                      long.TryParse(args[++i], out var parsedSeed)) seed = parsedSeed;
             else if (args[i] == "--validate") validateOnly = true;
@@ -331,6 +340,7 @@ internal sealed record AppOptions(
             path, graphic, graphicName, validateOnly,
             catalog, island, world, game, seed,
             observe, observeSeconds, observeLogIntervalSeconds,
-            observeScenario, observeHungerRateMultiplier);
+            observeScenario, observeHungerRateMultiplier,
+            observeStartingFoodCount);
     }
 }
