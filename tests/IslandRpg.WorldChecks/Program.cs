@@ -8,6 +8,10 @@ using OpenTK.Mathematics;
 
 WorldCheckProcess.DisableWindowsCrashDialogs();
 
+Require(
+    new GameSettings().UnlimitedZoom,
+    "unlimited zoom must be enabled by default");
+
 var playerCommandHints = ChatCommandRegistry.Filter("/h", false);
 var developerCommandHints = ChatCommandRegistry.Filter("/h", true);
 Require(

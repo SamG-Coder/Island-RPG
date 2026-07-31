@@ -357,6 +357,8 @@ internal static class GameShaderPrograms
             "uniform int preserveDarkTint;" +
             "uniform int spriteOutline;uniform vec3 spriteOutlineColor;" +
             "uniform int sceneLighting;uniform float sceneDarkness;" +
+            "uniform float sceneFogAmount;uniform vec2 sceneFogCenter;" +
+            "uniform vec2 sceneFogRadius;" +
             "uniform int sceneUnderground;uniform int localLightCount;" +
             "uniform vec2 localLightUv[16];uniform vec2 localLightRadius[16];" +
             "uniform vec3 localLightColor[16];uniform float localLightIntensity[16];" +
@@ -411,6 +413,12 @@ internal static class GameShaderPrograms
             "light=light*light*(3.0-2.0*light);" +
             "illumination+=localLightColor[i]*light*localLightIntensity[i];}" +
             "c.rgb*=clamp(ambient+illumination,vec3(0.0),vec3(1.12));" +
+            "}" +
+            "if(sceneFogAmount>0.001){" +
+            "vec2 fogDelta=(uv-sceneFogCenter)/max(sceneFogRadius,vec2(0.001));" +
+            "float fogCoverage=smoothstep(0.68,1.0,length(fogDelta));" +
+            "vec3 fogColor=vec3(0.035,0.038,0.035);" +
+            "c.rgb=mix(c.rgb,fogColor,fogCoverage*sceneFogAmount);" +
             "}" +
             "c.a*=opacity*alpha;}}");
         var program = GL.CreateProgram(); GL.AttachShader(program, vs); GL.AttachShader(program, fs); GL.LinkProgram(program);

@@ -458,6 +458,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 ChatMessageStyle.Warning);
         }
         var settings = _saves.LoadSettings();
+        _unlimitedZoomToggle.SetChecked(settings.UnlimitedZoom);
         ApplyDisplaySettings(settings);
         InitializeMusic();
         var progress = new Progress<(int Done, int Total, string Name)>(value =>
@@ -2912,6 +2913,8 @@ internal sealed partial class GameHostWindow : GameWindow
         // This program also renders sprites and UI. Keep the cave composite
         // strictly scoped to this one fullscreen draw.
         GL.Uniform1(_shaderUniforms.Get(_program, "sceneLighting"), 0);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "sceneFogAmount"), 0f);
     }
 
     protected override void OnRenderFrame(FrameEventArgs e)
@@ -5123,6 +5126,8 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.UseProgram(_program);
         GL.Uniform1(
             _shaderUniforms.Get(_program, "sceneLighting"), 0);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "sceneFogAmount"), 0f);
         GL.Uniform1(_shaderUniforms.Get(_program, "image"), 0);
         GL.Uniform1(
             _shaderUniforms.Get(_program, "opacity"),
@@ -5303,7 +5308,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 continue;
             }
 
-            if (IsChunkVisible(gpu))
+            if (IsChunkInsideWorldRenderCircle(gpu) &&
+                IsChunkVisible(gpu))
             {
                 _visibleWorldChunkBuffer.Add(gpu);
             }
@@ -5325,6 +5331,9 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_mode == PreviewMode.Game) DrawMoveMarker();
 
         var player = _mode == PreviewMode.Game ? GetPlayerVisual() : null;
+        var distantDetailOpacity = Math.Clamp(
+            (_zoom - .16f) / .06f, 0, 1);
+        var renderGroundObjectsAndFish = distantDetailOpacity > .001f;
         var playerDepth = player?.World.Y ?? float.MaxValue;
         var vegetationCapacity = visibleChunks.Sum(
             gpu => gpu.VegetationRenderItems.Length);
@@ -5389,6 +5398,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 visibleName);
         }
 
+        if (renderGroundObjectsAndFish)
         foreach (var item in visibleChunks
                      .SelectMany(gpu => gpu.Chunk.GroundObjects.Select(
                          groundObject => (Object: groundObject, Gpu: gpu))))
@@ -5405,6 +5415,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     item.Object, _worldGameSeconds, _clock);
             var world = GroundObjectWorld(item.Object);
             var objectOpacity = item.Gpu.Opacity *
+                distantDetailOpacity *
                 CaveEntranceService.Opacity(item.Object);
             if (!IsAtlasItemVisible(itemAtlasKey, world) &&
                 (shadowAtlasKey is null ||
@@ -5454,6 +5465,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 vegetation.AtlasKey);
         }
 
+        if (renderGroundObjectsAndFish)
         foreach (var gpu in visibleChunks)
         foreach (var cachedFish in gpu.FishRenderItems)
         {
@@ -5465,10 +5477,15 @@ internal sealed partial class GameHostWindow : GameWindow
             if (!IsAtlasItemVisible(atlasKey, world))
                 continue;
             _worldRenderQueue.AddShadow(
-                world, gpu.Opacity, fish.StableKey,
+                world,
+                gpu.Opacity * distantDetailOpacity,
+                fish.StableKey,
                 WorldFishPresentation.DepthAtlasKey);
             _worldRenderQueue.AddObject(
-                world, gpu.Opacity, fish.StableKey, atlasKey);
+                world,
+                gpu.Opacity * distantDetailOpacity,
+                fish.StableKey,
+                atlasKey);
         }
 
         _worldRenderQueue.Sort();
@@ -5789,7 +5806,10 @@ internal sealed partial class GameHostWindow : GameWindow
         var wanted = new List<ChunkCoordinate>();
         for (var y = center.Y - loadRadius; y <= center.Y + loadRadius; y++)
         for (var x = center.X - loadRadius; x <= center.X + loadRadius; x++)
-            if (!_worldChunks.ContainsKey(
+            if ((x - center.X) * (x - center.X) +
+                (y - center.Y) * (y - center.Y) <=
+                loadRadius * loadRadius &&
+                !_worldChunks.ContainsKey(
                     new(x, y, _activeWorldLevel)) &&
                 (_pendingChunkTask is null ||
                  _pendingChunkCoordinate !=
@@ -5821,14 +5841,13 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private int WorldStreamLoadRadius()
     {
-        const int standardRadius = 2;
+        const int standardRadius = 5;
         if (!_zoomScaledLoadingToggle.IsChecked)
             return standardRadius;
 
-        // Radius 2 covers the normal minimum zoom of 0.45. Below that,
-        // increase the surrounding chunk square in inverse proportion to
-        // zoom. The ceiling is purely a memory-safety boundary for extreme
-        // developer camera values: radius 32 already permits 4,225 chunks.
+        // Radius 5 gives extreme zoom a wider terrain buffer. The optional
+        // diagnostic mode can still expand it in inverse proportion to zoom;
+        // radius 32 is the memory-safety ceiling.
         const int maximumDeveloperRadius = 32;
         var zoom = Math.Max(_zoom, .001f);
         return Math.Clamp(
@@ -6934,6 +6953,21 @@ internal sealed partial class GameHostWindow : GameWindow
         WorldChunkCachePolicy.IsActiveLevel(
             gpu.Chunk.Coordinate, _activeWorldLevel);
 
+    private bool IsChunkInsideWorldRenderCircle(GpuWorldChunk gpu)
+    {
+        if (_mode != PreviewMode.Game || _player is null)
+            return true;
+        const int renderRadius = 5;
+        var playerChunkX = FloorDiv(
+            (int)MathF.Floor(_player.Position.X), WorldChunk.Size);
+        var playerChunkY = FloorDiv(
+            (int)MathF.Floor(_player.Position.Y), WorldChunk.Size);
+        var deltaX = gpu.Chunk.Coordinate.X - playerChunkX;
+        var deltaY = gpu.Chunk.Coordinate.Y - playerChunkY;
+        return deltaX * deltaX + deltaY * deltaY <=
+               renderRadius * renderRadius;
+    }
+
     private bool IsChunkVisible(GpuWorldChunk gpu) =>
         IsActiveWorldChunk(gpu) &&
         IsChunkVisibleWithPadding(gpu, 96);
@@ -7226,6 +7260,8 @@ internal sealed partial class GameHostWindow : GameWindow
             outlineColor ?? new Vector3(1f, .82f, .18f));
         GL.Uniform1(GL.GetUniformLocation(_program, "wading"),
             wading && !outlineOnly ? 1 : 0);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "sceneFogAmount"), 0f);
         GL.Uniform1(GL.GetUniformLocation(_program, "waterlineUv"),
             Math.Clamp((frame.HotspotY - 13f) / frame.Height, .45f, .88f));
         GL.Uniform1(GL.GetUniformLocation(_program, "brightness"), 0f);

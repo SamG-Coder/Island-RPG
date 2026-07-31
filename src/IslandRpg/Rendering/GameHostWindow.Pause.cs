@@ -193,6 +193,10 @@ internal sealed partial class GameHostWindow
                     (gameSettings.OccludedPlayerOutline
                         ? "On"
                         : "Off"));
+                DrawMenuButton(
+                    _settingsMenu.OptionBounds(1),
+                    "Unlimited zoom out: " +
+                    (gameSettings.UnlimitedZoom ? "On" : "Off"));
                 break;
             case SettingsTab.Sound:
                 var soundSettings = _saves.LoadSettings();
@@ -380,16 +384,6 @@ internal sealed partial class GameHostWindow
             _navigationBlocksToggle.Hovered =
                 _navigationBlocksToggle.HitTest(MouseState.Position);
             DrawToggleControl(_navigationBlocksToggle);
-        }
-        if (list.VisibleIndices.Contains(
-                DeveloperSettingsController.UnlimitedZoomIndex))
-        {
-            _unlimitedZoomToggle.Layout(
-                DeveloperSettingsController.UnlimitedZoomBounds(list),
-                horizontalInset: 0);
-            _unlimitedZoomToggle.Hovered =
-                _unlimitedZoomToggle.HitTest(MouseState.Position);
-            DrawToggleControl(_unlimitedZoomToggle);
         }
         if (list.VisibleIndices.Contains(
                 DeveloperSettingsController.ZoomScaledLoadingIndex))

@@ -23,7 +23,8 @@ internal sealed class SettingsMenuState
         Enum.GetValues<SettingsTab>();
     private static readonly string[] DisplayItems =
         ["fullscreen", "resolution", "vsync", "frame-limit", "metrics"];
-    private static readonly string[] GameItems = ["occluded-player-outline"];
+    private static readonly string[] GameItems =
+        ["occluded-player-outline", "unlimited-zoom"];
     private static readonly string[] SoundItems =
         ["music-enabled", "music-volume", "effects-volume"];
     private static readonly string[] DeveloperItems =
@@ -34,7 +35,6 @@ internal sealed class SettingsMenuState
         "developer-sound-audition",
         "developer-section-diagnostics",
         "developer-navigation-blocks",
-        "developer-unlimited-zoom",
         "developer-zoom-scaled-loading",
         "developer-use-test-assets",
         "developer-section-progression",

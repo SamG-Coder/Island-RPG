@@ -81,7 +81,8 @@ internal sealed record GameSettings(
     int FullscreenHeight = 0,
     bool MusicEnabled = true,
     float EffectsVolume = .85f,
-    bool UseTestAssets = false);
+    bool UseTestAssets = false,
+    bool UnlimitedZoom = true);
 
 internal sealed class GameSaveRepository
 {

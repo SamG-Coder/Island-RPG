@@ -12,11 +12,10 @@ internal sealed class DeveloperSettingsController
     public const int SoundAuditionIndex = 3;
     public const int DiagnosticsHeaderIndex = 4;
     public const int NavigationBlocksIndex = 5;
-    public const int UnlimitedZoomIndex = 6;
-    public const int ZoomScaledLoadingIndex = 7;
-    public const int UseTestAssetsIndex = 8;
-    public const int ProgressionHeaderIndex = 9;
-    public const int SkillStartIndex = 10;
+    public const int ZoomScaledLoadingIndex = 6;
+    public const int UseTestAssetsIndex = 7;
+    public const int ProgressionHeaderIndex = 8;
+    public const int SkillStartIndex = 9;
 
     public static readonly SkillType[] Skills =
         Enum.GetValues<SkillType>();
@@ -95,10 +94,6 @@ internal sealed class DeveloperSettingsController
     public static Vector4 NavigationBlocksBounds(
         ListControlState list) =>
         list.RowBounds(NavigationBlocksIndex);
-
-    public static Vector4 UnlimitedZoomBounds(
-        ListControlState list) =>
-        list.RowBounds(UnlimitedZoomIndex);
 
     public static Vector4 ZoomScaledLoadingBounds(
         ListControlState list) =>

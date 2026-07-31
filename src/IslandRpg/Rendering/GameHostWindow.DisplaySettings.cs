@@ -195,15 +195,29 @@ internal sealed partial class GameHostWindow
     internal bool UpdateGameSettings(Vector2 pointer, Vector4 panel)
     {
         _settingsMenu.LayoutContent(panel);
-        if (!_settingsMenu.ContentList.VisibleIndices.Contains(0) ||
-            !_settingsMenu.OptionBounds(0).Contains(pointer))
-            return false;
         var settings = _saves.LoadSettings();
-        settings = settings with
+        if (_settingsMenu.ContentList.VisibleIndices.Contains(0) &&
+            _settingsMenu.OptionBounds(0).Contains(pointer))
         {
-            OccludedPlayerOutline =
-                !settings.OccludedPlayerOutline
-        };
+            settings = settings with
+            {
+                OccludedPlayerOutline =
+                    !settings.OccludedPlayerOutline
+            };
+        }
+        else if (_settingsMenu.ContentList.VisibleIndices.Contains(1) &&
+                 _settingsMenu.OptionBounds(1).Contains(pointer))
+        {
+            settings = settings with
+            {
+                UnlimitedZoom = !settings.UnlimitedZoom
+            };
+            _unlimitedZoomToggle.SetChecked(settings.UnlimitedZoom);
+            if (!settings.UnlimitedZoom)
+                _targetZoom = Math.Clamp(_targetZoom, .45f, 1.75f);
+        }
+        else
+            return false;
         _saves.SaveSettings(settings);
         ApplyDisplaySettings(settings);
         return true;

@@ -45,6 +45,7 @@ internal sealed partial class GameHostWindow
         GL.Uniform1(
             _shaderUniforms.Get(_program, "sceneUnderground"),
             underground ? 1 : 0);
+        UploadUnlimitedZoomFog(active);
 
         var count = 0;
         if (active && _levelUpFireworks.Active)
@@ -144,5 +145,36 @@ internal sealed partial class GameHostWindow
                 intensity);
             count++;
         }
+    }
+
+    private void UploadUnlimitedZoomFog(bool active)
+    {
+        var fogAmount = active &&
+                        _unlimitedZoomToggle.IsChecked &&
+                        _player is not null
+            ? Math.Clamp((.22f - _zoom) / .04f, 0, 1)
+            : 0;
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "sceneFogAmount"),
+            fogAmount);
+        if (fogAmount <= 0) return;
+
+        var player = GetPlayerVisual();
+        var anchor = player is null
+            ? new Vector2(ReferenceWidth * .5f, ReferenceHeight * .5f)
+            : SpriteAnchor(player.World);
+        GL.Uniform2(
+            _shaderUniforms.Get(_program, "sceneFogCenter"),
+            anchor.X / ReferenceWidth,
+            1f - anchor.Y / ReferenceHeight);
+        const float visibleTileRadius = 80f;
+        var radiusX = visibleTileRadius * 48f *
+                      MathF.Sqrt(2f) * _zoom;
+        var radiusY = visibleTileRadius * 24f *
+                      MathF.Sqrt(2f) * _zoom;
+        GL.Uniform2(
+            _shaderUniforms.Get(_program, "sceneFogRadius"),
+            radiusX / ReferenceWidth,
+            radiusY / ReferenceHeight);
     }
 }

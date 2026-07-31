@@ -29,9 +29,6 @@ internal sealed partial class GameHostWindow
         _navigationBlocksToggle.Layout(
             DeveloperSettingsController.NavigationBlocksBounds(list),
             horizontalInset: 0);
-        _unlimitedZoomToggle.Layout(
-            DeveloperSettingsController.UnlimitedZoomBounds(list),
-            horizontalInset: 0);
         _zoomScaledLoadingToggle.Layout(
             DeveloperSettingsController.ZoomScaledLoadingBounds(list),
             horizontalInset: 0);
@@ -101,14 +98,6 @@ internal sealed partial class GameHostWindow
                 DeveloperSettingsController.NavigationBlocksIndex) &&
             _navigationBlocksToggle.ToggleAt(pointer))
             return true;
-        if (list.VisibleIndices.Contains(
-                DeveloperSettingsController.UnlimitedZoomIndex) &&
-            _unlimitedZoomToggle.ToggleAt(pointer))
-        {
-            if (!_unlimitedZoomToggle.IsChecked)
-                _targetZoom = Math.Clamp(_targetZoom, .45f, 1.75f);
-            return true;
-        }
         if (list.VisibleIndices.Contains(
                 DeveloperSettingsController.ZoomScaledLoadingIndex) &&
             _zoomScaledLoadingToggle.ToggleAt(pointer))
