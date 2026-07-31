@@ -78,6 +78,35 @@ internal sealed partial class GameHostWindow
             clearTreeActions: true);
     }
 
+    public void QueueVillagerAttack(VillagerState villager)
+    {
+        if (window._combatVillagerId == villager.Id)
+            return;
+        window.CancelMeleeCombat();
+        QueuePath(
+            new(villager.PositionX, villager.PositionY),
+            MeleeCombatService.AttackRange,
+            GameHostWindow.WorldActionType.AttackVillager,
+            actorId: villager.Id,
+            clearTreeActions: true);
+    }
+
+    public void QueueVillagerGift(
+        VillagerState villager,
+        int inventorySlot,
+        string itemId)
+    {
+        window.CancelMeleeCombat();
+        QueuePath(
+            new(villager.PositionX, villager.PositionY),
+            VillagerSimulation.InteractionRange,
+            GameHostWindow.WorldActionType.GiveItemToVillager,
+            inventorySlot: inventorySlot,
+            itemId: itemId,
+            actorId: villager.Id,
+            clearTreeActions: true);
+    }
+
     public void QueueFish(WorldFish fish)
     {
         var target = new Vector2(fish.X, fish.Y);
@@ -158,6 +187,7 @@ internal sealed partial class GameHostWindow
         string? itemId = null,
         string? fishKey = null,
         string? vegetationKey = null,
+        string? actorId = null,
         bool clearTreeActions = false)
     {
         if (window._player is null) return;
@@ -192,6 +222,7 @@ internal sealed partial class GameHostWindow
                 itemId,
                 fishKey,
                 vegetationKey,
+                actorId,
                 obstacles),
             token);
         window._moveMarker = null;
@@ -222,6 +253,23 @@ internal sealed partial class GameHostWindow
                 GroundObjectId: { } dummyId
             }:
                 window.BeginTrainingDummyCombat(dummyId);
+                break;
+            case
+            {
+                Type: GameHostWindow.WorldActionType.AttackVillager,
+                ActorId: { } villagerId
+            }:
+                window.BeginVillagerCombat(villagerId);
+                break;
+            case
+            {
+                Type: GameHostWindow.WorldActionType.GiveItemToVillager,
+                ActorId: { } villagerId,
+                InventorySlot: >= 0,
+                ItemId: { } itemId
+            }:
+                window.GiveItemToVillager(
+                    villagerId, action.InventorySlot, itemId);
                 break;
             case
             {

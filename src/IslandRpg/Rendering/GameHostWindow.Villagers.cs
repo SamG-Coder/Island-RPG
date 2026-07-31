@@ -76,6 +76,27 @@ internal sealed partial class GameHostWindow
         for (var index = 0; index < _villagers.Count; index++)
         {
             var previous = _villagers[index];
+            if (previous.Health <= 0)
+            {
+                if (previous.Action != EntityAction.Die)
+                {
+                    _villagers[index] = previous with
+                    {
+                        Action = EntityAction.Die,
+                        ActionTime = 0,
+                        TargetX = null,
+                        TargetY = null,
+                        FollowingActorId = null
+                    };
+                    _villagersDirty = true;
+                }
+                else
+                    _villagers[index] = previous with
+                    {
+                        ActionTime = previous.ActionTime + elapsed
+                    };
+                continue;
+            }
             if (previous.Activity == VillagerActivity.Conversing &&
                 _worldGameSeconds >=
                 previous.ActivityUntilGameSeconds)
@@ -110,16 +131,11 @@ internal sealed partial class GameHostWindow
                     previous = VillagerSimulation.BlockMovement(
                         previous, _worldGameSeconds);
                 else if (distanceSquared > 2.2f * 2.2f)
-                    previous = VillagerSimulation.ApplyDecision(
+                    previous =
+                        VillagerSimulation.RetargetFollowing(
                             previous,
-                            new(
-                                VillagerNeed.Social,
-                                followTarget),
-                            VillagerSimulationTier.Nearby,
-                            _worldGameSeconds) with
-                    {
-                        Activity = VillagerActivity.Following
-                    };
+                            followTarget,
+                            _worldGameSeconds);
                 else
                     previous = previous with
                     {
@@ -1022,6 +1038,97 @@ internal sealed partial class GameHostWindow
         }
     }
 
+    internal void GiveItemToVillager(
+        string villagerId,
+        int inventorySlot,
+        string itemId)
+    {
+        if (_player is null || _activePlayer is null ||
+            !InventoryContainsAt(inventorySlot, itemId))
+            return;
+        var villagerIndex = _villagers.FindIndex(value =>
+            value.Id == villagerId &&
+            value.WorldLevel == _activeWorldLevel &&
+            value.Health > 0);
+        if (villagerIndex < 0) return;
+        var villager = _villagers[villagerIndex];
+        var target = new Vector2(
+            villager.PositionX, villager.PositionY);
+        if (Vector2.Distance(_player.Position, target) >
+            VillagerSimulation.InteractionRange + .3f)
+        {
+            _worldActions.QueueVillagerGift(
+                villager, inventorySlot, itemId);
+            return;
+        }
+        if (!TryGetDropTerrain(
+                (int)MathF.Floor(target.X),
+                (int)MathF.Floor(target.Y),
+                out var gpu,
+                out var reason))
+        {
+            ReportBlockedAction("villager-gift-blocked", reason);
+            return;
+        }
+        if (!PlayerInventory.TryRemove(
+                _activePlayer.Inventory,
+                inventorySlot,
+                out var inventory))
+            return;
+
+        var itemInstanceId = Guid.NewGuid();
+        gpu.Chunk.GroundObjects.Add(new(
+            itemInstanceId,
+            itemId,
+            target.X,
+            target.Y,
+            OwnerId: villager.Id));
+        _activePlayer = _activePlayer with
+        {
+            Inventory = inventory,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        if (_activeInventorySlot == inventorySlot)
+            _activeInventorySlot = -1;
+        var itemName = ItemCatalog.Get(itemId).Name;
+        villager = VillagerSimulation.RecordGift(
+            villager,
+            _activePlayer.Id,
+            _activePlayer.Name,
+            itemInstanceId,
+            itemId,
+            _worldGameSeconds);
+        var giftSpeech =
+            $"{villager.Name}, this {itemName} is for you.";
+        villager = VillagerSimulation.RecordDialogueTurn(
+            villager,
+            _activePlayer.Id,
+            _activePlayer.Name,
+            giftSpeech,
+            _worldGameSeconds);
+        villager = VillagerSimulation.RecordDialogueTurn(
+            villager,
+            villager.Id,
+            villager.Name,
+            $"Thank you, {_activePlayer.Name}.",
+            _worldGameSeconds + 1);
+        _villagers[villagerIndex] = villager;
+        _villagersDirty = true;
+        _saves.SavePlayer(_activePlayer);
+        QueueChunkSave(gpu.Chunk);
+
+        var message =
+            $"{_activePlayer.Name}: {giftSpeech}";
+        _chatUi.AddMessage(message, ChatMessageStyle.Player);
+        ShowOverheadSpeech(
+            $"{villager.Name}, this {itemName} is for you.");
+        ShowVillagerSpeech(
+            villagerIndex,
+            $"Thank you, {_activePlayer.Name}.",
+            _player.Position);
+        _player.Stop();
+    }
+
     private static int ItemValue(string itemId)
     {
         var item = ItemCatalog.Get(itemId);
@@ -1032,48 +1139,78 @@ internal sealed partial class GameHostWindow
         return 2;
     }
 
-    private void DrawVillagers()
+    private void DrawVillager(VillagerState villager)
     {
         const int storedVillagerAngles = 5;
-        foreach (var villager in _villagers)
+        if (!_entityAnimations.TryGetValue(
+                (villager.Gender, villager.Action),
+                out var animation))
+            return;
+        var graphic = animation.Graphic;
+        var rawFrame = (int)(
+            villager.ActionTime / animation.SecondsPerFrame);
+        var directional = VillagerDirectionRig.Resolve(
+            new Vector2(
+                villager.FacingX,
+                villager.FacingY),
+            graphic.Sprite.Frames.Count,
+            storedVillagerAngles,
+            rawFrame);
+        var terrain = SamplePlayerTerrain(
+            villager.PositionX, villager.PositionY);
+        var world = IsometricTerrainProjection.Project(
+            villager.PositionX,
+            villager.PositionY,
+            terrain.Height);
+        DrawSprite(
+            graphic.Sprite.Frames[directional.Index],
+            animation.Textures[directional.Index],
+            world,
+            mirror: directional.Mirror,
+            wading: terrain.Biome is
+                Biome.ShallowWater or
+                Biome.RiverWater or
+                Biome.MangroveShallows,
+            teamColor: villager.TeamColor);
+    }
+
+    private bool TryGetVillagerUnderMouse(
+        Vector2 mouse,
+        out VillagerState villager)
+    {
+        for (var index = _villagers.Count - 1; index >= 0; index--)
         {
-            if (villager.WorldLevel != _activeWorldLevel ||
-                _player is null ||
-                Vector2.DistanceSquared(
-                    new(villager.PositionX, villager.PositionY),
-                    _player.Position) >
-                    VillagerSimulation.RegionalRadius *
-                    VillagerSimulation.RegionalRadius ||
+            var candidate = _villagers[index];
+            if (candidate.WorldLevel != _activeWorldLevel ||
+                candidate.Health <= 0 ||
                 !_entityAnimations.TryGetValue(
-                    (villager.Gender, villager.Action),
+                    (candidate.Gender, candidate.Action),
                     out var animation))
                 continue;
-            var graphic = animation.Graphic;
-            var rawFrame = (int)(
-                villager.ActionTime / animation.SecondsPerFrame);
+            var frameIndex = (int)(
+                candidate.ActionTime / animation.SecondsPerFrame);
             var directional = VillagerDirectionRig.Resolve(
-                new Vector2(
-                    villager.FacingX,
-                    villager.FacingY),
-                graphic.Sprite.Frames.Count,
-                storedVillagerAngles,
-                rawFrame);
+                new(candidate.FacingX, candidate.FacingY),
+                animation.Graphic.Sprite.Frames.Count,
+                5,
+                frameIndex);
             var terrain = SamplePlayerTerrain(
-                villager.PositionX, villager.PositionY);
-            var world = IsometricTerrainProjection.Project(
-                villager.PositionX,
-                villager.PositionY,
+                candidate.PositionX, candidate.PositionY);
+            var projected = IsometricTerrainProjection.Project(
+                candidate.PositionX,
+                candidate.PositionY,
                 terrain.Height);
-            DrawSprite(
-                graphic.Sprite.Frames[directional.Index],
-                animation.Textures[directional.Index],
-                world,
-                mirror: directional.Mirror,
-                wading: terrain.Biome is
-                    Biome.ShallowWater or
-                    Biome.RiverWater or
-                    Biome.MangroveShallows,
-                teamColor: villager.TeamColor);
+            var bounds = SpriteBounds(
+                animation.Graphic.Sprite.Frames[directional.Index],
+                projected,
+                directional.Mirror);
+            if (mouse.X < bounds.Left || mouse.X > bounds.Right ||
+                mouse.Y < bounds.Top || mouse.Y > bounds.Bottom)
+                continue;
+            villager = candidate;
+            return true;
         }
+        villager = null!;
+        return false;
     }
 }

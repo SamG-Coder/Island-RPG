@@ -326,6 +326,55 @@ var soloVillagerSpawn = VillagerSimulation.CreateInitial(
     2187, Vector2.Zero, population: 0);
 var twoVillagerSpawn = VillagerSimulation.CreateInitial(
     2187, Vector2.Zero, population: 2);
+var oneRealMinuteLater = VillagerSimulation.CatchUp(
+    villagerSpawnA[0],
+    VillagerSimulation.GameSecondsPerRealSecond * 60);
+Require(
+    MathF.Abs(
+        oneRealMinuteLater.Hunger -
+        (SurvivalService.MaximumHunger -
+         SurvivalService.BaseHungerLossPerSecond * 60)) <
+    .001f &&
+    oneRealMinuteLater.Health ==
+        AdventureService.BaseMaximumHealth,
+    "villager survival catch-up must convert accelerated game time back to real seconds");
+var repairedLegacyStarvation =
+    VillagerSimulation.CatchUp(
+        villagerSpawnA[0] with
+        {
+            Health = 0,
+            Hunger = 0,
+            SurvivalTimeScaleVersion = 0
+        },
+        0);
+var preservedViolenceDefeat =
+    VillagerSimulation.CatchUp(
+        repairedLegacyStarvation with
+        {
+            Health = 0,
+            Hunger = 0,
+            SurvivalTimeScaleVersion = 0,
+            Memories =
+            [
+                new(
+                    Guid.NewGuid(),
+                    "violence",
+                    "player",
+                    null,
+                    1,
+                    0,
+                    -100,
+                    "Samuel attacked Mira.")
+            ]
+        },
+        0);
+Require(
+    repairedLegacyStarvation.Health ==
+        AdventureService.BaseMaximumHealth &&
+    repairedLegacyStarvation.Hunger == 25 &&
+    repairedLegacyStarvation.SurvivalTimeScaleVersion == 1 &&
+    preservedViolenceDefeat.Health == 0,
+    "the survival time-scale migration must repair starvation-corrupted saves without reviving violence deaths");
 Require(soloVillagerSpawn.Length == 0,
     "zero-population worlds must remain solo");
 Require(twoVillagerSpawn.Length == 2,
@@ -857,6 +906,60 @@ Require(
     arrivedVillager.ActionTime == 0 &&
     arrivedVillager.TargetX is null,
     "villagers must interpolate at a bounded speed and stop exactly at their destination");
+var followingState = VillagerSimulation.RetargetFollowing(
+    partiallyMovedVillager with
+    {
+        FollowingActorId = "player",
+        ActionTime = 1.75
+    },
+    new(3, 1),
+    251);
+followingState = VillagerSimulation.RetargetFollowing(
+    followingState,
+    new(3.25f, 1.25f),
+    252);
+Require(
+    followingState.Action == EntityAction.Move &&
+    followingState.Activity == VillagerActivity.Following &&
+    followingState.ActionTime == 1.75 &&
+    followingState.TargetX == 3.25f &&
+    followingState.TargetY == 1.25f,
+    "retargeting a moving follower must preserve its walk-cycle time");
+var giftItemId = Guid.NewGuid();
+var giftedVillager = VillagerSimulation.RecordGift(
+    villagerSpawnA[0],
+    "player",
+    "Samuel",
+    giftItemId,
+    ItemIds.StoneAxe,
+    260);
+Require(
+    giftedVillager.Memories?.Any(memory =>
+        memory.Kind == "gift-received" &&
+        memory.SubjectId == "player" &&
+        memory.ItemInstanceId == giftItemId) == true &&
+    giftedVillager.Relationships?.Single(value =>
+        value.CharacterId == "player").State.Trust > 0 &&
+    giftedVillager.Relationships.Single(value =>
+        value.CharacterId == "player").State.Affection > 0,
+    "a gifted owned item must become a positive social memory");
+var attackedVillager = VillagerSimulation.RecordAttack(
+    giftedVillager,
+    "player",
+    "Samuel",
+    7,
+    261);
+Require(
+    attackedVillager.Health == giftedVillager.Health - 7 &&
+    attackedVillager.FollowingActorId is null &&
+    attackedVillager.Need == VillagerNeed.Safe &&
+    attackedVillager.Memories?.Any(memory =>
+        memory.Kind == "violence" &&
+        memory.SubjectId == "player" &&
+        memory.Sentiment <= -20) == true &&
+    attackedVillager.Relationships?.Single(value =>
+        value.CharacterId == "player").State.Resentment > 0,
+    "attacking a villager must damage them, stop following, and create a hostile memory");
 var conversationState = VillagerSimulation.BeginConversation(
     movementState,
     "player",

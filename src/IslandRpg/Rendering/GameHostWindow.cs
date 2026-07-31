@@ -102,6 +102,8 @@ internal sealed partial class GameHostWindow : GameWindow
         UseCraftingStation,
         OpenStorage,
         AttackTrainingDummy,
+        AttackVillager,
+        GiveItemToVillager,
         BoardFishingBoat
     }
     private sealed record QueuedWorldAction(
@@ -110,7 +112,8 @@ internal sealed partial class GameHostWindow : GameWindow
         int InventorySlot = -1,
         string? ItemId = null,
         string? FishKey = null,
-        string? VegetationKey = null);
+        string? VegetationKey = null,
+        string? ActorId = null);
     private sealed record PathResult(
         int RequestId,
         int WorldLevel,
@@ -1515,7 +1518,22 @@ internal sealed partial class GameHostWindow : GameWindow
             !IsPointerOverGameUi(MouseState.Position))
         {
             var target = ScreenToTerrain(SceneMousePosition());
-            if (TryGetGroundObjectUnderMouse(
+            if (TryGetVillagerUnderMouse(
+                    SceneMousePosition(), out var contextVillager))
+            {
+                var inventory = _activePlayer?.Inventory ?? [];
+                if ((uint)_activeInventorySlot <
+                        (uint)inventory.Length &&
+                    inventory[_activeInventorySlot] is { } activeItem)
+                    _worldActions.QueueVillagerGift(
+                        contextVillager,
+                        _activeInventorySlot,
+                        activeItem);
+                else
+                    _worldActions.QueueVillagerAttack(
+                        contextVillager);
+            }
+            else if (TryGetGroundObjectUnderMouse(
                     SceneMousePosition(), out var contextObject, out _))
             {
                 _groundObjectContextTarget = contextObject;
@@ -1875,6 +1893,7 @@ internal sealed partial class GameHostWindow : GameWindow
         string? itemId = null,
         string? fishKey = null,
         string? vegetationKey = null,
+        string? actorId = null,
         IReadOnlyList<NavigationObstacle>? obstacles = null)
     {
         var targetCell = new Vector2i(
@@ -1941,10 +1960,11 @@ internal sealed partial class GameHostWindow : GameWindow
                     actionType, target,
                     Math.Max(standOff, .72f) + .08f,
                     groundObjectId,
-                    inventorySlot,
-                    itemId,
-                    fishKey,
-                    vegetationKey));
+                inventorySlot,
+                itemId,
+                fishKey,
+                vegetationKey,
+                actorId));
         }
 
         return new PathResult(requestId, worldLevel, []);
@@ -5607,7 +5627,6 @@ internal sealed partial class GameHostWindow : GameWindow
         var distantDetailOpacity = Math.Clamp(
             (_zoom - .16f) / .06f, 0, 1);
         var renderGroundObjectsAndFish = distantDetailOpacity > .001f;
-        var playerDepth = player?.World.Y ?? float.MaxValue;
         var vegetationCapacity = visibleChunks.Sum(
             gpu => gpu.VegetationRenderItems.Length);
         _worldRenderQueue.Reset(vegetationCapacity);
@@ -5772,14 +5791,42 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawTreeBatch(shadowVertices);
 
         var atlasVertices = _worldRenderQueue.AtlasVertices;
+        var actors = new List<(
+            float Depth,
+            bool Player,
+            VillagerState? Villager)>(_villagers.Count + 1);
+        if (player is not null)
+            actors.Add((player.World.Y, true, null));
+        foreach (var villager in _villagers)
+        {
+            if (villager.WorldLevel != _activeWorldLevel ||
+                _player is null ||
+                Vector2.DistanceSquared(
+                    new(villager.PositionX, villager.PositionY),
+                    _player.Position) >
+                VillagerSimulation.RegionalRadius *
+                VillagerSimulation.RegionalRadius)
+                continue;
+            var terrain = SamplePlayerTerrain(
+                villager.PositionX, villager.PositionY);
+            var world = IsometricTerrainProjection.Project(
+                villager.PositionX,
+                villager.PositionY,
+                terrain.Height);
+            actors.Add((world.Y, false, villager));
+        }
+        actors.Sort(static (left, right) =>
+            left.Depth.CompareTo(right.Depth));
+        var nextActor = 0;
         var playerDrawn = player is null;
         foreach (var item in objects)
         {
-            if (!playerDrawn && item.World.Y > playerDepth)
+            while (nextActor < actors.Count &&
+                   item.World.Y > actors[nextActor].Depth)
             {
                 FlushAtlas();
-                DrawPlayer();
-                playerDrawn = true;
+                DrawActor(actors[nextActor]);
+                nextActor++;
             }
 
             AddAtlasQuad(
@@ -5790,7 +5837,11 @@ internal sealed partial class GameHostWindow : GameWindow
                 playerOccluded = true;
         }
         FlushAtlas();
-        if (!playerDrawn) DrawPlayer();
+        while (nextActor < actors.Count)
+        {
+            DrawActor(actors[nextActor]);
+            nextActor++;
+        }
         if (player is not null &&
             playerOccluded &&
             _occludedPlayerOutlineEnabled)
@@ -5808,7 +5859,6 @@ internal sealed partial class GameHostWindow : GameWindow
             atlasVertices.Clear();
         }
         RenderGroundDropPreview();
-        DrawVillagers();
 
         void FlushAtlas()
         {
@@ -5824,6 +5874,20 @@ internal sealed partial class GameHostWindow : GameWindow
                 player.Frame, player.Texture, player.World,
                 mirror: player.Mirror, wading: player.Wading,
                 teamColor: _activePlayer?.TeamColor ?? 0);
+        }
+
+        void DrawActor((
+            float Depth,
+            bool Player,
+            VillagerState? Villager) actor)
+        {
+            if (actor.Player)
+            {
+                DrawPlayer();
+                playerDrawn = true;
+            }
+            else if (actor.Villager is { } villager)
+                DrawVillager(villager);
         }
     }
 

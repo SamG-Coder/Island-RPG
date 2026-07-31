@@ -121,7 +121,26 @@ internal sealed partial class GameHostWindow
         }
         else if (!pointerBlocked)
         {
-            if (_fishingBoatDisembarkTargeting &&
+            if (TryGetVillagerUnderMouse(
+                    SceneMousePosition(), out _))
+            {
+                var inventory = _activePlayer?.Inventory ?? [];
+                var givingItem =
+                    (uint)_activeInventorySlot <
+                    (uint)inventory.Length &&
+                    inventory[_activeInventorySlot] is not null;
+                if (givingItem && _dropNativeCursor is not null)
+                {
+                    next = GameCursorKind.DropItem;
+                    cursor = _dropNativeCursor;
+                }
+                else if (_attackNativeCursor is not null)
+                {
+                    next = GameCursorKind.Attack;
+                    cursor = _attackNativeCursor;
+                }
+            }
+            else if (_fishingBoatDisembarkTargeting &&
                 _exitBoatNativeCursor is not null)
             {
                 next = GameCursorKind.ExitBoat;

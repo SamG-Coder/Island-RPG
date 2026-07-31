@@ -9,6 +9,7 @@ namespace IslandRpg.Rendering;
 internal sealed partial class GameHostWindow
 {
     private Guid? _combatTargetId;
+    private string? _combatVillagerId;
     private double _nextMeleeAttackAt;
     private double _swingStartedForAttackAt;
     private double _meleeReturnToIdleAt;
@@ -52,10 +53,39 @@ internal sealed partial class GameHostWindow
             ChatMessageStyle.Action);
     }
 
+    internal void BeginVillagerCombat(string villagerId)
+    {
+        if (_player is null) return;
+        var index = _villagers.FindIndex(value =>
+            value.Id == villagerId &&
+            value.WorldLevel == _activeWorldLevel &&
+            value.Health > 0);
+        if (index < 0) return;
+        var villager = _villagers[index];
+        var target = new Vector2(
+            villager.PositionX, villager.PositionY);
+        if (Vector2.Distance(_player.Position, target) >
+            MeleeCombatService.AttackRange + .3f)
+        {
+            _worldActions.QueueVillagerAttack(villager);
+            return;
+        }
+        _combatTargetId = null;
+        _combatVillagerId = villager.Id;
+        _nextMeleeAttackAt = _clock + MeleeImpactDelay();
+        _swingStartedForAttackAt = _nextMeleeAttackAt;
+        _player.RestartAttackAt(target);
+        _chatUi.AddMessage(
+            $"You begin attacking {villager.Name}.",
+            ChatMessageStyle.Warning);
+    }
+
     internal void CancelMeleeCombat()
     {
-        if (_combatTargetId is null) return;
+        if (_combatTargetId is null && _combatVillagerId is null)
+            return;
         _combatTargetId = null;
+        _combatVillagerId = null;
         // The ready time is global combat state. Movement or target changes
         // cancel targeting without granting an immediate fresh attack.
         _meleeReturnToIdleAt = 0;
@@ -65,6 +95,11 @@ internal sealed partial class GameHostWindow
 
     internal void UpdateMeleeCombat()
     {
+        if (_combatVillagerId is { } villagerId)
+        {
+            UpdateVillagerCombat(villagerId);
+            return;
+        }
         if (_combatTargetId is not { } targetId ||
             _activePlayer is null ||
             _player is null)
@@ -177,6 +212,82 @@ internal sealed partial class GameHostWindow
                 $"Your {CombatStatName(_activePlayer.CombatStance)} " +
                 $"level is now {award.Level}.",
                 ChatMessageStyle.LevelUp);
+    }
+
+    private void UpdateVillagerCombat(string villagerId)
+    {
+        if (_activePlayer is null || _player is null)
+            return;
+        var index = _villagers.FindIndex(value =>
+            value.Id == villagerId &&
+            value.WorldLevel == _activeWorldLevel &&
+            value.Health > 0);
+        if (index < 0)
+        {
+            CancelMeleeCombat();
+            return;
+        }
+        var villager = _villagers[index];
+        var target = new Vector2(
+            villager.PositionX, villager.PositionY);
+        if (Vector2.Distance(_player.Position, target) >
+            MeleeCombatService.AttackRange + .22f)
+        {
+            CancelMeleeCombat();
+            return;
+        }
+        var impactDelay = MeleeImpactDelay();
+        if (_swingStartedForAttackAt != _nextMeleeAttackAt &&
+            _clock < _nextMeleeAttackAt - impactDelay)
+        {
+            if (_player.Action == EntityAction.Attack &&
+                _clock >= _meleeReturnToIdleAt)
+                _player.Stop();
+            return;
+        }
+        if (_clock >= _nextMeleeAttackAt - impactDelay &&
+            _swingStartedForAttackAt != _nextMeleeAttackAt)
+        {
+            _player.RestartAttackAt(target);
+            _swingStartedForAttackAt = _nextMeleeAttackAt;
+        }
+        else
+            _player.AttackAt(target);
+        if (_clock < _nextMeleeAttackAt) return;
+        _nextMeleeAttackAt +=
+            MeleeCombatService.AttackIntervalSeconds;
+        _meleeReturnToIdleAt = _clock + MeleeRecoveryDelay();
+
+        var roll = MeleeCombatService.Roll(
+            _activePlayer.AttackExperience,
+            _activePlayer.StrengthExperience,
+            Random.Shared.NextSingle(),
+            Random.Shared.NextSingle());
+        if (!roll.Hit)
+        {
+            _chatUi.AddMessage(
+                $"You miss {villager.Name}.",
+                ChatMessageStyle.Miss);
+            return;
+        }
+        villager = VillagerSimulation.RecordAttack(
+            villager,
+            _activePlayer.Id,
+            _activePlayer.Name,
+            roll.Damage,
+            _worldGameSeconds);
+        _villagers[index] = villager;
+        _villagersDirty = true;
+        _chatUi.AddMessage(
+            $"You hit {villager.Name} for {roll.Damage}.",
+            ChatMessageStyle.Damage);
+        if (villager.Health <= 0)
+        {
+            _chatUi.AddMessage(
+                $"{villager.Name} collapses.",
+                ChatMessageStyle.Warning);
+            CancelMeleeCombat();
+        }
     }
 
     private void UpdateCombatPanelInput(Vector2 pointer, bool leftDown)

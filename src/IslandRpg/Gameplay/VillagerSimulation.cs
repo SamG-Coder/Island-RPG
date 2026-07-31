@@ -125,7 +125,8 @@ internal sealed record VillagerState(
     string? ConversationPartnerId = null,
     int BlockedMoveAttempts = 0,
     IReadOnlyList<VillagerConversationTurn>? ConversationHistory = null,
-    VillagerDeliberationTrace? LastDeliberation = null);
+    VillagerDeliberationTrace? LastDeliberation = null,
+    int SurvivalTimeScaleVersion = 0);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,
@@ -249,7 +250,8 @@ internal static class VillagerSimulation
                     : DefaultPersona(index),
                 AwakenedGameSeconds: gameSeconds,
                 Goals: VillagerCommitmentService.InitialGoals(
-                    id, gameSeconds));
+                    id, gameSeconds),
+                SurvivalTimeScaleVersion: 1);
         }
         return result;
     }
@@ -312,13 +314,33 @@ internal static class VillagerSimulation
         VillagerState state,
         double gameSeconds)
     {
+        if (state.SurvivalTimeScaleVersion < 1)
+        {
+            var violenceCausedDefeat =
+                state.Health <= 0 &&
+                state.Memories?.Any(memory =>
+                    memory.Kind == "violence") == true;
+            state = state with
+            {
+                Health = state.Health <= 0 &&
+                         !violenceCausedDefeat
+                    ? AdventureService.BaseMaximumHealth
+                    : state.Health,
+                Hunger = !violenceCausedDefeat
+                    ? Math.Max(25, state.Hunger)
+                    : state.Hunger,
+                SurvivalTimeScaleVersion = 1
+            };
+        }
         var elapsed = Math.Clamp(
             gameSeconds - state.LastSimulatedGameSeconds,
             0,
             24 * 60 * 60);
         if (elapsed <= 0) return state;
+        var realSeconds =
+            elapsed / GameSecondsPerRealSecond;
         var survival = SurvivalService.Advance(
-            state.Hunger, 0, state.Health, (float)elapsed);
+            state.Hunger, 0, state.Health, (float)realSeconds);
         return state with
         {
             Hunger = survival.Hunger,
@@ -844,6 +866,121 @@ internal static class VillagerSimulation
             gameSeconds);
     }
 
+    public static VillagerState RecordGift(
+        VillagerState villager,
+        string giverId,
+        string giverName,
+        Guid itemInstanceId,
+        string itemId,
+        double gameSeconds)
+    {
+        var relationships =
+            villager.Relationships?.ToList() ?? [];
+        var relationshipIndex = relationships.FindIndex(value =>
+            value.CharacterId == giverId);
+        var relationship = relationshipIndex >= 0
+            ? relationships[relationshipIndex]
+            : new VillagerRelationship(giverId, default);
+        relationship = relationship with
+        {
+            State = (relationship.State with
+            {
+                Trust = relationship.State.Trust + .5f,
+                Affection = relationship.State.Affection + .75f
+            }).Clamp()
+        };
+        if (relationshipIndex >= 0)
+            relationships[relationshipIndex] = relationship;
+        else
+            relationships.Add(relationship);
+
+        var memories = villager.Memories?.ToList() ?? [];
+        memories.Add(new(
+            Guid.NewGuid(),
+            "gift-received",
+            giverId,
+            itemInstanceId,
+            1,
+            gameSeconds,
+            Math.Clamp(ItemValueForMemory(itemId), 2, 30),
+            $"{giverName} gave {villager.Name} " +
+            $"{ItemCatalog.Get(itemId).Name}."));
+        if (memories.Count > MaximumMemories)
+            memories.RemoveRange(
+                0, memories.Count - MaximumMemories);
+        return villager with
+        {
+            Relationships = relationships,
+            Memories = memories
+        };
+    }
+
+    public static VillagerState RecordAttack(
+        VillagerState villager,
+        string attackerId,
+        string attackerName,
+        int damage,
+        double gameSeconds)
+    {
+        var relationships =
+            villager.Relationships?.ToList() ?? [];
+        var relationshipIndex = relationships.FindIndex(value =>
+            value.CharacterId == attackerId);
+        var relationship = relationshipIndex >= 0
+            ? relationships[relationshipIndex]
+            : new VillagerRelationship(attackerId, default);
+        relationship = relationship with
+        {
+            State = (relationship.State with
+            {
+                Trust = relationship.State.Trust - 4,
+                Affection = relationship.State.Affection - 3,
+                Resentment = relationship.State.Resentment + 5
+            }).Clamp()
+        };
+        if (relationshipIndex >= 0)
+            relationships[relationshipIndex] = relationship;
+        else
+            relationships.Add(relationship);
+        var memories = villager.Memories?.ToList() ?? [];
+        memories.Add(new(
+            Guid.NewGuid(),
+            "violence",
+            attackerId,
+            null,
+            1,
+            gameSeconds,
+            -Math.Max(20, damage * 4),
+            $"{attackerName} attacked {villager.Name}."));
+        if (memories.Count > MaximumMemories)
+            memories.RemoveRange(
+                0, memories.Count - MaximumMemories);
+        return villager with
+        {
+            Health = Math.Max(0, villager.Health - damage),
+            Relationships = relationships,
+            Memories = memories,
+            FollowingActorId = null,
+            Need = VillagerNeed.Safe,
+            Action = villager.Health - damage <= 0
+                ? EntityAction.Die
+                : EntityAction.Idle,
+            ActionTime = 0,
+            TargetX = null,
+            TargetY = null
+        };
+    }
+
+    private static int ItemValueForMemory(string itemId)
+    {
+        var item = ItemCatalog.Get(itemId);
+        if (item.HasTag(ItemTag.MetalToolSprite)) return 30;
+        if (item.HasTag(ItemTag.Tool)) return 15;
+        if (item.HasTag(ItemTag.PlaceableObject)) return 20;
+        if (item.HasTag(ItemTag.CookedFood)) return 5;
+        return 2;
+    }
+
     public static IReadOnlyList<VillagerMemory> RecallMemories(
         VillagerState state,
         string? partnerId,
@@ -1068,6 +1205,36 @@ internal static class VillagerSimulation
             ConversationPartnerId = null,
             NextDecisionGameSeconds =
                 gameSeconds + DecisionInterval(tier),
+            LastSimulatedGameSeconds = gameSeconds
+        };
+    }
+
+    public static VillagerState RetargetFollowing(
+        VillagerState state,
+        Vector2 target,
+        double gameSeconds)
+    {
+        var position = new Vector2(
+            state.PositionX, state.PositionY);
+        var direction = target - position;
+        if (direction.LengthSquared > .0001f)
+            direction = direction.Normalized();
+        else
+            direction = new(state.FacingX, state.FacingY);
+        return state with
+        {
+            Need = VillagerNeed.Social,
+            Activity = VillagerActivity.Following,
+            Action = EntityAction.Move,
+            ActionTime = state.Action == EntityAction.Move
+                ? state.ActionTime
+                : 0,
+            FacingX = direction.X,
+            FacingY = direction.Y,
+            TargetX = target.X,
+            TargetY = target.Y,
+            ActivityUntilGameSeconds = 0,
+            ConversationPartnerId = null,
             LastSimulatedGameSeconds = gameSeconds
         };
     }
