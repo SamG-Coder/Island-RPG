@@ -12,6 +12,7 @@ internal sealed partial class GameHostWindow
         ItemIds.SharpenedRock,
         ItemIds.StoneKnife,
         ItemIds.StoneAxe,
+        ItemIds.Rope,
         ItemIds.PrimitiveFishingNet,
         ItemIds.SmallRocks,
         ItemIds.Campfire,
@@ -35,12 +36,12 @@ internal sealed partial class GameHostWindow
             TryVillagerCookStew(index, villager) ||
             TryVillagerCook(index, villager) ||
             TryVillagerWithdrawFood(index, villager) ||
+            TryVillagerCraft(index, villager) ||
             TryVillagerGatherTreeSticks(index, villager, tier) ||
             TryVillagerForage(index, villager, tier) ||
             TryVillagerFish(index, villager, tier) ||
             TryVillagerCutTree(index, villager, tier) ||
             TryVillagerMine(index, villager, tier) ||
-            TryVillagerCraft(index, villager) ||
             TryVillagerPlaceObject(index, villager) ||
             TryVillagerPlaceOrTendCampfire(index, villager) ||
             TryVillagerTakeCampfireFuel(index, villager) ||
@@ -86,12 +87,8 @@ internal sealed partial class GameHostWindow
     {
         var requested = RequestedVillagerAction(
             villager, "gather_sticks");
-        var needsSticks = VillagerCraftPriority.Any(itemId =>
-            CraftingSkill.Recipes.FirstOrDefault(recipe =>
-                recipe.ResultItemId == itemId) is { } recipe &&
-            recipe.Ingredients.Any(ingredient =>
-                ingredient.ItemId == ItemIds.Sticks) &&
-            !villager.Inventory.Contains(itemId));
+        var needsSticks =
+            VillagerWorkSupplyPlanner.NeedsSticks(villager);
         if ((!requested && !needsSticks) ||
             PlayerInventory.IsFull(villager.Inventory))
             return false;
@@ -195,10 +192,9 @@ internal sealed partial class GameHostWindow
                          RequestedVillagerAction(villager, "gather_berries", "seek_food")) &&
                         VillagerSimulation.CountFood(
                             villager.Inventory) == 0;
-        var wantsFibre = RequestedVillagerAction(villager, "gather_fibre") ||
-            !villager.Inventory.Any(item =>
-            item is not null && ItemCatalog.Get(item).HasTag(ItemTag.Knife)) ||
-            PlayerInventory.BestFishingNet(villager.Inventory) is null;
+        var wantsFibre =
+            RequestedVillagerAction(villager, "gather_fibre") ||
+            VillagerWorkSupplyPlanner.NeedsFibre(villager);
         if (!requested && !wantsFood && !wantsFibre) return false;
 
         var position = new Vector2(villager.PositionX, villager.PositionY);

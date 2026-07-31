@@ -576,6 +576,47 @@ Require(
     roleAssignments["woodworker"] == VillagerWorkRole.Wood &&
     roleAssignments.Values.Distinct().Count() == 3,
     "temporary roles must cover urgent food, best-equipped wood work, and a complementary third job");
+var foodSupplyInventory = PlayerInventory.CreateStartingInventory();
+foodSupplyInventory[0] = ItemIds.PlantFibres;
+foodSupplyInventory[1] = ItemIds.PlantFibres;
+Require(
+    VillagerWorkSupplyPlanner.NeedsFibre(
+        hungryVillager with
+        {
+            WorkRole = VillagerWorkRole.Food,
+            Inventory = foodSupplyInventory
+        }) &&
+    !VillagerWorkSupplyPlanner.NeedsFibre(
+        hungryVillager with
+        {
+            WorkRole = VillagerWorkRole.Wood,
+            Inventory = foodSupplyInventory
+        }) &&
+    VillagerWorkSupplyPlanner.NeedsSticks(
+        hungryVillager with
+        {
+            WorkRole = VillagerWorkRole.Wood,
+            Inventory = foodSupplyInventory
+        }),
+    "work supply targets must send food workers toward fibre and wood workers toward axe prerequisites");
+foodSupplyInventory[2] = ItemIds.PlantFibres;
+Require(
+    !VillagerWorkSupplyPlanner.NeedsFibre(
+        hungryVillager with
+        {
+            WorkRole = VillagerWorkRole.Food,
+            Inventory = foodSupplyInventory
+        }),
+    "food workers must stop at the first fibre quota so crafting can run before further gathering");
+foodSupplyInventory[3] = ItemIds.Rope;
+Require(
+    VillagerWorkSupplyPlanner.NeedsFibre(
+        hungryVillager with
+        {
+            WorkRole = VillagerWorkRole.Food,
+            Inventory = foodSupplyInventory
+        }),
+    "after crafting rope, food workers must gather only the remaining fibre needed for a fishing net");
 
 var sharedGatherInventory = PlayerInventory.CreateStartingInventory();
 var sharedGather = ActorActionService.Gather(
