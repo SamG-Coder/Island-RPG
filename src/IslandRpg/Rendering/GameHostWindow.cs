@@ -316,6 +316,18 @@ internal sealed partial class GameHostWindow : GameWindow
         new SpriteFrame?[5];
     private readonly SpriteFrame?[] _progressionItemShadowFrames =
         new SpriteFrame?[5];
+    private readonly int[] _advancedToolTextures =
+        new int[ItemSpriteSheetCatalog.AdvancedTools.CellCount];
+    private readonly SpriteFrame?[] _advancedToolFrames =
+        new SpriteFrame?[ItemSpriteSheetCatalog.AdvancedTools.CellCount];
+    private readonly SpriteFrame?[] _advancedToolShadowFrames =
+        new SpriteFrame?[ItemSpriteSheetCatalog.AdvancedTools.CellCount];
+    private readonly int[] _fishingNetUpgradeTextures =
+        new int[ItemSpriteSheetCatalog.FishingNetUpgrades.CellCount];
+    private readonly SpriteFrame?[] _fishingNetUpgradeFrames =
+        new SpriteFrame?[ItemSpriteSheetCatalog.FishingNetUpgrades.CellCount];
+    private readonly SpriteFrame?[] _fishingNetUpgradeShadowFrames =
+        new SpriteFrame?[ItemSpriteSheetCatalog.FishingNetUpgrades.CellCount];
     private readonly int[] _stoneToolTextures = new int[14];
     private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[14];
     private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[14];
@@ -4593,6 +4605,8 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.MetalToolSprite) ||
             item.HasTag(ItemTag.MetalMaterialSprite) ||
             item.HasTag(ItemTag.ProgressionSprite) ||
+            item.HasTag(ItemTag.AdvancedToolSprite) ||
+            item.HasTag(ItemTag.FishingNetUpgradeSprite) ||
             item.HasTag(ItemTag.Fish) ||
             item.HasTag(ItemTag.FibreNetSprite) ||
             item.HasTag(ItemTag.PlaceableObject))
@@ -4638,6 +4652,16 @@ internal sealed partial class GameHostWindow : GameWindow
                    (uint)progressionCell <
                    (uint)_progressionItemTextures.Length
                 ? _progressionItemTextures[progressionCell]
+                : 0;
+        if (item.HasTag(ItemTag.AdvancedToolSprite))
+            return item.SpriteCell is { } advancedCell &&
+                   (uint)advancedCell < (uint)_advancedToolTextures.Length
+                ? _advancedToolTextures[advancedCell]
+                : 0;
+        if (item.HasTag(ItemTag.FishingNetUpgradeSprite))
+            return item.SpriteCell is { } netCell &&
+                   (uint)netCell < (uint)_fishingNetUpgradeTextures.Length
+                ? _fishingNetUpgradeTextures[netCell]
                 : 0;
         if (item.HasTag(ItemTag.CoastalSprite))
             return item.SpriteCell is { } coastalCell &&
@@ -4699,6 +4723,12 @@ internal sealed partial class GameHostWindow : GameWindow
             (uint)cell < (uint)_progressionItemFrames.Length)
             return _progressionItemFrames[cell] ??
                    WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.AdvancedToolSprite) &&
+            (uint)cell < (uint)_advancedToolFrames.Length)
+            return _advancedToolFrames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.FishingNetUpgradeSprite) &&
+            (uint)cell < (uint)_fishingNetUpgradeFrames.Length)
+            return _fishingNetUpgradeFrames[cell] ?? WoodcuttingItemsFrame;
         if (item.HasTag(ItemTag.CoastalSprite) &&
             (uint)cell < (uint)_coastalSprites.Frames.Length)
             return _coastalSprites.Frames[cell] ?? WoodcuttingItemsFrame;
@@ -4732,6 +4762,8 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.MetalToolSprite) ||
             item.HasTag(ItemTag.MetalMaterialSprite) ||
             item.HasTag(ItemTag.ProgressionSprite) ||
+            item.HasTag(ItemTag.AdvancedToolSprite) ||
+            item.HasTag(ItemTag.FishingNetUpgradeSprite) ||
             item.HasTag(ItemTag.SupplementalSprite) ||
             item.HasTag(ItemTag.NaturalMaterial) ||
             item.HasTag(ItemTag.Fish) ||
@@ -6466,6 +6498,13 @@ internal sealed partial class GameHostWindow : GameWindow
         LoadHorizontalItemSheet(
             "progression-items.png", _progressionItemFrames,
             _progressionItemShadowFrames, _progressionItemTextures);
+        LoadHorizontalItemSheet(
+            ItemSpriteSheetCatalog.AdvancedTools.FileName, _advancedToolFrames,
+            _advancedToolShadowFrames, _advancedToolTextures);
+        LoadHorizontalItemSheet(
+            ItemSpriteSheetCatalog.FishingNetUpgrades.FileName,
+            _fishingNetUpgradeFrames,
+            _fishingNetUpgradeShadowFrames, _fishingNetUpgradeTextures);
         var stoneToolSheetPath = Path.Combine(
             AppContext.BaseDirectory, "Resources", "Images",
             "stone-tools-items.png");
@@ -7992,6 +8031,10 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var texture in _metalMaterialTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _progressionItemTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _advancedToolTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _fishingNetUpgradeTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _stoneToolTextures)
             if (texture != 0) GL.DeleteTexture(texture);

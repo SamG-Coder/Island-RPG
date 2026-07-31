@@ -81,7 +81,8 @@ internal sealed partial class GameHostWindow
         var recipe = CraftingSkill.Recipes.First(
             candidate => candidate.Id == recipeId);
         var award = CraftingSkill.AwardExperience(
-            _activePlayer.CraftingExperience, recipe);
+            _activePlayer.CraftingExperience, recipe,
+            _activePlayer.Inventory);
         AwardAdventureExperience(award.Gained);
         _activePlayer = _activePlayer with
         {

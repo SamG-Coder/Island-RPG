@@ -17,7 +17,7 @@ internal sealed partial class GameHostWindow
     private void BeginCaveDigTargeting(int shovelSlot)
     {
         if (_activeWorldLevel != (int)WorldLevel.Overworld ||
-            !InventoryContainsAt(shovelSlot, ItemIds.StoneShovel))
+            !InventoryHasTagAt(shovelSlot, ItemTag.Shovel))
             return;
         _digTargetingSlot = shovelSlot;
         _gameCursorKind = GameCursorKind.Dig;
@@ -59,15 +59,17 @@ internal sealed partial class GameHostWindow
 
     private void QueueCaveDig(Vector2 target, int shovelSlot)
     {
-        if (!InventoryContainsAt(shovelSlot, ItemIds.StoneShovel))
+        if (!InventoryHasTagAt(shovelSlot, ItemTag.Shovel))
             return;
+        var shovelItemId = _activePlayer?.Inventory?[shovelSlot];
+        if (shovelItemId is null) return;
         target = new(
             MathF.Floor(target.X) + .5f,
             MathF.Floor(target.Y) + .5f);
         _worldActions.QueuePath(
             target, .82f, WorldActionType.DigCave,
             inventorySlot: shovelSlot,
-            itemId: ItemIds.StoneShovel,
+            itemId: shovelItemId,
             clearTreeActions: true);
     }
 
@@ -75,12 +77,13 @@ internal sealed partial class GameHostWindow
     {
         var inventory = _activePlayer?.Inventory ?? [];
         var shovelSlot = Array.FindIndex(
-            inventory, item => item == ItemIds.StoneShovel);
+            inventory, item => item is not null &&
+                ItemCatalog.Get(item).HasTag(ItemTag.Shovel));
         if (shovelSlot < 0)
         {
             ReportBlockedAction(
                 "dig-without-shovel",
-                "You need a stone shovel to continue digging.");
+                "You need a shovel to continue digging.");
             return;
         }
         QueueCaveDig(new(site.X, site.Y), shovelSlot);
@@ -103,7 +106,7 @@ internal sealed partial class GameHostWindow
     internal void TryDigCave(Vector2 target, int shovelSlot)
     {
         if (_activeWorldLevel != (int)WorldLevel.Overworld ||
-            !InventoryContainsAt(shovelSlot, ItemIds.StoneShovel))
+            !InventoryHasTagAt(shovelSlot, ItemTag.Shovel))
             return;
         var tileX = (int)MathF.Floor(target.X);
         var tileY = (int)MathF.Floor(target.Y);
@@ -215,7 +218,9 @@ internal sealed partial class GameHostWindow
         var damage = Math.Min(
             site.Health,
             DiggingSkill.Damage(
-                _activePlayer?.DiggingExperience ?? 0));
+                _activePlayer?.DiggingExperience ?? 0,
+                PlayerInventory.BestShovel(
+                    _activePlayer?.Inventory)?.DiggingPower ?? 1));
         var health = site.Health - damage;
         PlaySoundCue("digging-impact");
         _chatUi.AddMessage(

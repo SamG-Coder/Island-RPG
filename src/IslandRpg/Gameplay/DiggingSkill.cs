@@ -20,8 +20,9 @@ internal static class DiggingSkill
         _ => new(70, ItemIds.Dirt)
     };
 
-    public static int Damage(int experience) =>
-        8 + LevelForExperience(experience) / 4;
+    public static int Damage(int experience, int shovelPower = 1) =>
+        8 + LevelForExperience(experience) / 4 +
+        (Math.Max(1, shovelPower) - 1) * 4;
 
     public static int LevelForExperience(int experience) =>
         SkillService.LevelForExperience(experience);

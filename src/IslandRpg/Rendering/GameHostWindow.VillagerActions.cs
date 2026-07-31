@@ -6,24 +6,6 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
-    private static readonly string[] VillagerCraftPriority =
-    [
-        ItemIds.MediumRock,
-        ItemIds.SharpenedRock,
-        ItemIds.StoneKnife,
-        ItemIds.StoneAxe,
-        ItemIds.Rope,
-        ItemIds.PrimitiveFishingNet,
-        ItemIds.SmallRocks,
-        ItemIds.Campfire,
-        ItemIds.StonePickaxe,
-        ItemIds.StoneShovel,
-        ItemIds.Rope,
-        ItemIds.StoneHammer,
-        ItemIds.Workbench,
-        ItemIds.StorageChest
-    ];
-
     private bool TryExecuteVillagerCapabilityAction(
         int index,
         VillagerState villager,
@@ -291,15 +273,22 @@ internal sealed partial class GameHostWindow
     {
         var level = CraftingSkill.LevelForExperience(
             villager.CraftingExperience);
-        var hasCampfire = NearbyGroundObjects(villager, 12)
+        var nearbyObjects = NearbyGroundObjects(villager, 12).ToArray();
+        var hasCampfire = nearbyObjects
             .Any(value => CampfireService.IsCampfire(value.Object));
-        var hasWorkbench = NearbyGroundObjects(villager, 12)
-            .Any(value => value.Object.ItemId == ItemIds.Workbench);
-        foreach (var desired in VillagerCraftPriority)
+        var nearbyStations = nearbyObjects
+            .Select(value => value.Object.ItemId)
+            .Where(CraftingStationService.IsStation)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var desired in VillagerCraftPlanner.PriorityFor(
+                     villager.WorkRole))
         {
-            if (villager.Inventory.Contains(desired) ||
+            if (!VillagerCraftPlanner.Needs(
+                    desired, villager.Inventory) ||
                 desired == ItemIds.Campfire && hasCampfire ||
-                desired == ItemIds.Workbench && hasWorkbench ||
+                ItemCatalog.Get(desired).HasTag(ItemTag.PlaceableObject) &&
+                nearbyObjects.Any(value =>
+                    value.Object.ItemId == desired) ||
                 desired == ItemIds.StorageChest &&
                 NearbyGroundObjects(villager, 12).Any(value =>
                     StorageContainerService.IsStorage(value.Object.ItemId) &&
@@ -308,18 +297,15 @@ internal sealed partial class GameHostWindow
             var recipe = CraftingSkill.Recipes.FirstOrDefault(value =>
                 value.ResultItemId == desired);
             if (recipe is null) continue;
-            var stationAvailable = recipe.RequiredStationItemId switch
-            {
-                null => true,
-                ItemIds.Workbench => hasWorkbench,
-                ItemIds.Campfire => hasCampfire,
-                _ => false
-            };
+            var stationAvailable =
+                recipe.RequiredStationItemId is null ||
+                nearbyStations.Contains(recipe.RequiredStationItemId);
             var crafted = ActorActionService.Craft(
                 villager.Inventory, recipe, level, stationAvailable);
             if (!crafted.Succeeded) continue;
             var experience = CraftingSkill.AwardExperience(
-                villager.CraftingExperience, recipe);
+                villager.CraftingExperience, recipe,
+                crafted.Inventory);
             _villagers[index] = villager with
             {
                 Inventory = crafted.Inventory,
@@ -346,9 +332,10 @@ internal sealed partial class GameHostWindow
         int index, VillagerState villager,
         VillagerSimulationTier tier)
     {
+        var net = PlayerInventory.BestFishingNet(villager.Inventory);
         if ((!RequestedVillagerAction(villager, "fish") &&
              villager.Hunger > 70) ||
-            PlayerInventory.BestFishingNet(villager.Inventory) is null ||
+            net is null ||
             PlayerInventory.IsFull(villager.Inventory))
             return false;
         var position = new Vector2(villager.PositionX, villager.PositionY);
@@ -368,7 +355,8 @@ internal sealed partial class GameHostWindow
                     !FishingSkill.CanCatch(
                         fish.Species,
                         FishingSkill.LevelForExperience(
-                            villager.FishingExperience)) ||
+                            villager.FishingExperience),
+                        net.FishingPower) ||
                     !_villagerWork.IsAvailable(
                         ResourceReservationKey("fish", fish.StableKey),
                         villager.Id, _worldGameSeconds))

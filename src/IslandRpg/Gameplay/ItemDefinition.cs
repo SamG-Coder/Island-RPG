@@ -31,7 +31,9 @@ internal enum ItemTag
     MetalToolSprite = 1 << 24,
     MetalMaterialSprite = 1 << 25,
     ProgressionSprite = 1 << 26,
-    Sickle = 1 << 27
+    Sickle = 1 << 27,
+    AdvancedToolSprite = 1 << 28,
+    FishingNetUpgradeSprite = 1 << 29
 }
 
 internal sealed record ItemDefinition(
@@ -44,7 +46,11 @@ internal sealed record ItemDefinition(
     ItemTag Tags = ItemTag.None,
     int WoodcuttingPower = 0,
     int MiningPower = 0,
-    int FarmingPower = 0)
+    int FarmingPower = 0,
+    int DiggingPower = 0,
+    int FishingPower = 0,
+    int HammerPower = 0,
+    int KnifePower = 0)
 {
     public bool HasTag(ItemTag tag) => (Tags & tag) == tag;
 }
@@ -59,6 +65,13 @@ internal static class ItemIds
     public const string BronzePickaxe = "bronze_pickaxe";
     public const string BronzeAxe = "bronze_axe";
     public const string BronzeSickle = "bronze_sickle";
+    public const string BronzeHammer = "bronze_hammer";
+    public const string IronHammer = "iron_hammer";
+    public const string BronzeKnife = "bronze_knife";
+    public const string IronKnife = "iron_knife";
+    public const string BronzeShovel = "bronze_shovel";
+    public const string IronShovel = "iron_shovel";
+    public const string IronSickle = "iron_sickle";
     public const string IronPickaxe = "iron_pickaxe";
     public const string StoneShovel = "stone_shovel";
     public const string StoneKnife = "stone_knife";
@@ -131,6 +144,8 @@ internal static class ItemIds
     public const string Dirt = "dirt";
     public const string Sand = "sand";
     public const string PrimitiveFishingNet = "primitive_fishing_net";
+    public const string ReinforcedFishingNet = "reinforced_fishing_net";
+    public const string AdvancedFishingNet = "advanced_fishing_net";
     public const string Workbench = "workbench";
     public const string Campfire = "campfire";
     public const string Bloomery = "bloomery";
@@ -180,7 +195,8 @@ internal static class ItemCatalog
                 ItemIds.StoneHammer, "stone hammer", "Stone hammer",
                 "A primitive hammer with a stone head lashed to a wooden handle.",
                 0, Tags: ItemTag.Tool | ItemTag.Hammer |
-                         ItemTag.StoneToolSprite),
+                         ItemTag.StoneToolSprite,
+                HammerPower: 1),
             [ItemIds.StoneAxe] = new(
                 ItemIds.StoneAxe, "stone axe", "Stone axe",
                 "A primitive axe with a sharp stone head lashed to a wooden handle.",
@@ -212,6 +228,34 @@ internal static class ItemCatalog
                 4, Tags: ItemTag.Tool | ItemTag.Sickle |
                          ItemTag.ProgressionSprite,
                 FarmingPower: 1),
+            [ItemIds.BronzeHammer] = MetalTool(
+                ItemIds.BronzeHammer, "bronze hammer", "Bronze hammer",
+                "A balanced bronze hammer for demanding workshop tasks.",
+                0, ItemTag.Hammer, toolPower: 2),
+            [ItemIds.IronHammer] = MetalTool(
+                ItemIds.IronHammer, "iron hammer", "Iron hammer",
+                "A durable iron hammer suited to advanced smithing.",
+                1, ItemTag.Hammer, toolPower: 3),
+            [ItemIds.BronzeKnife] = MetalTool(
+                ItemIds.BronzeKnife, "bronze knife", "Bronze knife",
+                "A keen bronze knife for precise cutting and carving.",
+                2, ItemTag.Knife, toolPower: 2),
+            [ItemIds.IronKnife] = MetalTool(
+                ItemIds.IronKnife, "iron knife", "Iron knife",
+                "A strong iron knife that holds a reliable edge.",
+                3, ItemTag.Knife, toolPower: 3),
+            [ItemIds.BronzeShovel] = MetalTool(
+                ItemIds.BronzeShovel, "bronze shovel", "Bronze shovel",
+                "A bronze shovel that cuts firmly into compact earth.",
+                4, ItemTag.Shovel, diggingPower: 2),
+            [ItemIds.IronShovel] = MetalTool(
+                ItemIds.IronShovel, "iron shovel", "Iron shovel",
+                "A reinforced iron shovel for difficult excavations.",
+                5, ItemTag.Shovel, diggingPower: 3),
+            [ItemIds.IronSickle] = MetalTool(
+                ItemIds.IronSickle, "iron sickle", "Iron sickle",
+                "A sharp iron sickle for efficient harvesting.",
+                6, ItemTag.Sickle, farmingPower: 2),
             [ItemIds.IronPickaxe] = new(
                 ItemIds.IronPickaxe, "iron pickaxe", "Iron pickaxe",
                 "A strong forged iron pickaxe for breaking dense ore.",
@@ -222,12 +266,14 @@ internal static class ItemCatalog
                 ItemIds.StoneShovel, "stone shovel", "Stone shovel",
                 "A broad stone blade lashed to a wooden shaft for digging.",
                 4, Tags: ItemTag.Tool | ItemTag.Shovel |
-                         ItemTag.StoneToolSprite),
+                         ItemTag.StoneToolSprite,
+                DiggingPower: 1),
             [ItemIds.StoneKnife] = new(
                 ItemIds.StoneKnife, "stone knife", "Stone knife",
                 "A primitive cutting tool with a stone blade bound to a wooden grip.",
                 3, Tags: ItemTag.Tool | ItemTag.Knife |
-                         ItemTag.StoneToolSprite),
+                         ItemTag.StoneToolSprite,
+                KnifePower: 1),
             [ItemIds.BluntStoneHammer] = new(
                 ItemIds.BluntStoneHammer, "blunt stone hammer", "Blunt hammer",
                 "A stone hammer with worn, blunt working edges.", 0,
@@ -481,7 +527,17 @@ internal static class ItemCatalog
                 "primitive fishing net", "Fishing net",
                 "A simple hand-woven net for catching fish.", 1,
                 Tags: ItemTag.Tool | ItemTag.FishingNet |
-                      ItemTag.FibreNetSprite),
+                      ItemTag.FibreNetSprite,
+                FishingPower: 1),
+            [ItemIds.ReinforcedFishingNet] = FishingNet(
+                ItemIds.ReinforcedFishingNet,
+                "reinforced fishing net", "Reinforced net",
+                "A rope net reinforced for larger coastal fish.", 0, 2),
+            [ItemIds.AdvancedFishingNet] = FishingNet(
+                ItemIds.AdvancedFishingNet,
+                "advanced fishing net", "Advanced net",
+                "A dense net with iron weights for powerful ocean fish.",
+                1, 3),
             [ItemIds.Workbench] = new(
                 ItemIds.Workbench,
                 "workbench", "Workbench",
@@ -554,6 +610,27 @@ internal static class ItemCatalog
         new(
             id, name, caption, examine, cell,
             Tags: ItemTag.NaturalMaterial | ItemTag.CoastalSprite);
+
+    private static ItemDefinition MetalTool(
+        string id, string name, string caption, string examine, int cell,
+        ItemTag toolTag, int farmingPower = 0, int diggingPower = 0,
+        int toolPower = 0) =>
+        new(
+            id, name, caption, examine, cell,
+            Tags: ItemTag.Tool | toolTag | ItemTag.AdvancedToolSprite,
+            FarmingPower: farmingPower,
+            DiggingPower: diggingPower,
+            HammerPower: toolTag == ItemTag.Hammer ? toolPower : 0,
+            KnifePower: toolTag == ItemTag.Knife ? toolPower : 0);
+
+    private static ItemDefinition FishingNet(
+        string id, string name, string caption, string examine, int cell,
+        int fishingPower) =>
+        new(
+            id, name, caption, examine, cell,
+            Tags: ItemTag.Tool | ItemTag.FishingNet |
+                  ItemTag.FishingNetUpgradeSprite,
+            FishingPower: fishingPower);
 
     private static ItemDefinition Fish(
         string id, string name, string caption, string examine, int cell) =>

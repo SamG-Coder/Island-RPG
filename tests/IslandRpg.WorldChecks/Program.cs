@@ -5,6 +5,7 @@ using IslandRpg.Persistence;
 using IslandRpg.Rendering;
 using IslandRpg.Rendering.Ui;
 using OpenTK.Mathematics;
+using StbImageSharp;
 
 WorldCheckProcess.DisableWindowsCrashDialogs();
 
@@ -2144,11 +2145,102 @@ Require(plankRecipe.RequiredTools?.SequenceEqual(
             [new CraftingToolRequirement(ItemTag.Knife, "knife")]) == true &&
         CraftingService.TryCraft(
             plankRecipe, 2,
-            [ItemIds.StoneKnife, ItemIds.Logs],
+            [ItemIds.StoneKnife, ItemIds.OakLogs],
             out var craftedPlank) &&
         craftedPlank.Contains(ItemIds.StoneKnife) &&
         craftedPlank.Contains(ItemIds.Plank),
-    "the plank recipe must require and preserve any knife tool");
+    "the plank recipe must accept any authored log and preserve any knife tool");
+var metalToolIds = new[]
+{
+    ItemIds.BronzeHammer,
+    ItemIds.IronHammer,
+    ItemIds.BronzeKnife,
+    ItemIds.IronKnife,
+    ItemIds.BronzeShovel,
+    ItemIds.IronShovel,
+    ItemIds.IronSickle
+};
+Require(
+    metalToolIds.Select(ItemCatalog.Get).All(item =>
+        item.HasTag(ItemTag.Tool) &&
+        item.HasTag(ItemTag.AdvancedToolSprite)) &&
+    metalToolIds.Select(ItemCatalog.Get).Select(item => item.SpriteCell)
+        .SequenceEqual(Enumerable.Range(0, 7).Select(value => (int?)value)) &&
+    CraftingSkill.Recipes.Count(recipe =>
+        metalToolIds.Contains(recipe.ResultItemId)) == metalToolIds.Length,
+    "the complete bronze and iron tool gap must use one shared sprite family and have recipes");
+Require(
+    ItemCatalog.Get(ItemIds.BronzeShovel).DiggingPower == 2 &&
+    ItemCatalog.Get(ItemIds.IronShovel).DiggingPower == 3 &&
+    DiggingSkill.Damage(0, 3) > DiggingSkill.Damage(0, 1) &&
+    ItemCatalog.Get(ItemIds.IronSickle).FarmingPower == 2,
+    "advanced gathering tools must improve their associated skill power");
+Require(
+    PlayerInventory.BestHammer(
+        [ItemIds.StoneHammer, ItemIds.IronHammer])?.Id ==
+        ItemIds.IronHammer &&
+    PlayerInventory.BestKnife(
+        [ItemIds.StoneKnife, ItemIds.BronzeKnife])?.Id ==
+        ItemIds.BronzeKnife &&
+    PlayerInventory.TryBreakRock(
+        [ItemIds.BronzeHammer, ItemIds.LargeRock], 0, 1,
+        out var bronzeHammerSplit) &&
+    bronzeHammerSplit[0] == ItemIds.BronzeHammer &&
+    bronzeHammerSplit.Count(item => item == ItemIds.MediumRock) == 2,
+    "powered hammer and knife selection must prefer upgrades and metal hammers must work in shared tool actions");
+var bronzeHammerRecipe = CraftingSkill.Recipes.Single(recipe =>
+    recipe.ResultItemId == ItemIds.BronzeHammer);
+Require(
+    CraftingSkill.AwardExperience(
+        0, bronzeHammerRecipe, [ItemIds.IronHammer]).Gained >
+    CraftingSkill.AwardExperience(
+        0, bronzeHammerRecipe, [ItemIds.StoneHammer]).Gained &&
+    ItemDescriptionService.Describe(
+        ItemCatalog.Get(ItemIds.IronHammer)).Contains("Hammer power: 3") &&
+    ItemDescriptionService.Describe(
+        ItemCatalog.Get(ItemIds.AdvancedFishingNet)).Contains(
+            "Fishing power: 3"),
+    "advanced crafting tools must grant a power benefit and all tool powers must be visible when examined");
+Require(
+    VillagerCraftPlanner.PriorityFor(VillagerWorkRole.Food)
+        .Contains(ItemIds.AdvancedFishingNet) &&
+    VillagerCraftPlanner.PriorityFor(VillagerWorkRole.Crafting)
+        .Contains(ItemIds.IronHammer) &&
+    VillagerCraftPlanner.PriorityFor(VillagerWorkRole.Exploration)
+        .Contains(ItemIds.IronShovel) &&
+    !VillagerCraftPlanner.Needs(
+        ItemIds.StoneHammer, [ItemIds.IronHammer]) &&
+    VillagerCraftPlanner.Needs(
+        ItemIds.IronHammer, [ItemIds.StoneHammer]),
+    "NPC crafting plans must pursue role upgrades without replacing superior tools with primitive ones");
+foreach (var sheetDefinition in new[]
+         {
+             ItemSpriteSheetCatalog.AdvancedTools,
+             ItemSpriteSheetCatalog.FishingNetUpgrades
+         })
+{
+    var spritePath = Path.Combine(
+        AppContext.BaseDirectory, "Resources", "Images",
+        sheetDefinition.FileName);
+    Require(File.Exists(spritePath),
+        $"{sheetDefinition.FileName} must be copied beside the game");
+    using var spriteStream = File.OpenRead(spritePath);
+    var spriteSheet = ImageResult.FromStream(
+        spriteStream, ColorComponents.RedGreenBlueAlpha);
+    Require(
+        spriteSheet.Width == sheetDefinition.Width &&
+        spriteSheet.Height == sheetDefinition.Height &&
+        spriteSheet.Data[3] == 0,
+        $"{sheetDefinition.FileName} must have the configured transparent 32-pixel grid");
+    for (var cell = 0; cell < sheetDefinition.CellCount; cell++)
+        Require(
+            Enumerable.Range(0, sheetDefinition.CellSize)
+                .SelectMany(y => Enumerable.Range(0, sheetDefinition.CellSize)
+                    .Select(x => ((y * spriteSheet.Width) +
+                                  cell * sheetDefinition.CellSize + x) * 4 + 3))
+                .Any(alphaIndex => spriteSheet.Data[alphaIndex] > 0),
+            $"{sheetDefinition.FileName} cell {cell} must contain a visible sprite");
+}
 var pickaxeRecipe = CraftingSkill.Recipes.Single(
     recipe => recipe.ResultItemId == ItemIds.StonePickaxe);
 Require(pickaxeRecipe.Category == CraftingCategory.Tools &&
@@ -2537,13 +2629,13 @@ Require(
         workbenchRecipes,
         CraftingSkill.RecipesFor(
             CraftingCategory.All, ItemIds.Workbench)) &&
-    workbenchRecipes.Count == 4 &&
+    workbenchRecipes.Count == 5 &&
     workbenchRecipes.All(recipe =>
         recipe.RequiredStationItemId == ItemIds.Workbench) &&
     bloomeryRecipes.Count == 2 &&
     bloomeryRecipes.All(recipe =>
         recipe.RequiredStationItemId == ItemIds.Bloomery) &&
-    anvilRecipes.Count == 7 &&
+    anvilRecipes.Count == 15 &&
     anvilRecipes.All(recipe =>
         recipe.RequiredStationItemId == ItemIds.SmithingAnvil),
     "station recipe views must be cached and contain only recipes for the station used");
@@ -3671,6 +3763,37 @@ Require(
     !FishingSkill.CanCatch(WorldFishSpecies.BluefinTuna, 16) &&
     FishingSkill.CanCatch(WorldFishSpecies.BluefinTuna, 17),
     "fishing progression must unlock difficult catches without changing the authored net action");
+Require(
+    FishingSkill.CanCatch(WorldFishSpecies.ShoreMinnows, 1, 1) &&
+    !FishingSkill.CanCatch(WorldFishSpecies.SilverHerring, 5, 1) &&
+    FishingSkill.CanCatch(WorldFishSpecies.SilverHerring, 5, 2) &&
+    !FishingSkill.CanCatch(WorldFishSpecies.BluefinTuna, 17, 2) &&
+    FishingSkill.CanCatch(WorldFishSpecies.BluefinTuna, 17, 3),
+    "fishing net tiers must support primitive, coastal, and ocean catches in order");
+Require(
+    FishingSkill.CycleSeconds(3f, 3) <
+    FishingSkill.CycleSeconds(3f, 2) &&
+    FishingSkill.CycleSeconds(3f, 2) <
+    FishingSkill.CycleSeconds(3f, 1) &&
+    Math.Abs(FishingSkill.CycleSeconds(3f, 1) - 3f) < .001f,
+    "stronger fishing nets must shorten catch cycles without changing primitive-net timing");
+var fishingNetProgression = new[]
+{
+    ItemIds.PrimitiveFishingNet,
+    ItemIds.ReinforcedFishingNet,
+    ItemIds.AdvancedFishingNet
+}.Select(ItemCatalog.Get).ToArray();
+Require(
+    fishingNetProgression.Select(item => item.FishingPower)
+        .SequenceEqual([1, 2, 3]) &&
+    PlayerInventory.BestFishingNet(
+        [ItemIds.PrimitiveFishingNet, ItemIds.AdvancedFishingNet])?.Id ==
+        ItemIds.AdvancedFishingNet &&
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.ReinforcedFishingNet) &&
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.AdvancedFishingNet),
+    "net definitions, selection, and recipes must expose the full fishing progression");
 var fishingGuide = SkillGuideService.Definition(SkillType.Fishing);
 Require(
     fishingGuide.Entries.Select(entry => entry.Level)

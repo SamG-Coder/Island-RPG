@@ -83,6 +83,33 @@ internal static class CraftingSkill
                 "Knot the edges to finish a primitive casting net."
             ]),
         new(
+            "reinforced-fishing-net", ItemIds.ReinforcedFishingNet,
+            CraftingCategory.Tools, 6, 65,
+            [
+                new(ItemIds.PrimitiveFishingNet, 1),
+                new(ItemIds.Rope, 2)
+            ],
+            [
+                "Double the primitive mesh with tightly twisted rope.",
+                "Knot wooden weights around the reinforced perimeter."
+            ],
+            RequiredTools: [new(ItemTag.Knife, "knife")],
+            RequiredStationItemId: ItemIds.Workbench),
+        new(
+            "advanced-fishing-net", ItemIds.AdvancedFishingNet,
+            CraftingCategory.Tools, 12, 150,
+            [
+                new(ItemIds.ReinforcedFishingNet, 1),
+                new(ItemIds.Rope, 2),
+                new(ItemIds.IronBar, 1)
+            ],
+            [
+                "Weave a dense second layer through the reinforced mesh.",
+                "Hammer iron into compact weights and secure the edge knots."
+            ],
+            RequiredTools: [new(ItemTag.Hammer, "hammer")],
+            RequiredStationItemId: ItemIds.SmithingAnvil),
+        new(
             "medium-rock", ItemIds.MediumRock,
             CraftingCategory.Resources, 1, 8,
             [new(ItemIds.LargeRock, 2)],
@@ -125,7 +152,14 @@ internal static class CraftingSkill
         new(
             "plank", ItemIds.Plank,
             CraftingCategory.Resources, 2, 20,
-            [new(ItemIds.Logs, 1)],
+            [new(
+                ItemIds.Logs, 1,
+                [
+                    ItemIds.OakLogs,
+                    ItemIds.PineLogs,
+                    ItemIds.PalmLogs,
+                    ItemIds.Bamboo
+                ])],
             [
                 "Use a knife on any type of log.",
                 "Carve along the grain until the log becomes a plank."
@@ -305,6 +339,15 @@ internal static class CraftingSkill
                 new(ItemTag.Hammer, "hammer")
             ],
             RequiredStationItemId: ItemIds.SmithingAnvil),
+        SmithingTool(
+            "bronze-hammer", ItemIds.BronzeHammer, "hammer",
+            ItemIds.BronzeBar, 8, 105),
+        SmithingTool(
+            "bronze-knife", ItemIds.BronzeKnife, "knife",
+            ItemIds.BronzeBar, 8, 90),
+        SmithingTool(
+            "bronze-shovel", ItemIds.BronzeShovel, "shovel",
+            ItemIds.BronzeBar, 9, 105),
         new(
             "cooking-pot", ItemIds.CookingPot,
             CraftingCategory.Furniture, 10, 120,
@@ -386,6 +429,18 @@ internal static class CraftingSkill
                 new(ItemTag.Hammer, "hammer")
             ],
             RequiredStationItemId: ItemIds.SmithingAnvil),
+        SmithingTool(
+            "iron-hammer", ItemIds.IronHammer, "hammer",
+            ItemIds.IronBar, 12, 170),
+        SmithingTool(
+            "iron-knife", ItemIds.IronKnife, "knife",
+            ItemIds.IronBar, 12, 150),
+        SmithingTool(
+            "iron-shovel", ItemIds.IronShovel, "shovel",
+            ItemIds.IronBar, 13, 175),
+        SmithingTool(
+            "iron-sickle", ItemIds.IronSickle, "sickle",
+            ItemIds.IronBar, 13, 165),
         new(
             "stone-shovel", ItemIds.StoneShovel,
             CraftingCategory.Tools, 1, 45,
@@ -424,6 +479,20 @@ internal static class CraftingSkill
                 new(ItemTag.Hammer, "hammer")
             ])
     ];
+
+    private static CraftingRecipe SmithingTool(
+        string id, string resultItemId, string toolName,
+        string barItemId, int requiredLevel, int experience) =>
+        new(
+            id, resultItemId, CraftingCategory.Tools,
+            requiredLevel, experience,
+            [new(barItemId, 1), new(ItemIds.Sticks, 1)],
+            [
+                $"Hammer the metal into a balanced {toolName} head.",
+                $"Fit and secure the {toolName} head to a wooden handle."
+            ],
+            RequiredTools: [new(ItemTag.Hammer, "hammer")],
+            RequiredStationItemId: ItemIds.SmithingAnvil);
 
     private static readonly IReadOnlyDictionary<
         CraftingCategory, IReadOnlyList<CraftingRecipe>>
@@ -486,6 +555,33 @@ internal static class CraftingSkill
         int currentExperience, CraftingRecipe recipe) =>
         SkillService.AwardExperience(
             currentExperience, recipe.Experience);
+
+    public static SkillExperienceChange AwardExperience(
+        int currentExperience, CraftingRecipe recipe,
+        string?[]? inventory)
+    {
+        var power = BestRequiredToolPower(recipe, inventory);
+        var experience = (int)MathF.Round(
+            recipe.Experience * (1f + (power - 1) * .1f));
+        return SkillService.AwardExperience(
+            currentExperience, experience);
+    }
+
+    public static int BestRequiredToolPower(
+        CraftingRecipe recipe, string?[]? inventory)
+    {
+        var power = 1;
+        foreach (var tool in recipe.RequiredTools ?? [])
+            power = Math.Max(power, tool.Tag switch
+            {
+                ItemTag.Hammer =>
+                    PlayerInventory.BestHammer(inventory)?.HammerPower ?? 1,
+                ItemTag.Knife =>
+                    PlayerInventory.BestKnife(inventory)?.KnifePower ?? 1,
+                _ => 1
+            });
+        return power;
+    }
 
     public static RecipeAvailability Availability(
         CraftingRecipe recipe, int level, string?[]? inventory,

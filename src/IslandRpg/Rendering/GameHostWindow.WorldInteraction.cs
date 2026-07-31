@@ -669,6 +669,15 @@ internal sealed partial class GameHostWindow
                    StringComparison.OrdinalIgnoreCase);
     }
 
+    private bool InventoryHasTagAt(int slot, ItemTag tag)
+    {
+        var inventory = _activePlayer?.Inventory;
+        return inventory is not null &&
+               (uint)slot < (uint)inventory.Length &&
+               inventory[slot] is { } itemId &&
+               ItemCatalog.Get(itemId).HasTag(tag);
+    }
+
     private bool TryGroundItemVisual(
         string itemId,
         out SpriteFrame frame,

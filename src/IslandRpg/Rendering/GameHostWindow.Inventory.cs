@@ -373,7 +373,8 @@ internal sealed partial class GameHostWindow
             _activeInventorySlot = -1;
             return;
         }
-        if (source is ItemIds.LargeRock or ItemIds.StoneHammer &&
+        if ((source == ItemIds.LargeRock ||
+             ItemCatalog.Get(source).HasTag(ItemTag.Hammer)) &&
             target is ItemIds.LargeRock or ItemIds.MediumRock)
         {
             if (!PlayerInventory.TryBreakRock(
@@ -468,10 +469,7 @@ internal sealed partial class GameHostWindow
         if (option == 2)
         {
             _chatUi.AddMessage(
-                item.WoodcuttingPower > 0
-                    ? $"{item.Examine} Woodcutting power: " +
-                      $"{item.WoodcuttingPower}."
-                    : item.Examine,
+                ItemDescriptionService.Describe(item),
                 ChatMessageStyle.Normal);
             return;
         }

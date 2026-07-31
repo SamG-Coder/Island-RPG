@@ -55,13 +55,20 @@ internal static class PlayerInventory
             .FirstOrDefault();
 
     public static ItemDefinition? BestFishingNet(string?[]? items) =>
-        items?
-            .Where(item => item is not null)
-            .Select(item => ItemCatalog.Get(item!))
-            .Where(item =>
-                item.HasTag(ItemTag.Tool) &&
-                item.HasTag(ItemTag.FishingNet))
-            .FirstOrDefault();
+        BestPoweredTool(items, ItemTag.FishingNet,
+            item => item.FishingPower);
+
+    public static ItemDefinition? BestShovel(string?[]? items) =>
+        BestPoweredTool(items, ItemTag.Shovel,
+            item => item.DiggingPower);
+
+    public static ItemDefinition? BestHammer(string?[]? items) =>
+        BestPoweredTool(items, ItemTag.Hammer,
+            item => item.HammerPower);
+
+    public static ItemDefinition? BestKnife(string?[]? items) =>
+        BestPoweredTool(items, ItemTag.Knife,
+            item => item.KnifePower);
 
     public static ItemDefinition? BestSickle(string?[]? items)
     {
@@ -81,6 +88,20 @@ internal static class PlayerInventory
         return best;
     }
 
+    private static ItemDefinition? BestPoweredTool(
+        string?[]? items, ItemTag tag,
+        Func<ItemDefinition, int> power) =>
+        items?
+            .Take(Capacity)
+            .Where(itemId => itemId is not null)
+            .Select(itemId => ItemCatalog.Get(itemId!))
+            .Where(item =>
+                item.HasTag(ItemTag.Tool) &&
+                item.HasTag(tag) &&
+                power(item) > 0)
+            .OrderByDescending(power)
+            .FirstOrDefault();
+
     public static bool CanDrop(string itemId) =>
         ItemCatalog.Get(itemId).Droppable;
 
@@ -92,8 +113,10 @@ internal static class PlayerInventory
         if (toolSlot == targetSlot ||
             (uint)toolSlot >= Capacity ||
             (uint)targetSlot >= Capacity ||
-            updated[toolSlot] is not
-                (ItemIds.LargeRock or ItemIds.StoneHammer))
+            updated[toolSlot] is not { } toolId ||
+            toolId != ItemIds.LargeRock &&
+            !(ItemCatalog.Get(toolId).HasTag(ItemTag.Hammer) &&
+              ItemCatalog.Get(toolId).HammerPower > 0))
             return false;
         var result = updated[targetSlot] switch
         {

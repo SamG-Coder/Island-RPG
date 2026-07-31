@@ -131,14 +131,18 @@ internal sealed partial class GameHostWindow
             return 2.8f;
         var framesPerAngle = Math.Max(
             1, animation.Graphic.Sprite.Frames.Count / authoredAngles);
-        return framesPerAngle * animation.SecondsPerFrame;
+        var baseSeconds = framesPerAngle * animation.SecondsPerFrame;
+        var netPower = PlayerInventory.BestFishingNet(
+            _activePlayer?.Inventory)?.FishingPower ?? 1;
+        return FishingSkill.CycleSeconds(baseSeconds, netPower);
     }
 
     private void QueueFishing(WorldFish fish)
     {
         if (_activePlayer is null || IsFishDepleted(fish)) return;
-        if (PlayerInventory.BestFishingNet(
-                _activePlayer.Inventory) is null)
+        var net = PlayerInventory.BestFishingNet(
+            _activePlayer.Inventory);
+        if (net is null)
         {
             ReportBlockedAction(
                 "fishing-without-net",
@@ -148,8 +152,17 @@ internal sealed partial class GameHostWindow
         var level = FishingSkill.LevelForExperience(
             _activePlayer.FishingExperience);
         var profile = FishingSkill.Profile(fish.Species);
-        if (!FishingSkill.CanCatch(fish.Species, level))
+        if (!FishingSkill.CanCatch(
+                fish.Species, level, net.FishingPower))
         {
+            if (level >= profile.RequiredLevel)
+            {
+                ReportBlockedAction(
+                    $"fishing-net-{fish.Species}",
+                    $"You need a stronger fishing net to catch " +
+                    $"{WorldFishGenerator.Profile(fish.Species).DisplayName}.");
+                return;
+            }
             ReportBlockedAction(
                 $"fishing-level-{fish.Species}",
                 $"You need Fishing level {profile.RequiredLevel} to catch " +
@@ -168,12 +181,16 @@ internal sealed partial class GameHostWindow
         if (_player is null || _activePlayer is null) return;
         var fish = FindFish(fishKey);
         if (fish is null || IsFishDepleted(fish)) return;
-        if (PlayerInventory.BestFishingNet(
-                _activePlayer.Inventory) is null)
+        var net = PlayerInventory.BestFishingNet(
+            _activePlayer.Inventory);
+        var level = FishingSkill.LevelForExperience(
+            _activePlayer.FishingExperience);
+        if (net is null ||
+            !FishingSkill.CanCatch(fish.Species, level, net.FishingPower))
         {
             ReportBlockedAction(
                 "fishing-without-net",
-                "You need a fishing net to catch fish.");
+                "You need a suitable fishing net to catch this fish.");
             return;
         }
         if (PlayerInventory.IsFull(_activePlayer.Inventory))
@@ -209,12 +226,16 @@ internal sealed partial class GameHostWindow
             StopFishing();
             return;
         }
-        if (PlayerInventory.BestFishingNet(
-                _activePlayer.Inventory) is null)
+        var net = PlayerInventory.BestFishingNet(
+            _activePlayer.Inventory);
+        var level = FishingSkill.LevelForExperience(
+            _activePlayer.FishingExperience);
+        if (net is null ||
+            !FishingSkill.CanCatch(fish.Species, level, net.FishingPower))
         {
             ReportBlockedAction(
                 "fishing-net-lost",
-                "You can no longer fish without a fishing net.");
+                "You can no longer catch this fish with your current net.");
             StopFishing();
             return;
         }

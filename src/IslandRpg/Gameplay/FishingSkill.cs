@@ -6,6 +6,7 @@ internal sealed record FishingCatchProfile(
     WorldFishSpecies Species,
     string ItemId,
     int RequiredLevel,
+    int RequiredNetPower,
     int Experience,
     int SchoolSize);
 
@@ -18,17 +19,17 @@ internal static class FishingSkill
         Profiles = new Dictionary<WorldFishSpecies, FishingCatchProfile>
         {
             [WorldFishSpecies.ShoreMinnows] = new(
-                WorldFishSpecies.ShoreMinnows, ItemIds.RawMinnows, 1, 8, 5),
+                WorldFishSpecies.ShoreMinnows, ItemIds.RawMinnows, 1, 1, 8, 5),
             [WorldFishSpecies.RiverPerch] = new(
-                WorldFishSpecies.RiverPerch, ItemIds.RawRiverPerch, 1, 10, 4),
+                WorldFishSpecies.RiverPerch, ItemIds.RawRiverPerch, 1, 1, 10, 4),
             [WorldFishSpecies.SilverHerring] = new(
-                WorldFishSpecies.SilverHerring, ItemIds.RawSilverHerring, 5, 18, 4),
+                WorldFishSpecies.SilverHerring, ItemIds.RawSilverHerring, 5, 2, 18, 4),
             [WorldFishSpecies.RedSnapper] = new(
-                WorldFishSpecies.RedSnapper, ItemIds.RawRedSnapper, 9, 30, 3),
+                WorldFishSpecies.RedSnapper, ItemIds.RawRedSnapper, 9, 2, 30, 3),
             [WorldFishSpecies.OceanMackerel] = new(
-                WorldFishSpecies.OceanMackerel, ItemIds.RawOceanMackerel, 13, 48, 3),
+                WorldFishSpecies.OceanMackerel, ItemIds.RawOceanMackerel, 13, 3, 48, 3),
             [WorldFishSpecies.BluefinTuna] = new(
-                WorldFishSpecies.BluefinTuna, ItemIds.RawBluefinTuna, 17, 75, 2)
+                WorldFishSpecies.BluefinTuna, ItemIds.RawBluefinTuna, 17, 3, 75, 2)
         };
 
     public static IReadOnlyList<FishingCatchProfile> CatchProfiles =>
@@ -52,8 +53,16 @@ internal static class FishingSkill
     public static bool CanCatch(WorldFishSpecies species, int level) =>
         level >= Profile(species).RequiredLevel;
 
+    public static bool CanCatch(
+        WorldFishSpecies species, int level, int netPower) =>
+        CanCatch(species, level) &&
+        netPower >= Profile(species).RequiredNetPower;
+
     public static float AnimationFrameSeconds(float authoredFrameSeconds) =>
         authoredFrameSeconds / AnimationSpeedMultiplier;
+
+    public static float CycleSeconds(float baseSeconds, int netPower) =>
+        baseSeconds / (1f + (Math.Max(1, netPower) - 1) * .18f);
 
     public static SkillExperienceChange AwardExperience(
         int currentExperience, WorldFishSpecies species) =>
