@@ -13,6 +13,8 @@ internal sealed partial class GameHostWindow
     private readonly List<VillagerWorldObject>
         _villagerWorldObjects = [];
     private readonly HashSet<Guid> _villagerReservedObjects = [];
+    private readonly VillagerWorkCoordinator _villagerWork = new();
+    private double _nextVillagerRoleAssignment;
     private readonly List<SocialActorObservation>
         _socialActorObservations = [];
     private double _villagersNextSaveAt;
@@ -32,6 +34,8 @@ internal sealed partial class GameHostWindow
         _queuedPlayerConversationTurns.Clear();
         _conversationFloorSpeakerId = null;
         _conversationFloorUntil = 0;
+        _villagerWork.Clear();
+        _nextVillagerRoleAssignment = 0;
         if (_activeWorld is null) return;
         if (!_activeWorld.AiNpcsEnabled ||
             _activeWorld.AiNpcCount <= 0)
@@ -67,6 +71,24 @@ internal sealed partial class GameHostWindow
     {
         if (_player is null || _activeWorld is null) return;
         UpdateConversationTurns();
+        _villagerWork.Expire(_worldGameSeconds);
+        if (_worldGameSeconds >= _nextVillagerRoleAssignment)
+        {
+            var roles = VillagerWorkCoordinator.AssignRoles(_villagers);
+            for (var roleIndex = 0; roleIndex < _villagers.Count; roleIndex++)
+            {
+                var roleVillager = _villagers[roleIndex];
+                var role = roles.TryGetValue(roleVillager.Id, out var assigned)
+                    ? assigned
+                    : VillagerWorkRole.Unassigned;
+                if (roleVillager.WorkRole != role)
+                {
+                    _villagers[roleIndex] = roleVillager with { WorkRole = role };
+                    _villagersDirty = true;
+                }
+            }
+            _nextVillagerRoleAssignment = _worldGameSeconds + 30 * 60;
+        }
         _villagerReservedObjects.Clear();
         foreach (var villager in _villagers)
             if (villager.GoalObjectId is { } goal)
@@ -76,6 +98,7 @@ internal sealed partial class GameHostWindow
             var previous = _villagers[index];
             if (previous.Health <= 0)
             {
+                _villagerWork.ReleaseActor(previous.Id);
                 if (previous.Action != EntityAction.Die)
                 {
                     _villagers[index] = previous with

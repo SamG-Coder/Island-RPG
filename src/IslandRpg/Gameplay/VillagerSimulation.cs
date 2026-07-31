@@ -139,7 +139,8 @@ internal sealed record VillagerState(
     int MiningExperience = 0,
     int AttackExperience = 0,
     int StrengthExperience = 0,
-    int DefenceExperience = 0);
+    int DefenceExperience = 0,
+    VillagerWorkRole WorkRole = VillagerWorkRole.Unassigned);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,

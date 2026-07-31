@@ -541,6 +541,42 @@ Require(
     fedVillager.WellFedSeconds == expectedMeal.WellFedSeconds,
     "villager food hunger, healing, and well-fed effects must exactly match the player's shared meal result");
 
+var workCoordinator = new VillagerWorkCoordinator();
+Require(
+    workCoordinator.TryReserve("tree:one", "mira", 100) &&
+    !workCoordinator.IsAvailable("tree:one", "rowan", 100) &&
+    workCoordinator.IsAvailable("tree:one", "mira", 100),
+    "scarce villager targets must remain available only to their owner");
+Require(
+    workCoordinator.TryReserve("fish:two", "mira", 110) &&
+    workCoordinator.IsAvailable("tree:one", "rowan", 110) &&
+    workCoordinator.Count == 1,
+    "reserving a new target must atomically release an actor's prior target");
+workCoordinator.Expire(
+    110 + VillagerWorkCoordinator.ReservationSeconds + 1);
+Require(
+    workCoordinator.IsAvailable("fish:two", "rowan", 999) &&
+    workCoordinator.Count == 0,
+    "abandoned target reservations must expire without accumulating state");
+var woodInventory = PlayerInventory.CreateStartingInventory();
+woodInventory[0] = ItemIds.StoneAxe;
+var roleAssignments = VillagerWorkCoordinator.AssignRoles([
+    hungryVillager with { Id = "hungry", Hunger = 10 },
+    hungryVillager with
+    {
+        Id = "woodworker",
+        Hunger = 90,
+        Inventory = woodInventory,
+        WoodcuttingExperience = 500
+    },
+    hungryVillager with { Id = "third", Hunger = 80 }
+]);
+Require(
+    roleAssignments["hungry"] == VillagerWorkRole.Food &&
+    roleAssignments["woodworker"] == VillagerWorkRole.Wood &&
+    roleAssignments.Values.Distinct().Count() == 3,
+    "temporary roles must cover urgent food, best-equipped wood work, and a complementary third job");
+
 var sharedGatherInventory = PlayerInventory.CreateStartingInventory();
 var sharedGather = ActorActionService.Gather(
     sharedGatherInventory, ItemIds.PlantFibres, 3);

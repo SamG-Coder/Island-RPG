@@ -30,6 +30,7 @@ internal sealed partial class GameHostWindow
     {
         if (TryVillagerDefendSelf(index, villager, tier) ||
             TryVillagerEat(index, villager, tier) ||
+            TryVillagerRoleAction(index, villager, tier) ||
             TryVillagerCookStew(index, villager) ||
             TryVillagerCook(index, villager) ||
             TryVillagerWithdrawFood(index, villager) ||
@@ -46,6 +47,36 @@ internal sealed partial class GameHostWindow
             TryVillagerFulfilGift(index, villager))
             return true;
         return false;
+    }
+
+    private bool TryVillagerRoleAction(
+        int index, VillagerState villager,
+        VillagerSimulationTier tier)
+    {
+        if (villager.LastDeliberation is { Action: not "none" } trace &&
+            trace.Decision is not ("refuse" or "clarify") &&
+            _worldGameSeconds - trace.GameSeconds <= 15 * 60)
+            return false;
+        return villager.WorkRole switch
+        {
+            VillagerWorkRole.Food =>
+                TryVillagerCookStew(index, villager) ||
+                TryVillagerCook(index, villager) ||
+                TryVillagerWithdrawFood(index, villager) ||
+                TryVillagerFish(index, villager, tier) ||
+                TryVillagerForage(index, villager, tier),
+            VillagerWorkRole.Wood =>
+                TryVillagerCutTree(index, villager, tier) ||
+                TryVillagerGatherTreeSticks(index, villager, tier),
+            VillagerWorkRole.Crafting =>
+                TryVillagerCraft(index, villager) ||
+                TryVillagerPlaceObject(index, villager) ||
+                TryVillagerPlaceOrTendCampfire(index, villager),
+            VillagerWorkRole.Exploration =>
+                TryVillagerMine(index, villager, tier) ||
+                TryVillagerForage(index, villager, tier),
+            _ => false
+        };
     }
 
     private bool TryVillagerGatherTreeSticks(
@@ -72,7 +103,10 @@ internal sealed partial class GameHostWindow
             foreach (var tree in gpu.Chunk.TreeInstances)
             {
                 if (tree.State != TreeLifecycleState.Standing ||
-                    tree.SticksRemaining <= 0)
+                    tree.SticksRemaining <= 0 ||
+                    !_villagerWork.IsAvailable(
+                        TreeReservationKey(tree.Id),
+                        villager.Id, _worldGameSeconds))
                     continue;
                 var distance = Vector2.DistanceSquared(
                     position, new(tree.X + .5f, tree.Y + .5f));
@@ -82,6 +116,10 @@ internal sealed partial class GameHostWindow
             }
         }
         if (best is null) return false;
+        var reservationKey = TreeReservationKey(best.Value.Tree.Id);
+        if (!_villagerWork.TryReserve(
+                reservationKey, villager.Id, _worldGameSeconds))
+            return false;
         var target = new Vector2(
             best.Value.Tree.X + .5f, best.Value.Tree.Y + .5f);
         if (bestDistance > 1.6f * 1.6f)
@@ -111,6 +149,7 @@ internal sealed partial class GameHostWindow
             LastSimulatedGameSeconds = _worldGameSeconds
         };
         QueueChunkSave(best.Value.Gpu.Chunk);
+        _villagerWork.ReleaseTarget(reservationKey, villager.Id);
         ObserveLog("world_action_succeeded", villager.Id, new
         {
             Action = "gather_sticks",
@@ -179,7 +218,10 @@ internal sealed partial class GameHostWindow
                                vegetation.Kind is WorldVegetationKind.Shrub or
                                    WorldVegetationKind.FloweringShrub;
                 if (!eligible ||
-                    !VegetationReady(gpu.Chunk, cached.StableKey))
+                    !VegetationReady(gpu.Chunk, cached.StableKey) ||
+                    !_villagerWork.IsAvailable(
+                        ResourceReservationKey("vegetation", cached.StableKey),
+                        villager.Id, _worldGameSeconds))
                     continue;
                 var distance = Vector2.DistanceSquared(
                     position, new(vegetation.X, vegetation.Y));
@@ -189,6 +231,11 @@ internal sealed partial class GameHostWindow
             }
         }
         if (best is null) return false;
+        var reservationKey = ResourceReservationKey(
+            "vegetation", best.Value.Key);
+        if (!_villagerWork.TryReserve(
+                reservationKey, villager.Id, _worldGameSeconds))
+            return false;
         var target = new Vector2(best.Value.Value.X, best.Value.Value.Y);
         if (bestDistance > VillagerSimulation.InteractionRange *
                            VillagerSimulation.InteractionRange)
@@ -232,6 +279,7 @@ internal sealed partial class GameHostWindow
             best.Value.Key,
             berries ? 12 * 60 : 5 * 60);
         QueueChunkSave(best.Value.Gpu.Chunk);
+        _villagerWork.ReleaseTarget(reservationKey, villager.Id);
         ObserveLog("world_action_succeeded", villager.Id, new
         {
             Action = berries ? "gather_berries" : "gather_fibre",
@@ -323,7 +371,10 @@ internal sealed partial class GameHostWindow
                     !FishingSkill.CanCatch(
                         fish.Species,
                         FishingSkill.LevelForExperience(
-                            villager.FishingExperience)))
+                            villager.FishingExperience)) ||
+                    !_villagerWork.IsAvailable(
+                        ResourceReservationKey("fish", fish.StableKey),
+                        villager.Id, _worldGameSeconds))
                     continue;
                 var distance = Vector2.DistanceSquared(
                     position, new(fish.X, fish.Y));
@@ -333,6 +384,11 @@ internal sealed partial class GameHostWindow
             }
         }
         if (best is null) return false;
+        var reservationKey = ResourceReservationKey(
+            "fish", best.Value.Fish.StableKey);
+        if (!_villagerWork.TryReserve(
+                reservationKey, villager.Id, _worldGameSeconds))
+            return false;
         var fishTarget = new Vector2(best.Value.Fish.X, best.Value.Fish.Y);
         if (bestDistance > 3.2f * 3.2f)
         {
@@ -363,6 +419,7 @@ internal sealed partial class GameHostWindow
             LastSimulatedGameSeconds = _worldGameSeconds
         };
         QueueChunkSave(best.Value.Gpu.Chunk);
+        _villagerWork.ReleaseTarget(reservationKey, villager.Id);
         ObserveLog("world_action_succeeded", villager.Id, new
         {
             Action = "fish",
@@ -384,6 +441,7 @@ internal sealed partial class GameHostWindow
             goal.Status == CommitmentStatus.Active &&
             goal.ItemId == ItemIds.Logs) == true;
         if (!needsLogs &&
+            villager.WorkRole != VillagerWorkRole.Wood &&
             !RequestedVillagerAction(villager, "cut_tree", "gather"))
             return false;
         var position = new Vector2(villager.PositionX, villager.PositionY);
@@ -394,7 +452,11 @@ internal sealed partial class GameHostWindow
             if (!IsActiveSimulationChunk(gpu)) continue;
             foreach (var tree in gpu.Chunk.TreeInstances)
             {
-                if (tree.State != TreeLifecycleState.Standing) continue;
+                if (tree.State != TreeLifecycleState.Standing ||
+                    !_villagerWork.IsAvailable(
+                        TreeReservationKey(tree.Id),
+                        villager.Id, _worldGameSeconds))
+                    continue;
                 var distance = Vector2.DistanceSquared(
                     position, new(tree.X + .5f, tree.Y + .5f));
                 if (distance >= bestDistance) continue;
@@ -403,6 +465,10 @@ internal sealed partial class GameHostWindow
             }
         }
         if (best is null) return false;
+        var reservationKey = TreeReservationKey(best.Value.Tree.Id);
+        if (!_villagerWork.TryReserve(
+                reservationKey, villager.Id, _worldGameSeconds))
+            return false;
         var target = new Vector2(
             best.Value.Tree.X + .5f, best.Value.Tree.Y + .5f);
         if (bestDistance > 1.6f * 1.6f)
@@ -443,6 +509,8 @@ internal sealed partial class GameHostWindow
             LastSimulatedGameSeconds = _worldGameSeconds
         };
         QueueChunkSave(best.Value.Gpu.Chunk);
+        if (felled)
+            _villagerWork.ReleaseTarget(reservationKey, villager.Id);
         ObserveLog("world_action_succeeded", villager.Id, new
         {
             Action = "cut_tree",
@@ -458,7 +526,9 @@ internal sealed partial class GameHostWindow
         int index, VillagerState villager,
         VillagerSimulationTier tier)
     {
-        if (!RequestedVillagerAction(villager, "mine")) return false;
+        if (!RequestedVillagerAction(villager, "mine") &&
+            villager.WorkRole != VillagerWorkRole.Exploration)
+            return false;
         var pickaxe = PlayerInventory.BestPickaxe(villager.Inventory);
         if (pickaxe is null || PlayerInventory.IsFull(villager.Inventory))
             return false;
@@ -476,6 +546,10 @@ internal sealed partial class GameHostWindow
                 var value = gpu.Chunk.Vegetation[cached.VegetationIndex];
                 if (!MiningNodeCatalog.TryGet(value, out var definition))
                     continue;
+                if (!_villagerWork.IsAvailable(
+                        ResourceReservationKey("mining", cached.StableKey),
+                        villager.Id, _worldGameSeconds))
+                    continue;
                 var distance = Vector2.DistanceSquared(
                     position, new(value.X, value.Y));
                 if (distance >= bestDistance) continue;
@@ -484,6 +558,11 @@ internal sealed partial class GameHostWindow
             }
         }
         if (best is null) return false;
+        var reservationKey = ResourceReservationKey(
+            "mining", best.Value.Cached.StableKey);
+        if (!_villagerWork.TryReserve(
+                reservationKey, villager.Id, _worldGameSeconds))
+            return false;
         var target = new Vector2(best.Value.Value.X, best.Value.Value.Y);
         if (bestDistance > 1.5f * 1.5f)
         {
@@ -522,6 +601,8 @@ internal sealed partial class GameHostWindow
             LastSimulatedGameSeconds = _worldGameSeconds
         };
         QueueChunkSave(best.Value.Gpu.Chunk);
+        if (health == 0)
+            _villagerWork.ReleaseTarget(reservationKey, villager.Id);
         _villagersDirty = true;
         return true;
     }
@@ -853,13 +934,14 @@ internal sealed partial class GameHostWindow
         return true;
     }
 
-    private static bool RequestedVillagerAction(
+    private bool RequestedVillagerAction(
         VillagerState villager, params string[] actions)
     {
         var deliberation = villager.LastDeliberation;
         if (deliberation is null ||
             deliberation.Decision is "refuse" or "clarify" ||
-            string.IsNullOrWhiteSpace(deliberation.Action))
+            string.IsNullOrWhiteSpace(deliberation.Action) ||
+            _worldGameSeconds - deliberation.GameSeconds > 15 * 60)
             return false;
         return actions.Contains(
             deliberation.Action,
@@ -950,6 +1032,13 @@ internal sealed partial class GameHostWindow
         var index = gpu.Chunk.GroundObjects.IndexOf(previous);
         if (index >= 0) gpu.Chunk.GroundObjects[index] = updated;
     }
+
+    private static string TreeReservationKey(Guid treeId) =>
+        $"tree:{treeId:N}";
+
+    private static string ResourceReservationKey(
+        string kind, string stableKey) =>
+        $"{kind}:{stableKey}";
 
     private float DeterministicRoll(string actorId, string purpose)
     {
