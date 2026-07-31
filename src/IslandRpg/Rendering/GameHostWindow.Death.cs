@@ -38,6 +38,8 @@ internal sealed partial class GameHostWindow
             UpdatedUtc = DateTime.UtcNow
         };
         _activeWorldLevel = (int)WorldLevel.Overworld;
+        CancelFishingBoatAction();
+        _fishingBoatBoarded = false;
         _caveEntranceLightWorld = null;
         _starvationElapsed = 0;
         _playerDefeated = false;
@@ -58,7 +60,12 @@ internal sealed partial class GameHostWindow
                 spawn.X,
                 spawn.Y,
                 DateTime.UtcNow,
-                _activeWorldLevel));
+                _activeWorldLevel,
+                _fishingBoat?.Position.X,
+                _fishingBoat?.Position.Y,
+                _fishingBoat?.Facing.X ?? 1,
+                _fishingBoat?.Facing.Y ?? 1,
+                false));
         _chatUi.AddMessage(
             "You awaken at a safe place, weakened but carrying your belongings.",
             ChatMessageStyle.Action);

@@ -46,6 +46,10 @@ internal sealed partial class GameHostWindow
         _climbUpNativeCursor =
             CreateNativeCursor(
                 cursorSheet.Frames[GameCursorFrames.ClimbUp]);
+        _exitBoatNativeCursor = CreateNativeCursor(
+            cursorSheet.Frames[GameCursorFrames.ExitBoat]);
+        _enterBoatNativeCursor = CreateNativeCursor(
+            cursorSheet.Frames[GameCursorFrames.EnterBoat]);
         _digNativeCursor = CreateNativeCursor(
             cursorSheet.Frames[GameCursorFrames.Dig]);
         _dropNativeCursor = CreateNativeCursor(
@@ -117,7 +121,20 @@ internal sealed partial class GameHostWindow
         }
         else if (!pointerBlocked)
         {
-            if (TryGetGroundObjectUnderMouse(
+            if (_fishingBoatDisembarkTargeting &&
+                _exitBoatNativeCursor is not null)
+            {
+                next = GameCursorKind.ExitBoat;
+                cursor = _exitBoatNativeCursor;
+            }
+            else if (!_fishingBoatBoarded &&
+                     FishingBoatHitTest(SceneMousePosition()) &&
+                     _enterBoatNativeCursor is not null)
+            {
+                next = GameCursorKind.EnterBoat;
+                cursor = _enterBoatNativeCursor;
+            }
+            else if (TryGetGroundObjectUnderMouse(
                     SceneMousePosition(), out var groundObject, out _))
             {
                 if (IsAttackableCombatTarget(groundObject) &&

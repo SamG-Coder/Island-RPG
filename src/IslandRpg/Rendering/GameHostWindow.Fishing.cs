@@ -50,7 +50,10 @@ internal sealed partial class GameHostWindow
                 QueueFishing(fish);
                 break;
             case 1:
-                QueueWalk(_fishContextWalkTarget);
+                if (_fishingBoatBoarded)
+                    QueueFishingBoatTravel(_fishContextWalkTarget);
+                else
+                    QueueWalk(_fishContextWalkTarget);
                 break;
             case 2:
                 var profile = WorldFishGenerator.Profile(fish.Species);
@@ -154,7 +157,10 @@ internal sealed partial class GameHostWindow
             return;
         }
 
-        _worldActions.QueueFish(fish);
+        if (_fishingBoatBoarded)
+            QueueFishingFromBoat(fish);
+        else
+            _worldActions.QueueFish(fish);
     }
 
     internal void BeginFishing(string fishKey, Vector2 target)
@@ -285,6 +291,7 @@ internal sealed partial class GameHostWindow
     {
         _activeFishKey = null;
         _player?.Stop();
+        CenterFishingBoatRider();
     }
 
     private WorldFish? FindFish(string stableKey) =>

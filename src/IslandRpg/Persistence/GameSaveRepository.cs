@@ -46,7 +46,12 @@ internal sealed record WorldPlayerState(
     float PositionX,
     float PositionY,
     DateTime UpdatedUtc,
-    int WorldLevel = (int)IslandRpg.World.WorldLevel.Overworld);
+    int WorldLevel = (int)IslandRpg.World.WorldLevel.Overworld,
+    float? FishingBoatX = null,
+    float? FishingBoatY = null,
+    float FishingBoatFacingX = 1,
+    float FishingBoatFacingY = 1,
+    bool FishingBoatBoarded = false);
 
 internal sealed record PlayerDeathMarker(
     float PositionX,

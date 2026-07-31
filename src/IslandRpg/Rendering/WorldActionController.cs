@@ -237,6 +237,9 @@ internal sealed partial class GameHostWindow
             }:
                 window.BeginFishing(fishKey, action.Target);
                 break;
+            case { Type: GameHostWindow.WorldActionType.BoardFishingBoat }:
+                window.BoardFishingBoat();
+                break;
             case
             {
                 Type: GameHostWindow.WorldActionType.DropGroundObject,

@@ -41,8 +41,63 @@ Require(
     gameGraphics.Contains("VMBAS_DN") &&
     gameGraphics.Contains("VFBAS_DN") &&
     gameGraphics.Contains("VMBAS_SN") &&
-    gameGraphics.Contains("VFBAS_SN"),
-    "game asset loading must include both directional death and skeleton sheets");
+    gameGraphics.Contains("VFBAS_SN") &&
+    gameGraphics.Contains("SHIPF5SF"),
+    "game asset loading must include death, skeleton, and fishing boat sheets");
+
+const long fishingBoatSeed = 67;
+var fishingBoatOrigin = new Vector2(0, 0);
+var fishingBoatSpawn = FishingBoatTravel.FindInitialPosition(
+    fishingBoatSeed, fishingBoatOrigin);
+var fishingBoatBiome = InfiniteWorldGenerator.BiomeAt(
+    fishingBoatSeed,
+    (int)MathF.Floor(fishingBoatSpawn.X),
+    (int)MathF.Floor(fishingBoatSpawn.Y));
+Vector2? adjacentWater = null;
+Vector2? adjacentLand = null;
+for (var y = -2; y <= 2; y++)
+for (var x = -2; x <= 2; x++)
+{
+    if (x == 0 && y == 0) continue;
+    var candidate = fishingBoatSpawn + new Vector2(x, y);
+    var biome = InfiniteWorldGenerator.BiomeAt(
+        fishingBoatSeed,
+        (int)MathF.Floor(candidate.X),
+        (int)MathF.Floor(candidate.Y));
+    if (FishingBoatTravel.IsNavigable(biome))
+        adjacentWater ??= candidate;
+    else
+        adjacentLand ??= candidate;
+}
+Require(
+    fishingBoatBiome == Biome.ShallowWater &&
+    adjacentWater is { } water &&
+    FishingBoatTravel.FindPath(
+        fishingBoatSeed, fishingBoatSpawn, water).Count > 0 &&
+    adjacentLand is { } land &&
+    FishingBoatTravel.CanDisembark(
+        fishingBoatSeed, fishingBoatSpawn, land) &&
+    FishingBoatTravel.FindDisembarkLanding(
+        fishingBoatSeed,
+        fishingBoatSpawn,
+        land + new Vector2(8, 8)) is { } resolvedLanding &&
+    FishingBoatTravel.CanDisembark(
+        fishingBoatSeed, fishingBoatSpawn, resolvedLanding) &&
+    !FishingBoatTravel.CanDisembark(
+        fishingBoatSeed, fishingBoatSpawn, land + new Vector2(8, 8)),
+    "fishing boats must spawn at shore, route through water, and resolve nearby shoreline landings");
+var fishingBoatRider = new WorldEntity(
+    fishingBoatSpawn, EntityGender.Male);
+fishingBoatRider.FishAt(fishingBoatSpawn + Vector2.UnitX);
+fishingBoatRider.Update(.5f);
+var fishingActionTime = fishingBoatRider.ActionTime;
+fishingBoatRider.SyncPosition(
+    fishingBoatSpawn + new Vector2(.25f, .25f));
+fishingBoatRider.AdvanceAction(.5f);
+Require(
+    fishingBoatRider.Action == EntityAction.Fish &&
+    fishingBoatRider.ActionTime == fishingActionTime + .5f,
+    "boat riders must preserve and advance an active fishing action");
 
 var adventureAward = AdventureService.AwardFromAction(0, 400);
 Require(

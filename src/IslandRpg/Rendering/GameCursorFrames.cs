@@ -9,7 +9,9 @@ internal static class GameCursorFrames
     public const int Drop = 7;
     public const int CraftingStation = 7;
     public const int Cut = 8;
-    public const int ClimbDown = 15;
-    public const int ClimbUp = 16;
+    public const int ExitBoat = 15;
+    public const int EnterBoat = 16;
+    public const int ClimbDown = ExitBoat;
+    public const int ClimbUp = EnterBoat;
     public const int Dig = 17;
 }

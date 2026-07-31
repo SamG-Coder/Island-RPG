@@ -118,6 +118,9 @@ internal sealed partial class GameHostWindow
         CancelMeleeCombat();
         CancelWorldLevelWork(clearMinimap: true);
         UseDefaultGameCursor();
+        CancelFishingBoatAction();
+        _fishingBoat?.Stop();
+        _fishingBoatBoarded = false;
         _player.Die();
         _playerDefeated = true;
         _deathMessage = message;

@@ -417,7 +417,12 @@ internal sealed partial class GameHostWindow
             _activeWorld.Id,
             new WorldPlayerState(
                 _activePlayer.Id, entrance.X, entrance.Y,
-                DateTime.UtcNow, destinationLevel));
+                DateTime.UtcNow, destinationLevel,
+                _fishingBoat?.Position.X,
+                _fishingBoat?.Position.Y,
+                _fishingBoat?.Facing.X ?? 1,
+                _fishingBoat?.Facing.Y ?? 1,
+                false));
         StreamWorld();
         _chatUi.AddMessage(
             destinationLevel == (int)WorldLevel.Underground

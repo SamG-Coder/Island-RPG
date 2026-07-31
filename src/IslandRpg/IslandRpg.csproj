@@ -49,6 +49,7 @@
     <Content Include="Resources\Images\coastal-collectibles.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\fish-items.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\fibre-net-items.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\fishing-raft-directions.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\workbench.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\campfire.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\bloomery.png" CopyToOutputDirectory="PreserveNewest" />

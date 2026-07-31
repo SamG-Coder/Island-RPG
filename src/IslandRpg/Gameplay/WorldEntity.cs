@@ -74,6 +74,15 @@ internal sealed class WorldEntity
         SetAction(EntityAction.Idle);
     }
 
+    public void SyncPosition(Vector2 position)
+    {
+        Position = position;
+        Target = position;
+    }
+
+    public void AdvanceAction(float elapsed) =>
+        ActionTime += Math.Max(0, elapsed);
+
     public void PrepareForPathRequest()
     {
         // Repathing while already moving must not bounce through Idle. Keeping
@@ -100,6 +109,12 @@ internal sealed class WorldEntity
     public void Work() => SetAction(EntityAction.Work);
     public void Gather() => SetAction(EntityAction.Gather);
     public void Die() => SetAction(EntityAction.Die);
+
+    public void Face(Vector2 direction)
+    {
+        if (direction.LengthSquared > .0001f)
+            Facing = direction.Normalized();
+    }
 
     public void WorkAt(Vector2 target)
     {

@@ -70,6 +70,10 @@ internal sealed partial class GameHostWindow : GameWindow
         LoadedGraphic Graphic, int[] Textures, float SecondsPerFrame);
     private sealed record PlayerVisual(
         SpriteFrame Frame, int Texture, Vector2 World, bool Mirror, bool Wading);
+    private sealed record FishingBoatVisual(
+        SpriteFrame Frame, int Texture, Vector2 World, bool Mirror);
+    private sealed record FishingBoatComposite(
+        SpriteFrame[] Frames, int[] Textures);
     private sealed record GroundToolSprite(
         SpriteFrame Frame,
         int Texture,
@@ -97,7 +101,8 @@ internal sealed partial class GameHostWindow : GameWindow
         TakeCaveRope,
         UseCraftingStation,
         OpenStorage,
-        AttackTrainingDummy
+        AttackTrainingDummy,
+        BoardFishingBoat
     }
     private sealed record QueuedWorldAction(
         WorldActionType Type, Vector2 Target, float Range,
@@ -229,6 +234,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private MouseCursor? _mineNativeCursor;
     private MouseCursor? _climbDownNativeCursor;
     private MouseCursor? _climbUpNativeCursor;
+    private MouseCursor? _exitBoatNativeCursor;
+    private MouseCursor? _enterBoatNativeCursor;
     private enum GameCursorKind
     {
         Default,
@@ -241,7 +248,9 @@ internal sealed partial class GameHostWindow : GameWindow
         Dig,
         Mine,
         ClimbDown,
-        ClimbUp
+        ClimbUp,
+        ExitBoat,
+        EnterBoat
     }
     private GameCursorKind _gameCursorKind;
     private int _uiPanelFillTexture;
@@ -316,6 +325,18 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly List<WaterRipple> _waterRipples = [];
     private int _lastWaterFootfall = -1;
     private WorldEntity? _player;
+    private WorldEntity? _fishingBoat;
+    private EntityAnimation? _fishingBoatAnimation;
+    private SpriteFrame[] _fishingRaftFrames = [];
+    private int[] _fishingRaftTextures = [];
+    private readonly Dictionary<(EntityGender Gender, bool Boarded),
+        FishingBoatComposite> _fishingBoatComposites = [];
+    private readonly Dictionary<EntityGender, FishingBoatComposite>
+        _fishingBoatFishingComposites = [];
+    private readonly Dictionary<(EntityGender Gender, int Step),
+        FishingBoatComposite> _fishingBoatApproachComposites = [];
+    private bool _fishingBoatBoarded;
+    private double _fishingBoatAnimationTime;
     private bool _gameLeftWasDown;
     private bool _gameRightWasDown;
     private readonly InventoryInteractionController _inventoryInteraction =
@@ -405,6 +426,8 @@ internal sealed partial class GameHostWindow : GameWindow
             OpenCraftingWindow();
         _gameUi.QuestButton.Clicked += () =>
             OpenQuestWindow();
+        _gameUi.DisembarkButton.Clicked +=
+            BeginFishingBoatDisembarkTargeting;
     }
 
     protected override void OnLoad()
@@ -496,7 +519,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 "VMFAR_TN", "VFFAR_TN",
                 "VMMIN_TN", "VFMIN_TN",
                 "VMFOR_TN", "VFFOR_TN",
-                "VMFIS_TN", "VFFIS_TN", "MOVEX_NN"
+                "VMFIS_TN", "VFFIS_TN", "MOVEX_NN", "SHIPF5SF"
             })
                 names.Add(name);
         }
@@ -1116,6 +1139,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _player = new WorldEntity(
             new Vector2(worldPlayer.PositionX, worldPlayer.PositionY),
             player.Gender);
+        InitializeFishingBoat(worldPlayer);
         _camera = Vector2.Zero;
         SetZoomImmediate(.8f);
         FollowPlayer();
@@ -1139,6 +1163,8 @@ internal sealed partial class GameHostWindow : GameWindow
         _modalScreen.Close(ModalScreenKind.Death);
         _skillLevelsObserved = false;
         _player = null;
+        _fishingBoat = null;
+        _fishingBoatBoarded = false;
         _queuedAction = null;
         _activeTreeId = null;
         _moveMarker = null;
@@ -1174,7 +1200,12 @@ internal sealed partial class GameHostWindow : GameWindow
                     _player.Position.X,
                     _player.Position.Y,
                     DateTime.UtcNow,
-                    _activeWorldLevel));
+                    _activeWorldLevel,
+                    _fishingBoat?.Position.X,
+                    _fishingBoat?.Position.Y,
+                    _fishingBoat?.Facing.X ?? 1,
+                    _fishingBoat?.Facing.Y ?? 1,
+                    _fishingBoatBoarded));
         }
     }
 
@@ -1354,9 +1385,13 @@ internal sealed partial class GameHostWindow : GameWindow
         _worldActions.ProcessPendingPath();
 
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
+        var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         var placingObject = UpdatePlaceableObjectPlacementInput(
-            MouseState.IsButtonDown(MouseButton.Left), rightDown);
+            leftDown, rightDown);
+        var handledBoatInput = !placingObject &&
+            UpdateFishingBoatInput(leftDown, rightDown);
         if (!placingObject &&
+            !handledBoatInput &&
             rightDown && !_gameRightWasDown &&
             !IsPointerOverGameUi(MouseState.Position))
         {
@@ -1458,8 +1493,8 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         _gameRightWasDown = rightDown;
 
-        var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         if (!placingObject &&
+            !handledBoatInput &&
             leftDown && !_gameLeftWasDown &&
             !IsPointerOverGameUi(MouseState.Position))
         {
@@ -1574,7 +1609,15 @@ internal sealed partial class GameHostWindow : GameWindow
             Biome.RiverWater or Biome.MangroveShallows;
         _player.TerrainSpeedMultiplier =
             (wading ? .62f : 1f) / (1f + uphill * .18f);
-        _player.Update(elapsed);
+        if (_fishingBoatBoarded && _fishingBoat is not null)
+        {
+            _fishingBoat.Update(elapsed);
+            _fishingBoatAnimationTime += elapsed;
+            UpdateFishingBoatAction(elapsed);
+            _player.AdvanceAction(elapsed);
+        }
+        else
+            _player.Update(elapsed);
         _worldActions.CompleteQueuedAction();
         _worldActions.Update();
         UpdateLevelUpFireworks(elapsed);
@@ -1608,6 +1651,7 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         var scene = SceneClientBounds();
         _gameUi.Layout(scene);
+        _gameUi.DisembarkButton.Visible = _fishingBoatBoarded;
         _chatUi.Layout(scene);
         UpdateCommandHints();
         _minimapUi.Layout(scene);
@@ -3698,6 +3742,8 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawAoEUiTile(_gameUi.InventoryButton);
         DrawAoEUiTile(_gameUi.CraftingButton);
         DrawAoEUiTile(_gameUi.QuestButton);
+        if (_gameUi.DisembarkButton.Visible)
+            DrawAoEUiTile(_gameUi.DisembarkButton);
         DrawPlayerUiIcon(
             1, CenteredIconBounds(_gameUi.CombatButton.Bounds));
         DrawCombatSkillIcon(
@@ -3708,6 +3754,8 @@ internal sealed partial class GameHostWindow : GameWindow
             1, CenteredIconBounds(_gameUi.CraftingButton.Bounds));
         DrawToolbarActionIcon(
             0, CenteredIconBounds(_gameUi.QuestButton.Bounds));
+        if (_gameUi.DisembarkButton.Visible)
+            DrawDisembarkIcon(_gameUi.DisembarkButton.Bounds);
         RenderToolbarActionTooltip();
         RenderInventoryContextMenu();
         _uiOpacity = 1;
@@ -4936,7 +4984,13 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         ControlState? control = null;
         string? label = null;
-        if (_gameUi.QuestButton.Hovered)
+        if (_gameUi.DisembarkButton.Hovered)
+            (control, label) = (
+                _gameUi.DisembarkButton,
+                _fishingBoatDisembarkTargeting
+                    ? "Cancel Disembark"
+                    : "Disembark");
+        else if (_gameUi.QuestButton.Hovered)
             (control, label) = (_gameUi.QuestButton, "Quest Journal");
         else if (_gameUi.CraftingButton.Hovered)
             (control, label) = (_gameUi.CraftingButton, "Crafting Recipes");
@@ -4964,6 +5018,23 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawCenteredUiText(
             label, bounds,
             new(225, 212, 174, 255));
+    }
+
+    private void DrawDisembarkIcon(Vector4 bounds)
+    {
+        var color = _fishingBoatDisembarkTargeting
+            ? new Vector4(.95f, .72f, .25f, _uiOpacity)
+            : new Vector4(.88f, .82f, .62f, _uiOpacity);
+        var centerX = MathF.Round(bounds.X + bounds.Z * .5f);
+        var centerY = MathF.Round(bounds.Y + bounds.W * .5f);
+        DrawUiColor(
+            new(centerX - 10, centerY - 8, 14, 3), color);
+        DrawUiColor(
+            new(centerX + 1, centerY - 8, 3, 16), color);
+        DrawUiColor(
+            new(centerX + 4, centerY + 5, 9, 3), color);
+        DrawUiColor(
+            new(centerX + 9, centerY + 1, 4, 11), color);
     }
 
     private void DrawAoEPanelBorder(Vector4 box)
@@ -5402,6 +5473,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
         _worldRenderQueue.Sort();
         RenderDeathMarkers();
+        DrawFishingBoat();
         var shadowVertices = _worldRenderQueue.ShadowVertices;
         foreach (var shadow in shadows)
             AddAtlasQuad(
@@ -5878,6 +5950,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 continue;
             _skeletonAnimations[gender] = fallback;
         }
+        PrepareFishingBoatAnimation();
 
         var markerGraphic = _catalog!.Graphics.Values.FirstOrDefault(value =>
             value.Definition.Name.Equals("MOVEX_NN", StringComparison.OrdinalIgnoreCase))
@@ -6355,6 +6428,7 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         const int storedVillagerAngles = 5;
         if (_player is null ||
+            _fishingBoatBoarded ||
             (_playerDefeated && _clock >= _deathOverlayAt) ||
             !_entityAnimations.TryGetValue((_player.Gender, _player.Action), out var animation))
             return null;
@@ -7479,6 +7553,20 @@ internal sealed partial class GameHostWindow : GameWindow
             GL.DeleteTexture(texture);
         if (_moveMarkerAnimation is not null)
         foreach (var texture in _moveMarkerAnimation.Textures)
+            GL.DeleteTexture(texture);
+        if (_fishingBoatAnimation is not null)
+        foreach (var texture in _fishingBoatAnimation.Textures)
+            GL.DeleteTexture(texture);
+        foreach (var texture in _fishingRaftTextures)
+            GL.DeleteTexture(texture);
+        foreach (var texture in _fishingBoatComposites.Values
+                     .SelectMany(value => value.Textures))
+            GL.DeleteTexture(texture);
+        foreach (var texture in _fishingBoatFishingComposites.Values
+                     .SelectMany(value => value.Textures))
+            GL.DeleteTexture(texture);
+        foreach (var texture in _fishingBoatApproachComposites.Values
+                     .SelectMany(value => value.Textures))
             GL.DeleteTexture(texture);
         Cursor = MouseCursor.Default;
         if (_uiPanelFillTexture != 0) GL.DeleteTexture(_uiPanelFillTexture);
