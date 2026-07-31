@@ -30,6 +30,7 @@ internal sealed partial class GameHostWindow
     {
         if (TryVillagerDefendSelf(index, villager, tier) ||
             TryVillagerEat(index, villager, tier) ||
+            TryVillagerWithdrawWorkItem(index, villager) ||
             TryVillagerRoleAction(index, villager, tier) ||
             TryVillagerCookStew(index, villager) ||
             TryVillagerCook(index, villager) ||
@@ -709,12 +710,12 @@ internal sealed partial class GameHostWindow
                 value.Object.OwnerId == villager.Id);
         if (storage.Object is null) return false;
         var container = StorageContainerService.Open(storage.Object);
-        var foodIndex = container.Items.ToList().FindIndex(value =>
-            value is not null && SurvivalService.TryFoodEffect(value, out _));
-        if (foodIndex < 0 ||
-            !container.TryTake(foodIndex, 1, out var itemId) ||
-            !PlayerInventory.TryAdd(
-                villager.Inventory, itemId!, out var inventory))
+        if (!VillagerStorageTransfer.TryWithdrawFirst(
+                container,
+                villager.Inventory,
+                itemId => SurvivalService.TryFoodEffect(itemId, out _),
+                out var inventory,
+                out _))
             return false;
         var updated = StorageContainerService.Save(
             storage.Object, container);
@@ -723,6 +724,45 @@ internal sealed partial class GameHostWindow
         {
             Inventory = inventory,
             Action = EntityAction.Gather,
+            NextDecisionGameSeconds = _worldGameSeconds +
+                VillagerSimulation.NearbyDecisionSeconds
+        };
+        QueueChunkSave(storage.Gpu.Chunk);
+        _villagersDirty = true;
+        return true;
+    }
+
+    private bool TryVillagerWithdrawWorkItem(
+        int index,
+        VillagerState villager)
+    {
+        if (villager.WorkRole == VillagerWorkRole.Unassigned ||
+            VillagerStorageTransfer.HasWorkItem(
+                villager.WorkRole, villager.Inventory) ||
+            PlayerInventory.IsFull(villager.Inventory))
+            return false;
+        var storage = NearbyGroundObjects(villager, 3)
+            .FirstOrDefault(value =>
+                StorageContainerService.IsStorage(value.Object.ItemId) &&
+                value.Object.OwnerId == villager.Id);
+        if (storage.Object is null) return false;
+        var container = StorageContainerService.Open(storage.Object);
+        if (!VillagerStorageTransfer.TryWithdrawFirst(
+                container,
+                villager.Inventory,
+                itemId => VillagerStorageTransfer.IsWorkItemForRole(
+                    villager.WorkRole, itemId),
+                out var inventory,
+                out _))
+            return false;
+        var updated = StorageContainerService.Save(
+            storage.Object, container);
+        ReplaceGroundObject(storage.Gpu, storage.Object, updated);
+        _villagers[index] = villager with
+        {
+            Inventory = inventory,
+            Action = EntityAction.Gather,
+            ActionTime = 0,
             NextDecisionGameSeconds = _worldGameSeconds +
                 VillagerSimulation.NearbyDecisionSeconds
         };

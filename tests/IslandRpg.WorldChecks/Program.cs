@@ -2773,6 +2773,73 @@ Require(
     StorageContainerService.Definition(
         Guid.NewGuid(), ItemIds.StorageBarrel).Capacity == 40,
     "world storage snapshots must reopen by object ID while barrels retain their smaller layout");
+var villagerTransferContainer = new ItemContainerState(
+    new(
+        Guid.NewGuid(), "Villager chest", 2, 1,
+        AllowStacking: false));
+var villagerTransferInventory = PlayerInventory.CreateStartingInventory();
+villagerTransferInventory[0] = ItemIds.StoneAxe;
+villagerTransferInventory[1] = ItemIds.Logs;
+villagerTransferInventory[2] = ItemIds.Sticks;
+var villagerDeposit = VillagerStorageTransfer.DepositAll(
+    villagerTransferContainer,
+    villagerTransferInventory,
+    "mira");
+Require(
+    villagerDeposit.ItemsMoved == 2 &&
+    villagerDeposit.Inventory[0] is null &&
+    villagerDeposit.Inventory[1] is null &&
+    villagerDeposit.Inventory[2] == ItemIds.Sticks &&
+    villagerTransferContainer.OwnerIds.Take(2).All(value => value == "mira"),
+    "villager deposits must move only what fits and preserve actor ownership");
+Require(
+    VillagerStorageTransfer.TryWithdrawFirst(
+        villagerTransferContainer,
+        villagerDeposit.Inventory,
+        itemId => VillagerStorageTransfer.IsWorkItemForRole(
+            VillagerWorkRole.Wood, itemId),
+        out var villagerWithdrawInventory,
+        out var withdrawnWorkItem) &&
+    withdrawnWorkItem == ItemIds.StoneAxe &&
+    PlayerInventory.BestAxe(villagerWithdrawInventory)?.Id ==
+        ItemIds.StoneAxe &&
+    villagerTransferContainer.Items.All(value => value != ItemIds.StoneAxe),
+    "wood workers must withdraw a usable axe through the shared transfer path");
+var occupiedVillagerInventory = Enumerable
+    .Repeat<string?>(ItemIds.SmallRocks, PlayerInventory.Capacity)
+    .ToArray();
+var storedBeforeFailedWithdraw = villagerTransferContainer.Save();
+Require(
+    !VillagerStorageTransfer.TryWithdrawFirst(
+        villagerTransferContainer,
+        occupiedVillagerInventory,
+        _ => true,
+        out _,
+        out _) &&
+    villagerTransferContainer.Save().Items.SequenceEqual(
+        storedBeforeFailedWithdraw.Items) &&
+    villagerTransferContainer.Save().Quantities.SequenceEqual(
+        storedBeforeFailedWithdraw.Quantities),
+    "a failed villager withdrawal must leave full inventories and storage unchanged");
+var retainedToolContainer = new ItemContainerState(
+    new(
+        Guid.NewGuid(), "Role chest", 2, 1,
+        AllowStacking: false));
+var retainedToolInventory = PlayerInventory.CreateStartingInventory();
+retainedToolInventory[0] = ItemIds.StonePickaxe;
+retainedToolInventory[1] = ItemIds.Coal;
+var retainedToolDeposit = VillagerStorageTransfer.DepositAll(
+    retainedToolContainer,
+    retainedToolInventory,
+    "rowan",
+    itemId => VillagerStorageTransfer.IsWorkItemForRole(
+        VillagerWorkRole.Exploration, itemId));
+Require(
+    retainedToolDeposit.ItemsMoved == 1 &&
+    retainedToolDeposit.Inventory[0] == ItemIds.StonePickaxe &&
+    retainedToolDeposit.Inventory[1] is null &&
+    retainedToolContainer.Items.Contains(ItemIds.Coal),
+    "villager deposits must retain tools required by the assigned work role");
 var individualContainer = new ItemContainerState(
     new(
         Guid.NewGuid(), "Test chest", 2, 1,

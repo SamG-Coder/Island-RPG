@@ -68,8 +68,13 @@ internal sealed partial class GameHostWindow : GameWindow
         SpriteFrame Frame, float U0, float V0, float U1, float V1);
     private sealed record EntityAnimation(
         LoadedGraphic Graphic, int[] Textures, float SecondsPerFrame);
-    private sealed record PlayerVisual(
-        SpriteFrame Frame, int Texture, Vector2 World, bool Mirror, bool Wading);
+    private sealed record ActorVisual(
+        SpriteFrame Frame,
+        int Texture,
+        Vector2 World,
+        bool Mirror,
+        bool Wading,
+        int TeamColor);
     private sealed record FishingBoatVisual(
         SpriteFrame Frame, int Texture, Vector2 World, bool Mirror);
     private sealed record FishingBoatComposite(
@@ -5666,7 +5671,6 @@ internal sealed partial class GameHostWindow : GameWindow
             ShouldRenderGroundItemOutlines();
         var groundOutlineVertices =
             _worldRenderQueue.GroundOutlineVertices;
-        var playerOccluded = false;
         foreach (var item in visibleChunks
                      .SelectMany(gpu => gpu.Chunk.Cliffs.Select(face => (Face: face, Gpu: gpu)))
                      .OrderBy(item => item.Face.X1 + item.Face.Y1))
@@ -5821,12 +5825,9 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawTreeBatch(shadowVertices);
 
         var atlasVertices = _worldRenderQueue.AtlasVertices;
-        var actors = new List<(
-            float Depth,
-            bool Player,
-            VillagerState? Villager)>(_villagers.Count + 1);
+        var actors = new List<ActorVisual>(_villagers.Count + 1);
         if (player is not null)
-            actors.Add((player.World.Y, true, null));
+            actors.Add(player);
         foreach (var villager in _villagers)
         {
             if (villager.WorldLevel != _activeWorldLevel ||
@@ -5837,22 +5838,17 @@ internal sealed partial class GameHostWindow : GameWindow
                 VillagerSimulation.RegionalRadius *
                 VillagerSimulation.RegionalRadius)
                 continue;
-            var terrain = SamplePlayerTerrain(
-                villager.PositionX, villager.PositionY);
-            var world = IsometricTerrainProjection.Project(
-                villager.PositionX,
-                villager.PositionY,
-                terrain.Height);
-            actors.Add((world.Y, false, villager));
+            if (GetVillagerVisual(villager) is { } visual)
+                actors.Add(visual);
         }
         actors.Sort(static (left, right) =>
-            left.Depth.CompareTo(right.Depth));
+            left.World.Y.CompareTo(right.World.Y));
+        var occludedActors = new bool[actors.Count];
         var nextActor = 0;
-        var playerDrawn = player is null;
         foreach (var item in objects)
         {
             while (nextActor < actors.Count &&
-                   item.World.Y > actors[nextActor].Depth)
+                   item.World.Y > actors[nextActor].World.Y)
             {
                 FlushAtlas();
                 DrawActor(actors[nextActor]);
@@ -5862,9 +5858,15 @@ internal sealed partial class GameHostWindow : GameWindow
             AddAtlasQuad(
                 item.AtlasKey, item.World,
                 item.Opacity, atlasVertices);
-            if (playerDrawn && player is not null &&
-                AtlasOverlapsPlayer(item.AtlasKey, item.World, player))
-                playerOccluded = true;
+            for (var actorIndex = 0;
+                 actorIndex < nextActor;
+                 actorIndex++)
+                if (!occludedActors[actorIndex] &&
+                    AtlasOverlapsActor(
+                        item.AtlasKey,
+                        item.World,
+                        actors[actorIndex]))
+                    occludedActors[actorIndex] = true;
         }
         FlushAtlas();
         while (nextActor < actors.Count)
@@ -5872,14 +5874,12 @@ internal sealed partial class GameHostWindow : GameWindow
             DrawActor(actors[nextActor]);
             nextActor++;
         }
-        if (player is not null &&
-            playerOccluded &&
-            _occludedPlayerOutlineEnabled)
-            DrawSprite(
-                player.Frame, player.Texture, player.World,
-                mirror: player.Mirror, outlineOnly: true,
-                wading: player.Wading,
-                outlineColor: new Vector3(1f, .72f, .12f));
+        if (_occludedPlayerOutlineEnabled)
+            for (var actorIndex = 0;
+                 actorIndex < actors.Count;
+                 actorIndex++)
+                if (occludedActors[actorIndex])
+                    DrawActor(actors[actorIndex], outlineOnly: true);
         if (showGroundItemOutlines)
             DrawGroundItemOutlines(groundOutlineVertices);
         if (_levelUpFireworks.Active)
@@ -5897,27 +5897,17 @@ internal sealed partial class GameHostWindow : GameWindow
             atlasVertices.Clear();
         }
 
-        void DrawPlayer()
+        void DrawActor(ActorVisual actor, bool outlineOnly = false)
         {
-            if (player is null) return;
             DrawSprite(
-                player.Frame, player.Texture, player.World,
-                mirror: player.Mirror, wading: player.Wading,
-                teamColor: _activePlayer?.TeamColor ?? 0);
-        }
-
-        void DrawActor((
-            float Depth,
-            bool Player,
-            VillagerState? Villager) actor)
-        {
-            if (actor.Player)
-            {
-                DrawPlayer();
-                playerDrawn = true;
-            }
-            else if (actor.Villager is { } villager)
-                DrawVillager(villager);
+                actor.Frame,
+                actor.Texture,
+                actor.World,
+                mirror: actor.Mirror,
+                outlineOnly: outlineOnly,
+                wading: actor.Wading,
+                teamColor: actor.TeamColor,
+                outlineColor: new Vector3(1f, .72f, .12f));
         }
     }
 
@@ -6811,7 +6801,7 @@ internal sealed partial class GameHostWindow : GameWindow
             preserveDarkTint: _moveMarker.Action);
     }
 
-    private PlayerVisual? GetPlayerVisual()
+    private ActorVisual? GetPlayerVisual()
     {
         const int storedVillagerAngles = 5;
         if (_player is null ||
@@ -6867,7 +6857,8 @@ internal sealed partial class GameHostWindow : GameWindow
             world,
             directional.Mirror,
             biome is Biome.ShallowWater or
-                Biome.RiverWater or Biome.MangroveShallows);
+                Biome.RiverWater or Biome.MangroveShallows,
+            _activePlayer?.TeamColor ?? 0);
     }
 
     private void PrepareTreeAtlas()

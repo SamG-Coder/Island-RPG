@@ -25,36 +25,36 @@ internal sealed partial class GameHostWindow
         Vector2 Target,
         Guid? TargetObjectId = null);
 
-    private bool AtlasOverlapsPlayer(
-        string atlasKey, Vector2 world, PlayerVisual player)
+    private bool AtlasOverlapsActor(
+        string atlasKey, Vector2 world, ActorVisual actor)
     {
         if (!_treeAtlas.TryGetValue(atlasKey, out var entry)) return false;
         var objectBounds = SpriteBounds(entry.Frame, world);
-        var playerBounds = SpriteBounds(
-            player.Frame, player.World, player.Mirror);
-        if (objectBounds.Left >= playerBounds.Right ||
-            objectBounds.Right <= playerBounds.Left ||
-            objectBounds.Top >= playerBounds.Bottom ||
-            objectBounds.Bottom <= playerBounds.Top)
+        var actorBounds = SpriteBounds(
+            actor.Frame, actor.World, actor.Mirror);
+        if (objectBounds.Left >= actorBounds.Right ||
+            objectBounds.Right <= actorBounds.Left ||
+            objectBounds.Top >= actorBounds.Bottom ||
+            objectBounds.Bottom <= actorBounds.Top)
             return false;
 
         var scale = SpritePixelScale();
         if (scale <= 0) return false;
-        var playerFrame = player.Frame;
-        for (var displayY = 0; displayY < playerFrame.Height; displayY++)
-        for (var displayX = 0; displayX < playerFrame.Width; displayX++)
+        var actorFrame = actor.Frame;
+        for (var displayY = 0; displayY < actorFrame.Height; displayY++)
+        for (var displayX = 0; displayX < actorFrame.Width; displayX++)
         {
-            var sourceX = player.Mirror
-                ? playerFrame.Width - 1 - displayX
+            var sourceX = actor.Mirror
+                ? actorFrame.Width - 1 - displayX
                 : displayX;
-            var playerAlpha =
-                playerFrame.Rgba[
-                    (displayY * playerFrame.Width + sourceX) * 4 + 3];
-            if (playerAlpha < 32) continue;
+            var actorAlpha =
+                actorFrame.Rgba[
+                    (displayY * actorFrame.Width + sourceX) * 4 + 3];
+            if (actorAlpha < 32) continue;
             var screenX =
-                playerBounds.Left + (displayX + .5f) * scale;
+                actorBounds.Left + (displayX + .5f) * scale;
             var screenY =
-                playerBounds.Top + (displayY + .5f) * scale;
+                actorBounds.Top + (displayY + .5f) * scale;
             if (screenX < objectBounds.Left ||
                 screenX >= objectBounds.Right ||
                 screenY < objectBounds.Top ||

@@ -718,21 +718,13 @@ internal sealed partial class GameHostWindow
             return false;
         }
         var container = StorageContainerService.Open(target);
-        var depositedInventory =
-            (string?[])villager.Inventory.Clone();
-        var moved = 0;
-        for (var slot = 0;
-             slot < depositedInventory.Length;
-             slot++)
-        {
-            if (depositedInventory[slot] is not { } itemId ||
-                !container.TryAdd(
-                    itemId, ownerId: villager.Id))
-                continue;
-            depositedInventory[slot] = null;
-            moved++;
-        }
-        if (moved == 0)
+        var transfer = VillagerStorageTransfer.DepositAll(
+            container,
+            villager.Inventory,
+            villager.Id,
+            itemId => VillagerStorageTransfer.IsWorkItemForRole(
+                villager.WorkRole, itemId));
+        if (transfer.ItemsMoved == 0)
         {
             ObserveLog("world_action_failed", villager.Id, new
             {
@@ -749,7 +741,7 @@ internal sealed partial class GameHostWindow
         targetGpu.Chunk.GroundObjects[targetIndex] = savedStorage;
         _villagers[villagerIndex] = villager with
         {
-            Inventory = depositedInventory,
+            Inventory = transfer.Inventory,
             Action = EntityAction.Work,
             ActionTime = 0,
             GoalObjectId = null,
@@ -763,7 +755,7 @@ internal sealed partial class GameHostWindow
             Action = action.Kind.ToString(),
             target.Id,
             target.ItemId,
-            ItemsMoved = moved
+            ItemsMoved = transfer.ItemsMoved
         });
         QueueChunkSave(targetGpu.Chunk);
         _villagersDirty = true;
@@ -1290,13 +1282,13 @@ internal sealed partial class GameHostWindow
         return 2;
     }
 
-    private void DrawVillager(VillagerState villager)
+    private ActorVisual? GetVillagerVisual(VillagerState villager)
     {
         const int storedVillagerAngles = 5;
         if (!_entityAnimations.TryGetValue(
                 (villager.Gender, villager.Action),
                 out var animation))
-            return;
+            return null;
         var graphic = animation.Graphic;
         var rawFrame = (int)(
             villager.ActionTime / animation.SecondsPerFrame);
@@ -1321,16 +1313,16 @@ internal sealed partial class GameHostWindow
             villager.PositionX,
             villager.PositionY,
             terrain.Height);
-        DrawSprite(
+        return new ActorVisual(
             graphic.Sprite.Frames[directional.Index],
             animation.Textures[directional.Index],
             world,
-            mirror: directional.Mirror,
-            wading: terrain.Biome is
+            directional.Mirror,
+            terrain.Biome is
                 Biome.ShallowWater or
                 Biome.RiverWater or
                 Biome.MangroveShallows,
-            teamColor: villager.TeamColor);
+            villager.TeamColor);
     }
 
     private bool TryVillagerSpriteBounds(

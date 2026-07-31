@@ -847,7 +847,7 @@ internal sealed partial class GameHostWindow
             directional.Mirror);
     }
 
-    private PlayerVisual? GetFishingBoatRiderVisual()
+    private ActorVisual? GetFishingBoatRiderVisual()
     {
         if (_fishingBoat is null || !_fishingBoatBoarded ||
             _player is null ||
@@ -865,7 +865,8 @@ internal sealed partial class GameHostWindow
             animation.Textures[directional.Index],
             FishingBoatWorld() + new Vector2(0, -25),
             directional.Mirror,
-            false);
+            false,
+            _activePlayer?.TeamColor ?? 0);
     }
 
     private Vector2 FishingBoatWorld()
