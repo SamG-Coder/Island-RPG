@@ -176,7 +176,7 @@ internal sealed partial class GameHostWindow
             // as the ocean; lightning is composited afterwards so it can
             // briefly reveal the ship and reef.
             DrawUiColor(new(0, 0, width, height),
-                new(.005f, .012f, .028f, .3f));
+                new(.005f, .012f, .028f, .18f));
         }
 
         var flash = CinematicLightningIntensity();
@@ -380,10 +380,10 @@ internal sealed partial class GameHostWindow
         {
             DrawUiSprite(frame, _cinematicShipTexture,
                 new(x, y, shipWidth, shipHeight),
-                brightness: -.58f,
+                brightness: -.44f,
                 tint: new(.018f, .035f, .075f),
-                tintAmount: .64f,
-                sceneDarkness: .96f,
+                tintAmount: .54f,
+                sceneDarkness: .9f,
                 localLights: _cinematicShipLights,
                 drawOpacity: 1 - wreckBlend);
             if (wreckBlend > 0 && _cinematicSinkingFrames.Length > 0)
@@ -400,10 +400,10 @@ internal sealed partial class GameHostWindow
                     new(anchorX - wreck.HotspotX * scale,
                         anchorY - wreck.HotspotY * scale + sinking,
                         wreckWidth, wreckHeight),
-                    brightness: -.58f,
-                    tint: new(.018f, .035f, .075f), tintAmount: .64f,
+                    brightness: -.44f,
+                    tint: new(.018f, .035f, .075f), tintAmount: .54f,
                     drawOpacity: wreckBlend,
-                    sceneDarkness: .96f,
+                    sceneDarkness: .9f,
                     localLights: _cinematicShipLights);
             }
             if (fire > .02f)
@@ -485,8 +485,7 @@ internal sealed partial class GameHostWindow
     }
 
     internal static float CinematicFireVisibility(float time) =>
-        1 - CinematicSceneDirector.SmoothStep(
-            Math.Clamp((time - 33f) / 3f, 0, 1));
+        1 - Math.Clamp((time - ShipDestructionAt) / 8f, 0, 1);
 
     private void UpdateCinematicShipLights(
         float time, float fire, float verticalOffset)

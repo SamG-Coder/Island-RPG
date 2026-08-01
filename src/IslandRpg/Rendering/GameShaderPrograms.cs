@@ -72,8 +72,8 @@ internal static class GameShaderPrograms
                 float crestBreakup = smoothstep(0.67, 0.88,
                     fract(uv.x * 37.0 + uv.y * 23.0 - time * .7));
                 float whitecap = smoothstep(0.88, 1.08, wavePeak) * crestBreakup;
-                vec3 night = ageWater * vec3(0.075, 0.10, 0.15);
-                night += vec3(0.025, 0.055, 0.075) * crest;
+                vec3 night = ageWater * vec3(0.09, 0.12, 0.175);
+                night += vec3(0.03, 0.065, 0.09) * crest;
                 night = mix(night, vec3(0.31, 0.39, 0.43), whitecap * .22);
                 night += vec3(0.55, 0.66, 0.78) * lightning *
                     (0.35 + crest * 0.65);

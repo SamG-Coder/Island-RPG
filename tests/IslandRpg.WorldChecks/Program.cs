@@ -104,8 +104,9 @@ Require(
     seededStormA.Any(value => value.Name == "thunder-flash") &&
     Math.Abs(GameHostWindow.CinematicSeaZoom(31) - 1) < .001f &&
     Math.Abs(GameHostWindow.CinematicSeaZoom(36) - 1.45f) < .001f &&
-    GameHostWindow.CinematicFireVisibility(33) == 1 &&
-    GameHostWindow.CinematicFireVisibility(36) == 0,
+    GameHostWindow.CinematicFireVisibility(27) == 1 &&
+    Math.Abs(GameHostWindow.CinematicFireVisibility(31) - .5f) < .001f &&
+    GameHostWindow.CinematicFireVisibility(35) == 0,
     "opening storms must randomize reproducibly and push into the beach reveal zoom");
 var reusablePanCamera = new CinematicPanCamera();
 reusablePanCamera.Update(700, 1000, .1f);
