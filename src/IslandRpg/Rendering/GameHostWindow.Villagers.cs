@@ -16,6 +16,8 @@ internal sealed partial class GameHostWindow
     private readonly Dictionary<string, Vector2>
         _settlementCouncilPositions = [];
     private double _settlementCouncilGatherUntil;
+    private double _settlementCouncilDeadline;
+    private bool _settlementCouncilTimedOut;
     private double _nextSettlementCouncilLineAt;
     private VillagerGroupConversationLine? _pendingSettlementCouncilLine;
     private string? _settlementCouncilCenterSpeakerId;
@@ -61,6 +63,8 @@ internal sealed partial class GameHostWindow
         _settlementCouncilCenterSpeakerId = null;
         _settlementCouncilCandidateShouldReturn = false;
         _settlementCouncilCandidateReturnAt = 0;
+        _settlementCouncilDeadline = 0;
+        _settlementCouncilTimedOut = false;
         _nextVillagerRoleAssignment = 0;
         if (_activeWorld is null) return;
         if (!_activeWorld.AiNpcsEnabled ||
@@ -522,7 +526,7 @@ internal sealed partial class GameHostWindow
             value.Health > 0 && value.RecognizedLeaderId is not null)?
             .RecognizedLeaderId;
         var plan = VillagerSettlementProjectService.Plan(
-            _villagers, placedItems, leaderId);
+            _villagers, placedItems, leaderId, _worldGameSeconds);
         var key = plan is null
             ? null
             : $"{plan.ProjectItemId}:{plan.BuilderId}";
@@ -650,6 +654,8 @@ internal sealed partial class GameHostWindow
             _settlementCouncilPositions.Clear();
             _settlementCouncilGatherUntil = _worldGameSeconds +
                 12 * VillagerSimulation.GameSecondsPerRealSecond;
+            _settlementCouncilDeadline = _clock + 90;
+            _settlementCouncilTimedOut = false;
             _nextSettlementCouncilLineAt = double.PositiveInfinity;
             for (var index = 0; index < _villagers.Count; index++)
             {
@@ -693,6 +699,24 @@ internal sealed partial class GameHostWindow
             return true;
         if (double.IsPositiveInfinity(_nextSettlementCouncilLineAt))
             _nextSettlementCouncilLineAt = _clock;
+        if (!_settlementCouncilTimedOut &&
+            _clock >= _settlementCouncilDeadline)
+        {
+            var remainingTurns = _settlementCouncilLines.Count +
+                                 (_pendingSettlementCouncilLine is null
+                                     ? 0
+                                     : 1);
+            _settlementCouncilTimedOut = true;
+            _settlementCouncilLines.Clear();
+            _pendingSettlementCouncilLine = null;
+            _settlementCouncilCandidateShouldReturn = false;
+            _nextSettlementCouncilLineAt = _clock;
+            ObserveLog("settlement_council_timeout", null, new
+            {
+                DurationSeconds = 90,
+                RemainingTurns = remainingTurns
+            });
+        }
         if (_settlementCouncilCandidateShouldReturn &&
             _clock >= _settlementCouncilCandidateReturnAt &&
             _settlementCouncilCenterSpeakerId is { } returningCandidate)
@@ -808,6 +832,7 @@ internal sealed partial class GameHostWindow
         ObserveLog("settlement_council", leader.Id, new
         {
             resultToApply.Contested,
+            TimedOut = _settlementCouncilTimedOut,
             Votes = resultToApply.Votes,
             Worksite = new { X = leader.PositionX, Y = leader.PositionY }
         });
@@ -818,6 +843,8 @@ internal sealed partial class GameHostWindow
         _settlementCouncilCenterSpeakerId = null;
         _settlementCouncilCandidateShouldReturn = false;
         _settlementCouncilCandidateReturnAt = 0;
+        _settlementCouncilDeadline = 0;
+        _settlementCouncilTimedOut = false;
         _villagersDirty = true;
         return false;
     }
@@ -889,7 +916,9 @@ internal sealed partial class GameHostWindow
                 {
                     RecognizedLeaderId = null,
                     NextLeadershipChallengeGameSeconds =
-                        _worldGameSeconds + 2 * 60 * 60
+                        _worldGameSeconds +
+                        VillagerLeadershipService
+                            .MinimumLeadershipTenureGameSeconds
                 };
         ObserveLog("leadership_challenge", challenger.Id, new
         {
@@ -1454,6 +1483,13 @@ internal sealed partial class GameHostWindow
                     action.ObjectId,
                     Reason = "no_reachable_approach"
                 });
+                if (action.RememberedLocation is { } remembered)
+                    villager = VillagerLocationMemoryService.MarkUnreachable(
+                        villager,
+                        remembered.Type,
+                        new(remembered.PositionX, remembered.PositionY),
+                        remembered.WorldLevel,
+                        _worldGameSeconds);
                 _villagers[villagerIndex] =
                     VillagerSimulation.BlockMovement(
                         villager, _worldGameSeconds, action.ObjectId);
@@ -1734,7 +1770,8 @@ internal sealed partial class GameHostWindow
                     memory.Type,
                     rememberedPosition,
                     memory.WorldLevel,
-                    _worldGameSeconds)
+                    _worldGameSeconds,
+                    clearFailedLocation: false)
                 : VillagerLocationMemoryService.ObserveEmpty(
                     updated,
                     memory.Type,

@@ -99,6 +99,7 @@ internal static class ObserveEventLog
 {
     private static readonly object OutputLock = new();
     private static StreamWriter? _fileWriter;
+    private static ObserveSummaryAccumulator? _summary;
     public static string? OutputPath { get; private set; }
 
     public static void ConfigureOutputFolder(string folder)
@@ -124,6 +125,8 @@ internal static class ObserveEventLog
             {
                 AutoFlush = true
             };
+            _summary = new(Path.Combine(
+                resolved, Path.GetFileNameWithoutExtension(path)));
             OutputPath = path;
         }
     }
@@ -163,6 +166,8 @@ internal static class ObserveEventLog
         {
             _fileWriter?.WriteLine(line);
             _fileWriter?.Flush();
+            _summary?.Observe(
+                realSeconds, villagerId, eventType, data);
         }
     }
 }

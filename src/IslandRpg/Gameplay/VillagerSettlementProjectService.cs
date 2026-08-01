@@ -28,14 +28,19 @@ internal sealed record VillagerSettlementProjectPlan(
 internal static class VillagerSettlementProjectService
 {
     public const double AccountabilityDelayGameSeconds = 30 * 60;
+    public const double BuilderReplacementDelayGameSeconds = 30 * 60;
 
     public static VillagerSettlementProjectPlan? Plan(
         IReadOnlyList<VillagerState> villagers,
         IReadOnlySet<string> placedItems,
-        string? leaderId = null)
+        string? leaderId = null,
+        double gameSeconds = 0)
     {
         var living = villagers.Where(value => value.Health > 0).ToArray();
         if (living.Length < 2) return null;
+        var available = living
+            .Where(VillagerWorkCoordinator.IsAvailableForWork)
+            .ToArray();
         string projectItemId;
         IReadOnlyList<VillagerProjectRequirement> requirements;
         if (!placedItems.Contains(ItemIds.Campfire))
@@ -58,29 +63,40 @@ internal static class VillagerSettlementProjectService
             ];
         }
         else return null;
-        var incumbentBuilderId = living
+        var incumbentAssignment = living
             .Select(value => value.ProjectAssignment)
             .Where(value => value?.ProjectItemId == projectItemId)
-            .Select(value => value!.BuilderId)
-            .FirstOrDefault(id => living.Any(value => value.Id == id));
-        var builder = incumbentBuilderId is null
-            ? living
+            .FirstOrDefault();
+        var incumbentBuilder = incumbentAssignment is null
+            ? null
+            : living.FirstOrDefault(value =>
+                value.Id == incumbentAssignment.BuilderId);
+        var retainIncumbent = incumbentBuilder is not null &&
+            (VillagerWorkCoordinator.IsAvailableForWork(incumbentBuilder) ||
+             gameSeconds - incumbentAssignment!.AssignedGameSeconds <
+             BuilderReplacementDelayGameSeconds);
+        var builder = retainIncumbent
+            ? incumbentBuilder!
+            : available
             .OrderByDescending(value =>
                 value.WorkRole == VillagerWorkRole.Crafting)
             .ThenByDescending(value => value.CraftingExperience)
             .ThenBy(value => value.Id, StringComparer.Ordinal)
-            .First()
-            : living.First(value => value.Id == incumbentBuilderId);
+            .FirstOrDefault() ?? incumbentBuilder;
+        if (builder is null) return null;
+        var participants = retainIncumbent || incumbentBuilder is null
+            ? living
+            : living.Where(value => value.Id != incumbentBuilder.Id)
+                .ToArray();
         var leader = living.FirstOrDefault(value => value.Id == leaderId) ??
                      living.FirstOrDefault(value =>
                          value.Id == builder.RecognizedLeaderId) ?? builder;
-        var incumbent = living.Select(value => value.ProjectAssignment)
-            .FirstOrDefault(value => value?.ProjectItemId == projectItemId);
+        var incumbent = incumbentAssignment;
         var worksite = incumbent is null
             ? new Vector2(leader.PositionX, leader.PositionY)
             : new Vector2(incumbent.WorksiteX, incumbent.WorksiteY);
         var worksiteLevel = incumbent?.WorksiteLevel ?? leader.WorldLevel;
-        var stableAssignments = living
+        var stableAssignments = participants
             .Where(value => value.ProjectAssignment is { } assignment &&
                 assignment.ProjectItemId == projectItemId &&
                 assignment.BuilderId == builder.Id)
@@ -88,7 +104,7 @@ internal static class VillagerSettlementProjectService
                 value => value.Id,
                 value => value.ProjectAssignment!.Requirements,
                 StringComparer.Ordinal);
-        if (stableAssignments.Count == living.Length)
+        if (stableAssignments.Count == participants.Length)
             return new(
                 projectItemId,
                 builder.Id,
@@ -98,7 +114,7 @@ internal static class VillagerSettlementProjectService
                 worksiteLevel);
         return Assign(
             projectItemId, builder.Id, leader.Id, worksite, worksiteLevel,
-            living, requirements);
+            participants, requirements);
     }
 
     public static bool MatchesRequirement(

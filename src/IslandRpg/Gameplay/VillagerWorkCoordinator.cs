@@ -100,46 +100,43 @@ internal sealed class VillagerWorkCoordinator
     public static IReadOnlyDictionary<string, VillagerWorkRole> AssignRoles(
         IReadOnlyList<VillagerState> villagers)
     {
-        var living = villagers.Where(value => value.Health > 0)
+        var allLiving = villagers.Where(value => value.Health > 0)
             .OrderBy(value => value.Id, StringComparer.Ordinal)
             .ToArray();
         var roles = new Dictionary<string, VillagerWorkRole>(
-            living.Length, StringComparer.Ordinal);
+            allLiving.Length, StringComparer.Ordinal);
+        if (allLiving.Length == 0) return roles;
+        var living = allLiving.Where(IsAvailableForWork).ToArray();
+        foreach (var unavailable in allLiving.Where(value =>
+                     !IsAvailableForWork(value)))
+            roles[unavailable.Id] = VillagerWorkRole.Unassigned;
         if (living.Length == 0) return roles;
-        var forecast = VillagerWorkPlanner.Forecast(living);
+        var forecast = VillagerWorkPlanner.Forecast(allLiving);
 
         if (living.Length == 1)
         {
             roles[living[0].Id] = DevelopmentRole(living[0], forecast);
             return roles;
         }
-        var incumbentFood = living
-            .Where(value => value.WorkRole == VillagerWorkRole.Food)
-            .OrderBy(value => value.Id, StringComparer.Ordinal)
-            .FirstOrDefault();
         var foodCandidates = living
             .Where(value => value.Health > 20 && value.Hunger > 15)
             .DefaultIfEmpty(living
                 .OrderByDescending(value => value.Health)
                 .First())
             .ToArray();
-        var bestFood = foodCandidates
-            .OrderByDescending(value => VillagerWorkPlanner.Suitability(
-                value, VillagerWorkRole.Food, forecast))
-            .ThenBy(value => value.Id, StringComparer.Ordinal)
-            .First();
-        var food = incumbentFood is not null &&
-                   foodCandidates.Contains(incumbentFood) &&
-                   VillagerWorkPlanner.Suitability(
-                       incumbentFood, VillagerWorkRole.Food, forecast) >=
-                   VillagerWorkPlanner.Suitability(
-                       bestFood, VillagerWorkRole.Food, forecast) -
-                   FoodRoleHungerHysteresis
-            ? incumbentFood
-            : bestFood;
-        roles[food.Id] = VillagerWorkRole.Food;
+        var foodSlots = living.Length < 4
+            ? 1
+            : Math.Clamp(
+                (forecast.FoodDeficit + 7) / 8,
+                1,
+                Math.Max(1, (living.Length + 2) / 3));
+        foreach (var food in RankForRole(
+                     foodCandidates, VillagerWorkRole.Food, forecast)
+                 .Take(foodSlots))
+            roles[food.Id] = VillagerWorkRole.Food;
 
-        var remaining = living.Where(value => value.Id != food.Id).ToArray();
+        var remaining = living.Where(value => !roles.ContainsKey(value.Id))
+            .ToArray();
         if (remaining.Length > 0)
         {
             if (living.Length == 2)
@@ -148,20 +145,34 @@ internal sealed class VillagerWorkCoordinator
                     DevelopmentRole(remaining[0], forecast);
                 return roles;
             }
-            var incumbentWood = remaining
-                .Where(value => value.WorkRole == VillagerWorkRole.Wood)
-                .OrderBy(value => value.Id, StringComparer.Ordinal)
-                .FirstOrDefault();
-            var wood = incumbentWood ?? remaining
-                .OrderByDescending(value =>
-                    VillagerWorkPlanner.Suitability(
-                        value, VillagerWorkRole.Wood, forecast))
-                .ThenBy(value => value.Id, StringComparer.Ordinal)
-                .First();
-            roles[wood.Id] = VillagerWorkRole.Wood;
+            var woodSlots = living.Length < 4
+                ? 1
+                : Math.Clamp(
+                    (forecast.WoodDeficit + 19) / 20,
+                    1,
+                    Math.Max(1, (living.Length + 2) / 3));
+            foreach (var wood in RankForRole(
+                         remaining, VillagerWorkRole.Wood, forecast)
+                     .Take(Math.Min(woodSlots, remaining.Length)))
+                roles[wood.Id] = VillagerWorkRole.Wood;
         }
-        foreach (var villager in remaining.Where(value =>
-                     !roles.ContainsKey(value.Id)))
+        var development = remaining.Where(value =>
+                !roles.ContainsKey(value.Id))
+            .ToList();
+        if (development.Count >= 2)
+        {
+            var explorer = RankForRole(
+                    development, VillagerWorkRole.Exploration, forecast)
+                .First();
+            roles[explorer.Id] = VillagerWorkRole.Exploration;
+            development.Remove(explorer);
+            var crafter = RankForRole(
+                    development, VillagerWorkRole.Crafting, forecast)
+                .First();
+            roles[crafter.Id] = VillagerWorkRole.Crafting;
+            development.Remove(crafter);
+        }
+        foreach (var villager in development)
         {
             var crafting = VillagerWorkPlanner.Suitability(
                 villager, VillagerWorkRole.Crafting, forecast);
@@ -173,6 +184,26 @@ internal sealed class VillagerWorkCoordinator
         }
         return roles;
     }
+
+    public static bool IsAvailableForWork(VillagerState villager) =>
+        villager.Health > 20 &&
+        villager.Energy >= VillagerFatigueService.RestThreshold &&
+        villager.ConflictIntent == VillagerConflictIntent.None &&
+        villager.Activity is not (
+            VillagerActivity.Conversing or
+            VillagerActivity.Reflecting or
+            VillagerActivity.Following or
+            VillagerActivity.Resting or
+            VillagerActivity.Blocked);
+
+    private static IOrderedEnumerable<VillagerState> RankForRole(
+        IEnumerable<VillagerState> villagers,
+        VillagerWorkRole role,
+        VillagerResourceForecast forecast) =>
+        villagers.OrderByDescending(value =>
+                VillagerWorkPlanner.Suitability(value, role, forecast) +
+                (value.WorkRole == role ? FoodRoleHungerHysteresis : 0))
+            .ThenBy(value => value.Id, StringComparer.Ordinal);
 
     private static VillagerWorkRole DevelopmentRole(
         VillagerState villager,

@@ -51,6 +51,51 @@ if (args.Contains(
 }
 
 var worldCheckAssertions = 0;
+var observeSummaryDirectory = Path.Combine(
+    Path.GetTempPath(), "IslandRpg.WorldChecks", Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(observeSummaryDirectory);
+try
+{
+    var summaryPath = Path.Combine(observeSummaryDirectory, "observe");
+    var summary = new ObserveSummaryAccumulator(summaryPath);
+    summary.Observe(0, "mira", "villager_snapshot", new
+    {
+        Name = "Mira", Need = "Idle", Activity = "Idle", Action = "Idle",
+        GoalObjectId = (string?)null, ConversationPartnerId = (string?)null
+    });
+    summary.Observe(1, "mira", "world_action_failed", new
+    {
+        Action = "ApproachStorage", Reason = "no_reachable_approach"
+    });
+    summary.Observe(2, "mira", "world_action_succeeded", new
+    {
+        Action = "TakeItem"
+    });
+    summary.Observe(35, "mira", "villager_snapshot", new
+    {
+        Name = "Mira", Need = "Idle", Activity = "Idle", Action = "Idle",
+        GoalObjectId = (string?)null, ConversationPartnerId = (string?)null
+    });
+    var summaryJson = File.ReadAllText(summaryPath + ".summary.json");
+    var summaryLog = File.ReadAllText(summaryPath + ".summary.log");
+    using var summaryDocument = System.Text.Json.JsonDocument.Parse(summaryJson);
+    var summaryRoot = summaryDocument.RootElement;
+    var summaryVillager = summaryRoot.GetProperty("Villagers")[0];
+    Require(summaryRoot.GetProperty("FailureCounts")
+                .GetProperty("ApproachStorage:no_reachable_approach")
+                .GetInt32() == 1 &&
+            summaryVillager.GetProperty("Name").GetString() == "Mira" &&
+            summaryVillager.GetProperty("SuccessfulActions").GetInt32() == 1 &&
+            summaryVillager.GetProperty("FailedActions").GetInt32() == 1 &&
+            summaryVillager.GetProperty("PotentiallyStalled").GetBoolean() &&
+            summaryLog.Contains("Mira |", StringComparison.Ordinal) &&
+            summaryLog.Contains("successes/failures", StringComparison.Ordinal),
+        "observe summaries must persist failure counts plus per-villager progress and stall fields in JSON and log form");
+}
+finally
+{
+    Directory.Delete(observeSummaryDirectory, recursive: true);
+}
 var cinematicDirector = new CinematicSceneDirector(
     10,
     [new(2, 8, SceneCameraTarget.Player, Vector2.Zero, 1.4f, .8f)],
@@ -234,6 +279,17 @@ var repeatedLeadershipCouncil = VillagerLeadershipService.HoldCouncil(
     settlementTenSource)!;
 var councilVillagers = VillagerLeadershipService.ApplyCouncil(
     settlementTenSource, leadershipCouncil, 28_800);
+var releasedCouncilVillagers = VillagerLeadershipService.ApplyCouncil(
+    settlementTenSource.Select(value => value with
+    {
+        Need = VillagerNeed.Social,
+        Activity = VillagerActivity.Conversing,
+        ConversationPartnerId = "council-speaker",
+        FollowingActorId = "council-speaker",
+        TargetX = 40,
+        TargetY = 40,
+        NextDecisionGameSeconds = 99_999
+    }).ToArray(), leadershipCouncil, 28_800);
 var openingCouncilLines = VillagerGroupConversationService.OpeningCouncil(
     settlementTenSource, leadershipCouncil);
 var councilPlan = VillagerSettlementProjectService.Plan(
@@ -285,6 +341,18 @@ Require(
     supportingVillager.Relationships?.Single(value =>
         value.CharacterId == councilLeader.Id).State.Respect > 0,
     "recognized leaders must have visible status and receive initial follower respect");
+Require(releasedCouncilVillagers.All(value =>
+            value.Activity == VillagerActivity.Idle &&
+            value.Need == VillagerNeed.Idle &&
+            value.ConversationPartnerId is null &&
+            value.FollowingActorId is null &&
+            value.TargetX is null &&
+            value.TargetY is null &&
+            value.NextDecisionGameSeconds == 28_800 &&
+            value.NextLeadershipChallengeGameSeconds ==
+            28_800 +
+            VillagerLeadershipService.MinimumLeadershipTenureGameSeconds),
+    "council completion must release every participant for immediate work while retaining a shared leader cooldown");
 var missedAssignment = VillagerLeadershipService.ApplyMissedAssignment(
     councilLeader, supportingVillager, ItemIds.Campfire, 32_400);
 Require(
@@ -337,6 +405,24 @@ var dissentingVote = leadershipCouncil.Votes.FirstOrDefault(value =>
 Require(
     dissentingVote is not null,
     "the ten-person council fixture must include a dissenting voter");
+var cooledCouncilVillagers = assignedCouncilVillagers.Select(villager =>
+    villager with
+    {
+        Boldness = villager.Id == dissentingVote!.VoterId
+            ? 1
+            : villager.Boldness,
+        ProjectAssignment = villager.Id == dissentingVote.VoterId
+            ? villager.ProjectAssignment! with
+            {
+                Requirements = [new(ItemIds.LargeRock, 2)],
+                AssignedGameSeconds = 28_800
+            }
+            : villager.ProjectAssignment
+    }).ToArray();
+Require(
+    VillagerLeadershipService.SelectChallenger(
+        cooledCouncilVillagers, 30_600) is null,
+    "a stalled dissenter must respect the post-council leadership cooldown instead of immediately reopening the election");
 var challengeVillagers = assignedCouncilVillagers.Select((villager, index) =>
     villager with
     {
@@ -542,8 +628,63 @@ var rememberedFoodAction = VillagerSimulation.SelectWorldAction(
 Require(rememberedFoodAction.Kind ==
             VillagerWorldActionKind.ApproachItem &&
         rememberedFoodAction.ObjectId is null &&
-        rememberedFoodAction.Target is { X: > 0 },
+        rememberedFoodAction.Target is { X: > 0 } &&
+        rememberedFoodAction.RememberedLocation == discoveredFoodLocation,
     "villagers must approach a remembered useful location when no nearby target is visible");
+var unreachableRememberedFood = VillagerLocationMemoryService.MarkUnreachable(
+    locationMemoryVillager,
+    discoveredFoodLocation.Type,
+    new(discoveredFoodLocation.PositionX, discoveredFoodLocation.PositionY),
+    discoveredFoodLocation.WorldLevel,
+    gameSeconds: 110);
+var unreachableFoodMemory = unreachableRememberedFood.LocationMemories!
+    .Single();
+Require(unreachableRememberedFood.FailedLocations is
+            [{ Type: VillagerLocationType.FoodSource, Failures: 1 }] &&
+        VillagerLocationMemoryService.IsTemporarilyFailed(
+            unreachableRememberedFood, unreachableFoodMemory, 111) &&
+        VillagerSimulation.SelectWorldAction(
+            unreachableRememberedFood, [], gameSeconds: 111).Kind ==
+        VillagerWorldActionKind.None &&
+        unreachableFoodMemory.Confidence < discoveredFoodLocation.Confidence,
+    "an unreachable remembered location without an object ID must be keyed, deprioritized, and temporarily blacklisted");
+var visuallyRefreshedFailedFood =
+    VillagerLocationMemoryService.ObserveWorldObjects(
+        unreachableRememberedFood,
+        [new(
+            Guid.NewGuid(), ItemIds.WildBerries,
+            new(discoveredFoodLocation.PositionX,
+                discoveredFoodLocation.PositionY),
+            null, false)],
+        gameSeconds: 111.5);
+Require(VillagerLocationMemoryService.IsTemporarilyFailed(
+        visuallyRefreshedFailedFood,
+        visuallyRefreshedFailedFood.LocationMemories!.Single(),
+        gameSeconds: 112),
+    "seeing an unreachable resource again must refresh its existence without incorrectly clearing the failed-path cooldown");
+var retriedUnreachableFood = VillagerLocationMemoryService.MarkUnreachable(
+    unreachableRememberedFood,
+    discoveredFoodLocation.Type,
+    new(discoveredFoodLocation.PositionX, discoveredFoodLocation.PositionY),
+    discoveredFoodLocation.WorldLevel,
+    gameSeconds: 112);
+var retriedFailure = retriedUnreachableFood.FailedLocations!.Single();
+Require(retriedFailure.Failures == 2 &&
+        retriedFailure.RetryAfterGameSeconds >
+        unreachableRememberedFood.FailedLocations!.Single()
+            .RetryAfterGameSeconds,
+    "repeated remembered-location failures must extend the retry window rather than create duplicate anonymous failures");
+var rediscoveredAfterFailure = VillagerLocationMemoryService.Remember(
+    retriedUnreachableFood,
+    VillagerLocationType.FoodSource,
+    new(10, 2),
+    worldLevel: 0,
+    gameSeconds: 113);
+Require(rediscoveredAfterFailure.FailedLocations is null &&
+        VillagerSimulation.SelectWorldAction(
+            rediscoveredAfterFailure, [], gameSeconds: 114).Kind ==
+        VillagerWorldActionKind.ApproachItem,
+    "rediscovering a remembered location must clear its failure blacklist so the villager can try it again");
 var dangerousFoodLocation = VillagerLocationMemoryService.Remember(
     locationMemoryVillager,
     VillagerLocationType.Danger,
@@ -1017,20 +1158,24 @@ using (var personaAi = new NpcAiService(
 {
     var personas = await personaAi.GeneratePersonasAsync(
         defaultAi, "Test Island", 42, ["Mira", "Tomas", "Rowan"]);
+    var personaGenders = VillagerSimulation.GendersForPopulation(3, 42);
     Require(
         personas is { Count: 3 } &&
         personas[0] is
         {
-            PriorTrade: "Carpenter",
             KnownToolIds.Count: 1
         } persona &&
+        MedievalDemographics.IsTradeCompatible(
+            persona.PriorTrade, personaGenders[0]) &&
         persona.KnownToolIds[0] == ItemIds.StoneHammer &&
         personas[1].PriorTrade ==
-            VillagerSimulation.DefaultPersona(1).PriorTrade &&
+            VillagerSimulation.DefaultPersona(
+                1, personaGenders[1]).PriorTrade &&
         personas[2].PriorTrade ==
-            VillagerSimulation.DefaultPersona(2).PriorTrade &&
+            VillagerSimulation.DefaultPersona(
+                2, personaGenders[2]).PriorTrade &&
         HistoricalKnowledgePolicy.IsPlausible(personas[0].BackgroundStory),
-        "world creation must complete partial casts, reject invented tools, and replace post-1200 AD trades");
+        "world creation must complete partial casts, reject invented tools, and replace post-1200 AD or sex-incompatible trades");
 }
 
 var miraOwner = ItemOwner.Character("mira");
@@ -1349,6 +1494,29 @@ Require(
     roleAssignments["woodworker"] == VillagerWorkRole.Wood &&
     roleAssignments.Values.Distinct().Count() == 3,
     "temporary roles must protect a near-starving villager while covering food, specialist wood work, and a complementary third job");
+var scaledWorkforce = Enumerable.Range(0, 10).Select(index =>
+    hungryVillager with
+    {
+        Id = $"scaled-worker-{index}",
+        Hunger = 80,
+        Health = 100,
+        Inventory = PlayerInventory.CreateStartingInventory(),
+        Activity = index == 8
+            ? VillagerActivity.Conversing
+            : index == 9
+                ? VillagerActivity.Blocked
+                : VillagerActivity.Idle
+    }).ToArray();
+var scaledRoles = VillagerWorkCoordinator.AssignRoles(scaledWorkforce);
+Require(!VillagerWorkCoordinator.IsAvailableForWork(scaledWorkforce[8]) &&
+        !VillagerWorkCoordinator.IsAvailableForWork(scaledWorkforce[9]) &&
+        scaledRoles[scaledWorkforce[8].Id] == VillagerWorkRole.Unassigned &&
+        scaledRoles[scaledWorkforce[9].Id] == VillagerWorkRole.Unassigned &&
+        scaledRoles.Values.Count(value => value == VillagerWorkRole.Food) == 3 &&
+        scaledRoles.Values.Count(value => value == VillagerWorkRole.Wood) == 2 &&
+        scaledRoles.Values.Any(value => value is
+            VillagerWorkRole.Crafting or VillagerWorkRole.Exploration),
+    "role planning must exclude unavailable villagers while scaling food and wood coverage to settlement deficits without consuming every worker");
 var projectVillagers = new[]
 {
     hungryVillager with
@@ -1384,6 +1552,27 @@ Require(campfireProject is
             .Where(value => value.ItemId == ItemIds.LargeRock)
             .Sum(value => value.Quantity) == 3,
     "settlement planning must select a crafter and divide campfire resources across villagers");
+var unavailableBuilderProject = VillagerSettlementProjectService.Plan(
+    projectVillagers.Select(value => value with
+    {
+        Activity = value.Id == "project-builder"
+            ? VillagerActivity.Blocked
+            : VillagerActivity.Idle,
+        ProjectAssignment = new VillagerProjectAssignment(
+            ItemIds.Campfire,
+            "project-builder",
+            [new(ItemIds.LargeRock, 1)],
+            AssignedGameSeconds: 0)
+    }).ToArray(),
+    new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+    gameSeconds:
+        VillagerSettlementProjectService.BuilderReplacementDelayGameSeconds +
+        1);
+Require(unavailableBuilderProject is { BuilderId: not "project-builder" } &&
+        !unavailableBuilderProject.Assignments.ContainsKey("project-builder") &&
+        unavailableBuilderProject.Assignments.Keys.All(id =>
+            id is "project-food" or "project-wood"),
+    "a blocked incumbent builder must be replaced by an available worker and excluded from replanned project assignments");
 var reassignedProjectVillagers = projectVillagers
     .Select(value => value with
     {
@@ -1744,6 +1933,28 @@ Require(
     VillagerSimulation.NamesForPopulation(4, 2187).Distinct().Count() == 4 &&
     VillagerSimulation.NamesForPopulation(4, 2187).SequenceEqual(
         VillagerSimulation.NamesForPopulation(4, 2187)) &&
+    VillagerSimulation.NamesForPopulation(10, 2187)
+        .Select((name, index) => MedievalDemographics.IsNameCompatible(
+            name,
+            VillagerSimulation.GendersForPopulation(10, 2187)[index]))
+        .All(compatible => compatible) &&
+    VillagerSimulation.GendersForPopulation(10, 2187)
+        .Count(gender => gender == EntityGender.Female) == 5 &&
+    VillagerSimulation.GendersForPopulation(10, 2187)
+        .Count(gender => gender == EntityGender.Male) == 5 &&
+    MedievalDemographics.GendersForNames(
+        ["Margery", "William", "Custom"], 2187)[0] ==
+        EntityGender.Female &&
+    MedievalDemographics.GendersForNames(
+        ["Margery", "William", "Custom"], 2187)[1] ==
+        EntityGender.Male &&
+    VillagerSimulation.CreateInitial(
+            2187, Vector2.Zero, population: 10)
+        .All(villager =>
+            MedievalDemographics.IsNameCompatible(
+                villager.Name, villager.Gender) &&
+            MedievalDemographics.IsTradeCompatible(
+                villager.Persona!.PriorTrade, villager.Gender)) &&
     settlementFourConfigured.Count == 4 &&
     !ReferenceEquals(settlementFourConfigured, settlementFourSource) &&
     settlementTenConfigured.Count == 10 &&
@@ -3111,6 +3322,15 @@ Require(
     conversationState.TargetX is null &&
     conversationState.NextDecisionGameSeconds == 1_240,
     "conversation must be an explicit activity that cancels movement and postpones decisions");
+var resumedConversationState = VillagerSimulation.ResumeAfterConversation(
+    conversationState, 1_240);
+Require(
+    resumedConversationState.Activity == VillagerActivity.Idle &&
+    resumedConversationState.ConversationPartnerId is null &&
+    resumedConversationState.TargetX is null &&
+    resumedConversationState.TargetY is null &&
+    resumedConversationState.NextDecisionGameSeconds == 1_241,
+    "a completed scripted conversation must release the villager into an immediately schedulable idle state");
 var reflectionState = VillagerSimulation.CompleteConversation(
     conversationState, 1_240);
 Require(

@@ -12,6 +12,7 @@ internal sealed record VillagerLeadershipResult(
 
 internal static class VillagerLeadershipService
 {
+    public const double MinimumLeadershipTenureGameSeconds = 6 * 60 * 60;
     private static readonly SkillType[] LeadershipSkills =
     [
         SkillType.Woodcutting, SkillType.Farming, SkillType.Fishing,
@@ -111,12 +112,39 @@ internal static class VillagerLeadershipService
             if (memories.Count > VillagerSimulation.MaximumMemories)
                 memories.RemoveRange(
                     0, memories.Count - VillagerSimulation.MaximumMemories);
+            var released = villager.Need == VillagerNeed.Social ||
+                           villager.Activity is
+                               VillagerActivity.Conversing or
+                               VillagerActivity.Reflecting or
+                               VillagerActivity.Following or
+                               VillagerActivity.Socializing;
             return villager with
             {
                 RecognizedLeaderId = result.LeaderId,
-                NextLeadershipChallengeGameSeconds = gameSeconds + 45 * 60,
+                NextLeadershipChallengeGameSeconds = gameSeconds +
+                    MinimumLeadershipTenureGameSeconds,
                 Relationships = relationships,
-                Memories = memories
+                Memories = memories,
+                Need = released ? VillagerNeed.Idle : villager.Need,
+                Activity = released
+                    ? VillagerActivity.Idle
+                    : villager.Activity,
+                ActivityUntilGameSeconds = released
+                    ? 0
+                    : villager.ActivityUntilGameSeconds,
+                ConversationPartnerId = released
+                    ? null
+                    : villager.ConversationPartnerId,
+                FollowingActorId = released
+                    ? null
+                    : villager.FollowingActorId,
+                Action = released ? EntityAction.Idle : villager.Action,
+                ActionTime = released ? 0 : villager.ActionTime,
+                TargetX = released ? null : villager.TargetX,
+                TargetY = released ? null : villager.TargetY,
+                NextDecisionGameSeconds = released
+                    ? gameSeconds
+                    : villager.NextDecisionGameSeconds
             };
         }).ToArray();
     }

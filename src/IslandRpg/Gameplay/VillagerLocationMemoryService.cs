@@ -26,6 +26,8 @@ internal static class VillagerLocationMemoryService
     public const float EmptyConfidencePenalty = .5f;
     public const float MinimumUsefulConfidence = .2f;
     public const float MatchRadius = 2f;
+    public const int MaximumFailedLocations = 16;
+    public const double FailedLocationRetryGameSeconds = 15 * 60;
     private const float ResourceDecayPerGameDay = .12f;
     private const float DangerRadius = 4f;
 
@@ -35,7 +37,8 @@ internal static class VillagerLocationMemoryService
         Vector2 position,
         int worldLevel,
         double gameSeconds,
-        float confidence = DiscoveryConfidence)
+        float confidence = DiscoveryConfidence,
+        bool clearFailedLocation = true)
     {
         if (state.Health <= 0) return state;
         var memories = state.LocationMemories?.ToList() ?? [];
@@ -67,7 +70,15 @@ internal static class VillagerLocationMemoryService
                     RetentionScore(memory, gameSeconds))
                 .Take(MaximumMemories)
                 .ToList();
-        return state with { LocationMemories = memories };
+        return state with
+        {
+            LocationMemories = memories,
+            FailedLocations = clearFailedLocation
+                ? RemoveMatchingFailure(
+                    state.FailedLocations, type, position, worldLevel,
+                    gameSeconds)
+                : state.FailedLocations
+        };
     }
 
     public static VillagerState ObserveWorldObjects(
@@ -94,7 +105,8 @@ internal static class VillagerLocationMemoryService
                 type.Value,
                 item.Position,
                 state.WorldLevel,
-                gameSeconds);
+                gameSeconds,
+                clearFailedLocation: false);
         }
         return observed;
     }
@@ -114,6 +126,8 @@ internal static class VillagerLocationMemoryService
             if (memory.Type == VillagerLocationType.Danger ||
                 storageOnly && memory.Type != VillagerLocationType.Storage ||
                 memory.WorldLevel != state.WorldLevel)
+                continue;
+            if (IsTemporarilyFailed(state, memory, gameSeconds))
                 continue;
             var confidence = ConfidenceAt(memory, gameSeconds);
             if (confidence < MinimumUsefulConfidence) continue;
@@ -172,6 +186,49 @@ internal static class VillagerLocationMemoryService
         return state with { LocationMemories = memories };
     }
 
+    public static VillagerState MarkUnreachable(
+        VillagerState state,
+        VillagerLocationType type,
+        Vector2 position,
+        int worldLevel,
+        double gameSeconds)
+    {
+        if (state.Health <= 0) return state;
+        state = ObserveEmpty(
+            state, type, position, worldLevel, gameSeconds);
+        var failures = (state.FailedLocations ?? [])
+            .Where(value => value.RetryAfterGameSeconds > gameSeconds)
+            .ToList();
+        var index = failures.FindIndex(value =>
+            Matches(value, type, position, worldLevel));
+        var failureCount = index < 0 ? 1 : failures[index].Failures + 1;
+        var retryAfter = gameSeconds + FailedLocationRetryGameSeconds *
+            Math.Min(4, failureCount);
+        var failed = new VillagerFailedLocation(
+            position.X, position.Y, worldLevel, type,
+            retryAfter, failureCount);
+        if (index < 0) failures.Add(failed);
+        else failures[index] = failed;
+        if (failures.Count > MaximumFailedLocations)
+            failures = failures
+                .OrderByDescending(value => value.RetryAfterGameSeconds)
+                .Take(MaximumFailedLocations)
+                .ToList();
+        return state with { FailedLocations = failures };
+    }
+
+    public static bool IsTemporarilyFailed(
+        VillagerState state,
+        VillagerLocationMemory memory,
+        double gameSeconds) =>
+        state.FailedLocations?.Any(value =>
+            value.RetryAfterGameSeconds > gameSeconds &&
+            Matches(
+                value,
+                memory.Type,
+                new(memory.PositionX, memory.PositionY),
+                memory.WorldLevel)) == true;
+
     public static float ConfidenceAt(
         VillagerLocationMemory memory,
         double gameSeconds)
@@ -229,4 +286,30 @@ internal static class VillagerLocationMemoryService
         ConfidenceAt(memory, gameSeconds) * 1000 +
         (float)Math.Min(gameSeconds, memory.LastObservedGameSeconds) /
         (24 * 60 * 60);
+
+    private static IReadOnlyList<VillagerFailedLocation>? RemoveMatchingFailure(
+        IReadOnlyList<VillagerFailedLocation>? failures,
+        VillagerLocationType type,
+        Vector2 position,
+        int worldLevel,
+        double gameSeconds)
+    {
+        if (failures is not { Count: > 0 }) return failures;
+        var remaining = failures.Where(value =>
+                value.RetryAfterGameSeconds > gameSeconds &&
+                !Matches(value, type, position, worldLevel))
+            .ToArray();
+        return remaining.Length == 0 ? null : remaining;
+    }
+
+    private static bool Matches(
+        VillagerFailedLocation failure,
+        VillagerLocationType type,
+        Vector2 position,
+        int worldLevel) =>
+        failure.Type == type &&
+        failure.WorldLevel == worldLevel &&
+        Vector2.DistanceSquared(
+            new(failure.PositionX, failure.PositionY), position) <=
+        MatchRadius * MatchRadius;
 }

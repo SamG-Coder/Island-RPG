@@ -558,6 +558,7 @@ internal sealed class NpcAiService : IDisposable
         if (!settings.Enabled || names.Count == 0 ||
             !TryBaseUri(settings.BaseUrl, out var baseUri))
             return null;
+        var genders = MedievalDemographics.GendersForNames(names, worldSeed);
         using var timeout = CancellationTokenSource
             .CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(45));
@@ -576,13 +577,21 @@ internal sealed class NpcAiService : IDisposable
                 "pre-island history, temperament, former trade, uncertain arrival " +
                 "memory, and reason to learn about other survivors. knownToolIds may " +
                 "only use stone_axe, stone_hammer, stone_pickaxe, stone_shovel, or " +
-                "stone_knife. Avoid heroes, magic, prophecy, and shared omniscience.",
+                "stone_knife. Use the supplied sex and choose priorTrade verbatim from " +
+                "that person's allowedTrades. Avoid heroes, magic, prophecy, and " +
+                "shared omniscience.",
             prompt = JsonSerializer.Serialize(new
             {
                 worldName,
                 worldSeed,
                 timeline = "Day 1, 03:00; newly awake on an unknown island",
-                names
+                people = names.Select((personName, index) => new
+                {
+                    name = personName,
+                    sex = genders[index].ToString(),
+                    allowedTrades = MedievalDemographics.AllowedTrades(
+                        genders[index])
+                })
             }, JsonOptions),
             stream = false,
             think = false,
@@ -599,27 +608,29 @@ internal sealed class NpcAiService : IDisposable
             using var response = await _http.SendAsync(
                 request, timeout.Token);
             if (!response.IsSuccessStatusCode)
-                return DefaultPersonas(names.Count);
+                return DefaultPersonas(names.Count, worldSeed);
             var generated = await response.Content
                 .ReadFromJsonAsync<OllamaGenerate>(
                     JsonOptions, timeout.Token);
             if (string.IsNullOrWhiteSpace(generated?.Response))
-                return DefaultPersonas(names.Count);
+                return DefaultPersonas(names.Count, worldSeed);
             var cast = JsonSerializer.Deserialize<NpcCast>(
                 generated.Response, JsonOptions);
             var people = cast?.People ?? [];
             var result = new VillagerPersona[names.Count];
             for (var index = 0; index < result.Length; index++)
                 result[index] = index < people.Length
-                    ? ValidatePersona(people[index], index)
-                    : VillagerSimulation.DefaultPersona(index);
+                    ? ValidatePersona(
+                        people[index], index, genders[index], worldSeed)
+                    : VillagerSimulation.DefaultPersona(
+                        index, genders[index]);
             return result;
         }
         catch (Exception exception) when (
             exception is OperationCanceledException or
                 HttpRequestException or JsonException)
         {
-            return DefaultPersonas(names.Count);
+            return DefaultPersonas(names.Count, worldSeed);
         }
     }
 
@@ -1030,9 +1041,11 @@ internal sealed class NpcAiService : IDisposable
 
     private static VillagerPersona ValidatePersona(
         VillagerPersonaDraft value,
-        int index)
+        int index,
+        EntityGender gender,
+        long worldSeed)
     {
-        var fallback = VillagerSimulation.DefaultPersona(index);
+        var fallback = VillagerSimulation.DefaultPersona(index, gender);
         var allowedTools = new HashSet<string>(
             [
                 ItemIds.StoneAxe,
@@ -1057,7 +1070,9 @@ internal sealed class NpcAiService : IDisposable
                 ? fallback.Personality
                 : Limit(value.Personality, 140),
             IsPlaceholder(value.PriorTrade) ||
-            !HistoricalKnowledgePolicy.IsPlausible(value.PriorTrade)
+            !HistoricalKnowledgePolicy.IsPlausible(value.PriorTrade) ||
+            !MedievalDemographics.IsTradeCompatible(
+                value.PriorTrade ?? "", gender)
                 ? fallback.PriorTrade
                 : Limit(value.PriorTrade, 60),
             tools.Length == 0
@@ -1073,10 +1088,16 @@ internal sealed class NpcAiService : IDisposable
                 : Limit(value.SocialDrive, 180));
     }
 
-    private static IReadOnlyList<VillagerPersona> DefaultPersonas(int count) =>
-        Enumerable.Range(0, count)
-            .Select(VillagerSimulation.DefaultPersona)
+    private static IReadOnlyList<VillagerPersona> DefaultPersonas(
+        int count, long worldSeed)
+    {
+        var genders = MedievalDemographics.GendersForPopulation(
+            count, worldSeed);
+        return Enumerable.Range(0, count)
+            .Select(index => VillagerSimulation.DefaultPersona(
+                index, genders[index]))
             .ToArray();
+    }
 
     private static NpcAiRuntimeState State(
         NpcAiAvailability availability,

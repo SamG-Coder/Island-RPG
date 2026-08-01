@@ -60,6 +60,14 @@ internal sealed record VillagerFailedTarget(
     Guid TargetId,
     double RetryAfterGameSeconds);
 
+internal sealed record VillagerFailedLocation(
+    float PositionX,
+    float PositionY,
+    int WorldLevel,
+    VillagerLocationType Type,
+    double RetryAfterGameSeconds,
+    int Failures = 1);
+
 internal sealed record VillagerRelationship(
     string CharacterId,
     RelationshipState State,
@@ -167,6 +175,7 @@ internal sealed record VillagerState(
     double ConflictExpiresGameSeconds = 0,
     float StarvationDamageRemainder = 0,
     IReadOnlyList<VillagerFailedTarget>? FailedTargets = null,
+    IReadOnlyList<VillagerFailedLocation>? FailedLocations = null,
     IReadOnlyList<Guid>? ObservedOwnershipIncidentIds = null,
     float Energy = VillagerFatigueService.MaximumEnergy,
     double? LastEnergyGameSeconds = null,
@@ -200,7 +209,8 @@ internal readonly record struct VillagerWorldObject(
 internal readonly record struct VillagerWorldAction(
     VillagerWorldActionKind Kind,
     Guid? ObjectId = null,
-    Vector2? Target = null);
+    Vector2? Target = null,
+    VillagerLocationMemory? RememberedLocation = null);
 
 internal enum VillagerSocialIntent : byte
 {
@@ -264,40 +274,18 @@ internal static class VillagerSimulation
     public const double MinimumReflectionRealSeconds = .35;
     public const double MaximumReflectionRealSeconds = 1.2;
 
-    private static readonly string[] Names =
-    [
-        "Adela", "Aldric", "Alina", "Ansel", "Aveline", "Baldwin",
-        "Beatrice", "Bertram", "Branwen", "Cedric", "Cecily", "Clara",
-        "Conrad", "Crispin", "Daria", "Edith", "Edmund", "Eleanor",
-        "Elric", "Emeline", "Emrys", "Ethel", "Everard", "Felix",
-        "Fiora", "Gareth", "Gavin", "Gerard", "Gisela", "Godfrey",
-        "Guinevere", "Hadrian", "Heloise", "Hugh", "Ida", "Isolde",
-        "Ivo", "Joan", "Jocelyn", "Juliana", "Leofric", "Linnet",
-        "Lucan", "Lucia", "Mabel", "Magnus", "Margery", "Martin",
-        "Matilda", "Merek", "Mira", "Muriel", "Nesta", "Nicholas",
-        "Odilia", "Osric", "Owen", "Petronilla", "Philip", "Ralph",
-        "Reynard", "Rhiannon", "Richard", "Robert", "Rosamund",
-        "Rowan", "Sabine", "Serena", "Sibyl", "Simon", "Stephen",
-        "Sybil", "Theobald", "Theodora", "Thomas", "Tomas", "Tristan",
-        "Ursula", "Valerian", "Walter", "Warin", "Wilfred", "William",
-        "Winifred", "Wulfric", "Ysabel", "Agnes", "Alaric", "Amabel",
-        "Bennet", "Blanche", "Corwin", "Elaine", "Fulk", "Giles",
-        "Helena", "Lambert", "Maud", "Piers", "Yvette"
-    ];
-
-    public static int AvailableNameCount => Names.Length;
+    public static int AvailableNameCount => MedievalDemographics.NameCount;
 
     public static IReadOnlyList<string> NamesForPopulation(
         int population,
         long seed = 0)
     {
-        population = Math.Clamp(population, 0, MaximumPopulation);
-        var start = PositiveMod(Hash(seed, 0, 7919), Names.Length);
-        const int stride = 37;
-        return Enumerable.Range(0, population)
-            .Select(index => Names[(start + index * stride) % Names.Length])
-            .ToArray();
+        return MedievalDemographics.NamesForPopulation(population, seed);
     }
+
+    public static IReadOnlyList<EntityGender> GendersForPopulation(
+        int population, long seed = 0) =>
+        MedievalDemographics.GendersForPopulation(population, seed);
 
     public static VillagerState[] CreateInitial(
         long worldSeed,
@@ -310,6 +298,14 @@ internal static class VillagerSimulation
     {
         population = Math.Clamp(population, 0, MaximumPopulation);
         var names = NamesForPopulation(population, worldSeed);
+        var genders = MedievalDemographics.GendersForNames(
+            Enumerable.Range(0, population)
+                .Select(index => setups is not null && index < setups.Count &&
+                                 !string.IsNullOrWhiteSpace(setups[index].Name)
+                    ? setups[index].Name
+                    : names[index])
+                .ToArray(),
+            worldSeed);
         var result = new VillagerState[population];
         for (var index = 0; index < result.Length; index++)
         {
@@ -327,7 +323,7 @@ internal static class VillagerSimulation
             result[index] = new(
                 id,
                 setup?.Name ?? names[index],
-                index == 0 ? EntityGender.Female : EntityGender.Male,
+                genders[index],
                 PositiveMod(Hash(worldSeed, index, 17), 5),
                 index + 1,
                 position.X,
@@ -342,10 +338,12 @@ internal static class VillagerSimulation
                 Sociability: Unit(Hash(worldSeed, index, 31)),
                 Honesty: Unit(Hash(worldSeed, index, 47)),
                 Boldness: Unit(Hash(worldSeed, index, 61)),
-                Persona: setup?.Persona ?? (personas is not null &&
+                Persona: GenderCompatiblePersona(
+                    setup?.Persona ?? (personas is not null &&
                          index < personas.Count
-                    ? personas[index]
-                    : DefaultPersona(index)),
+                        ? personas[index]
+                        : DefaultPersona(index, genders[index])),
+                    genders[index], index, worldSeed),
                 AwakenedGameSeconds: gameSeconds,
                 Goals: VillagerCommitmentService.InitialGoals(
                     id, gameSeconds),
@@ -356,30 +354,49 @@ internal static class VillagerSimulation
     }
 
     public static VillagerPersona DefaultPersona(int index) =>
+        DefaultPersona(index, index == 0
+            ? EntityGender.Female
+            : EntityGender.Male);
+
+    public static VillagerPersona DefaultPersona(
+        int index, EntityGender gender) =>
         (index % InitialPopulation) switch
         {
             0 => new(
                 "A practical village carpenter who remembers repairing homes before the wreck.",
                 "Observant, guarded, and quietly helpful.",
-                "Carpenter",
+                MedievalDemographics.TradeFor(gender, index),
                 [ItemIds.StoneAxe, ItemIds.StoneHammer],
                 "Woke on the beach with salt in her eyes and no memory of the wreck itself.",
                 "Wants to learn who can be trusted and build a safe camp together."),
             1 => new(
                 "A travelling fisher accustomed to storms, ropes, and feeding small crews.",
                 "Patient, sociable, and cautious around promises.",
-                "Fisher",
+                MedievalDemographics.TradeFor(gender, index),
                 [ItemIds.StoneKnife],
                 "Remembers rough water, then waking alone near the tide line.",
                 "Wants companions, shared meals, and reliable information."),
             _ => new(
                 "A quarry labourer who learned to identify useful stone and maintain hand tools.",
                 "Direct, resilient, and slow to trust.",
-                "Quarry worker",
+                MedievalDemographics.TradeFor(gender, index),
                 [ItemIds.StonePickaxe, ItemIds.StoneHammer],
                 "Remembers a loud impact before waking among scattered supplies.",
                 "Wants to understand the island and find dependable partners.")
         };
+
+    public static VillagerPersona GenderCompatiblePersona(
+        VillagerPersona persona,
+        EntityGender gender,
+        int index,
+        long seed = 0) =>
+        MedievalDemographics.IsTradeCompatible(persona.PriorTrade, gender)
+            ? persona
+            : persona with
+            {
+                PriorTrade = MedievalDemographics.TradeFor(
+                    gender, index, seed)
+            };
 
     public static double HoursOnIsland(
         VillagerState state,
@@ -570,7 +587,8 @@ internal static class VillagerSimulation
                     VillagerWorldActionKind.ApproachStorage,
                     Target: StepToward(
                         position,
-                        new(storage.PositionX, storage.PositionY)));
+                        new(storage.PositionX, storage.PositionY)),
+                    RememberedLocation: storage);
         }
 
         bestScore = ResourceSearchRadius * ResourceSearchRadius;
@@ -621,7 +639,8 @@ internal static class VillagerSimulation
                     : VillagerWorldActionKind.ApproachItem,
                 Target: StepToward(
                     position,
-                    new(remembered.PositionX, remembered.PositionY)));
+                    new(remembered.PositionX, remembered.PositionY)),
+                RememberedLocation: remembered);
         }
         var inRange = Vector2.DistanceSquared(
             position, best.Position) <=
