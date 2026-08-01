@@ -17,6 +17,8 @@ internal sealed class PlaceableObjectSprites
         _campfireFueled = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<(string FuelItemId, int FlameTier, int Frame),
         PlaceableObjectSprite> _campfireLit = [];
+    private readonly PlaceableObjectSprite?[] _campfireFlames =
+        new PlaceableObjectSprite?[CampfireService.AnimationFrameCount];
 
     public IEnumerable<KeyValuePair<string, PlaceableObjectSprite>> All =>
         _sprites;
@@ -46,6 +48,14 @@ internal sealed class PlaceableObjectSprites
     public bool TryGetCampfireFueled(
         string fuelItemId, out PlaceableObjectSprite sprite) =>
         _campfireFueled.TryGetValue(fuelItemId, out sprite!);
+
+    public bool TryGetCampfireFlame(
+        int frame, out PlaceableObjectSprite sprite)
+    {
+        sprite = _campfireFlames[Math.Clamp(
+            frame, 0, _campfireFlames.Length - 1)]!;
+        return sprite is not null;
+    }
 
     public static PlaceableObjectSprites Load(
         string imageDirectory,
@@ -186,6 +196,17 @@ internal sealed class PlaceableObjectSprites
             fireSheet.Height != campfireBase.Frame.Height)
             throw new InvalidDataException(
                 "The campfire animation must be a 16-frame horizontal strip.");
+
+        for (var frameIndex = 0; frameIndex < frameCount; frameIndex++)
+        {
+            var flamePixels = new byte[frameWidth * fireSheet.Height * 4];
+            BlendCell(
+                fireSheet, frameIndex * frameWidth, 0,
+                frameWidth, fireSheet.Height,
+                flamePixels, frameWidth);
+            _campfireFlames[frameIndex] = CreateSprite(
+                flamePixels, frameWidth, fireSheet.Height, null, upload);
+        }
 
         foreach (var fuel in ItemCatalog.All.Where(item =>
                      item.HasTag(ItemTag.Log) &&

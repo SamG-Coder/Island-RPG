@@ -15,6 +15,12 @@ using StbImageSharp;
 
 namespace IslandRpg.Rendering;
 
+internal readonly record struct UiSpriteLight(
+    Vector2 Uv,
+    Vector2 Radius,
+    Vector3 Color,
+    float Intensity);
+
 // MAINTENANCE RULE:
 // GameHostWindow is the application coordinator, not a feature container.
 // New features must put most rendering, input, state, and gameplay logic in a
@@ -5584,10 +5590,7 @@ internal sealed partial class GameHostWindow : GameWindow
         int teamColor = 0,
         Vector3? spriteOutline = null,
         float sceneDarkness = 0,
-        Vector2? localLightUv = null,
-        Vector2? localLightRadius = null,
-        Vector3? localLightColor = null,
-        float localLightIntensity = 0)
+        IReadOnlyList<UiSpriteLight>? localLights = null)
     {
         _fontRenderer?.Flush();
         _uiColorBatch.Flush();
@@ -5608,16 +5611,22 @@ internal sealed partial class GameHostWindow : GameWindow
             _shaderUniforms.Get(_program, "sceneUnderground"), 0);
         GL.Uniform1(
             _shaderUniforms.Get(_program, "localLightCount"),
-            localLightUv is null || localLightIntensity <= 0 ? 0 : 1);
-        if (localLightUv is { } lightUv)
+            localLights?.Count ?? 0);
+        if (localLights is not null)
         {
-            GL.Uniform2(_shaderUniforms.Get(_program, "localLightUv[0]"), lightUv);
-            GL.Uniform2(_shaderUniforms.Get(_program, "localLightRadius[0]"),
-                localLightRadius ?? new Vector2(.25f));
-            GL.Uniform3(_shaderUniforms.Get(_program, "localLightColor[0]"),
-                localLightColor ?? Vector3.One);
-            GL.Uniform1(_shaderUniforms.Get(_program, "localLightIntensity[0]"),
-                localLightIntensity);
+            var count = Math.Min(16, localLights.Count);
+            for (var index = 0; index < count; index++)
+            {
+                var light = localLights[index];
+                GL.Uniform2(_shaderUniforms.Get(
+                    _program, $"localLightUv[{index}]"), light.Uv);
+                GL.Uniform2(_shaderUniforms.Get(
+                    _program, $"localLightRadius[{index}]"), light.Radius);
+                GL.Uniform3(_shaderUniforms.Get(
+                    _program, $"localLightColor[{index}]"), light.Color);
+                GL.Uniform1(_shaderUniforms.Get(
+                    _program, $"localLightIntensity[{index}]"), light.Intensity);
+            }
         }
         GL.Uniform1(
             _shaderUniforms.Get(_program, "sceneFogAmount"), 0f);
@@ -8337,6 +8346,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_terrainProgram != 0) GL.DeleteProgram(_terrainProgram);
         if (_cinematicOceanProgram != 0)
             GL.DeleteProgram(_cinematicOceanProgram);
+        if (_cinematicLightningProgram != 0)
+            GL.DeleteProgram(_cinematicLightningProgram);
         if (_cliffProgram != 0) GL.DeleteProgram(_cliffProgram);
         GL.DeleteVertexArray(_vao);
         if (_pauseBlurProgram != 0) GL.DeleteProgram(_pauseBlurProgram);

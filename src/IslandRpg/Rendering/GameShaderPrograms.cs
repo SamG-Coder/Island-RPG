@@ -4,6 +4,42 @@ namespace IslandRpg.Rendering;
 
 internal static class GameShaderPrograms
 {
+    public static int CreateCinematicLightningProgram()
+    {
+        const string vertex = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uvIn; out vec2 uv; void main(){uv=uvIn;gl_Position=vec4(p,0,1);}";
+        const string fragment = """
+            #version 330 core
+            in vec2 uv;
+            out vec4 color;
+            uniform vec2 target;
+            uniform float time;
+            uniform float intensity;
+            uniform float aspect;
+            float hash(float value) {
+                return fract(sin(value * 91.731 + 17.17) * 43758.5453);
+            }
+            void main() {
+                if (uv.y > target.y) discard;
+                float segment = floor(uv.y * 18.0);
+                float taper = clamp(uv.y / max(target.y, 0.001), 0.0, 1.0);
+                float jagged = (hash(segment + floor(time * 7.0)) - 0.5) *
+                    mix(0.13, 0.025, taper);
+                float boltX = mix(0.44, target.x, taper) + jagged;
+                float distanceToBolt = abs(uv.x - boltX) * aspect;
+                float core = 1.0 - smoothstep(0.0015, 0.0055, distanceToBolt);
+                float glow = 1.0 - smoothstep(0.003, 0.022, distanceToBolt);
+                float branchGate = step(0.63, hash(segment + 4.3));
+                float branchX = boltX + (uv.y - segment / 18.0) * .38;
+                float branch = (1.0 - smoothstep(0.002, 0.006,
+                    abs(uv.x - branchX) * aspect)) * branchGate * .55;
+                float alpha = (core + glow * .45 + branch) * intensity;
+                if (alpha < .01) discard;
+                color = vec4(vec3(.72, .86, 1.0) * (1.2 + core), alpha);
+            }
+            """;
+        return CreateProgram(vertex, fragment);
+    }
+
     public static int CreateCinematicOceanProgram()
     {
         const string vertex = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uvIn; out vec2 uv; void main(){uv=uvIn;gl_Position=vec4(p,0,1);}";

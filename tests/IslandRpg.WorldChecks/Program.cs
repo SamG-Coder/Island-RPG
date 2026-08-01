@@ -74,11 +74,19 @@ Require(
     Math.Abs(GameHostWindow.AnchoredSpriteTop(610, 320, 282, 320) - 328) < .001,
     "cinematic ships must place their authored hull anchor on the ocean waterline");
 Require(
-    GameHostWindow.SinkingOffset(14, 300) == 0 &&
-    GameHostWindow.SinkingOffset(17, 300) is > 4 and < 5 &&
-    GameHostWindow.SinkingOffset(20, 300) is > 8 and < 10 &&
+    GameHostWindow.SinkingOffset(27, 300) == 0 &&
+    GameHostWindow.SinkingOffset(31, 300) is > 4 and < 5 &&
+    GameHostWindow.SinkingOffset(35, 300) is > 8 and < 10 &&
     GameHostWindow.SinkingFrameIndex(0, 6) == 0 &&
-    GameHostWindow.SinkingFrameIndex(1, 6) == 5,
+    GameHostWindow.SinkingFrameIndex(1, 6) == 5 &&
+    GameHostWindow.ShipTrackedTravel(35) >
+        GameHostWindow.ShipTrackedTravel(34) &&
+    GameHostWindow.ShipTrackedTravel(35) -
+        GameHostWindow.ShipTrackedTravel(34) <
+    GameHostWindow.ShipTrackedTravel(28) -
+        GameHostWindow.ShipTrackedTravel(27) &&
+    GameHostWindow.CreditOpacity(8, 7, 16) > .99f &&
+    GameHostWindow.CreditOpacity(16, 7, 16) == 0,
     "wreck cinematics must keep ships afloat before impact and sink gradually afterwards");
 var settlementFourSource = VillagerSimulation.CreateInitial(
     2187, Vector2.Zero, population: 4);
