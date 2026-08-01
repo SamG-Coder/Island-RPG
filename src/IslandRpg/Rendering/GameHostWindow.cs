@@ -329,6 +329,12 @@ internal sealed partial class GameHostWindow : GameWindow
         new SpriteFrame?[ItemSpriteSheetCatalog.FishingNetUpgrades.CellCount];
     private readonly SpriteFrame?[] _fishingNetUpgradeShadowFrames =
         new SpriteFrame?[ItemSpriteSheetCatalog.FishingNetUpgrades.CellCount];
+    private readonly int[] _personalGoalItemTextures =
+        new int[ItemSpriteSheetCatalog.PersonalGoals.CellCount];
+    private readonly SpriteFrame?[] _personalGoalItemFrames =
+        new SpriteFrame?[ItemSpriteSheetCatalog.PersonalGoals.CellCount];
+    private readonly SpriteFrame?[] _personalGoalItemShadowFrames =
+        new SpriteFrame?[ItemSpriteSheetCatalog.PersonalGoals.CellCount];
     private readonly int[] _stoneToolTextures = new int[14];
     private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[14];
     private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[14];
@@ -4502,7 +4508,8 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         if (_activePlayer is null || _player is null) return;
         var treeType = SeedTreeType(itemId);
-        if (treeType is null) return;
+        var cropSeed = CropService.TryHarvestItem(itemId, out _);
+        if (treeType is null && !cropSeed) return;
 
         var originX = (int)MathF.Floor(_player.Position.X);
         var originY = (int)MathF.Floor(_player.Position.Y);
@@ -4557,18 +4564,25 @@ internal sealed partial class GameHostWindow : GameWindow
             return;
         inventory[slot] = null;
         var (plantX, plantY, targetGpu) = planting.Value;
-        var frameIndex = WorldTreeCatalog.SelectFrame(
-            _worldSeed, plantX, plantY, treeType);
-        targetGpu.Chunk.Trees =
-        [
-            .. targetGpu.Chunk.Trees,
-            new IslandTree(plantX, plantY, treeType, frameIndex)
-        ];
-        var maximumHealth = TreeMaximumHealth(treeType);
-        targetGpu.Chunk.TreeInstances.Add(new(
-            Guid.NewGuid(), plantX, plantY, treeType,
-            maximumHealth, maximumHealth,
-            TreeLifecycleState.Standing, 0, 0));
+        if (cropSeed)
+            targetGpu.Chunk.GroundObjects.Add(CropService.Plant(
+                itemId, plantX + .5f, plantY + .5f,
+                _worldGameSeconds, _activePlayer.Id));
+        else
+        {
+            var frameIndex = WorldTreeCatalog.SelectFrame(
+                _worldSeed, plantX, plantY, treeType!);
+            targetGpu.Chunk.Trees =
+            [
+                .. targetGpu.Chunk.Trees,
+                new IslandTree(plantX, plantY, treeType!, frameIndex)
+            ];
+            var maximumHealth = TreeMaximumHealth(treeType!);
+            targetGpu.Chunk.TreeInstances.Add(new(
+                Guid.NewGuid(), plantX, plantY, treeType!,
+                maximumHealth, maximumHealth,
+                TreeLifecycleState.Standing, 0, 0));
+        }
         QueueChunkSave(targetGpu.Chunk);
         _activePlayer = _activePlayer with
         {
@@ -4640,6 +4654,7 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.ProgressionSprite) ||
             item.HasTag(ItemTag.AdvancedToolSprite) ||
             item.HasTag(ItemTag.FishingNetUpgradeSprite) ||
+            item.HasTag(ItemTag.PersonalGoalSprite) ||
             item.HasTag(ItemTag.Fish) ||
             item.HasTag(ItemTag.FibreNetSprite) ||
             item.HasTag(ItemTag.PlaceableObject))
@@ -4695,6 +4710,11 @@ internal sealed partial class GameHostWindow : GameWindow
             return item.SpriteCell is { } netCell &&
                    (uint)netCell < (uint)_fishingNetUpgradeTextures.Length
                 ? _fishingNetUpgradeTextures[netCell]
+                : 0;
+        if (item.HasTag(ItemTag.PersonalGoalSprite))
+            return item.SpriteCell is { } goalCell &&
+                   (uint)goalCell < (uint)_personalGoalItemTextures.Length
+                ? _personalGoalItemTextures[goalCell]
                 : 0;
         if (item.HasTag(ItemTag.CoastalSprite))
             return item.SpriteCell is { } coastalCell &&
@@ -4762,6 +4782,9 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.HasTag(ItemTag.FishingNetUpgradeSprite) &&
             (uint)cell < (uint)_fishingNetUpgradeFrames.Length)
             return _fishingNetUpgradeFrames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.PersonalGoalSprite) &&
+            (uint)cell < (uint)_personalGoalItemFrames.Length)
+            return _personalGoalItemFrames[cell] ?? WoodcuttingItemsFrame;
         if (item.HasTag(ItemTag.CoastalSprite) &&
             (uint)cell < (uint)_coastalSprites.Frames.Length)
             return _coastalSprites.Frames[cell] ?? WoodcuttingItemsFrame;
@@ -4797,6 +4820,7 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.ProgressionSprite) ||
             item.HasTag(ItemTag.AdvancedToolSprite) ||
             item.HasTag(ItemTag.FishingNetUpgradeSprite) ||
+            item.HasTag(ItemTag.PersonalGoalSprite) ||
             item.HasTag(ItemTag.SupplementalSprite) ||
             item.HasTag(ItemTag.NaturalMaterial) ||
             item.HasTag(ItemTag.Fish) ||
@@ -6556,6 +6580,11 @@ internal sealed partial class GameHostWindow : GameWindow
             ItemSpriteSheetCatalog.FishingNetUpgrades.FileName,
             _fishingNetUpgradeFrames,
             _fishingNetUpgradeShadowFrames, _fishingNetUpgradeTextures);
+        LoadGridItemSheet(
+            ItemSpriteSheetCatalog.PersonalGoals,
+            _personalGoalItemFrames,
+            _personalGoalItemShadowFrames,
+            _personalGoalItemTextures);
         var stoneToolSheetPath = Path.Combine(
             AppContext.BaseDirectory, "Resources", "Images",
             "stone-tools-items.png");
@@ -6786,6 +6815,53 @@ internal sealed partial class GameHostWindow : GameWindow
                     cellSize * 4);
             var frame = new SpriteFrame(
                 cellSize, cellSize, cellSize / 2, 28, pixels);
+            frames[cell] = frame;
+            shadowFrames[cell] = ItemShadowGenerator.Create(frame);
+            textures[cell] = Upload(frame);
+        }
+    }
+
+    private void LoadGridItemSheet(
+        ItemSpriteSheetDefinition definition,
+        SpriteFrame?[] frames,
+        SpriteFrame?[] shadowFrames,
+        int[] textures)
+    {
+        if (frames.Length != definition.CellCount ||
+            shadowFrames.Length != definition.CellCount ||
+            textures.Length != definition.CellCount)
+            throw new ArgumentException(
+                "Item sprite arrays must match the sheet definition.");
+        var path = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Images",
+            definition.FileName);
+        if (!File.Exists(path)) return;
+        using var stream = File.OpenRead(path);
+        var sheet = ImageResult.FromStream(
+            stream, ColorComponents.RedGreenBlueAlpha);
+        if (sheet.Width < definition.Width ||
+            sheet.Height < definition.Height)
+            throw new InvalidDataException(
+                $"{definition.FileName} must be at least " +
+                $"{definition.Width}x{definition.Height}.");
+        for (var cell = 0; cell < definition.CellCount; cell++)
+        {
+            var pixels = new byte[
+                definition.CellSize * definition.CellSize * 4];
+            var cellX = cell % definition.EffectiveColumns *
+                        definition.CellSize;
+            var cellY = cell / definition.EffectiveColumns *
+                        definition.CellSize;
+            for (var row = 0; row < definition.CellSize; row++)
+                System.Buffer.BlockCopy(
+                    sheet.Data,
+                    ((cellY + row) * sheet.Width + cellX) * 4,
+                    pixels,
+                    row * definition.CellSize * 4,
+                    definition.CellSize * 4);
+            var frame = new SpriteFrame(
+                definition.CellSize, definition.CellSize,
+                definition.CellSize / 2, 28, pixels);
             frames[cell] = frame;
             shadowFrames[cell] = ItemShadowGenerator.Create(frame);
             textures[cell] = Upload(frame);
@@ -7070,6 +7146,13 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_progressionItemShadowFrames[cell] is { } shadowFrame)
                 Place(ProgressionAtlasKey(cell, true), null, shadowFrame);
         }
+        for (var cell = 0; cell < _personalGoalItemFrames.Length; cell++)
+        {
+            if (_personalGoalItemFrames[cell] is { } itemFrame)
+                Place(PersonalGoalAtlasKey(cell, false), null, itemFrame);
+            if (_personalGoalItemShadowFrames[cell] is { } shadowFrame)
+                Place(PersonalGoalAtlasKey(cell, true), null, shadowFrame);
+        }
         for (var cell = 0; cell < _stoneToolFrames.Length; cell++)
         {
             if (_stoneToolFrames[cell] is { } itemFrame)
@@ -7205,6 +7288,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static string ProgressionAtlasKey(int cell, bool shadow) =>
         shadow ? $"PROGRESSION_SHADOW#{cell}" : $"PROGRESSION#{cell}";
+
+    private static string PersonalGoalAtlasKey(int cell, bool shadow) =>
+        shadow ? $"PERSONAL_GOAL_SHADOW#{cell}" : $"PERSONAL_GOAL#{cell}";
 
     private static string StoneToolAtlasKey(int cell, bool shadow) =>
         shadow ? $"STONE_TOOL_SHADOW#{cell}" : $"STONE_TOOL#{cell}";

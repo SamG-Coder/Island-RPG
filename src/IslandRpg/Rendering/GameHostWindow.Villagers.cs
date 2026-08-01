@@ -976,12 +976,17 @@ internal sealed partial class GameHostWindow
             if (!IsActiveSimulationChunk(gpu)) continue;
             foreach (var item in gpu.Chunk.GroundObjects)
             {
+                if (CropService.IsCrop(item) &&
+                    !CropService.IsReady(item, _worldGameSeconds))
+                    continue;
                 if (_villagerReservedObjects.Contains(item.Id) &&
                     item.Id != villager.GoalObjectId)
                     continue;
                 _villagerWorldObjects.Add(new(
                     item.Id,
-                    item.ItemId,
+                    CropService.IsCrop(item)
+                        ? item.FuelItemId!
+                        : item.ItemId,
                     new(item.X, item.Y),
                     item.OwnerId,
                     StorageContainerService.IsStorage(
@@ -1079,14 +1084,20 @@ internal sealed partial class GameHostWindow
         }
         if (action.Kind == VillagerWorldActionKind.TakeItem)
         {
+            var takenItemId = CropService.IsCrop(target)
+                ? target.FuelItemId!
+                : target.ItemId;
+            var gathered = ActorActionService.Gather(
+                villager.Inventory,
+                takenItemId,
+                CropService.IsCrop(target)
+                    ? CropService.HarvestCount(villager.Inventory)
+                    : 1);
             if (target.OwnerId is { Length: > 0 } owner &&
                 !string.Equals(
                     owner, villager.Id,
                     StringComparison.Ordinal) ||
-                !PlayerInventory.TryAdd(
-                    villager.Inventory,
-                    target.ItemId,
-                    out var inventory))
+                !gathered.Succeeded)
             {
                 ObserveLog("world_action_failed", villager.Id, new
                 {
@@ -1109,9 +1120,20 @@ internal sealed partial class GameHostWindow
                 });
                 return false;
             }
+            var harvestedCount = gathered.Inventory.Count(value =>
+                                     value == takenItemId) -
+                                 villager.Inventory.Count(value =>
+                                     value == takenItemId);
             var updatedVillager = villager with
             {
-                Inventory = inventory,
+                Inventory = gathered.Inventory,
+                FarmingExperience = CropService.IsCrop(target)
+                    ? FarmingSkill.AwardExperience(
+                        villager.FarmingExperience,
+                        FarmingSkill.PlantingExperience *
+                        harvestedCount)
+                        .Experience
+                    : villager.FarmingExperience,
                 Need = VillagerNeed.Explore,
                 Action = EntityAction.Gather,
                 ActionTime = 0,
@@ -1125,12 +1147,12 @@ internal sealed partial class GameHostWindow
             };
             _villagers[villagerIndex] =
                 VillagerCommitmentService.RecordAcquiredItem(
-                    updatedVillager, target.ItemId);
+                    updatedVillager, takenItemId);
             ObserveLog("world_action_succeeded", villager.Id, new
             {
                 Action = action.Kind.ToString(),
                 target.Id,
-                target.ItemId,
+                ItemId = takenItemId,
                 PreviousOwner = target.OwnerId
             });
             QueueChunkSave(targetGpu.Chunk);

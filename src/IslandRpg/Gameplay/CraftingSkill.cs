@@ -454,6 +454,44 @@ internal static class CraftingSkill
                 "Lash the blade firmly to the wooden shaft."
             ]),
         new(
+            "stone-sickle", ItemIds.StoneSickle,
+            CraftingCategory.Tools, 1, 40,
+            [
+                new(ItemIds.SharpenedRock, 1),
+                new(ItemIds.Sticks, 1),
+                new(ItemIds.PlantFibres, 1)
+            ],
+            [
+                "Knapp the sharp stone into a curved harvesting edge.",
+                "Lash the blade to a short wooden handle."
+            ]),
+        new(
+            "portable-torch", ItemIds.PortableTorch,
+            CraftingCategory.Tools, 2, 30,
+            [
+                new(ItemIds.Sticks, 1),
+                new(ItemIds.PlantFibres, 2),
+                new(ItemIds.Charcoal, 1, [ItemIds.Coal])
+            ],
+            [
+                "Wrap dry fibre tightly around one end of the stick.",
+                "Work powdered fuel into the wrapping so it burns steadily."
+            ]),
+        new(
+            "gathering-basket", ItemIds.GatheringBasket,
+            CraftingCategory.Tools, 2, 35,
+            [new(ItemIds.PlantFibres, 6), new(ItemIds.Sticks, 2)],
+            [
+                "Split the fibres into flexible weaving strands.",
+                "Weave them around a rigid stick rim and handles."
+            ]),
+        new(
+            "open-pearl-oyster", ItemIds.Pearl,
+            CraftingCategory.Resources, 1, 12,
+            [new(ItemIds.PearlOysterShell, 1)],
+            ["Open the oyster shell carefully and remove its pearl."],
+            RequiredTools: [new(ItemTag.Knife, "knife")]),
+        new(
             "campfire", ItemIds.Campfire,
             CraftingCategory.Furniture, 1, 25,
             [new(ItemIds.SmallRocks, 3)],

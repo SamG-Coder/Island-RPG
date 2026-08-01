@@ -82,6 +82,28 @@ internal sealed partial class GameHostWindow
             }
         }
 
+        if (active && (underground || darkness > .04f))
+        {
+            if (_activePlayer?.Inventory.Contains(
+                    ItemIds.PortableTorch) == true && _player is not null)
+            {
+                var visual = GetPlayerVisual();
+                AddTorchLight(visual is null
+                    ? new(ReferenceWidth * .5f, ReferenceHeight * .5f)
+                    : SpriteAnchor(visual.World));
+            }
+            foreach (var villager in _villagers)
+            {
+                if (count >= MaximumSceneLights) break;
+                if (villager.Health <= 0 ||
+                    villager.WorldLevel != _activeWorldLevel ||
+                    !villager.Inventory.Contains(ItemIds.PortableTorch))
+                    continue;
+                AddTorchLight(SpriteAnchor(new(
+                    villager.PositionX, villager.PositionY)));
+            }
+        }
+
         if (active && darkness > .04f)
         {
             var flicker = CampfireLightSource.Opacity(_clock, darkness);
@@ -144,6 +166,17 @@ internal sealed partial class GameHostWindow
                     _program, LocalLightIntensityUniforms[count]),
                 intensity);
             count++;
+        }
+
+
+        void AddTorchLight(Vector2 anchor)
+        {
+            var flicker = .92f + MathF.Sin((float)_clock * 9f) * .06f;
+            AddLight(
+                anchor - new Vector2(0, 12 * _zoom),
+                new(.105f * _zoom, .072f * _zoom),
+                new(1f, .62f, .28f),
+                flicker);
         }
     }
 

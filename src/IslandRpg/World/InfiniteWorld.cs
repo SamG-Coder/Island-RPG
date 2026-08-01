@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.IO.Compression;
+using IslandRpg.Gameplay;
 using OpenTK.Mathematics;
 
 namespace IslandRpg.World;
@@ -278,12 +279,24 @@ internal static class InfiniteWorldGenerator
                 _ => 0
             };
             if (!rules.IncludeRocks) rockChance = 0;
+            var cropSeedChance = rules.IncludeSticks
+                ? tile.Region switch
+                {
+                    WorldBiome.TemperateGrassland => .018f,
+                    WorldBiome.Savanna => .012f,
+                    WorldBiome.Wetland => .009f,
+                    _ => 0
+                }
+                : 0;
             var roll = UnitHash(seed, tile.X, tile.Y, 811);
             string? itemId = roll < stickChance
-                ? "sticks"
+                ? ItemIds.Sticks
                 : roll < stickChance + rockChance
-                    ? "large_rock"
-                    : null;
+                    ? ItemIds.LargeRock
+                    : roll < stickChance + rockChance + cropSeedChance
+                        ? SelectCropSeed(
+                            UnitHash(seed, tile.X, tile.Y, 817))
+                        : null;
             if (itemId is null) continue;
             var x = tile.X + .18f + UnitHash(seed, tile.X, tile.Y, 823) * .64f;
             var y = tile.Y + .18f + UnitHash(seed, tile.X, tile.Y, 827) * .64f;
@@ -304,6 +317,13 @@ internal static class InfiniteWorldGenerator
                     seed, tiles, trees, objects));
         return objects;
     }
+
+    private static string SelectCropSeed(float roll) => roll switch
+    {
+        < 1f / 3f => ItemIds.WildGrainSeeds,
+        < 2f / 3f => ItemIds.BeanSeeds,
+        _ => ItemIds.RootSeeds
+    };
 
     private static Guid StableGroundObjectId(
         long seed, int x, int y, string itemId)

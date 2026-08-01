@@ -87,6 +87,7 @@ internal sealed partial class GameHostWindow
                 TryVillagerCook(index, villager) ||
                 TryVillagerWithdrawFood(index, villager) ||
                 TryVillagerFish(index, villager, tier) ||
+                TryVillagerPlantCrop(index, villager) ||
                 TryVillagerForage(index, villager, tier),
             VillagerWorkRole.Wood =>
                 TryVillagerCutTree(index, villager, tier) ||
@@ -100,6 +101,56 @@ internal sealed partial class GameHostWindow
                 TryVillagerMine(index, villager, tier),
             _ => false
         };
+    }
+
+    private bool TryVillagerPlantCrop(int index, VillagerState villager)
+    {
+        var seedSlot = Array.FindIndex(villager.Inventory, itemId =>
+            itemId is not null &&
+            CropService.TryHarvestItem(itemId, out _));
+        if (seedSlot < 0 || villager.Inventory[seedSlot] is not { } seedItemId)
+            return false;
+        var originX = (int)MathF.Floor(villager.PositionX);
+        var originY = (int)MathF.Floor(villager.PositionY);
+        foreach (var offset in new (int X, int Y)[]
+                 { (0, 1), (1, 0), (0, -1), (-1, 0) })
+        {
+            var x = originX + offset.X;
+            var y = originY + offset.Y;
+            if (!TryGetDropTerrain(x, y, out var gpu, out _) ||
+                gpu.Chunk.GroundObjects.Any(value =>
+                    (int)MathF.Floor(value.X) == x &&
+                    (int)MathF.Floor(value.Y) == y))
+                continue;
+            if (!PlayerInventory.TryRemove(
+                    villager.Inventory, seedSlot, out var inventory))
+                return false;
+            gpu.Chunk.GroundObjects.Add(CropService.Plant(
+                seedItemId, x + .5f, y + .5f,
+                _worldGameSeconds, villager.Id));
+            _villagers[index] = villager with
+            {
+                Inventory = inventory,
+                FarmingExperience = FarmingSkill.AwardExperience(
+                    villager.FarmingExperience,
+                    FarmingSkill.PlantingExperience).Experience,
+                Action = EntityAction.Work,
+                ActionTime = 0,
+                NextDecisionGameSeconds = _worldGameSeconds +
+                    VillagerSimulation.NearbyDecisionSeconds
+            };
+            QueueChunkSave(gpu.Chunk);
+            ObserveLog("world_action_succeeded", villager.Id, new
+            {
+                Action = "plant_crop",
+                ItemId = seedItemId,
+                X = x,
+                Y = y
+            });
+            _villagersDirty = true;
+            return true;
+        }
+        return false;
     }
 
     private bool TryVillagerSettlementContribution(

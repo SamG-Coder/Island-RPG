@@ -165,7 +165,9 @@ internal sealed partial class GameHostWindow
             return;
         }
 
-        var requested = Random.Shared.Next(1, 3);
+        var requested = Random.Shared.Next(1, 3) +
+                        FarmingSkill.GatheringBasketBonus(
+                            _activePlayer.Inventory);
         var previousInventory = PlayerInventory.Normalize(
             _activePlayer.Inventory);
         var harvest = ActorActionService.Gather(

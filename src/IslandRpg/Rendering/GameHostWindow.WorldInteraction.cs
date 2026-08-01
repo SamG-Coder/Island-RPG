@@ -231,6 +231,15 @@ internal sealed partial class GameHostWindow
             item => item.Id == groundObjectId);
         if (chunk is null || groundObject is null) return;
         var itemId = groundObject.ItemId;
+        var crop = CropService.IsCrop(groundObject);
+        if (crop && !CropService.IsReady(
+                groundObject, _worldGameSeconds))
+        {
+            ReportBlockedAction(
+                "crop-still-growing",
+                "That crop is still growing.");
+            return;
+        }
         if (PlaceableObjectCatalog.IsPlaceable(itemId))
         {
             ReportBlockedAction(
@@ -238,8 +247,18 @@ internal sealed partial class GameHostWindow
                 "That has been built in place and cannot be picked up.");
             return;
         }
-        if (!PlayerInventory.TryAdd(
-                _activePlayer.Inventory, itemId, out var inventory))
+        if (crop) itemId = groundObject.FuelItemId!;
+        var beforeInventory = PlayerInventory.Normalize(
+            _activePlayer.Inventory);
+        var gathered = crop
+            ? ActorActionService.Gather(
+                beforeInventory, itemId,
+                CropService.HarvestCount(beforeInventory))
+            : new ActorInventoryResult(
+                PlayerInventory.TryAdd(
+                    beforeInventory, itemId, out var added),
+                added);
+        if (!gathered.Succeeded)
         {
             ReportBlockedAction(
                 "pickup-inventory-full",
@@ -247,16 +266,27 @@ internal sealed partial class GameHostWindow
             return;
         }
         if (!chunk.Chunk.GroundObjects.Remove(groundObject)) return;
-        NotifyVillagersOfTaking(groundObject);
+        var harvestedCount = gathered.Inventory.Count(value =>
+                                 value == itemId) -
+                             beforeInventory.Count(value =>
+                                 value == itemId);
+        NotifyVillagersOfTaking(crop
+            ? groundObject with { ItemId = itemId }
+            : groundObject);
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = gathered.Inventory,
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
+        if (crop)
+            AwardFarmingExperience(
+                FarmingSkill.PlantingExperience * harvestedCount);
         QueueChunkSave(chunk.Chunk);
         _chatUi.AddMessage(
-            $"You pick up the {ItemCatalog.Get(itemId).Name}.",
+            crop
+                ? $"You harvest the {ItemCatalog.Get(itemId).Name}."
+                : $"You pick up the {ItemCatalog.Get(itemId).Name}.",
             ChatMessageStyle.Action);
         RecordQuestEvent(new(
             QuestEventType.GatherItem, itemId));
@@ -914,6 +944,27 @@ internal sealed partial class GameHostWindow
             shadowKey = _progressionItemShadowFrames[cell] is null
                 ? null
                 : ProgressionAtlasKey(cell, true);
+            return true;
+        }
+
+        if (item.HasTag(ItemTag.PersonalGoalSprite))
+        {
+            if ((uint)cell >= (uint)_personalGoalItemFrames.Length ||
+                _personalGoalItemFrames[cell] is not { } goalFrame ||
+                _personalGoalItemTextures[cell] == 0)
+            {
+                frame = null!;
+                texture = 0;
+                atlasKey = "";
+                shadowKey = null;
+                return false;
+            }
+            frame = goalFrame;
+            texture = _personalGoalItemTextures[cell];
+            atlasKey = PersonalGoalAtlasKey(cell, false);
+            shadowKey = _personalGoalItemShadowFrames[cell] is null
+                ? null
+                : PersonalGoalAtlasKey(cell, true);
             return true;
         }
 

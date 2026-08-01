@@ -86,7 +86,9 @@ internal sealed partial class GameHostWindow
         var requested = Random.Shared.Next(1, 4) +
                         FarmingSkill.BonusBerryCount(
                             farmingLevel, sickle,
-                            Random.Shared.NextSingle());
+                            Random.Shared.NextSingle()) +
+                        FarmingSkill.GatheringBasketBonus(
+                            _activePlayer.Inventory);
         var previousInventory = PlayerInventory.Normalize(
             _activePlayer.Inventory);
         var harvest = ActorActionService.Gather(

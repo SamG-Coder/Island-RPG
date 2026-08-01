@@ -6577,6 +6577,76 @@ finally
     if (Directory.Exists(resolvedRoot)) Directory.Delete(resolvedRoot, recursive: true);
 }
 
+var personalGoalIds = new[]
+{
+    ItemIds.WildGrainSeeds, ItemIds.WildGrain,
+    ItemIds.BeanSeeds, ItemIds.Beans,
+    ItemIds.RootSeeds, ItemIds.EdibleRoots,
+    ItemIds.PortableTorch, ItemIds.GatheringBasket,
+    ItemIds.Pearl, ItemIds.StoneSickle
+};
+Require(
+    personalGoalIds.Select(ItemCatalog.Get).All(item =>
+        item.HasTag(ItemTag.PersonalGoalSprite) &&
+        item.SpriteCell is >= 0 and < 10) &&
+    personalGoalIds.Select(ItemCatalog.Get)
+        .Select(item => item.SpriteCell).Distinct().Count() == 10,
+    "personal-goal items must use ten unique generated sprite cells");
+var personalGoalSheetPath = Path.Combine(
+    AppContext.BaseDirectory, "Resources", "Images",
+    ItemSpriteSheetCatalog.PersonalGoals.FileName);
+using (var personalGoalSheetStream = File.OpenRead(personalGoalSheetPath))
+{
+    var personalGoalSheet = ImageResult.FromStream(
+        personalGoalSheetStream, ColorComponents.RedGreenBlueAlpha);
+    Require(
+        personalGoalSheet.Width ==
+            ItemSpriteSheetCatalog.PersonalGoals.Width &&
+        personalGoalSheet.Height ==
+            ItemSpriteSheetCatalog.PersonalGoals.Height &&
+        personalGoalSheet.Data.Where((_, index) => index % 4 == 3)
+            .Any(alpha => alpha == 0),
+        "converted personal-goal sprite sheet must have the catalog dimensions and transparency");
+}
+Require(
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.StoneSickle) &&
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.PortableTorch) &&
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.GatheringBasket) &&
+    CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.Pearl &&
+        recipe.RequiredTools?.Any(tool =>
+            tool.Tag == ItemTag.Knife) == true),
+    "new tools, basket, torch and pearl must have complete crafting recipes");
+Require(
+    PlayerInventory.BestSickle(
+        [ItemIds.StoneSickle, ItemIds.IronSickle])?.Id ==
+        ItemIds.IronSickle &&
+    FarmingSkill.GatheringBasketBonus(
+        [ItemIds.GatheringBasket]) == 1 &&
+    FarmingSkill.GatheringBasketBonus([]) == 0,
+    "stone sickles and gathering baskets must integrate with farming helpers");
+Require(
+    SurvivalService.TryFoodEffect(ItemIds.WildGrain, out var grainFood) &&
+    SurvivalService.TryFoodEffect(ItemIds.Beans, out var beanFood) &&
+    SurvivalService.TryFoodEffect(ItemIds.EdibleRoots, out var rootFood) &&
+    grainFood.HungerRestored < beanFood.HungerRestored &&
+    beanFood.HungerRestored < rootFood.HungerRestored,
+    "all harvested crops must provide ordered survival food effects");
+var plantedCrop = CropService.Plant(
+    ItemIds.BeanSeeds, 4.5f, 8.5f, 1_000, "farmer");
+Require(
+    CropService.IsCrop(plantedCrop) &&
+    !CropService.IsReady(
+        plantedCrop, 1_000 + CropService.GrowthGameSeconds - 1) &&
+    CropService.IsReady(
+        plantedCrop, 1_000 + CropService.GrowthGameSeconds) &&
+    plantedCrop.FuelItemId == ItemIds.Beans &&
+    CropService.HarvestCount([ItemIds.GatheringBasket]) == 3,
+    "crop planting must persist its harvest, maturity time, owner and basket yield");
+
 Console.WriteLine(
     $"World checks passed: {macroBiomes.Count} macro biomes, deterministic generation, seams, " +
     $"persistence, and 64-slot region storage ({regionBytes:N0} bytes for the test region). " +

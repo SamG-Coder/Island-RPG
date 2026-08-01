@@ -34,6 +34,9 @@ internal static class FarmingSkill
         return roll < Math.Min(.75f, chance) ? 1 : 0;
     }
 
+    public static int GatheringBasketBonus(string?[]? inventory) =>
+        inventory?.Contains(ItemIds.GatheringBasket) == true ? 1 : 0;
+
     public static string ExperienceMessage(int experience) =>
         $"+{experience} Farming XP.";
 

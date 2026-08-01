@@ -17,6 +17,8 @@ internal static class VillagerCraftPlanner
             [
                 ItemIds.Rope,
                 ItemIds.PrimitiveFishingNet,
+                ItemIds.StoneSickle,
+                ItemIds.GatheringBasket,
                 ItemIds.Campfire,
                 ItemIds.Workbench,
                 ItemIds.ReinforcedFishingNet,
@@ -29,6 +31,8 @@ internal static class VillagerCraftPlanner
             [VillagerWorkRole.Crafting] =
             [
                 ItemIds.Rope,
+                ItemIds.PortableTorch,
+                ItemIds.GatheringBasket,
                 ItemIds.StoneKnife,
                 ItemIds.StoneHammer,
                 ItemIds.Campfire,

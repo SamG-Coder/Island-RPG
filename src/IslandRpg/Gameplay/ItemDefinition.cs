@@ -34,7 +34,8 @@ internal enum ItemTag
     Sickle = 1 << 27,
     AdvancedToolSprite = 1 << 28,
     FishingNetUpgradeSprite = 1 << 29,
-    Weapon = 1 << 30
+    Weapon = 1 << 30,
+    PersonalGoalSprite = 1 << 31
 }
 
 internal sealed record ItemDefinition(
@@ -97,6 +98,16 @@ internal static class ItemIds
     public const string SnowTreeSeeds = "snow_tree_seeds";
     public const string BambooSeeds = "bamboo_seeds";
     public const string CactusSeeds = "cactus_seeds";
+    public const string WildGrainSeeds = "wild_grain_seeds";
+    public const string WildGrain = "wild_grain";
+    public const string BeanSeeds = "bean_seeds";
+    public const string Beans = "beans";
+    public const string RootSeeds = "root_seeds";
+    public const string EdibleRoots = "edible_roots";
+    public const string PortableTorch = "portable_torch";
+    public const string GatheringBasket = "gathering_basket";
+    public const string Pearl = "pearl";
+    public const string StoneSickle = "stone_sickle";
     public const string SharpenedRock = "sharpened_rock";
     public const string Coal = "coal";
     public const string TinOre = "tin_ore";
@@ -341,6 +352,42 @@ internal static class ItemCatalog
                 ItemIds.CactusSeeds, "cactus seeds", "Cactus seed",
                 "Tiny dark seeds collected from a cactus pod.", 7,
                 Tags: ItemTag.Seed | ItemTag.SupplementalSprite),
+            [ItemIds.WildGrainSeeds] = PersonalGoal(
+                ItemIds.WildGrainSeeds, "wild grain seeds", "Grain seed",
+                "A pouch of hardy grain seed suitable for open soil.", 0,
+                ItemTag.Seed),
+            [ItemIds.WildGrain] = PersonalGoal(
+                ItemIds.WildGrain, "wild grain", "Grain",
+                "A tied sheaf of nutritious wild grain.", 1),
+            [ItemIds.BeanSeeds] = PersonalGoal(
+                ItemIds.BeanSeeds, "bean seeds", "Bean seed",
+                "Mottled beans selected for planting.", 2, ItemTag.Seed),
+            [ItemIds.Beans] = PersonalGoal(
+                ItemIds.Beans, "beans", "Beans",
+                "A handful of fresh, filling beans.", 3),
+            [ItemIds.RootSeeds] = PersonalGoal(
+                ItemIds.RootSeeds, "root seeds", "Root seed",
+                "Seeds for a hardy edible root crop.", 4, ItemTag.Seed),
+            [ItemIds.EdibleRoots] = PersonalGoal(
+                ItemIds.EdibleRoots, "edible roots", "Roots",
+                "Earthy roots that can be eaten raw.", 5),
+            [ItemIds.PortableTorch] = PersonalGoal(
+                ItemIds.PortableTorch, "portable torch", "Torch",
+                "A resinous wrapped torch that illuminates dark places.", 6,
+                ItemTag.Tool),
+            [ItemIds.GatheringBasket] = PersonalGoal(
+                ItemIds.GatheringBasket, "gathering basket", "Basket",
+                "A woven basket that helps keep gathered materials together.",
+                7, ItemTag.Tool),
+            [ItemIds.Pearl] = PersonalGoal(
+                ItemIds.Pearl, "pearl", "Pearl",
+                "A rare luminous pearl prized by collectors.", 8),
+            [ItemIds.StoneSickle] = new(
+                ItemIds.StoneSickle, "stone sickle", "Stone sickle",
+                "A curved knapped blade lashed to a wooden handle.", 9,
+                Tags: ItemTag.Tool | ItemTag.Sickle |
+                      ItemTag.PersonalGoalSprite,
+                FarmingPower: 1),
             [ItemIds.SharpenedRock] = new(
                 ItemIds.SharpenedRock, "sharpened rock", "Sharp rock",
                 "A stone deliberately knapped to form a sharp edge.", 8,
@@ -611,6 +658,13 @@ internal static class ItemCatalog
         new(
             id, name, caption, examine, cell,
             Tags: ItemTag.NaturalMaterial | ItemTag.CoastalSprite);
+
+    private static ItemDefinition PersonalGoal(
+        string id, string name, string caption, string examine, int cell,
+        ItemTag tags = ItemTag.None) =>
+        new(
+            id, name, caption, examine, cell,
+            Tags: tags | ItemTag.PersonalGoalSprite);
 
     private static ItemDefinition MetalTool(
         string id, string name, string caption, string examine, int cell,
