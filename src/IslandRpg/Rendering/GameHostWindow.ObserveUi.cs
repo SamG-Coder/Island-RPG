@@ -267,7 +267,9 @@ internal sealed partial class GameHostWindow
         string[] left =
         [
             $"Status: {phase} / {villager.Action}",
-            $"Role: {villager.WorkRole}",
+            $"Role: {villager.WorkRole}" +
+            (VillagerLeadershipService.IsLeader(villager) ? " / Leader" : ""),
+            $"Leadership: {(VillagerLeadershipService.IsLeader(villager) ? "Leader" : "Follower")}",
             $"Need: {villager.Need}",
             $"Health: {villager.Health}",
             $"Hunger: {villager.Hunger:0.0}",
@@ -289,6 +291,7 @@ internal sealed partial class GameHostWindow
             $"Memories: {villager.Memories?.Count ?? 0}",
             $"Location memories: {villager.LocationMemories?.Count ?? 0}",
             $"Known people: {villager.KnownPeople?.Count ?? 0}",
+            $"Leader: {LeaderName(villager)}",
             $"Failed targets: {villager.FailedTargets?.Count ?? 0}",
             $"Project: {TrimObserveText(projectText, 24)}",
             $"S/H/B: {villager.Sociability:0.00} / {villager.Honesty:0.00} / {villager.Boldness:0.00}",
@@ -321,6 +324,12 @@ internal sealed partial class GameHostWindow
                 new(content.X + 8, content.Y + 274),
                 new FSColor(166, 174, 145, 255));
     }
+
+    private string LeaderName(VillagerState villager) =>
+        villager.RecognizedLeaderId is not { } leaderId
+            ? "None"
+            : _villagers.FirstOrDefault(value => value.Id == leaderId)?.Name ??
+              "Unknown";
 
     private void RenderObserveInventory(VillagerState villager, Vector4 panel)
     {

@@ -10,6 +10,18 @@ namespace IslandRpg.Rendering;
 internal sealed partial class GameHostWindow
 {
     private string? _settlementProjectKey;
+    private VillagerLeadershipResult? _settlementCouncilResult;
+    private Queue<VillagerGroupConversationLine> _settlementCouncilLines = [];
+    private Vector2 _settlementCouncilPoint;
+    private readonly Dictionary<string, Vector2>
+        _settlementCouncilPositions = [];
+    private double _settlementCouncilGatherUntil;
+    private double _nextSettlementCouncilLineAt;
+    private VillagerGroupConversationLine? _pendingSettlementCouncilLine;
+    private string? _settlementCouncilCenterSpeakerId;
+    private double _settlementCouncilCenterMoveUntil;
+    private bool _settlementCouncilCandidateShouldReturn;
+    private double _settlementCouncilCandidateReturnAt;
     private readonly Dictionary<string, double>
         _nextProjectAccountability = [];
     private readonly HashSet<string> _completedProjectContributions = [];
@@ -42,6 +54,13 @@ internal sealed partial class GameHostWindow
         _conversationFloorUntil = 0;
         _villagerWork.Clear();
         _npcController.Clear();
+        _settlementCouncilResult = null;
+        _settlementCouncilLines.Clear();
+        _settlementCouncilPositions.Clear();
+        _pendingSettlementCouncilLine = null;
+        _settlementCouncilCenterSpeakerId = null;
+        _settlementCouncilCandidateShouldReturn = false;
+        _settlementCouncilCandidateReturnAt = 0;
         _nextVillagerRoleAssignment = 0;
         if (_activeWorld is null) return;
         if (!_activeWorld.AiNpcsEnabled ||
@@ -82,7 +101,10 @@ internal sealed partial class GameHostWindow
         if (_player is null || _activeWorld is null) return;
         UpdateConversationTurns();
         _villagerWork.Expire(_worldGameSeconds);
-        if (_worldGameSeconds >= _nextVillagerRoleAssignment)
+        TryCallLeadershipChallenge();
+        var councilActive = UpdateSettlementLeadership();
+        if (!councilActive &&
+            _worldGameSeconds >= _nextVillagerRoleAssignment)
         {
             var forecast = VillagerWorkPlanner.Forecast(_villagers);
             var roles = VillagerWorkCoordinator.AssignRoles(_villagers);
@@ -128,8 +150,11 @@ internal sealed partial class GameHostWindow
             }
             _nextVillagerRoleAssignment = _worldGameSeconds + 30 * 60;
         }
-        UpdateSettlementProjectAssignments();
-        TryPromptStalledProject();
+        if (!councilActive)
+        {
+            UpdateSettlementProjectAssignments();
+            TryPromptStalledProject();
+        }
         UpdateVillagerPromiseDeadlines();
         _villagerReservedObjects.Clear();
         foreach (var villager in _villagers)
@@ -357,6 +382,9 @@ internal sealed partial class GameHostWindow
                 _villagers[index] = villager;
                 _villagersDirty = true;
             }
+            if (_settlementCouncilResult is not null &&
+                !VillagerIntentPriorityService.HasUrgentOverride(villager))
+                continue;
             if (villager.Activity is
                 VillagerActivity.Conversing or
                 VillagerActivity.Reflecting)
@@ -467,8 +495,11 @@ internal sealed partial class GameHostWindow
             .SelectMany(value => value.Chunk.GroundObjects)
             .Select(value => value.ItemId)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var leaderId = _villagers.FirstOrDefault(value =>
+            value.Health > 0 && value.RecognizedLeaderId is not null)?
+            .RecognizedLeaderId;
         var plan = VillagerSettlementProjectService.Plan(
-            _villagers, placedItems);
+            _villagers, placedItems, leaderId);
         var key = plan is null
             ? null
             : $"{plan.ProjectItemId}:{plan.BuilderId}";
@@ -499,7 +530,11 @@ internal sealed partial class GameHostWindow
                     plan.ProjectItemId,
                     plan.BuilderId,
                     requirements,
-                    assignedAt);
+                    assignedAt,
+                    plan.LeaderId,
+                    plan.Worksite.X,
+                    plan.Worksite.Y,
+                    plan.WorksiteLevel);
             }
             if (VillagerSettlementProjectService.SameAssignment(
                     villager.ProjectAssignment, assignment))
@@ -519,8 +554,326 @@ internal sealed partial class GameHostWindow
                 Status = "active",
                 plan.ProjectItemId,
                 plan.BuilderId,
+                plan.LeaderId,
+                Worksite = new { X = plan.Worksite.X, Y = plan.Worksite.Y },
                 Assignments = plan.Assignments
             });
+        if (plan is not null)
+            AnnounceSettlementAssignments(plan);
+    }
+
+    private void AnnounceSettlementAssignments(
+        VillagerSettlementProjectPlan plan)
+    {
+        var leaderIndex = _villagers.FindIndex(value =>
+            value.Id == plan.LeaderId && value.Health > 0);
+        if (leaderIndex < 0) return;
+        var builder = _villagers.First(value => value.Id == plan.BuilderId);
+        var orders = plan.Assignments
+            .Where(pair => pair.Value.Count > 0)
+            .Select(pair =>
+            {
+                var worker = _villagers.First(value => value.Id == pair.Key);
+                var needs = string.Join(" and ", pair.Value.Select(value =>
+                    $"{value.Quantity} {ItemCatalog.Get(value.ItemId).Name}"));
+                return $"{worker.Name}, bring {needs}";
+            });
+        var projectName = ItemCatalog.Get(plan.ProjectItemId).Name;
+        var text = $"We are building the {projectName}. " +
+                   $"{builder.Name}, remain at the worksite. " +
+                   string.Join(". ", orders) + ".";
+        ShowVillagerSpeech(
+            leaderIndex, text, plan.Worksite);
+        for (var index = 0; index < _villagers.Count; index++)
+        {
+            if (_villagers[index].Health <= 0) continue;
+            _villagers[index] = VillagerSimulation.RecordDialogueTurn(
+                _villagers[index],
+                _villagers[leaderIndex].Id,
+                _villagers[leaderIndex].Name,
+                text,
+                _worldGameSeconds);
+        }
+        ObserveLog("settlement_orders", plan.LeaderId, new
+        {
+            plan.ProjectItemId,
+            plan.BuilderId,
+            Orders = plan.Assignments
+        });
+        _villagersDirty = true;
+    }
+
+    private bool UpdateSettlementLeadership()
+    {
+        var living = _villagers.Where(value => value.Health > 0).ToArray();
+        if (living.Length < 2) return false;
+        var recognized = living.Select(value => value.RecognizedLeaderId)
+            .FirstOrDefault(id => id is not null &&
+                living.Any(candidate => candidate.Id == id));
+        if (recognized is not null && living.All(value =>
+                value.RecognizedLeaderId == recognized))
+            return false;
+        if (_settlementCouncilResult is null)
+        {
+            var result = VillagerLeadershipService.HoldCouncil(living);
+            if (result is null) return false;
+            _settlementCouncilResult = result;
+            _settlementCouncilLines = new(
+                VillagerGroupConversationService.OpeningCouncil(
+                    living, result));
+            _settlementCouncilPoint = new(
+                living.Average(value => value.PositionX),
+                living.Average(value => value.PositionY));
+            _settlementCouncilPositions.Clear();
+            _settlementCouncilGatherUntil = _worldGameSeconds +
+                12 * VillagerSimulation.GameSecondsPerRealSecond;
+            _nextSettlementCouncilLineAt = double.PositiveInfinity;
+            for (var index = 0; index < _villagers.Count; index++)
+            {
+                var villager = _villagers[index];
+                if (villager.Health <= 0) continue;
+                var offset = VillagerGroupConversationService.CircleOffset(
+                    villager.Id, index, _villagers.Count);
+                var desired = _settlementCouncilPoint +
+                    new Vector2(offset.X, offset.Y);
+                var target = WorldLevelNavigation.ReachableWalkableTarget(
+                    _worldSeed,
+                    new(villager.PositionX, villager.PositionY),
+                    desired,
+                    villager.WorldLevel,
+                    maximumRadius: 3);
+                _settlementCouncilPositions[villager.Id] = target;
+                _villagers[index] = VillagerSimulation.ApplyDecision(
+                    villager,
+                    new(VillagerNeed.Social, target),
+                    VillagerSimulationTier.Nearby,
+                    _worldGameSeconds);
+            }
+            ObserveLog("settlement_council_gathering", null, new
+            {
+                MeetingPoint = new
+                {
+                    X = _settlementCouncilPoint.X,
+                    Y = _settlementCouncilPoint.Y
+                },
+                Participants = living.Select(value => value.Id).ToArray()
+            });
+            _villagersDirty = true;
+            return true;
+        }
+        var gathered = living.All(value =>
+            _settlementCouncilPositions.TryGetValue(value.Id, out var place) &&
+            Vector2.DistanceSquared(
+                new(value.PositionX, value.PositionY), place) <= .75f * .75f);
+        if (!gathered &&
+            _worldGameSeconds < _settlementCouncilGatherUntil)
+            return true;
+        if (double.IsPositiveInfinity(_nextSettlementCouncilLineAt))
+            _nextSettlementCouncilLineAt = _clock;
+        if (_settlementCouncilCandidateShouldReturn &&
+            _clock >= _settlementCouncilCandidateReturnAt &&
+            _settlementCouncilCenterSpeakerId is { } returningCandidate)
+        {
+            ReturnCouncilCandidateToCircle(returningCandidate);
+            _settlementCouncilCandidateShouldReturn = false;
+        }
+        if (_clock < _nextSettlementCouncilLineAt ||
+            ConversationFloorBusy || _npcAiDialogueTask is not null)
+            return true;
+        VillagerGroupConversationLine? line = null;
+        if (_pendingSettlementCouncilLine is { } pendingLine)
+        {
+            var pendingSpeaker = _villagers.First(value =>
+                value.Id == pendingLine.SpeakerId);
+            if (Vector2.DistanceSquared(
+                    new(pendingSpeaker.PositionX, pendingSpeaker.PositionY),
+                    _settlementCouncilPoint) > .8f * .8f &&
+                _worldGameSeconds < _settlementCouncilCenterMoveUntil)
+                return true;
+            line = pendingLine;
+            _pendingSettlementCouncilLine = null;
+        }
+        else if (_settlementCouncilLines.TryDequeue(out var queuedLine))
+        {
+            if (_settlementCouncilCenterSpeakerId is { } previousCandidate &&
+                queuedLine.Purpose != "proposal")
+                ReturnCouncilCandidateToCircle(previousCandidate);
+            if (queuedLine.Purpose == "proposal")
+            {
+                if (_settlementCouncilCenterSpeakerId is { } centerSpeaker)
+                    ReturnCouncilCandidateToCircle(centerSpeaker);
+                var candidateIndex = _villagers.FindIndex(value =>
+                    value.Id == queuedLine.SpeakerId);
+                if (candidateIndex >= 0)
+                {
+                    _villagers[candidateIndex] = VillagerSimulation.ApplyDecision(
+                        _villagers[candidateIndex],
+                        new(VillagerNeed.Social, _settlementCouncilPoint),
+                        VillagerSimulationTier.Nearby,
+                        _worldGameSeconds);
+                    _settlementCouncilCenterSpeakerId = queuedLine.SpeakerId;
+                    _pendingSettlementCouncilLine = queuedLine;
+                    _settlementCouncilCenterMoveUntil = _worldGameSeconds +
+                        8 * VillagerSimulation.GameSecondsPerRealSecond;
+                    ObserveLog("settlement_candidate_steps_forward",
+                        queuedLine.SpeakerId, new
+                        {
+                            X = _settlementCouncilPoint.X,
+                            Y = _settlementCouncilPoint.Y
+                        });
+                    return true;
+                }
+            }
+            line = queuedLine;
+        }
+        if (line is not null)
+        {
+            var speakerIndex = _villagers.FindIndex(value =>
+                value.Id == line.SpeakerId);
+            if (speakerIndex >= 0)
+            {
+                var seconds = ConversationLineSeconds(line.Text);
+                if (line.UseAi)
+                {
+                    var leaderId = _settlementCouncilResult!.LeaderId;
+                    var councilLeader = _villagers.First(value =>
+                        value.Id == leaderId);
+                    SpeakVillagerDialogue(
+                        _villagers[speakerIndex],
+                        councilLeader.Id,
+                        "the gathered survivors",
+                        VillagerSocialIntent.AskSurvival,
+                        line.Text,
+                        allowNpcReply: false);
+                    _npcAiDialogueGroupListenerIds = _villagers
+                        .Where(IsPresentAtCouncil)
+                        .Select(value => value.Id)
+                        .ToArray();
+                    _npcAiDialogueGroupPurpose = line.Purpose;
+                }
+                else
+                {
+                    ShowVillagerSpeech(
+                        speakerIndex, line.Text, _settlementCouncilPoint);
+                    RecordCouncilLineForGroup(
+                        speakerIndex, line.Text, seconds, line.Purpose);
+                }
+                ObserveLog("settlement_council_turn", line.SpeakerId, new
+                {
+                    line.Purpose,
+                    line.Text,
+                    RemainingTurns = _settlementCouncilLines.Count
+                });
+                _nextSettlementCouncilLineAt = _clock + seconds;
+                if (line.Purpose == "proposal" && !line.UseAi)
+                {
+                    _settlementCouncilCandidateShouldReturn = true;
+                    _settlementCouncilCandidateReturnAt = _clock + seconds;
+                }
+                _villagersDirty = true;
+            }
+            return true;
+        }
+        var resultToApply = _settlementCouncilResult;
+        if (resultToApply is null) return false;
+        var updated = VillagerLeadershipService.ApplyCouncil(
+            _villagers, resultToApply, _worldGameSeconds);
+        for (var index = 0; index < _villagers.Count; index++)
+            _villagers[index] = updated[index];
+        var leader = _villagers.First(value =>
+            value.Id == resultToApply.LeaderId);
+        ObserveLog("settlement_council", leader.Id, new
+        {
+            resultToApply.Contested,
+            Votes = resultToApply.Votes,
+            Worksite = new { X = leader.PositionX, Y = leader.PositionY }
+        });
+        _settlementCouncilResult = null;
+        _settlementCouncilLines.Clear();
+        _settlementCouncilPositions.Clear();
+        _pendingSettlementCouncilLine = null;
+        _settlementCouncilCenterSpeakerId = null;
+        _settlementCouncilCandidateShouldReturn = false;
+        _settlementCouncilCandidateReturnAt = 0;
+        _villagersDirty = true;
+        return false;
+    }
+
+    private void RecordCouncilLineForGroup(
+        int speakerIndex, string text, double seconds, string purpose)
+    {
+        for (var index = 0; index < _villagers.Count; index++)
+        {
+            var listener = _villagers[index];
+            if (!IsPresentAtCouncil(listener)) continue;
+            listener = VillagerSimulation.RecordDialogueTurn(
+                listener,
+                _villagers[speakerIndex].Id,
+                _villagers[speakerIndex].Name,
+                text,
+                _worldGameSeconds);
+            if (purpose == "introduction" && index != speakerIndex)
+                listener = VillagerSimulation.RecordIntroductionResponse(
+                    listener,
+                    _villagers[speakerIndex].Id,
+                    _villagers[speakerIndex].Name,
+                    _worldGameSeconds);
+            if (index != speakerIndex)
+                listener = VillagerSimulation.BeginConversation(
+                    listener, _villagers[speakerIndex].Id,
+                    _worldGameSeconds, seconds);
+            _villagers[index] = listener;
+        }
+    }
+
+    private bool IsPresentAtCouncil(VillagerState villager) =>
+        villager.Health > 0 &&
+        villager.WorldLevel == _activeWorldLevel &&
+        Vector2.DistanceSquared(
+            new(villager.PositionX, villager.PositionY),
+            _settlementCouncilPoint) <= 8 * 8;
+
+    private void ReturnCouncilCandidateToCircle(string candidateId)
+    {
+        var index = _villagers.FindIndex(value => value.Id == candidateId);
+        if (index < 0 ||
+            !_settlementCouncilPositions.TryGetValue(
+                candidateId, out var position))
+            return;
+        _villagers[index] = VillagerSimulation.ApplyDecision(
+            _villagers[index],
+            new(VillagerNeed.Social, position),
+            VillagerSimulationTier.Nearby,
+            _worldGameSeconds);
+        _settlementCouncilCenterSpeakerId = null;
+    }
+
+    private void TryCallLeadershipChallenge()
+    {
+        if (_settlementCouncilResult is not null) return;
+        var challenger = VillagerLeadershipService.SelectChallenger(
+            _villagers, _worldGameSeconds);
+        if (challenger is null) return;
+        var challengerIndex = _villagers.FindIndex(value =>
+            value.Id == challenger.Id);
+        ShowVillagerSpeech(
+            challengerIndex,
+            "This plan is failing. I call for us to gather and choose our direction again.",
+            new(challenger.PositionX, challenger.PositionY));
+        for (var index = 0; index < _villagers.Count; index++)
+            if (_villagers[index].Health > 0)
+                _villagers[index] = _villagers[index] with
+                {
+                    RecognizedLeaderId = null,
+                    NextLeadershipChallengeGameSeconds =
+                        _worldGameSeconds + 2 * 60 * 60
+                };
+        ObserveLog("leadership_challenge", challenger.Id, new
+        {
+            PreviousLeaderId = challenger.RecognizedLeaderId,
+            Reason = "stalled_project"
+        });
+        _villagersDirty = true;
     }
 
     private static string ProjectContributionKey(
@@ -538,12 +891,15 @@ internal sealed partial class GameHostWindow
             _nextProjectAccountability.GetValueOrDefault(stalled.Id) >
             _worldGameSeconds)
             return;
-        var builderIndex = _villagers.FindIndex(value =>
-            value.Id == assignment.BuilderId && value.Health > 0);
-        if (builderIndex < 0) return;
-        var builder = _villagers[builderIndex];
+        var leaderIndex = _villagers.FindIndex(value =>
+            value.Id == assignment.LeaderId && value.Health > 0);
+        if (leaderIndex < 0)
+            leaderIndex = _villagers.FindIndex(value =>
+                value.Id == assignment.BuilderId && value.Health > 0);
+        if (leaderIndex < 0) return;
+        var leader = _villagers[leaderIndex];
         if (Vector2.DistanceSquared(
-                new(builder.PositionX, builder.PositionY),
+                new(leader.PositionX, leader.PositionY),
                 new(stalled.PositionX, stalled.PositionY)) >
             VillagerSimulation.SocialRange * VillagerSimulation.SocialRange)
             return;
@@ -553,7 +909,7 @@ internal sealed partial class GameHostWindow
                    $"the {ItemCatalog.Get(assignment.ProjectItemId).Name}. " +
                    "What is stopping you?";
         ShowVillagerSpeech(
-            builderIndex,
+            leaderIndex,
             text,
             new(stalled.PositionX, stalled.PositionY));
         var stalledIndex = _villagers.FindIndex(value =>
@@ -561,17 +917,24 @@ internal sealed partial class GameHostWindow
         if (stalledIndex >= 0)
         {
             var shared = VillagerSimulation.RecordSharedDialogueLine(
-                _villagers[builderIndex],
+                _villagers[leaderIndex],
                 _villagers[stalledIndex],
                 text,
                 _worldGameSeconds);
-            _villagers[builderIndex] = shared.Speaker;
+            _villagers[leaderIndex] = shared.Speaker;
             _villagers[stalledIndex] = shared.Listener;
             _villagersDirty = true;
+            var consequence = VillagerLeadershipService.ApplyMissedAssignment(
+                _villagers[leaderIndex],
+                _villagers[stalledIndex],
+                assignment.ProjectItemId,
+                _worldGameSeconds);
+            _villagers[leaderIndex] = consequence.Leader;
+            _villagers[stalledIndex] = consequence.Worker;
         }
         _nextProjectAccountability[stalled.Id] = _worldGameSeconds +
             VillagerSettlementProjectService.AccountabilityDelayGameSeconds;
-        ObserveLog("settlement_accountability", builder.Id, new
+        ObserveLog("settlement_accountability", leader.Id, new
         {
             ContributorId = stalled.Id,
             assignment.ProjectItemId,
@@ -1940,7 +2303,8 @@ internal sealed partial class GameHostWindow
             return null;
         var graphic = animation.Graphic;
         var rawFrame = (int)(
-            villager.ActionTime / animation.SecondsPerFrame);
+            VillagerVisualAnimationTime(villager) /
+            animation.SecondsPerFrame);
         if (villager.Action == EntityAction.Die)
         {
             var framesPerAngle = Math.Max(
@@ -1987,7 +2351,8 @@ internal sealed partial class GameHostWindow
             return false;
         }
         var rawFrame = (int)(
-            villager.ActionTime / animation.SecondsPerFrame);
+            VillagerVisualAnimationTime(villager) /
+            animation.SecondsPerFrame);
         if (villager.Action == EntityAction.Die)
         {
             var framesPerAngle = Math.Max(
@@ -2011,6 +2376,19 @@ internal sealed partial class GameHostWindow
                 terrain.Height),
             directional.Mirror);
         return true;
+    }
+
+    private double VillagerVisualAnimationTime(VillagerState villager)
+    {
+        if (villager.Action != EntityAction.Idle)
+            return villager.ActionTime;
+        uint hash = 2166136261;
+        foreach (var character in villager.Id)
+        {
+            hash ^= character;
+            hash *= 16777619;
+        }
+        return _clock + (hash % 10_000) / 997.0;
     }
 
     private bool TryGetVillagerUnderMouse(

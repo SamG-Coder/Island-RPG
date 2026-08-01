@@ -171,7 +171,9 @@ internal sealed record VillagerState(
     float Energy = VillagerFatigueService.MaximumEnergy,
     double? LastEnergyGameSeconds = null,
     IReadOnlyList<VillagerLocationMemory>? LocationMemories = null,
-    VillagerProjectAssignment? ProjectAssignment = null);
+    VillagerProjectAssignment? ProjectAssignment = null,
+    string? RecognizedLeaderId = null,
+    double NextLeadershipChallengeGameSeconds = 0);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,

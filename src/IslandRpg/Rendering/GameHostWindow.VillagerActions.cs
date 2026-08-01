@@ -92,6 +92,7 @@ internal sealed partial class GameHostWindow
                 villager))
             return false;
         return TryVillagerSettlementContribution(index, villager, tier) ||
+               TryVillagerReachProjectWorksite(index, villager, tier) ||
                TryVillagerWithdrawWorkItem(index, villager) ||
                TryVillagerCraft(index, villager) ||
                TryVillagerGatherTreeSticks(index, villager, tier) ||
@@ -201,15 +202,38 @@ internal sealed partial class GameHostWindow
         if (slot < 0) return false;
         var contributorPosition = new Vector2(
             villager.PositionX, villager.PositionY);
-        var builderPosition = new Vector2(
-            builder.PositionX, builder.PositionY);
+        var worksite = new Vector2(
+            assignment.WorksiteX, assignment.WorksiteY);
+        var builderPosition = new Vector2(builder.PositionX, builder.PositionY);
+        if (Vector2.DistanceSquared(builderPosition, worksite) >
+            VillagerSimulation.InteractionRange *
+            VillagerSimulation.InteractionRange)
+        {
+            if (Vector2.DistanceSquared(contributorPosition, worksite) >
+                VillagerSimulation.InteractionRange *
+                VillagerSimulation.InteractionRange)
+                MoveVillagerForCapability(
+                    index, villager, tier, worksite, VillagerNeed.Safe);
+            else
+            {
+                _villagers[index] = villager with
+                {
+                    Action = EntityAction.Idle,
+                    ActionTime = 0,
+                    NextDecisionGameSeconds = _worldGameSeconds +
+                        VillagerSimulation.NearbyDecisionSeconds
+                };
+                _villagersDirty = true;
+            }
+            return true;
+        }
         if (Vector2.DistanceSquared(
                 contributorPosition, builderPosition) >
             VillagerSimulation.InteractionRange *
             VillagerSimulation.InteractionRange)
         {
             MoveVillagerForCapability(
-                index, villager, tier, builderPosition, VillagerNeed.Safe);
+                index, villager, tier, worksite, VillagerNeed.Safe);
             return true;
         }
         if (!ActorActionService.TryTransfer(
@@ -242,6 +266,26 @@ internal sealed partial class GameHostWindow
             assignment.ProjectItemId,
             ItemId = itemId
         });
+        return true;
+    }
+
+    private bool TryVillagerReachProjectWorksite(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier)
+    {
+        if (villager.ProjectAssignment is not { } assignment ||
+            villager.Id != assignment.BuilderId ||
+            villager.WorldLevel != assignment.WorksiteLevel)
+            return false;
+        var worksite = new Vector2(assignment.WorksiteX, assignment.WorksiteY);
+        if (Vector2.DistanceSquared(
+                new(villager.PositionX, villager.PositionY), worksite) <=
+            VillagerSimulation.InteractionRange *
+            VillagerSimulation.InteractionRange)
+            return false;
+        MoveVillagerForCapability(
+            index, villager, tier, worksite, VillagerNeed.Safe);
         return true;
     }
 

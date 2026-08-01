@@ -93,6 +93,139 @@ Require(
     !VillagerIntentPriorityService.HasCommittedWork(
         priorityVillager with { Health = 0 }),
     "committed work must be protected from optional goals while yielding to urgent needs, fatigue, and death");
+var leadershipCouncil = VillagerLeadershipService.HoldCouncil(
+    settlementTenSource)!;
+var repeatedLeadershipCouncil = VillagerLeadershipService.HoldCouncil(
+    settlementTenSource)!;
+var councilVillagers = VillagerLeadershipService.ApplyCouncil(
+    settlementTenSource, leadershipCouncil, 28_800);
+var openingCouncilLines = VillagerGroupConversationService.OpeningCouncil(
+    settlementTenSource, leadershipCouncil);
+var councilPlan = VillagerSettlementProjectService.Plan(
+    councilVillagers,
+    new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+    leadershipCouncil.LeaderId)!;
+var councilLeader = councilVillagers.Single(value =>
+    value.Id == leadershipCouncil.LeaderId);
+var councilSupporter = leadershipCouncil.Votes.First(value =>
+    value.VoterId != leadershipCouncil.LeaderId &&
+    value.CandidateId == leadershipCouncil.LeaderId);
+var supportingVillager = councilVillagers.Single(value =>
+    value.Id == councilSupporter.VoterId);
+Require(
+    leadershipCouncil.LeaderId == repeatedLeadershipCouncil.LeaderId &&
+    leadershipCouncil.Votes.Count == settlementTenSource.Length &&
+    openingCouncilLines.Count(line => line.Purpose == "introduction") ==
+        settlementTenSource.Length &&
+    openingCouncilLines.Where(line => line.Purpose == "introduction")
+        .Select(line => line.Text).Distinct(StringComparer.Ordinal).Count() ==
+        settlementTenSource.Length &&
+    openingCouncilLines.Count(line => line.UseAi) >=
+        openingCouncilLines.Count(line => line.Purpose == "dissent") + 2 &&
+    openingCouncilLines.Count(line =>
+        line.Purpose is "support" or "dissent") ==
+        settlementTenSource.Length &&
+    settlementTenSource.All(villager => openingCouncilLines.Any(line =>
+        line.SpeakerId == villager.Id && line.Purpose == "introduction")) &&
+    openingCouncilLines.Take(settlementTenSource.Length).All(line =>
+        line.Purpose == "introduction") &&
+    openingCouncilLines[settlementTenSource.Length].Purpose ==
+        "nomination-call" &&
+    openingCouncilLines.Skip(settlementTenSource.Length + 1)
+        .TakeWhile(line => line.Purpose == "proposal")
+        .All(line => line.UseAi) &&
+    openingCouncilLines[^1].Purpose == "decision" &&
+    councilVillagers.All(value =>
+        value.RecognizedLeaderId == leadershipCouncil.LeaderId) &&
+    councilVillagers.All(value => value.Memories?.Any(memory =>
+        memory.Kind is "leadership-council" or "leadership-contested" &&
+        memory.SubjectId == leadershipCouncil.LeaderId) == true) &&
+    councilPlan.LeaderId == leadershipCouncil.LeaderId &&
+    councilPlan.Worksite == new Vector2(
+        councilLeader.PositionX, councilLeader.PositionY) &&
+    councilPlan.Assignments.Count == settlementTenSource.Length,
+    "the opening council must deterministically choose a known leader and establish one shared project worksite");
+Require(
+    VillagerLeadershipService.IsLeader(councilLeader) &&
+    supportingVillager.Relationships?.Single(value =>
+        value.CharacterId == councilLeader.Id).State.Respect > 0,
+    "recognized leaders must have visible status and receive initial follower respect");
+var missedAssignment = VillagerLeadershipService.ApplyMissedAssignment(
+    councilLeader, supportingVillager, ItemIds.Campfire, 32_400);
+Require(
+    missedAssignment.Worker.Memories?.Any(value =>
+        value.Kind == "missed-assignment" &&
+        value.SubjectId == councilLeader.Id) == true &&
+    missedAssignment.Worker.Relationships?.Single(value =>
+        value.CharacterId == councilLeader.Id).State.Resentment > 0 &&
+    missedAssignment.Leader.Relationships?.Single(value =>
+        value.CharacterId == supportingVillager.Id).State.Respect < 0,
+    "idle assigned workers must receive one remembered social consequence from leadership");
+var councilAssignments = councilVillagers.Select(villager =>
+    new VillagerProjectAssignment(
+        councilPlan.ProjectItemId,
+        councilPlan.BuilderId,
+        councilPlan.Assignments[villager.Id],
+        28_800,
+        councilPlan.LeaderId,
+        councilPlan.Worksite.X,
+        councilPlan.Worksite.Y,
+        councilPlan.WorksiteLevel)).ToArray();
+Require(
+    councilAssignments.All(value =>
+        value.WorksiteX == councilPlan.Worksite.X &&
+        value.WorksiteY == councilPlan.Worksite.Y &&
+        value.WorksiteLevel == councilPlan.WorksiteLevel),
+    "every project assignment must carry the same fixed delivery rendezvous");
+var assignedCouncilVillagers = councilVillagers.Select((villager, index) =>
+    villager with { ProjectAssignment = councilAssignments[index] }).ToArray();
+var replannedCouncilProject = VillagerSettlementProjectService.Plan(
+    assignedCouncilVillagers,
+    new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+    leadershipCouncil.LeaderId)!;
+Require(
+    assignedCouncilVillagers.All(villager =>
+        replannedCouncilProject.Assignments[villager.Id]
+            .SequenceEqual(villager.ProjectAssignment!.Requirements)),
+    "active project responsibilities must remain stable when work roles are recalculated");
+var councilOffsets = settlementTenSource.Select((villager, index) =>
+    VillagerGroupConversationService.CircleOffset(
+        villager.Id, index, settlementTenSource.Length)).ToArray();
+Require(
+    councilOffsets.All(offset =>
+        offset.Length() is >= 3.09f and <= 4.21f) &&
+    councilOffsets.Select(offset => MathF.Round(offset.Length(), 2))
+        .Distinct().Count() > 4,
+    "the opening council must gather into a human-looking rough circle");
+var dissentingVote = leadershipCouncil.Votes.FirstOrDefault(value =>
+    value.CandidateId != leadershipCouncil.LeaderId);
+Require(
+    dissentingVote is not null,
+    "the ten-person council fixture must include a dissenting voter");
+var challengeVillagers = assignedCouncilVillagers.Select((villager, index) =>
+    villager with
+    {
+        Boldness = villager.Id == dissentingVote!.VoterId ? 1 : villager.Boldness,
+        NextLeadershipChallengeGameSeconds = 0,
+        ProjectAssignment = index == 0
+            ? villager.ProjectAssignment! with
+            {
+                Requirements = [new(ItemIds.LargeRock, 2)],
+                AssignedGameSeconds = 0
+            }
+            : villager.ProjectAssignment
+    }).ToArray();
+var selectedChallenger = VillagerLeadershipService.SelectChallenger(
+    challengeVillagers, 60 * 60);
+Require(
+    selectedChallenger?.Id == dissentingVote!.VoterId &&
+    VillagerLeadershipService.SelectChallenger(
+        challengeVillagers.Select(value => value with
+        {
+            NextLeadershipChallengeGameSeconds = 2 * 60 * 60
+        }).ToArray(),
+        60 * 60) is null,
+    "a bold dissenter may call a new election after a stalled plan, subject to cooldown");
 Require(
     new GameSettings().UnlimitedZoom,
     "unlimited zoom must be enabled by default");

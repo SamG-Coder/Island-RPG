@@ -27,6 +27,8 @@ internal sealed partial class GameHostWindow
     private const string NpcAiSpeechFallback =
         "Sorry, I didn't understand that. Could you say it another way?";
     private Task<string?>? _npcAiDialogueTask;
+    private IReadOnlyList<string>? _npcAiDialogueGroupListenerIds;
+    private string? _npcAiDialogueGroupPurpose;
     private string? _npcAiDialogueSpeakerId;
     private string? _npcAiDialogueListenerId;
     private string? _npcAiDialogueFallback;
@@ -347,12 +349,16 @@ internal sealed partial class GameHostWindow
         var intent = _npcAiDialogueIntent;
         var replyPending = _npcAiDialogueReplyPending;
         var replyFallback = _npcAiDialogueReplyFallback;
+        var groupListenerIds = _npcAiDialogueGroupListenerIds;
+        var groupPurpose = _npcAiDialogueGroupPurpose;
         _npcAiDialogueTask = null;
         _npcAiDialogueSpeakerId = null;
         _npcAiDialogueListenerId = null;
         _npcAiDialogueFallback = null;
         _npcAiDialogueReplyPending = false;
         _npcAiDialogueReplyFallback = null;
+        _npcAiDialogueGroupListenerIds = null;
+        _npcAiDialogueGroupPurpose = null;
         _npcAiDialogueReadyAt = 0;
         line = DialogueResponseService.Resolve(line, fallback);
         ObserveLog("ai_dialogue_response", speakerId, new
@@ -384,8 +390,30 @@ internal sealed partial class GameHostWindow
                         _villagers[speakerIndex].PositionY));
         var listenerIndex = _villagers.FindIndex(value =>
             value.Id == listenerId);
-        RecordVillagerDialogueLine(
-            speakerIndex, listenerIndex, line);
+        if (groupListenerIds is { Count: > 0 })
+        {
+            foreach (var groupListenerId in groupListenerIds)
+            {
+                var groupIndex = _villagers.FindIndex(value =>
+                    value.Id == groupListenerId);
+                if (groupIndex < 0) continue;
+                _villagers[groupIndex] = VillagerSimulation.RecordDialogueTurn(
+                    _villagers[groupIndex], speakerId,
+                    _villagers[speakerIndex].Name, line, _worldGameSeconds);
+                if (groupPurpose == "introduction" &&
+                    groupIndex != speakerIndex)
+                    _villagers[groupIndex] =
+                        VillagerSimulation.RecordIntroductionResponse(
+                            _villagers[groupIndex],
+                            speakerId,
+                            _villagers[speakerIndex].Name,
+                            _worldGameSeconds);
+            }
+            _villagersDirty = true;
+        }
+        else
+            RecordVillagerDialogueLine(
+                speakerIndex, listenerIndex, line);
         if (listenerIndex >= 0)
             HoldVillagerConversation(
                 listenerIndex,
@@ -395,6 +423,13 @@ internal sealed partial class GameHostWindow
                 ConversationLineSeconds(line));
         ShowVillagerSpeech(
             speakerIndex, line, listenerPosition);
+        if (groupPurpose == "proposal" &&
+            _settlementCouncilCenterSpeakerId == speakerId)
+        {
+            _settlementCouncilCandidateShouldReturn = true;
+            _settlementCouncilCandidateReturnAt =
+                _clock + ConversationLineSeconds(line);
+        }
         if (!replyPending)
         {
             _villagers[speakerIndex] =

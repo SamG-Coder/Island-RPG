@@ -10,13 +10,20 @@ internal sealed record VillagerProjectAssignment(
     string ProjectItemId,
     string BuilderId,
     IReadOnlyList<VillagerProjectRequirement> Requirements,
-    double AssignedGameSeconds);
+    double AssignedGameSeconds,
+    string? LeaderId = null,
+    float WorksiteX = 0,
+    float WorksiteY = 0,
+    int WorksiteLevel = 0);
 
 internal sealed record VillagerSettlementProjectPlan(
     string ProjectItemId,
     string BuilderId,
     IReadOnlyDictionary<string, IReadOnlyList<VillagerProjectRequirement>>
-        Assignments);
+        Assignments,
+    string LeaderId,
+    Vector2 Worksite,
+    int WorksiteLevel);
 
 internal static class VillagerSettlementProjectService
 {
@@ -24,7 +31,8 @@ internal static class VillagerSettlementProjectService
 
     public static VillagerSettlementProjectPlan? Plan(
         IReadOnlyList<VillagerState> villagers,
-        IReadOnlySet<string> placedItems)
+        IReadOnlySet<string> placedItems,
+        string? leaderId = null)
     {
         var living = villagers.Where(value => value.Health > 0).ToArray();
         if (living.Length < 2) return null;
@@ -63,7 +71,34 @@ internal static class VillagerSettlementProjectService
             .ThenBy(value => value.Id, StringComparer.Ordinal)
             .First()
             : living.First(value => value.Id == incumbentBuilderId);
-        return Assign(projectItemId, builder.Id, living, requirements);
+        var leader = living.FirstOrDefault(value => value.Id == leaderId) ??
+                     living.FirstOrDefault(value =>
+                         value.Id == builder.RecognizedLeaderId) ?? builder;
+        var incumbent = living.Select(value => value.ProjectAssignment)
+            .FirstOrDefault(value => value?.ProjectItemId == projectItemId);
+        var worksite = incumbent is null
+            ? new Vector2(leader.PositionX, leader.PositionY)
+            : new Vector2(incumbent.WorksiteX, incumbent.WorksiteY);
+        var worksiteLevel = incumbent?.WorksiteLevel ?? leader.WorldLevel;
+        var stableAssignments = living
+            .Where(value => value.ProjectAssignment is { } assignment &&
+                assignment.ProjectItemId == projectItemId &&
+                assignment.BuilderId == builder.Id)
+            .ToDictionary(
+                value => value.Id,
+                value => value.ProjectAssignment!.Requirements,
+                StringComparer.Ordinal);
+        if (stableAssignments.Count == living.Length)
+            return new(
+                projectItemId,
+                builder.Id,
+                stableAssignments,
+                incumbent?.LeaderId ?? leader.Id,
+                worksite,
+                worksiteLevel);
+        return Assign(
+            projectItemId, builder.Id, leader.Id, worksite, worksiteLevel,
+            living, requirements);
     }
 
     public static bool MatchesRequirement(
@@ -93,6 +128,10 @@ internal static class VillagerSettlementProjectService
         return left.ProjectItemId == right.ProjectItemId &&
                left.BuilderId == right.BuilderId &&
                left.AssignedGameSeconds == right.AssignedGameSeconds &&
+               left.LeaderId == right.LeaderId &&
+               left.WorksiteX == right.WorksiteX &&
+               left.WorksiteY == right.WorksiteY &&
+               left.WorksiteLevel == right.WorksiteLevel &&
                left.Requirements.SequenceEqual(right.Requirements);
     }
 
@@ -142,6 +181,9 @@ internal static class VillagerSettlementProjectService
     private static VillagerSettlementProjectPlan Assign(
         string projectItemId,
         string builderId,
+        string leaderId,
+        Vector2 worksite,
+        int worksiteLevel,
         IReadOnlyList<VillagerState> villagers,
         IReadOnlyList<VillagerProjectRequirement> requirements)
     {
@@ -173,7 +215,9 @@ internal static class VillagerSettlementProjectService
                     };
             }
         }
-        return new(projectItemId, builderId, assignments);
+        return new(
+            projectItemId, builderId, assignments,
+            leaderId, worksite, worksiteLevel);
     }
 
     private static int Suitability(
