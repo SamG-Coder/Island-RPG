@@ -99,6 +99,22 @@ internal sealed partial class GameHostWindow
                 ChatMessageStyle.LevelUp);
     }
 
+    private void CompletePlayerCraft(
+        string recipeId, string?[]? beforeInventory,
+        string?[]? afterInventory)
+    {
+        var recipe = CraftingSkill.Recipes.First(
+            candidate => candidate.Id == recipeId);
+        var added = PlayerInventory.AddedCount(
+            beforeInventory, afterInventory, recipe.ResultItemId);
+        if (added > 0)
+            RecordQuestEvent(new(
+                QuestEventType.CraftItem,
+                recipe.ResultItemId,
+                added));
+        AwardCraftingExperience(recipeId);
+    }
+
     private Vector4 CraftingWindowBounds() =>
         CraftingWindowState.WindowBounds(SceneClientBounds());
 
@@ -174,8 +190,9 @@ internal sealed partial class GameHostWindow
                 "You do not have enough inventory space for every crafting step.");
             return;
         }
+        var beforeInventory = _activePlayer.Inventory;
         var result = CraftingService.TryCraftDetailed(
-            recipe, level, _activePlayer.Inventory,
+            recipe, level, beforeInventory,
             out var inventory,
             HasRequiredCraftingStation(recipe));
         if (result == CraftingService.CraftResult.InventoryFull)
@@ -197,10 +214,7 @@ internal sealed partial class GameHostWindow
         _chatUi.AddMessage(
             $"You craft {ItemCatalog.Get(recipe.ResultItemId).Name}.",
             ChatMessageStyle.Action);
-        RecordQuestEvent(new(
-            QuestEventType.CraftItem,
-            recipe.ResultItemId));
-        AwardCraftingExperience(recipe.Id);
+        CompletePlayerCraft(recipe.Id, beforeInventory, inventory);
     }
 
     private RecipeAvailability RecipeAvailabilityFor(

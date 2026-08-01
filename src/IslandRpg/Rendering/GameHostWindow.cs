@@ -371,6 +371,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _newWorldPreviewTexture;
     private SpriteFrame? _newWorldPreviewFrame;
     private Task<NewWorldPreviewResult>? _newWorldPreviewTask;
+    private CancellationTokenSource? _newWorldPreviewCancellation;
+    private string? _newWorldPreviewRequestedSeedText;
     private string? _newWorldPreviewSeedText;
     private static readonly SpriteFrame SolidUiFrame = new(1, 1, 0, 0, []);
     private MoveMarker? _moveMarker;
@@ -835,6 +837,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 }
             }
         }
+        if (_screen == ScreenState.WorldPreview && _mode == PreviewMode.Game)
+            ReconcileInventoryQuestProgress();
     }
 
     private void UpdateCamera(float elapsed)
@@ -905,6 +909,8 @@ internal sealed partial class GameHostWindow : GameWindow
             UpdateNewWorldPreview();
             UpdateAiWorldCreation();
         }
+        else
+            _newWorldPreviewCancellation?.Cancel();
         var textBox = FocusedTextBox();
         textBox?.UpdateKeyboard(
             KeyboardState,
@@ -1470,41 +1476,57 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void UpdateNewWorldPreview()
     {
+        var seedText = _seedTextBox.Text;
+        if (_newWorldPreviewTask is not null &&
+            seedText != _newWorldPreviewRequestedSeedText)
+            _newWorldPreviewCancellation?.Cancel();
         if (_newWorldPreviewTask is { IsCompleted: true })
         {
-            var result = _newWorldPreviewTask.GetAwaiter().GetResult();
+            var completed = _newWorldPreviewTask;
             _newWorldPreviewTask = null;
-            if (result.SeedText == _seedTextBox.Text &&
-                _newWorldPreviewTexture != 0)
+            _newWorldPreviewCancellation?.Dispose();
+            _newWorldPreviewCancellation = null;
+            _newWorldPreviewRequestedSeedText = null;
+            if (!completed.IsCanceled && !completed.IsFaulted)
             {
-                GL.BindTexture(
-                    TextureTarget.Texture2D, _newWorldPreviewTexture);
-                GL.TexSubImage2D(
-                    TextureTarget.Texture2D, 0, 0, 0,
-                    128, 128, PixelFormat.Rgba,
-                    PixelType.UnsignedByte, result.Pixels);
-                _newWorldPreviewSeedText = result.SeedText;
+                var result = completed.GetAwaiter().GetResult();
+                if (result.SeedText == seedText &&
+                    _newWorldPreviewTexture != 0)
+                {
+                    GL.BindTexture(
+                        TextureTarget.Texture2D, _newWorldPreviewTexture);
+                    GL.TexSubImage2D(
+                        TextureTarget.Texture2D, 0, 0, 0,
+                        128, 128, PixelFormat.Rgba,
+                        PixelType.UnsignedByte, result.Pixels);
+                    _newWorldPreviewSeedText = result.SeedText;
+                }
             }
         }
 
-        var seedText = _seedTextBox.Text;
         if (_newWorldPreviewTask is not null ||
             seedText == _newWorldPreviewSeedText)
             return;
+        _newWorldPreviewCancellation = new();
+        _newWorldPreviewRequestedSeedText = seedText;
+        var cancellationToken = _newWorldPreviewCancellation.Token;
         _newWorldPreviewTask = Task.Run(
-            () => BuildNewWorldPreview(seedText));
+            () => BuildNewWorldPreview(seedText, cancellationToken),
+            cancellationToken);
     }
 
     private static NewWorldPreviewResult BuildNewWorldPreview(
-        string seedText)
+        string seedText, CancellationToken cancellationToken)
     {
         const int width = 128;
         const int height = 128;
         const float tilesPerPixel = .75f;
         var seed = SeedFromText(seedText);
-        var spawn = FindPlayableSpawn(seed);
+        var spawn = FindPlayableSpawn(seed, cancellationToken);
         var pixels = new byte[width * height * 4];
         for (var y = 0; y < height; y++)
+        {
+        cancellationToken.ThrowIfCancellationRequested();
         for (var x = 0; x < width; x++)
         {
             var worldX = (int)MathF.Floor(
@@ -1518,6 +1540,7 @@ internal sealed partial class GameHostWindow : GameWindow
             pixels[index + 1] = green;
             pixels[index + 2] = blue;
             pixels[index + 3] = 255;
+        }
         }
 
         for (var y = height / 2 - 4; y <= height / 2 + 4; y++)
@@ -2703,32 +2726,62 @@ internal sealed partial class GameHostWindow : GameWindow
         FindPlayableSpawn(_worldSeed);
 
     internal static Vector2 FindPlayableSpawn(long seed)
-        => ShorelineSpawnCache.GetOrAdd(seed, FindNearestShorelineSpawn);
+        => FindPlayableSpawn(seed, CancellationToken.None);
 
-    private static Vector2 FindNearestShorelineSpawn(long seed)
+    internal static Vector2 FindPlayableSpawn(
+        long seed, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (ShorelineSpawnCache.TryGetValue(seed, out var cached))
+            return cached;
+        var resolved = FindNearestShorelineSpawn(seed, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        return ShorelineSpawnCache.GetOrAdd(seed, resolved);
+    }
+
+    private static Vector2 FindNearestShorelineSpawn(
+        long seed, CancellationToken cancellationToken)
     {
         const int coarseStep = 16;
         const int maximumSearchRadius = 4096;
         var maximumCoarseRadius = maximumSearchRadius / coarseStep;
         for (var coarseRadius = 0;
              coarseRadius <= maximumCoarseRadius; coarseRadius++)
-        for (var coarseY = -coarseRadius;
-             coarseY <= coarseRadius; coarseY++)
-        for (var coarseX = -coarseRadius;
-             coarseX <= coarseRadius; coarseX++)
         {
-            if (Math.Max(Math.Abs(coarseX), Math.Abs(coarseY)) !=
-                coarseRadius)
-                continue;
-            var x = coarseX * coarseStep;
-            var y = coarseY * coarseStep;
-            // Coast elevation changes smoothly at macro scale. Only refine
-            // coarse samples near sea level instead of classifying every tile.
-            var elevation = InfiniteWorldGenerator.BaseElevationAt(seed, x, y);
-            if (elevation is < .55f or > 1.9f) continue;
-            if (TryFindShorelineNear(seed, x, y, coarseStep + 3,
-                    out var spawn))
-                return spawn;
+            cancellationToken.ThrowIfCancellationRequested();
+            var perimeter = CoarsePerimeter(coarseRadius);
+            var bestIndex = int.MaxValue;
+            var bestSpawn = Vector2.Zero;
+            var gate = new object();
+            Parallel.For(
+                0, perimeter.Length,
+                new ParallelOptions
+                {
+                    CancellationToken = cancellationToken,
+                    MaxDegreeOfParallelism = Math.Max(
+                        1, Environment.ProcessorCount - 1)
+                },
+                index =>
+                {
+                    if (index >= Volatile.Read(ref bestIndex)) return;
+                    var point = perimeter[index];
+                    var x = point.X * coarseStep;
+                    var y = point.Y * coarseStep;
+                    var elevation = InfiniteWorldGenerator.BaseElevationAt(
+                        seed, x, y);
+                    if (elevation is < .55f or > 1.9f) return;
+                    if (!TryFindShorelineNear(
+                            seed, x, y, coarseStep + 3,
+                            cancellationToken, out var spawn))
+                        return;
+                    lock (gate)
+                        if (index < bestIndex)
+                        {
+                            bestIndex = index;
+                            bestSpawn = spawn;
+                        }
+                });
+            if (bestIndex != int.MaxValue) return bestSpawn;
         }
         throw new InvalidOperationException(
             $"No shoreline island was found within {maximumSearchRadius} " +
@@ -2737,9 +2790,11 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static bool TryFindShorelineNear(
         long seed, int centerX, int centerY, int searchRadius,
-        out Vector2 spawn)
+        CancellationToken cancellationToken, out Vector2 spawn)
     {
         for (var radius = 0; radius <= searchRadius; radius++)
+        {
+        cancellationToken.ThrowIfCancellationRequested();
         for (var offsetY = -radius; offsetY <= radius; offsetY++)
         for (var offsetX = -radius; offsetX <= radius; offsetX++)
         {
@@ -2751,8 +2806,23 @@ internal sealed partial class GameHostWindow : GameWindow
             spawn = new(x + .5f, y + .5f);
             return true;
         }
+        }
         spawn = default;
         return false;
+    }
+
+    private static Vector2i[] CoarsePerimeter(int radius)
+    {
+        if (radius <= 0) return [Vector2i.Zero];
+        var result = new Vector2i[radius * 8];
+        var index = 0;
+        for (var y = -radius; y <= radius; y++)
+        for (var x = -radius; x <= radius; x++)
+        {
+            if (Math.Max(Math.Abs(x), Math.Abs(y)) != radius) continue;
+            result[index++] = new(x, y);
+        }
+        return result;
     }
 
     internal static bool IsShorelineSpawn(long seed, int x, int y)
@@ -8274,6 +8344,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     protected override void OnUnload()
     {
+        _newWorldPreviewCancellation?.Cancel();
         _npcAi.Dispose();
         _uiColorBatch.Dispose();
         _soundEffects?.Dispose();

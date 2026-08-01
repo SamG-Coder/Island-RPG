@@ -16,6 +16,7 @@ internal sealed partial class GameHostWindow
     private const float CinematicWaterlineRatio = .61f;
     private CinematicSceneDirector? _sceneDirector;
     private bool _openingRevealInitialized;
+    private bool _cinematicMusicRestored;
     private SpriteFrame? _cinematicShipFrame;
     private int _cinematicShipTexture;
     private SpriteFrame[] _cinematicSinkingFrames = [];
@@ -56,6 +57,8 @@ internal sealed partial class GameHostWindow
             ],
             cues: stormCues);
         _openingRevealInitialized = false;
+        _cinematicMusicRestored = false;
+        _musicPlayer?.PlaySceneTrack("xmusic10.mp3");
         _sceneDirector.Start();
     }
 
@@ -138,6 +141,12 @@ internal sealed partial class GameHostWindow
             if (cue.StartsWith("thunder", StringComparison.Ordinal))
                 PlayGeneratedSound("thunder.wav");
             else PlaySoundCue(cue);
+        if (!_cinematicMusicRestored &&
+            _sceneDirector.Time >= OpeningSeaEndsAt)
+        {
+            _cinematicMusicRestored = true;
+            _musicPlayer?.ResumePlaylist();
+        }
         if (_sceneDirector.Time >= OpeningSeaEndsAt && _player is not null)
         {
             if (!_openingRevealInitialized)
@@ -152,6 +161,9 @@ internal sealed partial class GameHostWindow
         }
         if (!_sceneDirector.Active)
         {
+            if (!_cinematicMusicRestored)
+                _musicPlayer?.ResumePlaylist();
+            _cinematicMusicRestored = true;
             SetZoomImmediate(.8f);
             CenterCinematicCameraOnShore();
             _sceneDirector = null;

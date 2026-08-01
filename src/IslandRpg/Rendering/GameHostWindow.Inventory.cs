@@ -272,7 +272,7 @@ internal sealed partial class GameHostWindow
             _chatUi.AddMessage(
                 "You bind the sharp rock with fibre and create a stone knife.",
                 ChatMessageStyle.Action);
-            AwardCraftingExperience("stone-knife");
+            CompletePlayerCraft("stone-knife", inventory, craftedKnife);
             _activeInventorySlot = -1;
             return;
         }
@@ -311,7 +311,7 @@ internal sealed partial class GameHostWindow
                 $"You carve the log into a plank with the " +
                 $"{ItemCatalog.Get(source).Name}.",
                 ChatMessageStyle.Action);
-            AwardCraftingExperience("plank");
+            CompletePlayerCraft("plank", inventory, carvedPlank);
             _activeInventorySlot = -1;
             return;
         }
@@ -330,7 +330,7 @@ internal sealed partial class GameHostWindow
             _chatUi.AddMessage(
                 "You fasten the sharp rock to the sticks and create a stone axe.",
                 ChatMessageStyle.Action);
-            AwardCraftingExperience("stone-axe");
+            CompletePlayerCraft("stone-axe", inventory, craftedAxe);
             _activeInventorySlot = -1;
             return;
         }
@@ -350,7 +350,7 @@ internal sealed partial class GameHostWindow
             _chatUi.AddMessage(
                 "You fasten the medium rock to the sticks and create a stone hammer.",
                 ChatMessageStyle.Action);
-            AwardCraftingExperience("stone-hammer");
+            CompletePlayerCraft("stone-hammer", inventory, craftedHammer);
             _activeInventorySlot = -1;
             return;
         }
@@ -369,7 +369,7 @@ internal sealed partial class GameHostWindow
             _chatUi.AddMessage(
                 "You strike the rocks together and create a sharp rock.",
                 ChatMessageStyle.Action);
-            AwardCraftingExperience("sharpened-rock");
+            CompletePlayerCraft("sharpened-rock", inventory, sharpened);
             _activeInventorySlot = -1;
             return;
         }
@@ -401,6 +401,12 @@ internal sealed partial class GameHostWindow
                     ? "You split the large rock into two medium rocks."
                     : "You break the medium rock into two handfuls of pebbles.",
                 ChatMessageStyle.Action);
+            CompletePlayerCraft(
+                target == ItemIds.LargeRock
+                    ? "medium-rock"
+                    : "small-rocks",
+                inventory,
+                hammerBlunted ? afterUse : broken);
             if (hammerBlunted)
             {
                 _chatUi.AddMessage(

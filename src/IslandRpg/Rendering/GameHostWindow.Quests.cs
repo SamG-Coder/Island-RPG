@@ -15,6 +15,9 @@ internal sealed partial class GameHostWindow
     private bool _questLeftWasDown;
     private QuestFilter _questFilter;
     private ModalScreenKind _questReturnModal;
+    private string?[]? _lastQuestInventory;
+    private IReadOnlyList<QuestProgress>? _lastQuestProgress;
+    private string? _lastInventoryQuestId;
 
     private void OpenQuestWindow()
     {
@@ -73,6 +76,41 @@ internal sealed partial class GameHostWindow
         _modalScreen.Open(ModalScreenKind.QuestComplete);
         _chatUi.BlurInput();
         UseDefaultGameCursor();
+    }
+
+    private void ReconcileInventoryQuestProgress()
+    {
+        if (_activePlayer is null) return;
+        var inventory = _activePlayer.Inventory;
+        var quests = _activePlayer.Quests;
+        if (ReferenceEquals(inventory, _lastQuestInventory) &&
+            ReferenceEquals(quests, _lastQuestProgress))
+            return;
+        _lastQuestInventory = inventory;
+        _lastQuestProgress = quests;
+        var active = QuestService.ActiveQuest(quests);
+        if (active is null)
+        {
+            _lastInventoryQuestId = null;
+            return;
+        }
+        _lastInventoryQuestId = active.Value.Definition.Id;
+        foreach (var questEvent in QuestService.InventoryProgressEvents(
+                     _activePlayer.Quests, inventory))
+        {
+            RecordQuestEvent(questEvent);
+            if (QuestService.ActiveQuest(_activePlayer.Quests)?
+                    .Definition.Id != _lastInventoryQuestId)
+            {
+                // Reconcile the newly unlocked quest on the next update.
+                _lastQuestInventory = null;
+                _lastQuestProgress = null;
+                _lastInventoryQuestId = null;
+                return;
+            }
+            active = QuestService.ActiveQuest(_activePlayer.Quests);
+            if (active is null) return;
+        }
     }
 
     private void CompleteQuestFromCommand(string questId)

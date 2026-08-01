@@ -20,6 +20,14 @@ internal static class PlayerInventory
     public static int Count(string?[]? items) =>
         items?.Take(Capacity).Count(item => item is not null) ?? 0;
 
+    public static int Count(string?[]? items, string itemId) =>
+        items?.Take(Capacity).Count(item => string.Equals(
+            item, itemId, StringComparison.OrdinalIgnoreCase)) ?? 0;
+
+    public static int AddedCount(
+        string?[]? before, string?[]? after, string itemId) =>
+        Math.Max(0, Count(after, itemId) - Count(before, itemId));
+
     public static bool IsFull(string?[]? items) => Count(items) >= Capacity;
 
     public static ItemDefinition? BestAxe(string?[]? items) =>

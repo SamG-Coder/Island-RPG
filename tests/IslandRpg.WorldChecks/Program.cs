@@ -1,5 +1,6 @@
 using IslandRpg.World;
 using IslandRpg.Assets;
+using IslandRpg.Audio;
 using IslandRpg.Gameplay;
 using IslandRpg.Persistence;
 using IslandRpg.Rendering;
@@ -108,6 +109,11 @@ Require(
     Math.Abs(GameHostWindow.CinematicFireVisibility(31) - .5f) < .001f &&
     GameHostWindow.CinematicFireVisibility(35) == 0,
     "opening storms must randomize reproducibly and push into the beach reveal zoom");
+Require(
+    Age2MusicCatalog.FindNamedTrack(
+        [@"C:\aoe\music1.mp3", @"C:\aoe\xmusic10.mp3"],
+        "XMUSIC10.MP3") == @"C:\aoe\xmusic10.mp3",
+    "cinematic music overrides must resolve installed AoE tracks by file name");
 var reusablePanCamera = new CinematicPanCamera();
 reusablePanCamera.Update(700, 1000, .1f);
 var reusablePanStarted = reusablePanCamera.Panning;
@@ -3627,8 +3633,7 @@ Require(
 var questExperience = 0;
 foreach (var questEvent in new[]
          {
-             new QuestEvent(QuestEventType.GatherItem, ItemIds.SmallRocks, 3),
-             new QuestEvent(QuestEventType.GatherItem, ItemIds.LargeRock, 3),
+             new QuestEvent(QuestEventType.GatherItem, ItemIds.LargeRock, 5),
              new QuestEvent(QuestEventType.GatherItem, ItemIds.Sticks, 2),
              new QuestEvent(QuestEventType.GatherItem, ItemIds.PlantFibres, 2)
          })
@@ -3654,6 +3659,47 @@ var duplicateQuestUpdate = QuestService.Apply(
 Require(
     duplicateQuestUpdate.AdventureExperience == questExperience,
     "completed quest events must not award Adventure XP twice");
+var inventoryCraftProgress = questProgress;
+var inventoryCraftExperience = questExperience;
+var reconciledInventoryEvents = QuestService.InventoryProgressEvents(
+    questProgress,
+    [ItemIds.MediumRock, ItemIds.MediumRock, ItemIds.StoneKnife]);
+Require(
+    reconciledInventoryEvents.Any(value =>
+        value.TargetId == ItemIds.MediumRock && value.Amount == 2) &&
+    reconciledInventoryEvents.Any(value =>
+        value.TargetId == ItemIds.StoneKnife && value.Amount == 1),
+    "active inventory objectives must reconcile held result quantities whenever inventory state changes");
+foreach (var questEvent in new[]
+         {
+             new QuestEvent(QuestEventType.CraftItem, ItemIds.MediumRock, 8),
+             new QuestEvent(QuestEventType.CraftItem, ItemIds.SharpenedRock, 2),
+             new QuestEvent(QuestEventType.CraftItem, ItemIds.StoneKnife),
+             new QuestEvent(QuestEventType.CraftItem, ItemIds.StoneAxe),
+             new QuestEvent(QuestEventType.CraftItem, ItemIds.SmallRocks, 4)
+         })
+{
+    var update = QuestService.Apply(
+        inventoryCraftProgress, inventoryCraftExperience, questEvent);
+    inventoryCraftProgress = update.Progress;
+    inventoryCraftExperience = update.AdventureExperience;
+}
+Require(
+    inventoryCraftProgress[1].Status == QuestStatus.Complete &&
+    inventoryCraftProgress[2].Status == QuestStatus.InProgress &&
+    inventoryCraftExperience == 250,
+    "successful direct item-use crafts must satisfy tool objectives and unlock the fire quest");
+Require(
+    PlayerInventory.AddedCount(
+        [ItemIds.LargeRock, ItemIds.LargeRock, ItemIds.MediumRock],
+        [ItemIds.LargeRock, ItemIds.MediumRock, ItemIds.MediumRock,
+            ItemIds.MediumRock],
+        ItemIds.MediumRock) == 2 &&
+    PlayerInventory.AddedCount(
+        [ItemIds.MediumRock, ItemIds.MediumRock],
+        [ItemIds.MediumRock, ItemIds.SmallRocks, ItemIds.SmallRocks],
+        ItemIds.SmallRocks) == 2,
+    "quest craft quantities must use positive result-item inventory deltas across conversions");
 
 Console.WriteLine(
     "World-hover probe benchmark (1,000 stationary updates): " +
@@ -3848,6 +3894,18 @@ var newGameTime = WorldTime.At(WorldTime.NewGameStartGameSeconds);
 var shorelineSpawn = GameHostWindow.FindPlayableSpawn(2187);
 var shorelineTileX = (int)MathF.Floor(shorelineSpawn.X);
 var shorelineTileY = (int)MathF.Floor(shorelineSpawn.Y);
+using var cancelledSpawnSearch = new CancellationTokenSource();
+cancelledSpawnSearch.Cancel();
+var shorelineCancellationObserved = false;
+try
+{
+    GameHostWindow.FindPlayableSpawn(
+        2187, cancelledSpawnSearch.Token);
+}
+catch (OperationCanceledException)
+{
+    shorelineCancellationObserved = true;
+}
 var midnight = WorldTime.At(0);
 var nextDay = WorldTime.At(24 * 60 * 60);
 Require(newGameTime.Day == 1 && newGameTime.Hour == 3 &&
@@ -3860,8 +3918,9 @@ Require(
     InfiniteWorldGenerator.BiomeAt(
         2187, shorelineTileX, shorelineTileY) == Biome.Beach &&
     GameHostWindow.IsShorelineSpawn(
-        2187, shorelineTileX, shorelineTileY),
-    "new-game seed resolution must preserve the seed and select a beach beside its nearest island shore");
+        2187, shorelineTileX, shorelineTileY) &&
+    shorelineCancellationObserved,
+    "parallel new-game shoreline resolution must preserve the seed, select a beach, and honor cancellation");
 Require(WorldTime.Advance(0, WorldTime.RealSecondsPerGameDay) ==
         24 * 60 * 60,
     "one full game day must take 24 real minutes");

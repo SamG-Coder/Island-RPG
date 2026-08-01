@@ -10,6 +10,7 @@ internal sealed class Age2MusicPlayer : IDisposable
     private int _trackIndex = -1;
     private bool _enabled;
     private float _volume = 1;
+    private string? _sceneTrack;
 
     public Age2MusicPlayer(string install)
     {
@@ -31,24 +32,52 @@ internal sealed class Age2MusicPlayer : IDisposable
 
         if (_reader is not null)
             _reader.Volume = _volume;
-        else
-            PlayNext();
+        else if (_sceneTrack is not null)
+            Play(_sceneTrack);
+        else PlayNext();
     }
 
     public void Update()
     {
         if (!_enabled || !Available) return;
         if (_output?.PlaybackState == PlaybackState.Stopped)
-            PlayNext();
+        {
+            if (_sceneTrack is not null)
+                ResumePlaylist();
+            else PlayNext();
+        }
+    }
+
+    public bool PlaySceneTrack(string fileName)
+    {
+        var track = Age2MusicCatalog.FindNamedTrack(_tracks, fileName);
+        if (track is null) return false;
+        _sceneTrack = track;
+        if (_enabled) Play(track);
+        return true;
+    }
+
+    public void ResumePlaylist()
+    {
+        if (_sceneTrack is null) return;
+        _sceneTrack = null;
+        CloseCurrent();
+        _trackIndex = -1;
+        if (_enabled) PlayNext();
     }
 
     private void PlayNext()
     {
-        CloseCurrent();
         _trackIndex = (_trackIndex + 1) % _tracks.Length;
+        Play(_tracks[_trackIndex]);
+    }
+
+    private void Play(string path)
+    {
+        CloseCurrent();
         try
         {
-            _reader = new AudioFileReader(_tracks[_trackIndex])
+            _reader = new AudioFileReader(path)
             {
                 Volume = _volume
             };
@@ -76,11 +105,17 @@ internal sealed class Age2MusicPlayer : IDisposable
         _enabled = false;
         CloseCurrent();
         _trackIndex = -1;
+        _sceneTrack = null;
     }
 }
 
 internal static class Age2MusicCatalog
 {
+    public static string? FindNamedTrack(
+        IEnumerable<string> tracks, string fileName) =>
+        tracks.FirstOrDefault(path => Path.GetFileName(path).Equals(
+            fileName, StringComparison.OrdinalIgnoreCase));
+
     public static IReadOnlyList<string> FindTracks(string install)
     {
         var directory = Path.Combine(

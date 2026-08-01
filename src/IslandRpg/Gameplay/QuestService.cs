@@ -62,13 +62,12 @@ internal static class QuestService
             "washed-ashore",
             "Washed Ashore",
             "SURVIVAL",
-            "Gather enough shoreline material to make tools and a fire ring.",
-            "Search the dark shoreline carefully for stone, sticks and fibre.",
+            "Gather naturally occurring shoreline materials for primitive tools.",
+            "Search the dark shoreline for large rocks, sticks and plant fibre.",
             "I gathered the first materials I need to survive.",
             50,
             [
-                new("rocks", "Gather small rocks", QuestEventType.GatherItem, ItemIds.SmallRocks, 3),
-                new("large-rocks", "Gather large rocks", QuestEventType.GatherItem, ItemIds.LargeRock, 3),
+                new("large-rocks", "Gather large rocks", QuestEventType.GatherItem, ItemIds.LargeRock, 5),
                 new("sticks", "Gather sticks", QuestEventType.GatherItem, ItemIds.Sticks, 2),
                 new("fibres", "Gather plant fibres", QuestEventType.GatherItem, ItemIds.PlantFibres, 2)
             ]),
@@ -77,13 +76,15 @@ internal static class QuestService
             "Tools of Survival",
             "CRAFTING",
             "Shape the tools needed to cut fuel and prepare food.",
-            "Knapp two sharp stones, then bind a knife and an axe.",
+            "Break down large stone, knapp two sharp edges, then bind a knife and axe.",
             "I shaped crude materials into dependable tools.",
             200,
             [
+                new("medium-rocks", "Make medium rocks", QuestEventType.CraftItem, ItemIds.MediumRock, 8),
                 new("sharp-rock", "Craft sharpened rocks", QuestEventType.CraftItem, ItemIds.SharpenedRock, 2),
                 new("knife", "Craft a stone knife", QuestEventType.CraftItem, ItemIds.StoneKnife),
-                new("axe", "Craft a stone axe", QuestEventType.CraftItem, ItemIds.StoneAxe)
+                new("axe", "Craft a stone axe", QuestEventType.CraftItem, ItemIds.StoneAxe),
+                new("small-rocks", "Make small rocks", QuestEventType.CraftItem, ItemIds.SmallRocks, 4)
             ],
             "washed-ashore"),
         new(
@@ -178,6 +179,28 @@ internal static class QuestService
             if (normalized[index].Status == QuestStatus.InProgress)
                 return (Definitions[index], normalized[index]);
         return null;
+    }
+
+    public static IReadOnlyList<QuestEvent> InventoryProgressEvents(
+        IReadOnlyList<QuestProgress>? progress, string?[]? inventory)
+    {
+        if (ActiveQuest(progress) is not { } active) return [];
+        var result = new List<QuestEvent>();
+        foreach (var objective in active.Definition.Objectives)
+        {
+            if (objective.TargetId is null ||
+                objective.EventType is not (
+                    QuestEventType.GatherItem or QuestEventType.CraftItem))
+                continue;
+            var held = PlayerInventory.Count(inventory, objective.TargetId);
+            var recorded = active.Progress.ObjectiveCounts?
+                .GetValueOrDefault(objective.Id) ?? 0;
+            var missing = Math.Min(objective.Required, held) - recorded;
+            if (missing > 0)
+                result.Add(new(
+                    objective.EventType, objective.TargetId, missing));
+        }
+        return result;
     }
 
     public static QuestUpdateResult Apply(
