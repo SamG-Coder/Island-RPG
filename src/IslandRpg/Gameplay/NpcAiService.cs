@@ -494,7 +494,10 @@ internal sealed class NpcAiService : IDisposable
             system =
                 "Return only one short first-person sentence of dialogue. " +
                 HistoricalKnowledgePolicy.PromptRule + " " +
-                "The speaker just woke on an unknown island. Preserve exactly " +
+                "The speaker is a survivor of a recent shipwreck on an unknown island. " +
+                "Treat supplied memories of injury, rescue, blame, or witnessed conduct " +
+                "as personal knowledge and express fitting gratitude, concern, gossip, " +
+                "denial, or resentment. Preserve exactly " +
                 "the supplied deterministicMeaning. Never narrate actions, " +
                 "describe the speaker in third person, prepend a name, summarize " +
                 "context, invent facts, mention AI, or output none. Use the supplied " +

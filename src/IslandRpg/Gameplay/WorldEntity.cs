@@ -29,6 +29,7 @@ internal enum EntityAction
     Dig,
     Mine,
     Fish,
+    Hurt,
     Die
 }
 

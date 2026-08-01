@@ -58,6 +58,68 @@ var settlementTenSource = VillagerSimulation.CreateInitial(
     2187, Vector2.Zero, population: 10);
 var settlementTenConfigured = ObserveScenarioService.Configure(
     ObserveScenarioService.SettlementTen, 2187, settlementTenSource);
+var openingIncidentVillagers = VillagerOpeningIncidentService.Apply(
+    settlementTenSource, 2187,
+    settlementTenSource[0].AwakenedGameSeconds);
+var repeatedOpeningIncident = VillagerOpeningIncidentService.Apply(
+    settlementTenSource, 2187,
+    settlementTenSource[0].AwakenedGameSeconds);
+var variedOpeningIncident = VillagerOpeningIncidentService.Apply(
+    settlementTenSource, 99173,
+    settlementTenSource[0].AwakenedGameSeconds);
+var openingIncidentAccounts =
+    VillagerOpeningIncidentService.Accounts(openingIncidentVillagers);
+var openingInjured = openingIncidentVillagers.Where(value =>
+    value.Health < AdventureService.BaseMaximumHealth).ToArray();
+static string IncidentSignature(IEnumerable<VillagerState> villagers) =>
+    string.Join("|", villagers.OrderBy(value => value.Id).SelectMany(value =>
+        (value.Memories ?? []).Where(memory =>
+                memory.Kind.StartsWith("wreck_", StringComparison.Ordinal))
+            .OrderBy(memory => memory.EventId)
+            .Select(memory =>
+                $"{value.Id}:{memory.EventId}:{memory.Kind}:" +
+                $"{memory.SubjectId}:{memory.Sentiment}:{memory.Summary}")));
+var incidentIds = openingIncidentVillagers.SelectMany(value =>
+        value.Memories ?? [])
+    .Where(value => value.Kind.StartsWith(
+        "wreck_", StringComparison.Ordinal))
+    .Select(value => value.EventId).Distinct().ToArray();
+var exposedInjury = VillagerOpeningIncidentService.ApplyShoreExposure(
+    settlementTenSource[0] with
+    {
+        Health = 20,
+        Action = EntityAction.Hurt
+    }, Biome.Beach, damage: 3);
+var safeInjury = VillagerOpeningIncidentService.ApplyShoreExposure(
+    settlementTenSource[0] with
+    {
+        Health = 20,
+        Action = EntityAction.Hurt
+    }, Biome.Grassland, damage: 3);
+Require(
+    openingInjured.Length >= 1 &&
+    openingInjured.All(value => value.Health > 0) &&
+    incidentIds.Length is >= 3 and <= 5 &&
+    IncidentSignature(openingIncidentVillagers) ==
+        IncidentSignature(repeatedOpeningIncident) &&
+    IncidentSignature(openingIncidentVillagers) !=
+        IncidentSignature(variedOpeningIncident) &&
+    VillagerOpeningIncidentService.IsActive(
+        openingIncidentVillagers,
+        settlementTenSource[0].AwakenedGameSeconds) &&
+    !VillagerOpeningIncidentService.IsActive(
+        openingIncidentVillagers,
+        settlementTenSource[0].AwakenedGameSeconds +
+        VillagerOpeningIncidentService.IncidentRealSeconds *
+        VillagerSimulation.GameSecondsPerRealSecond) &&
+    openingIncidentAccounts.Count >= 2 &&
+    openingIncidentAccounts.All(value => value.UseAi) &&
+    exposedInjury.Health == 17 &&
+    exposedInjury.Action == EntityAction.Hurt &&
+    safeInjury.Health == 20 &&
+    openingIncidentVillagers.Any(value =>
+        value.Relationships?.Count > 0),
+    "seeded opening incidents must vary by run while deterministically causing bounded nonlethal injuries and social history");
 var priorityVillager = settlementTenSource[0] with
 {
     ProjectAssignment = new(

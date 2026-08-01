@@ -6385,6 +6385,7 @@ internal sealed partial class GameHostWindow : GameWindow
             [EntityAction.Dig] = "TN",
             [EntityAction.Mine] = "TN",
             [EntityAction.Fish] = "TN",
+            [EntityAction.Hurt] = "DN",
             [EntityAction.Die] = "DN"
         };
         var uploaded = new Dictionary<string, EntityAnimation>(

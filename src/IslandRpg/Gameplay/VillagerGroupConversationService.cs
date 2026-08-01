@@ -68,6 +68,7 @@ internal static class VillagerGroupConversationService
                     ? "support"
                     : "dissent",
                 UseAi: vote.CandidateId != result.LeaderId));
+        lines.AddRange(VillagerOpeningIncidentService.Accounts(living));
         lines.Add(new(
             result.LeaderId,
             "I hear the disagreement. We will establish the worksite here, then judge the plan by whether it succeeds.",

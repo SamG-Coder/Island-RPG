@@ -78,8 +78,7 @@ internal sealed partial class GameHostWindow
                     _observeMode?.HungerRateMultiplier ?? 1)));
         else
         {
-            _villagers.AddRange(
-                VillagerSimulation.CreateInitial(
+            var arrivals = VillagerSimulation.CreateInitial(
                     _worldSeed,
                     spawn,
                     candidate => WorldLevelNavigation.IsWalkable(
@@ -90,7 +89,26 @@ internal sealed partial class GameHostWindow
                     gameSeconds: _worldGameSeconds,
                     population: _activeWorld.AiNpcCount,
                     personas: _activeWorld.AiNpcPersonas,
-                    setups: _activeWorld.AiNpcSetups));
+                    setups: _activeWorld.AiNpcSetups);
+            InitializeOpeningIncident(arrivals, spawn);
+            ObserveLog("opening_wreck_incident", null, new
+            {
+                Era = "1200 AD",
+                EndsAtGameSeconds = _worldGameSeconds +
+                    VillagerOpeningIncidentService.IncidentRealSeconds *
+                    VillagerSimulation.GameSecondsPerRealSecond,
+                Injured = _openingIncidentOutcomes.Values.Where(value =>
+                        value.Health < AdventureService.BaseMaximumHealth)
+                    .Select(value => new { value.Id, value.Health }).ToArray(),
+                Accounts = VillagerOpeningIncidentService.Accounts(
+                        _openingIncidentOutcomes.Values.ToArray())
+                    .Select(value => new
+                    {
+                        value.SpeakerId,
+                        value.Purpose,
+                        DeterministicMeaning = value.Text
+                    }).ToArray()
+            });
             _villagersDirty = true;
         }
         _villagersNextSaveAt = _worldGameSeconds + 30;
@@ -101,9 +119,11 @@ internal sealed partial class GameHostWindow
         if (_player is null || _activeWorld is null) return;
         UpdateConversationTurns();
         _villagerWork.Expire(_worldGameSeconds);
+        var openingIncidentActive = UpdateOpeningIncident();
         TryCallLeadershipChallenge();
-        var councilActive = UpdateSettlementLeadership();
-        if (!councilActive &&
+        var councilActive = !openingIncidentActive &&
+            UpdateSettlementLeadership();
+        if (!openingIncidentActive && !councilActive &&
             _worldGameSeconds >= _nextVillagerRoleAssignment)
         {
             var forecast = VillagerWorkPlanner.Forecast(_villagers);
@@ -150,7 +170,7 @@ internal sealed partial class GameHostWindow
             }
             _nextVillagerRoleAssignment = _worldGameSeconds + 30 * 60;
         }
-        if (!councilActive)
+        if (!openingIncidentActive && !councilActive)
         {
             UpdateSettlementProjectAssignments();
             TryPromptStalledProject();
@@ -383,6 +403,9 @@ internal sealed partial class GameHostWindow
                 _villagersDirty = true;
             }
             if (_settlementCouncilResult is not null &&
+                !VillagerIntentPriorityService.HasUrgentOverride(villager))
+                continue;
+            if (openingIncidentActive &&
                 !VillagerIntentPriorityService.HasUrgentOverride(villager))
                 continue;
             if (villager.Activity is
@@ -2305,7 +2328,7 @@ internal sealed partial class GameHostWindow
         var rawFrame = (int)(
             VillagerVisualAnimationTime(villager) /
             animation.SecondsPerFrame);
-        if (villager.Action == EntityAction.Die)
+        if (villager.Action is EntityAction.Die or EntityAction.Hurt)
         {
             var framesPerAngle = Math.Max(
                 1, graphic.Sprite.Frames.Count /
@@ -2353,7 +2376,7 @@ internal sealed partial class GameHostWindow
         var rawFrame = (int)(
             VillagerVisualAnimationTime(villager) /
             animation.SecondsPerFrame);
-        if (villager.Action == EntityAction.Die)
+        if (villager.Action is EntityAction.Die or EntityAction.Hurt)
         {
             var framesPerAngle = Math.Max(
                 1, animation.Graphic.Sprite.Frames.Count /
