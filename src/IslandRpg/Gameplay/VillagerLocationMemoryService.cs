@@ -17,7 +17,8 @@ internal sealed record VillagerLocationMemory(
     int WorldLevel,
     VillagerLocationType Type,
     float Confidence,
-    double LastObservedGameSeconds);
+    double LastObservedGameSeconds,
+    string? OwnerId = null);
 
 internal static class VillagerLocationMemoryService
 {
@@ -38,7 +39,8 @@ internal static class VillagerLocationMemoryService
         int worldLevel,
         double gameSeconds,
         float confidence = DiscoveryConfidence,
-        bool clearFailedLocation = true)
+        bool clearFailedLocation = true,
+        string? ownerId = null)
     {
         if (state.Health <= 0) return state;
         var memories = state.LocationMemories?.ToList() ?? [];
@@ -54,7 +56,8 @@ internal static class VillagerLocationMemoryService
             worldLevel,
             type,
             Math.Clamp(confidence, 0, 1),
-            gameSeconds);
+            gameSeconds,
+            ownerId);
         if (index >= 0)
             memories[index] = refreshed with
             {
@@ -106,7 +109,8 @@ internal static class VillagerLocationMemoryService
                 item.Position,
                 state.WorldLevel,
                 gameSeconds,
-                clearFailedLocation: false);
+                clearFailedLocation: false,
+                ownerId: item.OwnerId);
         }
         return observed;
     }
@@ -125,6 +129,9 @@ internal static class VillagerLocationMemoryService
         {
             if (memory.Type == VillagerLocationType.Danger ||
                 storageOnly && memory.Type != VillagerLocationType.Storage ||
+                !storageOnly && memory.Type == VillagerLocationType.Storage ||
+                memory.Type == VillagerLocationType.Storage &&
+                !CanUseStorage(state, memory) ||
                 memory.WorldLevel != state.WorldLevel)
                 continue;
             if (IsTemporarilyFailed(state, memory, gameSeconds))
@@ -263,6 +270,13 @@ internal static class VillagerLocationMemoryService
         state.Health <= 20 ||
         state.Need == VillagerNeed.Safe ||
         state.ConflictIntent != VillagerConflictIntent.None;
+
+    private static bool CanUseStorage(
+        VillagerState state,
+        VillagerLocationMemory memory) =>
+        string.Equals(
+            memory.OwnerId, state.Id,
+            StringComparison.Ordinal);
 
     private static float NeedBonus(
         VillagerState state,

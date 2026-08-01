@@ -204,16 +204,24 @@ internal sealed partial class GameHostWindow
             villager.PositionX, villager.PositionY);
         var worksite = new Vector2(
             assignment.WorksiteX, assignment.WorksiteY);
+        var worksiteRendezvous =
+            VillagerSettlementProjectService.RendezvousPoint(
+            worksite, villager.Id, isBuilder: false);
         var builderPosition = new Vector2(builder.PositionX, builder.PositionY);
+        var builderRendezvous =
+            VillagerSettlementProjectService.RendezvousPoint(
+                builderPosition, villager.Id, isBuilder: false);
         if (Vector2.DistanceSquared(builderPosition, worksite) >
             VillagerSimulation.InteractionRange *
             VillagerSimulation.InteractionRange)
         {
-            if (Vector2.DistanceSquared(contributorPosition, worksite) >
+            if (Vector2.DistanceSquared(
+                    contributorPosition, worksiteRendezvous) >
                 VillagerSimulation.InteractionRange *
                 VillagerSimulation.InteractionRange)
                 MoveVillagerForCapability(
-                    index, villager, tier, worksite, VillagerNeed.Safe);
+                    index, villager, tier, worksiteRendezvous,
+                    VillagerNeed.Safe);
             else
             {
                 _villagers[index] = villager with
@@ -233,7 +241,8 @@ internal sealed partial class GameHostWindow
             VillagerSimulation.InteractionRange)
         {
             MoveVillagerForCapability(
-                index, villager, tier, worksite, VillagerNeed.Safe);
+                index, villager, tier, builderRendezvous,
+                VillagerNeed.Safe);
             return true;
         }
         if (!ActorActionService.TryTransfer(
@@ -575,10 +584,11 @@ internal sealed partial class GameHostWindow
             .Select(value => value.Object.ItemId)
             .Where(CraftingStationService.IsStation)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var desired in VillagerCraftPlanner.PriorityFor(
-                     villager.WorkRole))
+        foreach (var desired in VillagerCraftPlanner.PriorityFor(villager))
         {
             if (!VillagerCraftPlanner.Needs(
+                    desired, villager) ||
+                VillagerCraftPlanner.ConsumesAssignedContribution(
                     desired, villager) ||
                 villager.ProjectAssignment is { } project &&
                 ItemCatalog.Get(desired).HasTag(ItemTag.PlaceableObject) &&

@@ -527,6 +527,14 @@ internal sealed partial class GameHostWindow
             .RecognizedLeaderId;
         var plan = VillagerSettlementProjectService.Plan(
             _villagers, placedItems, leaderId, _worldGameSeconds);
+        if (plan is not null && !_villagers.Any(value =>
+                value.ProjectAssignment?.ProjectItemId ==
+                plan.ProjectItemId))
+            plan = plan with
+            {
+                Worksite = FindProjectWorksite(
+                    plan.Worksite, plan.WorksiteLevel)
+            };
         var key = plan is null
             ? null
             : $"{plan.ProjectItemId}:{plan.BuilderId}";
@@ -587,6 +595,30 @@ internal sealed partial class GameHostWindow
             });
         if (plan is not null)
             AnnounceSettlementAssignments(plan);
+    }
+
+    private Vector2 FindProjectWorksite(Vector2 origin, int worldLevel)
+    {
+        for (var ring = 1; ring <= 4; ring++)
+        for (var step = 0; step < 12; step++)
+        {
+            var angle = step / 12f * MathF.Tau;
+            var candidate = origin + new Vector2(
+                MathF.Cos(angle), MathF.Sin(angle)) * ring;
+            if (!WorldLevelNavigation.IsWalkable(
+                    _worldSeed,
+                    (int)MathF.Floor(candidate.X),
+                    (int)MathF.Floor(candidate.Y),
+                    worldLevel) ||
+                _villagers.Any(value => value.Health > 0 &&
+                    value.WorldLevel == worldLevel &&
+                    Vector2.DistanceSquared(
+                        new(value.PositionX, value.PositionY), candidate) <
+                    1.2f * 1.2f))
+                continue;
+            return candidate;
+        }
+        return origin;
     }
 
     private void AnnounceSettlementAssignments(

@@ -46,21 +46,17 @@ internal static class VillagerSettlementProjectService
         if (!placedItems.Contains(ItemIds.Campfire))
         {
             projectItemId = ItemIds.Campfire;
-            requirements = [new(ItemIds.LargeRock, 3)];
+            requirements = RequirementsFor(projectItemId);
         }
         else if (!placedItems.Contains(ItemIds.Workbench))
         {
             projectItemId = ItemIds.Workbench;
-            requirements = [new(ItemIds.Logs, 4), new(ItemIds.Sticks, 2)];
+            requirements = RequirementsFor(projectItemId);
         }
         else if (!placedItems.Contains(ItemIds.StorageChest))
         {
             projectItemId = ItemIds.StorageChest;
-            requirements =
-            [
-                new(ItemIds.Logs, 6), new(ItemIds.Sticks, 2),
-                new(ItemIds.PlantFibres, 3)
-            ];
+            requirements = RequirementsFor(projectItemId);
         }
         else return null;
         var incumbentAssignment = living
@@ -72,7 +68,7 @@ internal static class VillagerSettlementProjectService
             : living.FirstOrDefault(value =>
                 value.Id == incumbentAssignment.BuilderId);
         var retainIncumbent = incumbentBuilder is not null &&
-            (VillagerWorkCoordinator.IsAvailableForWork(incumbentBuilder) ||
+            (CanRemainBuilder(incumbentBuilder) ||
              gameSeconds - incumbentAssignment!.AssignedGameSeconds <
              BuilderReplacementDelayGameSeconds);
         var builder = retainIncumbent
@@ -130,6 +126,20 @@ internal static class VillagerSettlementProjectService
                item.HasTag(ItemTag.Log);
     }
 
+    public static IReadOnlyList<VillagerProjectRequirement> RequirementsFor(
+        string projectItemId) => projectItemId switch
+    {
+        ItemIds.Campfire => [new(ItemIds.LargeRock, 3)],
+        ItemIds.Workbench =>
+            [new(ItemIds.Logs, 4), new(ItemIds.Sticks, 2)],
+        ItemIds.StorageChest =>
+        [
+            new(ItemIds.Logs, 6), new(ItemIds.Sticks, 2),
+            new(ItemIds.PlantFibres, 3)
+        ],
+        _ => []
+    };
+
     public static bool NeedsItem(VillagerState villager, string itemId) =>
         villager.ProjectAssignment?.Requirements.Any(requirement =>
             MatchesRequirement(itemId, requirement.ItemId) &&
@@ -161,7 +171,8 @@ internal static class VillagerSettlementProjectService
         for (var slot = 0; slot < contributor.Inventory.Length; slot++)
         {
             if (contributor.Inventory[slot] is not { } itemId) continue;
-            foreach (var requirement in assignment.Requirements)
+            foreach (var requirement in RequirementsFor(
+                         assignment.ProjectItemId))
                 if (MatchesRequirement(itemId, requirement.ItemId) &&
                     CountMatching(builder.Inventory, requirement.ItemId) <
                     TotalProjectRequirement(
@@ -192,6 +203,18 @@ internal static class VillagerSettlementProjectService
         var angle = (uint)hash / (float)uint.MaxValue * MathF.Tau;
         return new Vector2(villager.PositionX, villager.PositionY) +
                new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * 8;
+    }
+
+    public static Vector2 RendezvousPoint(
+        Vector2 worksite,
+        string actorId,
+        bool isBuilder)
+    {
+        if (isBuilder) return worksite;
+        var hash = StableHash(actorId);
+        var angle = (hash & 0xffff) / 65535f * MathF.Tau;
+        return worksite + new Vector2(
+            MathF.Cos(angle), MathF.Sin(angle)) * .8f;
     }
 
     private static VillagerSettlementProjectPlan Assign(
@@ -255,20 +278,28 @@ internal static class VillagerSettlementProjectService
         return villager.Id == builderId ? 25 : 0;
     }
 
+    private static bool CanRemainBuilder(VillagerState villager) =>
+        villager.Health > 20 &&
+        villager.ConflictIntent == VillagerConflictIntent.None;
+
     private static int TotalProjectRequirement(
         string projectItemId,
-        string itemId) => projectItemId switch
-    {
-        ItemIds.Campfire when itemId == ItemIds.LargeRock => 3,
-        ItemIds.Workbench when itemId == ItemIds.Logs => 4,
-        ItemIds.Workbench when itemId == ItemIds.Sticks => 2,
-        ItemIds.StorageChest when itemId == ItemIds.Logs => 6,
-        ItemIds.StorageChest when itemId == ItemIds.Sticks => 2,
-        ItemIds.StorageChest when itemId == ItemIds.PlantFibres => 3,
-        _ => 1
-    };
+        string itemId) => RequirementsFor(projectItemId)
+        .Where(value => MatchesRequirement(itemId, value.ItemId))
+        .Sum(value => value.Quantity);
 
     private static int CountMatching(string?[] inventory, string itemId) =>
         inventory.Count(value =>
             value is not null && MatchesRequirement(value, itemId));
+
+    private static int StableHash(string value)
+    {
+        unchecked
+        {
+            var hash = 2166136261u;
+            foreach (var character in value)
+                hash = (hash ^ character) * 16777619;
+            return (int)hash;
+        }
+    }
 }

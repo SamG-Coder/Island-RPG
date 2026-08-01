@@ -66,6 +66,68 @@ internal static class VillagerCraftPlanner
                 ? roleItems
                 : []);
 
+    public static IEnumerable<string> PriorityFor(VillagerState villager)
+    {
+        var project = villager.ProjectAssignment is { } assignment &&
+                      assignment.BuilderId == villager.Id
+            ? assignment.ProjectItemId
+            : null;
+        return (project is null
+                ? []
+                : CraftingDependencyOrder(project))
+            .Concat(PriorityFor(villager.WorkRole))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    public static bool ConsumesAssignedContribution(
+        string resultItemId,
+        VillagerState villager)
+    {
+        if (villager.ProjectAssignment is not { } assignment ||
+            assignment.BuilderId == villager.Id)
+            return false;
+        var recipe = CraftingSkill.Recipes.FirstOrDefault(value =>
+            string.Equals(value.ResultItemId, resultItemId,
+                StringComparison.OrdinalIgnoreCase));
+        return recipe?.Ingredients.Any(ingredient =>
+            assignment.Requirements.Any(requirement =>
+                VillagerSettlementProjectService.MatchesRequirement(
+                    ingredient.ItemId, requirement.ItemId) &&
+                villager.Inventory.Any(itemId => itemId is not null &&
+                    VillagerSettlementProjectService.MatchesRequirement(
+                        itemId, requirement.ItemId)))) == true;
+    }
+
+    /// <summary>
+    /// Returns craftable prerequisites before their dependent result. This
+    /// keeps settlement projects and personal crafting on the same recipe
+    /// graph instead of maintaining a second, divergent material sequence.
+    /// </summary>
+    public static IReadOnlyList<string> CraftingDependencyOrder(
+        string resultItemId)
+    {
+        var result = new List<string>();
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Visit(resultItemId, visited, result);
+        return result;
+    }
+
+    private static void Visit(
+        string itemId,
+        HashSet<string> visited,
+        List<string> result)
+    {
+        if (!visited.Add(itemId)) return;
+        var recipe = CraftingSkill.Recipes.FirstOrDefault(value =>
+            string.Equals(
+                value.ResultItemId, itemId,
+                StringComparison.OrdinalIgnoreCase));
+        if (recipe is null) return;
+        foreach (var ingredient in recipe.Ingredients)
+            Visit(ingredient.ItemId, visited, result);
+        result.Add(itemId);
+    }
+
     public static bool Needs(string itemId, string?[] inventory)
     {
         var candidate = ItemCatalog.Get(itemId);

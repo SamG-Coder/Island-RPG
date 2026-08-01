@@ -631,6 +631,44 @@ Require(rememberedFoodAction.Kind ==
         rememberedFoodAction.Target is { X: > 0 } &&
         rememberedFoodAction.RememberedLocation == discoveredFoodLocation,
     "villagers must approach a remembered useful location when no nearby target is visible");
+var foreignStorageMemory = VillagerLocationMemoryService.Remember(
+    locationMemoryVillager,
+    VillagerLocationType.Storage,
+    new(4, 0),
+    worldLevel: 0,
+    gameSeconds: 105,
+    ownerId: "someone-else");
+var fullLocationInventory = Enumerable.Repeat<string?>(
+    ItemIds.Sticks, PlayerInventory.Capacity).ToArray();
+Require(
+    VillagerSimulation.SelectWorldAction(
+        foreignStorageMemory with
+        {
+            Inventory = fullLocationInventory,
+            LocationMemories = foreignStorageMemory.LocationMemories!
+                .Where(value => value.Type == VillagerLocationType.Storage)
+                .ToArray()
+        },
+        [], 110).Kind == VillagerWorldActionKind.None,
+    "villagers must not approach remembered storage they cannot use");
+var ownedStorageMemory = VillagerLocationMemoryService.Remember(
+    locationMemoryVillager,
+    VillagerLocationType.Storage,
+    new(4, 0),
+    worldLevel: 0,
+    gameSeconds: 105,
+    ownerId: locationMemoryVillager.Id);
+Require(
+    VillagerSimulation.SelectWorldAction(
+        ownedStorageMemory with
+        {
+            Inventory = fullLocationInventory,
+            LocationMemories = ownedStorageMemory.LocationMemories!
+                .Where(value => value.Type == VillagerLocationType.Storage)
+                .ToArray()
+        },
+        [], 110).Kind == VillagerWorldActionKind.ApproachStorage,
+    "a full villager may approach personally owned remembered storage");
 var unreachableRememberedFood = VillagerLocationMemoryService.MarkUnreachable(
     locationMemoryVillager,
     discoveredFoodLocation.Type,
@@ -1568,11 +1606,27 @@ var unavailableBuilderProject = VillagerSettlementProjectService.Plan(
     gameSeconds:
         VillagerSettlementProjectService.BuilderReplacementDelayGameSeconds +
         1);
-Require(unavailableBuilderProject is { BuilderId: not "project-builder" } &&
-        !unavailableBuilderProject.Assignments.ContainsKey("project-builder") &&
-        unavailableBuilderProject.Assignments.Keys.All(id =>
-            id is "project-food" or "project-wood"),
-    "a blocked incumbent builder must be replaced by an available worker and excluded from replanned project assignments");
+Require(unavailableBuilderProject is { BuilderId: "project-builder" },
+    "temporary blocked activity must not churn a living project builder");
+var incapacitatedBuilderProject = VillagerSettlementProjectService.Plan(
+    projectVillagers.Select(value => value with
+    {
+        Health = value.Id == "project-builder" ? 20 : value.Health,
+        ProjectAssignment = new VillagerProjectAssignment(
+            ItemIds.Campfire,
+            "project-builder",
+            [new(ItemIds.LargeRock, 1)],
+            AssignedGameSeconds: 0)
+    }).ToArray(),
+    new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+    gameSeconds:
+        VillagerSettlementProjectService.BuilderReplacementDelayGameSeconds +
+        1);
+Require(incapacitatedBuilderProject is
+        { BuilderId: not "project-builder" } &&
+        !incapacitatedBuilderProject.Assignments.ContainsKey(
+            "project-builder"),
+    "an incapacitated project builder must still be replaced after the grace period");
 var reassignedProjectVillagers = projectVillagers
     .Select(value => value with
     {
@@ -1645,6 +1699,21 @@ Require(VillagerSettlementProjectService.ContributionSlot(
         VillagerSettlementProjectService.MatchesRequirement(
             ItemIds.OakLogs, ItemIds.Logs),
     "project delivery must accept interchangeable log types through the shared contribution contract");
+var opportunisticRockContributor = assignedProjectVillager with
+{
+    Inventory = new string?[PlayerInventory.Capacity],
+    ProjectAssignment = assignedProjectVillager.ProjectAssignment! with
+    {
+        Requirements = []
+    }
+};
+opportunisticRockContributor.Inventory[0] = ItemIds.LargeRock;
+Require(
+    VillagerSettlementProjectService.ContributionSlot(
+        opportunisticRockContributor, projectVillagers[2]) == 0 &&
+    VillagerSettlementProjectService.RequirementsFor(ItemIds.Campfire)
+        .SequenceEqual([new(ItemIds.LargeRock, 3)]),
+    "any participant carrying a needed project material must be allowed to deliver it even when someone else received the original order");
 var projectCraftInventory = new string?[28];
 projectCraftInventory[0] = ItemIds.SmallRocks;
 projectCraftInventory[1] = ItemIds.SmallRocks;
@@ -1658,6 +1727,30 @@ var projectBuilder = projectVillagers[2] with
         [],
         100)
 };
+Require(
+    VillagerCraftPlanner.CraftingDependencyOrder(ItemIds.Campfire)
+        .SequenceEqual(
+            [ItemIds.MediumRock, ItemIds.SmallRocks, ItemIds.Campfire]) &&
+    VillagerCraftPlanner.PriorityFor(projectBuilder).Take(3)
+        .SequenceEqual(
+            [ItemIds.MediumRock, ItemIds.SmallRocks, ItemIds.Campfire]),
+    "project crafting must follow the recipe dependency graph before optional tool crafting");
+var contributorWithRock = assignedProjectVillager with
+{
+    Inventory = new string?[PlayerInventory.Capacity]
+};
+contributorWithRock.Inventory[0] = ItemIds.LargeRock;
+Require(
+    VillagerCraftPlanner.ConsumesAssignedContribution(
+        ItemIds.MediumRock, contributorWithRock) &&
+    !VillagerCraftPlanner.ConsumesAssignedContribution(
+        ItemIds.StoneKnife, contributorWithRock) &&
+    Vector2.Distance(
+        Vector2.Zero,
+        VillagerSettlementProjectService.RendezvousPoint(
+            Vector2.Zero, contributorWithRock.Id, isBuilder: false)) <
+        VillagerSimulation.InteractionRange,
+    "contributors must preserve assigned materials and receive a stable in-range rendezvous slot");
 var completedCampfireRockInventory =
     (string?[])projectCraftInventory.Clone();
 completedCampfireRockInventory[3] = ItemIds.SmallRocks;
