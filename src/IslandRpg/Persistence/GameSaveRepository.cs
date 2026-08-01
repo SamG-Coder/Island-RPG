@@ -153,7 +153,8 @@ internal sealed class GameSaveRepository
         var now = DateTime.UtcNow;
         var id = UniqueId(WorldsRoot, name);
         aiNpcCount = aiNpcsEnabled
-            ? Math.Clamp(aiNpcCount, 0, 3)
+            ? Math.Clamp(
+                aiNpcCount, 0, VillagerSimulation.MaximumPopulation)
             : 0;
         var profile = new WorldProfile(
             id, CleanName(name, "New World"), seed, now, now, playerId,

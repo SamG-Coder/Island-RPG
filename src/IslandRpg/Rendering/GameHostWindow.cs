@@ -153,7 +153,8 @@ internal sealed partial class GameHostWindow : GameWindow
         new("0", "0 — Solo"),
         new("1", "1 survivor"),
         new("2", "2 survivors"),
-        new("3", "3 survivors")
+        new("3", "3 survivors"),
+        new("4", "4 survivors")
     ];
     private readonly TextBoxControlState _seedTextBox =
         new(Random.Shared.NextInt64().ToString());

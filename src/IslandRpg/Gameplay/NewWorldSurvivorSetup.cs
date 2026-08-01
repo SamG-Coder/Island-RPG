@@ -34,7 +34,8 @@ internal static class NewWorldSurvivorSetupService
         IReadOnlyList<string> itemLists,
         string sharedStory)
     {
-        population = Math.Clamp(population, 0, VillagerSimulation.InitialPopulation);
+        population = Math.Clamp(
+            population, 0, VillagerSimulation.MaximumPopulation);
         var result = new NewWorldSurvivorSetup[population];
         for (var index = 0; index < population; index++)
         {

@@ -44,16 +44,16 @@ try
                 WorldSeed = options.Seed,
                 Names = VillagerSimulation.NamesForPopulation(
                     ObserveModePolicy.RequiredVillagerCount(
-                        options.ObserveScenario)),
+                        options.ObserveScenario), options.Seed),
                 aiSettings.Model
             });
         var personas = ai.GeneratePersonasAsync(
                 aiSettings,
                 $"Observation-{stamp}",
                 options.Seed,
-                VillagerSimulation.NamesForPopulation(
-                    ObserveModePolicy.RequiredVillagerCount(
-                        options.ObserveScenario)))
+            VillagerSimulation.NamesForPopulation(
+                ObserveModePolicy.RequiredVillagerCount(
+                    options.ObserveScenario), options.Seed))
             .GetAwaiter().GetResult() ?? [];
         ObserveEventLog.Write(
             Console.Out, 0, 8 * 60 * 60, "Day 1 08:00", null,

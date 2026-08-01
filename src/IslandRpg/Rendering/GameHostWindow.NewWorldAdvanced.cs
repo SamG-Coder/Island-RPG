@@ -28,7 +28,7 @@ internal sealed partial class GameHostWindow
     private int _newWorldAdvancedNpcIndex;
 
     private static TextBoxControlState[] CreateAdvancedFields(int maximumLength) =>
-        Enumerable.Range(0, VillagerSimulation.InitialPopulation)
+        Enumerable.Range(0, VillagerSimulation.MaximumPopulation)
             .Select(_ => new TextBoxControlState { MaximumLength = maximumLength })
             .ToArray();
 
@@ -131,7 +131,7 @@ internal sealed partial class GameHostWindow
     private TextBoxControlState[] AdvancedFields()
     {
         var index = Math.Clamp(_newWorldAdvancedNpcIndex, 0,
-            VillagerSimulation.InitialPopulation - 1);
+            VillagerSimulation.MaximumPopulation - 1);
         return [_newWorldNpcNameTextBoxes[index],
             _newWorldNpcPersonalityTextBoxes[index],
             _newWorldNpcTradeTextBoxes[index],

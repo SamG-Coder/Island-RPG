@@ -50,6 +50,10 @@ if (args.Contains(
 }
 
 var worldCheckAssertions = 0;
+var settlementFourSource = VillagerSimulation.CreateInitial(
+    2187, Vector2.Zero, population: 4);
+var settlementFourConfigured = ObserveScenarioService.Configure(
+    ObserveScenarioService.SettlementFour, 2187, settlementFourSource);
 Require(
     new GameSettings().UnlimitedZoom,
     "unlimited zoom must be enabled by default");
@@ -1378,6 +1382,18 @@ Require(
         ObserveScenarioService.IslandResourceTrio) == 3 &&
     ObserveModePolicy.RequiredVillagerCount(
         ObserveScenarioService.IslandFuturesTrio) == 3 &&
+    ObserveModePolicy.RequiredVillagerCount(
+        ObserveScenarioService.SettlementFour) == 4 &&
+    ObserveScenarioService.IsSupported(
+        ObserveScenarioService.SettlementFour) &&
+    VillagerSimulation.NamePoolSize == 100 &&
+    VillagerSimulation.AvailableNameCount == 100 &&
+    VillagerSimulation.NamesForPopulation(4, 2187).Count == 4 &&
+    VillagerSimulation.NamesForPopulation(4, 2187).Distinct().Count() == 4 &&
+    VillagerSimulation.NamesForPopulation(4, 2187).SequenceEqual(
+        VillagerSimulation.NamesForPopulation(4, 2187)) &&
+    settlementFourConfigured.Count == 4 &&
+    !ReferenceEquals(settlementFourConfigured, settlementFourSource) &&
     !ObserveModePolicy.ObserverParticipatesInSimulation,
     "Observe CLI configuration must request exactly two villagers and exclude the hidden observer");
 var acceleratedHunger = VillagerSimulation.CatchUp(
@@ -6475,7 +6491,7 @@ try
         "Crowded Realm", 6789, player.Id,
         aiNpcsEnabled: true, aiNpcCount: 99);
     Require(clampedAiWorld.AiNpcCount ==
-            VillagerSimulation.InitialPopulation,
+            VillagerSimulation.MaximumPopulation,
         "AI NPC population must be clamped to the supported maximum");
     saves.SaveWorldPlayer(
         world.Id, new(player.Id, 12.5f, -8.25f, DateTime.UtcNow));

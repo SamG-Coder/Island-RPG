@@ -230,6 +230,8 @@ internal readonly record struct VillagerSocialGoal(
 internal static class VillagerSimulation
 {
     public const int InitialPopulation = 3;
+    public const int MaximumPopulation = 4;
+    public const int NamePoolSize = 100;
     public const float NearbyRadius = 28;
     public const float RegionalRadius = 128;
     public const double NearbyDecisionSeconds =
@@ -259,12 +261,40 @@ internal static class VillagerSimulation
     public const double MinimumReflectionRealSeconds = .35;
     public const double MaximumReflectionRealSeconds = 1.2;
 
-    private static readonly string[] Names = ["Mira", "Tomas", "Rowan"];
+    private static readonly string[] Names =
+    [
+        "Adela", "Aldric", "Alina", "Ansel", "Aveline", "Baldwin",
+        "Beatrice", "Bertram", "Branwen", "Cedric", "Cecily", "Clara",
+        "Conrad", "Crispin", "Daria", "Edith", "Edmund", "Eleanor",
+        "Elric", "Emeline", "Emrys", "Ethel", "Everard", "Felix",
+        "Fiora", "Gareth", "Gavin", "Gerard", "Gisela", "Godfrey",
+        "Guinevere", "Hadrian", "Heloise", "Hugh", "Ida", "Isolde",
+        "Ivo", "Joan", "Jocelyn", "Juliana", "Leofric", "Linnet",
+        "Lucan", "Lucia", "Mabel", "Magnus", "Margery", "Martin",
+        "Matilda", "Merek", "Mira", "Muriel", "Nesta", "Nicholas",
+        "Odilia", "Osric", "Owen", "Petronilla", "Philip", "Ralph",
+        "Reynard", "Rhiannon", "Richard", "Robert", "Rosamund",
+        "Rowan", "Sabine", "Serena", "Sibyl", "Simon", "Stephen",
+        "Sybil", "Theobald", "Theodora", "Thomas", "Tomas", "Tristan",
+        "Ursula", "Valerian", "Walter", "Warin", "Wilfred", "William",
+        "Winifred", "Wulfric", "Ysabel", "Agnes", "Alaric", "Amabel",
+        "Bennet", "Blanche", "Corwin", "Elaine", "Fulk", "Giles",
+        "Helena", "Lambert", "Maud", "Piers", "Yvette"
+    ];
+
+    public static int AvailableNameCount => Names.Length;
 
     public static IReadOnlyList<string> NamesForPopulation(
-        int population) =>
-        Names.Take(Math.Clamp(
-            population, 0, InitialPopulation)).ToArray();
+        int population,
+        long seed = 0)
+    {
+        population = Math.Clamp(population, 0, MaximumPopulation);
+        var start = PositiveMod(Hash(seed, 0, 7919), Names.Length);
+        const int stride = 37;
+        return Enumerable.Range(0, population)
+            .Select(index => Names[(start + index * stride) % Names.Length])
+            .ToArray();
+    }
 
     public static VillagerState[] CreateInitial(
         long worldSeed,
@@ -275,7 +305,8 @@ internal static class VillagerSimulation
         IReadOnlyList<VillagerPersona>? personas = null,
         IReadOnlyList<NewWorldSurvivorSetup>? setups = null)
     {
-        population = Math.Clamp(population, 0, InitialPopulation);
+        population = Math.Clamp(population, 0, MaximumPopulation);
+        var names = NamesForPopulation(population, worldSeed);
         var result = new VillagerState[population];
         for (var index = 0; index < result.Length; index++)
         {
@@ -292,7 +323,7 @@ internal static class VillagerSimulation
                     inventory[slot] = setup.StartingItems[slot];
             result[index] = new(
                 id,
-                setup?.Name ?? Names[index],
+                setup?.Name ?? names[index],
                 index == 0 ? EntityGender.Female : EntityGender.Male,
                 PositiveMod(Hash(worldSeed, index, 17), 5),
                 index + 1,

@@ -11,16 +11,18 @@ internal static class ObserveScenarioService
     public const string DesertKnifeConflict = "desert-knife-conflict";
     public const string IslandResourceTrio = "island-resource-trio";
     public const string IslandFuturesTrio = "island-futures-trio";
+    public const string SettlementFour = "settlement-four";
 
     public static bool IsSupported(string value) =>
         value is Default or DesertSurplus or DesertKnifeConflict or
-            IslandResourceTrio or IslandFuturesTrio;
+            IslandResourceTrio or IslandFuturesTrio or SettlementFour;
 
     public static int RequiredVillagerCount(string scenario) =>
         scenario switch
         {
             IslandResourceTrio => 3,
             IslandFuturesTrio => 3,
+            SettlementFour => 4,
             _ => 2
         };
 
@@ -35,6 +37,7 @@ internal static class ObserveScenarioService
                 $"Observe scenario '{scenario}' requires " +
                 $"{RequiredVillagerCount(scenario)} villagers.");
         if (scenario == Default) return villagers;
+        if (scenario == SettlementFour) return villagers.ToArray();
         if (scenario == IslandResourceTrio)
             return ConfigureIslandResourceTrio(seed, villagers);
         if (scenario == IslandFuturesTrio)
