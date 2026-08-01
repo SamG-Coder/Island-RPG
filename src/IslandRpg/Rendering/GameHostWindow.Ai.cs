@@ -44,13 +44,16 @@ internal sealed partial class GameHostWindow
         PlayerProfile Player,
         int Population,
         bool ObserveWorld = false,
-        string SharedStory = "");
+        string SharedStory = "",
+        string ModelOverride = "");
 
-    private void BeginNpcAiCheck()
+    private void BeginNpcAiCheck(bool useActiveWorld = false)
     {
         if (_npcAiCheckTask is { IsCompleted: false })
             return;
-        var settings = _saves.LoadSettings().EffectiveAi;
+        var settings = useActiveWorld
+            ? ActiveNpcAiSettings()
+            : _saves.LoadSettings().EffectiveAi;
         _npcAiState = settings.Enabled
             ? new(
                 NpcAiAvailability.Checking,
@@ -74,12 +77,13 @@ internal sealed partial class GameHostWindow
         _pendingNewWorldCreation = new(
             name, seed, spawn, player, population,
             _newWorldObserveToggle.IsChecked,
-            _newWorldSharedStoryTextBox.Text.Trim());
+            _newWorldSharedStoryTextBox.Text.Trim(),
+            _newWorldAiModelOverrideTextBox.Text.Trim());
         _frontendError =
             "Creating survivor histories and personalities...";
         _npcPersonaGenerationTask =
             _npcAi.GeneratePersonasAsync(
-                _saves.LoadSettings().EffectiveAi,
+                NewWorldNpcAiSettings(),
                 name,
                 seed,
                 Enumerable.Range(0, population)
@@ -111,7 +115,8 @@ internal sealed partial class GameHostWindow
             setups.Select(value => value.Persona).ToArray(),
             pending.ObserveWorld,
             pending.SharedStory,
-            setups);
+            setups,
+            pending.ModelOverride);
     }
 
     private void InitializeNpcAiSettingsFields(
@@ -305,8 +310,8 @@ internal sealed partial class GameHostWindow
         if (interpretation is null)
         {
             _npcAiState = new(
-                NpcAiAvailability.ModelUnresponsive,
-                "AI returned no valid runtime response.",
+                NpcAiAvailability.Ready,
+                "AI response was invalid; used a safe reply and will retry.",
                 DateTime.UtcNow);
             if ((uint)index < (uint)_villagers.Count)
                 ShowVillagerSpeech(
@@ -418,7 +423,7 @@ internal sealed partial class GameHostWindow
     {
         if (_npcAiDialogueTask is { IsCompleted: false })
             return;
-        var settings = _saves.LoadSettings().EffectiveAi;
+        var settings = ActiveNpcAiSettings();
         _npcAiDialogueSpeakerId = speaker.Id;
         _npcAiDialogueListenerId = listenerId;
         _npcAiDialogueFallback = fallback;
@@ -708,7 +713,7 @@ internal sealed partial class GameHostWindow
         _npcAiSpeechFallback =
             FallbackNpcReply(listener, message);
         _npcAiSpeechTask = _npcAi.InterpretAsync(
-            _saves.LoadSettings().EffectiveAi,
+            ActiveNpcAiSettings(),
             context);
         _chatUi.AddMessage(
             $"{listener.Name} considers what you said...",
@@ -967,8 +972,12 @@ internal sealed partial class GameHostWindow
         if (lower.Contains("your name") ||
             lower.Contains("who are you"))
             return $"My name is {listener.Name}.";
-        if (lower is "hello" or "hi" or "hey")
+        if (lower is "hello" or "hi" or "hey" ||
+            lower.StartsWith("hello ") ||
+            lower.StartsWith("hey "))
             return $"Hello. I'm {listener.Name}.";
+        if (lower.Contains("where are you"))
+            return "I'm here beside you.";
         if (lower.Contains("what should we do") ||
             lower.Contains("what do we do") ||
             lower.Contains("what now"))

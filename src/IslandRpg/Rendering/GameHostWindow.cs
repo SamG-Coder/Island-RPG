@@ -784,7 +784,9 @@ internal sealed partial class GameHostWindow : GameWindow
             {
                 if (_mode == PreviewMode.Game)
                 {
-                    if (!IsObserveWorld)
+                    if (IsObserveWorld)
+                        UpdateObserveUi();
+                    else
                         UpdateGameUi();
                     UpdateGame((float)e.Time);
                     if (IsObserveWorld)
@@ -809,7 +811,9 @@ internal sealed partial class GameHostWindow : GameWindow
     private void UpdateCamera(float elapsed)
     {
         var mouse = SceneMousePosition();
-        if (MouseState.IsButtonDown(MouseButton.Left))
+        var pointerBlocked = IsObserveWorld &&
+                             IsPointerOverObserveUi(MouseState.Position);
+        if (MouseState.IsButtonDown(MouseButton.Left) && !pointerBlocked)
         {
             if (_dragging) _camera += mouse - _lastMouse;
             _lastMouse = mouse;
@@ -817,6 +821,7 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         else _dragging = false;
 
+        if (_chatUi.Input.Focused) return;
         var direction = Vector2.Zero;
         if (KeyboardState.IsKeyDown(Keys.A) || KeyboardState.IsKeyDown(Keys.Left)) direction.X += 1;
         if (KeyboardState.IsKeyDown(Keys.D) || KeyboardState.IsKeyDown(Keys.Right)) direction.X -= 1;
@@ -1214,7 +1219,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 spawn,
                 player,
                 0),
-            [], false, "", []);
+            [], false, "", [], "");
     }
 
     private void CompleteNewWorldCreation(
@@ -1222,7 +1227,8 @@ internal sealed partial class GameHostWindow : GameWindow
         IReadOnlyList<VillagerPersona> personas,
         bool observeWorld,
         string sharedStory,
-        IReadOnlyList<NewWorldSurvivorSetup> setups)
+        IReadOnlyList<NewWorldSurvivorSetup> setups,
+        string modelOverride)
     {
         var world = _saves.CreateWorld(
             pending.Name,
@@ -1233,7 +1239,8 @@ internal sealed partial class GameHostWindow : GameWindow
             personas,
             observeWorld,
             sharedStory,
-            setups);
+            setups,
+            modelOverride);
         _saves.SaveWorldPlayer(
             world.Id,
             new(
@@ -1284,6 +1291,8 @@ internal sealed partial class GameHostWindow : GameWindow
             UnloadWorldChunk(coordinate, save: false);
 
         _activeWorld = world with { LastPlayerId = player.Id };
+        if (_activeWorld.AiNpcsEnabled)
+            BeginNpcAiCheck(useActiveWorld: true);
         _worldGameSeconds = Math.Max(
             0, _activeWorld.ElapsedGameSeconds);
         _activePlayer = player;
@@ -1907,26 +1916,7 @@ internal sealed partial class GameHostWindow : GameWindow
             _inventoryInteraction.Cancel();
             _groundDropPreview = null;
         }
-        if (KeyboardState.IsKeyPressed(Keys.Enter))
-        {
-            if (_chatUi.Input.Focused)
-                _chatUi.Submit();
-            else
-                _chatUi.FocusInput();
-        }
-        if (_chatUi.Input.Focused &&
-            KeyboardState.IsKeyPressed(Keys.Backspace))
-            _chatUi.Backspace();
-        if (_chatUi.Input.Focused && _commandHints.Visible)
-        {
-            if (KeyboardState.IsKeyPressed(Keys.Up))
-                _commandHints.MoveSelection(-1);
-            else if (KeyboardState.IsKeyPressed(Keys.Down))
-                _commandHints.MoveSelection(1);
-            if (KeyboardState.IsKeyPressed(Keys.Tab) &&
-                _commandHints.Selected() is { } selected)
-                CompleteCommandHint(selected);
-        }
+        UpdateChatCommandInput();
         if (!_chatUi.Input.Focused &&
             KeyboardState.IsKeyPressed(Keys.Q))
             OpenQuestWindow();
@@ -3165,12 +3155,15 @@ internal sealed partial class GameHostWindow : GameWindow
             RenderFrontend();
         }
         else if (_screen == ScreenState.WorldPreview &&
-            _mode == PreviewMode.Game && !_atlasOpen &&
-            !IsObserveWorld)
+            _mode == PreviewMode.Game && !_atlasOpen)
         {
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
             if (_modalScreen.BlursBackground) BlurComposedFrame();
-            if (!_modalScreen.HidesGameUi) RenderGameUi();
+            if (!_modalScreen.HidesGameUi)
+            {
+                if (IsObserveWorld) RenderObserveUi();
+                else RenderGameUi();
+            }
             if (_itemContainerWindow.Visible)
                 RenderItemContainerWindow();
             else if (_modalScreen.Active == ModalScreenKind.Death)
@@ -4887,9 +4880,12 @@ internal sealed partial class GameHostWindow : GameWindow
     private void RenderMinimap()
     {
         if (_player is null || _minimapFrame is null || _minimapTexture == 0) return;
+        var minimapFocus = IsObserveWorld
+            ? ObservationFocusPosition()
+            : _player.Position;
         var center = new Vector2i(
-            (int)MathF.Floor(_player.Position.X),
-            (int)MathF.Floor(_player.Position.Y));
+            (int)MathF.Floor(minimapFocus.X),
+            (int)MathF.Floor(minimapFocus.Y));
         if (_minimapBuildTask is { IsCompleted: true })
         {
             var completed = _minimapBuildTask;

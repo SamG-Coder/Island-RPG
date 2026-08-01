@@ -9,6 +9,16 @@ using StbImageSharp;
 
 WorldCheckProcess.DisableWindowsCrashDialogs();
 
+if (args.Contains("--ai-score", StringComparer.OrdinalIgnoreCase))
+{
+    var modelIndex = Array.FindIndex(args, value => value == "--model");
+    var model = modelIndex >= 0 && modelIndex + 1 < args.Length
+        ? args[modelIndex + 1]
+        : new GameSettings().EffectiveAi.Model;
+    Environment.ExitCode = await NpcAiModelScore.RunAsync(model) ? 0 : 1;
+    return;
+}
+
 if (args.Contains(
         "--live-arrival-scenario",
         StringComparer.OrdinalIgnoreCase))
@@ -80,7 +90,7 @@ Require(advancedVillagers[0].Name == "Elara" &&
 Require(
     defaultAi.Enabled &&
     defaultAi.BaseUrl == "http://localhost:11434" &&
-    defaultAi.Model == "qwen3:4b",
+    defaultAi.Model == "qwen3.6:35b-a3b",
     "AI settings must default to the contract-tested local Qwen model while remaining runtime-gated");
 await NpcAiScenarioChecks.RunAsync();
 using (var disabledAi = new NpcAiService(
@@ -111,7 +121,7 @@ using (var readyAi = new NpcAiService(
                request.RequestUri?.AbsolutePath == "/api/tags"
                    ? StubHttpHandler.Json(
                        """
-                       {"models":[{"name":"qwen3:4b","model":"qwen3:4b"}]}
+                       {"models":[{"name":"qwen3.6:35b-a3b","model":"qwen3.6:35b-a3b"}]}
                        """)
                    : StubHttpHandler.Json(
                        """{"response":"READY","done":true}""")))))
@@ -5723,10 +5733,12 @@ try
         [
             VillagerSimulation.DefaultPersona(0),
             VillagerSimulation.DefaultPersona(1)
-        ]);
+        ],
+        aiModelOverride: "gemma4:12b");
     Require(aiWorld.AiNpcsEnabled && aiWorld.AiNpcCount == 2 &&
-            aiWorld.AiNpcPersonas?.Count == 2,
-        "AI NPC world options must be stored on the world profile");
+            aiWorld.AiNpcPersonas?.Count == 2 &&
+            aiWorld.AiModelOverride == "gemma4:12b",
+        "AI NPC world options and model override must be stored on the world profile");
     var clampedAiWorld = saves.CreateWorld(
         "Crowded Realm", 6789, player.Id,
         aiNpcsEnabled: true, aiNpcCount: 99);

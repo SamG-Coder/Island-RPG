@@ -1341,21 +1341,7 @@ internal sealed partial class GameHostWindow
                 _player.Position);
             return true;
         }
-        var response = lower.Contains("name")
-            ? $"My name is {target.Name}."
-            : lower.Contains("how are") ||
-              lower.Contains("hungry")
-                ? target.Hunger < 35
-                    ? "I'm hungry. I need to find food."
-                    : "I'm doing well enough."
-                : lower.Contains("sorry")
-                    ? "I'll remember that you apologised."
-                : lower.Contains("hello") ||
-                      lower == "hi" ||
-                      lower.StartsWith("hi ")
-                        ? $"Hello. I'm {target.Name}."
-                        : $"I heard you. Right now I'm focused on " +
-                          $"{target.Need.ToString().ToLowerInvariant()}.";
+        var response = FallbackNpcReply(target, message);
         ShowVillagerSpeech(
             nearestIndex,
             response,

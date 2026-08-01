@@ -17,7 +17,8 @@ internal sealed record WorldProfile(
     IReadOnlyList<VillagerPersona>? AiNpcPersonas = null,
     bool ObserveWorld = false,
     string SharedStory = "",
-    IReadOnlyList<NewWorldSurvivorSetup>? AiNpcSetups = null);
+    IReadOnlyList<NewWorldSurvivorSetup>? AiNpcSetups = null,
+    string AiModelOverride = "");
 
 internal sealed record PlayerProfile(
     string Id,
@@ -91,8 +92,16 @@ internal sealed record GameSettings(
     bool UnlimitedZoom = true,
     NpcAiSettings? Ai = null)
 {
-    public NpcAiSettings EffectiveAi =>
-        Ai ?? new();
+    public NpcAiSettings EffectiveAi
+    {
+        get
+        {
+            var settings = Ai ?? new();
+            return settings.Model == NpcAiModelDefaults.Previous
+                ? settings with { Model = NpcAiModelDefaults.Current }
+                : settings;
+        }
+    }
 }
 
 internal sealed class GameSaveRepository
@@ -138,7 +147,8 @@ internal sealed class GameSaveRepository
         IReadOnlyList<VillagerPersona>? aiNpcPersonas = null,
         bool observeWorld = false,
         string sharedStory = "",
-        IReadOnlyList<NewWorldSurvivorSetup>? aiNpcSetups = null)
+        IReadOnlyList<NewWorldSurvivorSetup>? aiNpcSetups = null,
+        string aiModelOverride = "")
     {
         var now = DateTime.UtcNow;
         var id = UniqueId(WorldsRoot, name);
@@ -152,7 +162,10 @@ internal sealed class GameSaveRepository
             AiNpcPersonas: aiNpcPersonas?.Take(aiNpcCount).ToArray(),
             ObserveWorld: observeWorld && aiNpcCount > 0,
             SharedStory: sharedStory.Trim(),
-            AiNpcSetups: aiNpcSetups?.Take(aiNpcCount).ToArray());
+            AiNpcSetups: aiNpcSetups?.Take(aiNpcCount).ToArray(),
+            AiModelOverride: aiNpcsEnabled
+                ? aiModelOverride.Trim()
+                : "");
         SaveWorld(profile);
         return profile;
     }

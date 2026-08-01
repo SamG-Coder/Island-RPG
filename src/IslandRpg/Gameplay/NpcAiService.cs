@@ -7,8 +7,14 @@ namespace IslandRpg.Gameplay;
 internal sealed record NpcAiSettings(
     bool Enabled = true,
     string BaseUrl = "http://localhost:11434",
-    string Model = "qwen3:4b",
+    string Model = NpcAiModelDefaults.Current,
     string Password = "");
+
+internal static class NpcAiModelDefaults
+{
+    public const string Current = "qwen3.6:35b-a3b";
+    public const string Previous = "qwen3:4b";
+}
 
 internal enum NpcAiAvailability : byte
 {

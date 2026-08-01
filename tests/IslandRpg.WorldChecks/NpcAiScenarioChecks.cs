@@ -253,6 +253,10 @@ internal static class NpcAiScenarioChecks
             villagers[0], "what should we do?");
         var stormReply = GameHostWindow.FallbackNpcReply(
             villagers[0], "I think there was a storm");
+        var greetingReply = GameHostWindow.FallbackNpcReply(
+            villagers[0], "hey");
+        var locationReply = GameHostWindow.FallbackNpcReply(
+            villagers[0], "where are you?");
         Check(
             (planningReply.Contains(
                  "supplies", StringComparison.OrdinalIgnoreCase) ||
@@ -271,6 +275,12 @@ internal static class NpcAiScenarioChecks
             !stormReply.StartsWith(
                 "I heard you", StringComparison.OrdinalIgnoreCase),
             "31 island planning and storm hypothesis produce relevant progressive replies");
+        Check(
+            greetingReply.Contains("Hello", StringComparison.OrdinalIgnoreCase) &&
+            locationReply.Contains("here", StringComparison.OrdinalIgnoreCase) &&
+            !greetingReply.StartsWith("I heard you", StringComparison.OrdinalIgnoreCase) &&
+            !locationReply.Contains("focused on", StringComparison.OrdinalIgnoreCase),
+            "31b screenshot conversation greetings and location questions stay coherent");
 
         var brain = villagers[0];
         for (var turn = 0; turn < 20; turn++)
@@ -542,11 +552,11 @@ internal static class NpcAiScenarioChecks
             interpreted?.Reply == "",
             "47 listener cannot claim the speaker's identity");
 
-        if (passed != 47)
+        if (passed != 48)
             throw new InvalidOperationException(
-                $"Expected 47 NPC AI scenarios, passed {passed}.");
+                $"Expected 48 NPC AI scenarios, passed {passed}.");
         Console.WriteLine(
-            "NPC AI scenario matrix passed: 47/47.");
+            "NPC AI scenario matrix passed: 48/48.");
     }
 
     private static SocialActorObservation[] Observe(

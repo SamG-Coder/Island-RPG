@@ -13,6 +13,8 @@ internal sealed partial class GameHostWindow
         "Observe world", "Free camera; no player participation");
     private readonly TextBoxControlState _newWorldSharedStoryTextBox =
         new() { MaximumLength = 320 };
+    private readonly TextBoxControlState _newWorldAiModelOverrideTextBox =
+        new() { MaximumLength = 100 };
     private readonly TextBoxControlState[] _newWorldNpcNameTextBoxes =
         CreateAdvancedFields(48);
     private readonly TextBoxControlState[] _newWorldNpcPersonalityTextBoxes =
@@ -102,7 +104,8 @@ internal sealed partial class GameHostWindow
         DrawAoEPanelBorder(content);
         var fields = AdvancedFields();
         string[] labels = ["Name", "Personality override", "Prior trade override",
-            "Backstory override", "Starting items (comma separated)", "Shared story / what happened"];
+            "Backstory override", "Starting items (comma separated)",
+            "Shared story / what happened", "AI model override"];
         for (var index = 0; index < fields.Length; index++)
         {
             var bounds = AdvancedFieldBounds(index);
@@ -112,7 +115,7 @@ internal sealed partial class GameHostWindow
             DrawTextField(fields[index]);
         }
         DrawCenteredUiText(
-            "Leave an override blank to keep the AI-generated value. Items must match catalog names.",
+            "Blank fields inherit generated values and the global AI model. Items use catalog names.",
             new(content.X + 16, content.Y + content.W - 68, content.Z - 32, 18),
             new FSColor(145, 138, 117, 255));
         _newWorldObserveToggle.Layout(
@@ -134,7 +137,8 @@ internal sealed partial class GameHostWindow
             _newWorldNpcTradeTextBoxes[index],
             _newWorldNpcBackstoryTextBoxes[index],
             _newWorldNpcItemsTextBoxes[index],
-            _newWorldSharedStoryTextBox];
+            _newWorldSharedStoryTextBox,
+            _newWorldAiModelOverrideTextBox];
     }
 
     private TextBoxControlState? FocusedAdvancedTextBox() =>
@@ -143,6 +147,7 @@ internal sealed partial class GameHostWindow
     private void BlurAdvancedTextBoxes()
     {
         _newWorldSharedStoryTextBox.Blur();
+        _newWorldAiModelOverrideTextBox.Blur();
         foreach (var value in _newWorldNpcNameTextBoxes
                      .Concat(_newWorldNpcPersonalityTextBoxes)
                      .Concat(_newWorldNpcTradeTextBoxes)
@@ -203,10 +208,27 @@ internal sealed partial class GameHostWindow
     {
         var content = AdvancedContentBounds();
         var row = index < 5 ? index : 0;
-        var x = index == 5 ? content.X + content.Z / 2 + 8 : content.X + 16;
+        var rightColumn = index >= 5;
+        var x = rightColumn ? content.X + content.Z / 2 + 8 : content.X + 16;
         var width = content.Z / 2 - 32;
-        var y = index == 5 ? content.Y + 34 : content.Y + 34 + row * 58;
+        var y = rightColumn
+            ? content.Y + 34 + (index - 5) * 58
+            : content.Y + 34 + row * 58;
         return new(x, y, width, 34);
+    }
+
+    private NpcAiSettings NewWorldNpcAiSettings()
+    {
+        var settings = _saves.LoadSettings().EffectiveAi;
+        var model = _newWorldAiModelOverrideTextBox.Text.Trim();
+        return model.Length == 0 ? settings : settings with { Model = model };
+    }
+
+    private NpcAiSettings ActiveNpcAiSettings()
+    {
+        var settings = _saves.LoadSettings().EffectiveAi;
+        var model = _activeWorld?.AiModelOverride?.Trim() ?? "";
+        return model.Length == 0 ? settings : settings with { Model = model };
     }
 
     private Vector4 AdvancedDoneButtonBounds()
