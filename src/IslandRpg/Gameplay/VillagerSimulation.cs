@@ -235,7 +235,7 @@ internal static class VillagerSimulation
     public const float NearbyRadius = 28;
     public const float RegionalRadius = 128;
     public const double NearbyDecisionSeconds =
-        8 * GameSecondsPerRealSecond;
+        3 * GameSecondsPerRealSecond;
     public const double RegionalDecisionSeconds =
         30 * GameSecondsPerRealSecond;
     public const double DistantDecisionSeconds =
@@ -249,7 +249,7 @@ internal static class VillagerSimulation
     public const float FootBoxWidth = .46f;
     public const float FootBoxDepth = .34f;
     public const double GatherPauseSeconds =
-        45 * GameSecondsPerRealSecond;
+        2 * GameSecondsPerRealSecond;
     public const double SocialCooldownRealSeconds = 120;
     public const double IntroductionCooldownRealSeconds = 45;
     public const double RelationshipCheckInSeconds = 6 * 60 * 60;

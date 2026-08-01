@@ -939,11 +939,32 @@ Require(
     "villager simulation frequency must decrease with distance");
 Require(
     VillagerSimulation.NearbyDecisionSeconds /
-        VillagerSimulation.GameSecondsPerRealSecond >= 8 &&
+        VillagerSimulation.GameSecondsPerRealSecond == 3 &&
     VillagerSimulation.GatherPauseSeconds /
-        VillagerSimulation.GameSecondsPerRealSecond >= 45 &&
+        VillagerSimulation.GameSecondsPerRealSecond == 2 &&
     VillagerSimulation.SocialCooldownRealSeconds >= 90,
     "ordinary decisions, gathering, and social speech cooldowns must be authored in real-time seconds");
+var waitingStatusVillager = villagerSpawnA[0] with
+{
+    LastDeliberation = null,
+    NextDecisionGameSeconds = 1_120,
+    WorkRole = VillagerWorkRole.Wood
+};
+Require(
+    VillagerStatusService.CurrentThought(
+        waitingStatusVillager, 1_000).Contains("2.0s") &&
+    VillagerStatusService.CurrentThought(
+        waitingStatusVillager with
+        {
+            NextDecisionGameSeconds = 1_000
+        }, 1_000).Contains("wood task") &&
+    VillagerStatusService.CurrentThought(
+        waitingStatusVillager with
+        {
+            Activity = VillagerActivity.Resting,
+            Energy = 10
+        }, 1_000).Contains("50"),
+    "observation status must explain idle cooldown, role work, and genuine rest");
 var hungryVillagerInventory = PlayerInventory.CreateStartingInventory();
 hungryVillagerInventory[0] = ItemIds.CookedMinnows;
 var hungryVillager = villagerSpawnA[0] with
@@ -3223,6 +3244,35 @@ Require(
     refreshedSkillMemory.Summary!.Contains("missed") &&
     refreshedSkillMemory.ObservedValue == 26,
     "NPC skill feedback must persist in bounded memory and consolidate repeated actions");
+var inspectedVillager = actionMemoryVillager with
+{
+    WoodcuttingExperience = 125,
+    FarmingExperience = 250,
+    CraftingExperience = 500,
+    MiningExperience = 1_000,
+    AttackExperience = 2_000,
+    StrengthExperience = 3_000,
+    DefenceExperience = 4_000
+};
+Require(
+    VillagerSkillService.Experience(
+        inspectedVillager, SkillType.Woodcutting) == 125 &&
+    VillagerSkillService.Experience(
+        inspectedVillager, SkillType.Farming) == 250 &&
+    VillagerSkillService.Experience(
+        inspectedVillager, SkillType.Crafting) == 500 &&
+    VillagerSkillService.Experience(
+        inspectedVillager, SkillType.Mining) == 1_000 &&
+    VillagerSkillService.Experience(
+        inspectedVillager, SkillType.Attack) == 2_000 &&
+    VillagerSkillService.Experience(
+        inspectedVillager, SkillType.Strength) == 3_000 &&
+    VillagerSkillService.Experience(
+        inspectedVillager, SkillType.Defence) == 4_000 &&
+    VillagerSkillService.Level(
+        inspectedVillager, SkillType.Mining) ==
+        SkillService.LevelForExperience(1_000),
+    "observe inspection must read each NPC's own persisted skill XP and level");
 Require(
     MiningNodeCatalog.TryGet(
         new(0, 0, UndergroundResourceGenerator.Coal, 0,

@@ -2897,6 +2897,9 @@ internal sealed partial class GameHostWindow : GameWindow
             return;
         }
         if (_screen != ScreenState.WorldPreview || e.OffsetY == 0) return;
+        if (_mode == PreviewMode.Game && IsObserveWorld &&
+            ScrollObserveMemories(MouseState.Position, e.OffsetY))
+            return;
         if (_mode == PreviewMode.Game &&
             _itemContainerWindow.Visible)
         {
