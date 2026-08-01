@@ -183,7 +183,8 @@ internal sealed record VillagerState(
     VillagerProjectAssignment? ProjectAssignment = null,
     string? RecognizedLeaderId = null,
     double NextLeadershipChallengeGameSeconds = 0,
-    string? DeathCause = null);
+    string? DeathCause = null,
+    string? SettlementGroupId = null);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,
@@ -205,7 +206,8 @@ internal readonly record struct VillagerWorldObject(
     string ItemId,
     Vector2 Position,
     string? OwnerId,
-    bool IsStorage);
+    bool IsStorage,
+    string? GroupOwnerId = null);
 
 internal readonly record struct VillagerWorldAction(
     VillagerWorldActionKind Kind,
@@ -602,10 +604,8 @@ internal static class VillagerSimulation
             if (IsFailedTarget(state, candidate.Id, gameSeconds))
                 continue;
             if (candidate.IsStorage ||
-                candidate.OwnerId is { Length: > 0 } owner &&
-                !string.Equals(
-                    owner, state.Id,
-                    StringComparison.Ordinal) ||
+                !SettlementGroupService.CanAccess(
+                    state, candidate.OwnerId, candidate.GroupOwnerId) ||
                 !ItemCatalog.TryGet(candidate.ItemId, out var item) ||
                 item.HasTag(ItemTag.PlaceableObject) ||
                 !ShouldGather(state, item))

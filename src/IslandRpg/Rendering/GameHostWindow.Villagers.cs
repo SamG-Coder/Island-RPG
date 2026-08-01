@@ -10,6 +10,7 @@ namespace IslandRpg.Rendering;
 internal sealed partial class GameHostWindow
 {
     private string? _settlementProjectKey;
+    private SettlementGroupState? _settlementGroup;
     private VillagerLeadershipResult? _settlementCouncilResult;
     private Queue<VillagerGroupConversationLine> _settlementCouncilLines = [];
     private Vector2 _settlementCouncilPoint;
@@ -71,6 +72,7 @@ internal sealed partial class GameHostWindow
         _recentNpcResourceHealthUntil = 0;
         _playerWorldHealthUntil = 0;
         if (_activeWorld is null) return;
+        _settlementGroup = _saves.LoadSettlementGroup(_activeWorld.Id);
         _villagerDeaths = _saves.LoadVillagerDeaths(_activeWorld.Id);
         if (!_activeWorld.AiNpcsEnabled ||
             _activeWorld.AiNpcCount <= 0)
@@ -120,6 +122,15 @@ internal sealed partial class GameHostWindow
             });
             _villagersDirty = true;
         }
+        if (_settlementGroup is { } loadedGroup)
+            for (var index = 0; index < _villagers.Count; index++)
+                if (loadedGroup.MemberIds.Contains(
+                        _villagers[index].Id,
+                        StringComparer.Ordinal))
+                    _villagers[index] = _villagers[index] with
+                    {
+                        SettlementGroupId = loadedGroup.Id
+                    };
         _villagersNextSaveAt = _worldGameSeconds + 30;
     }
 
@@ -920,12 +931,38 @@ internal sealed partial class GameHostWindow
             _villagers[index] = updated[index];
         var leader = _villagers.First(value =>
             value.Id == resultToApply.LeaderId);
+        var livingIds = _villagers
+            .Where(value => value.Health > 0)
+            .Select(value => value.Id)
+            .ToArray();
+        _settlementGroup = _settlementGroup is null
+            ? SettlementGroupService.Form(
+                _activeWorld!.Id,
+                leader.Id,
+                livingIds,
+                _settlementCouncilPoint,
+                leader.WorldLevel,
+                _worldGameSeconds)
+            : _settlementGroup with
+            {
+                LeaderId = leader.Id,
+                MemberIds = livingIds
+            };
+        for (var index = 0; index < _villagers.Count; index++)
+            if (_villagers[index].Health > 0)
+                _villagers[index] = _villagers[index] with
+                {
+                    SettlementGroupId = _settlementGroup.Id
+                };
+        _saves.SaveSettlementGroup(_activeWorld!.Id, _settlementGroup);
         ObserveLog("settlement_council", leader.Id, new
         {
             resultToApply.Contested,
             TimedOut = _settlementCouncilTimedOut,
             Votes = resultToApply.Votes,
-            Worksite = new { X = leader.PositionX, Y = leader.PositionY }
+            Worksite = new { X = leader.PositionX, Y = leader.PositionY },
+            GroupId = _settlementGroup.Id,
+            Camp = new { X = _settlementGroup.CampX, Y = _settlementGroup.CampY }
         });
         _settlementCouncilResult = null;
         _settlementCouncilLines.Clear();
@@ -1523,7 +1560,8 @@ internal sealed partial class GameHostWindow
                     new(item.X, item.Y),
                     item.OwnerId,
                     StorageContainerService.IsStorage(
-                        item.ItemId)));
+                        item.ItemId),
+                    item.GroupOwnerId));
             }
         }
         var beforeLocationObservation = villager;
@@ -1532,6 +1570,7 @@ internal sealed partial class GameHostWindow
             CollectionsMarshal.AsSpan(_villagerWorldObjects),
             _worldGameSeconds);
         villager = ReconcileVillagerLocationMemory(villager);
+        villager = ExchangeSettlementKnowledge(villager);
         _villagers[villagerIndex] = villager;
         if (!ReferenceEquals(beforeLocationObservation, villager))
             _villagersDirty = true;
@@ -1728,10 +1767,8 @@ internal sealed partial class GameHostWindow
             : EntityInteractionService.Pickup(
                 villager.Inventory, target.ItemId);
         var takenItemId = gathered.ItemId ?? target.ItemId;
-        var ownedByAnother = target.OwnerId is { Length: > 0 } owner &&
-                             !string.Equals(
-                                 owner, actorId,
-                                 StringComparison.Ordinal);
+        var ownedByAnother = !SettlementGroupService.CanAccess(
+            villager, target.OwnerId, target.GroupOwnerId);
         if (ownedByAnother || !gathered.Succeeded)
         {
             _villagerWork.ReleaseTarget(reservationKey, actorId);
@@ -1779,10 +1816,40 @@ internal sealed partial class GameHostWindow
             target.Id,
             ItemId = takenItemId,
             PreviousOwner = target.OwnerId
+                ?? target.GroupOwnerId
         });
         QueueChunkSave(targetGpu.Chunk);
         _villagersDirty = true;
         return new(intent, true);
+    }
+
+    private VillagerState ExchangeSettlementKnowledge(
+        VillagerState villager)
+    {
+        if (_settlementGroup is not { } group ||
+            villager.SettlementGroupId != group.Id ||
+            villager.WorldLevel != group.WorldLevel ||
+            Vector2.DistanceSquared(
+                new(villager.PositionX, villager.PositionY),
+                group.Camp) > group.CacheRadius * group.CacheRadius)
+            return villager;
+        var updatedGroup = SettlementGroupService.ReportDiscoveries(
+            group, villager);
+        if (!ReferenceEquals(updatedGroup, group))
+        {
+            _settlementGroup = updatedGroup;
+            if (_activeWorld is not null)
+                _saves.SaveSettlementGroup(
+                    _activeWorld.Id, updatedGroup);
+            ObserveLog("settlement_knowledge_report", villager.Id, new
+            {
+                GroupId = group.Id,
+                SharedLocations = updatedGroup.SharedLocations?.Count ?? 0
+            });
+            group = updatedGroup;
+        }
+        return SettlementGroupService.LearnReports(
+            villager, group, _worldGameSeconds);
     }
 
     private VillagerState ReconcileVillagerLocationMemory(
@@ -2296,17 +2363,22 @@ internal sealed partial class GameHostWindow
     {
         if (_player is null ||
             _activePlayer is null ||
-            string.IsNullOrWhiteSpace(item.OwnerId) ||
+            string.IsNullOrWhiteSpace(item.OwnerId) &&
+            string.IsNullOrWhiteSpace(item.GroupOwnerId) ||
             string.Equals(
                 item.OwnerId, _activePlayer.Id,
                 StringComparison.Ordinal))
             return;
+        var ownershipId = item.OwnerId ?? item.GroupOwnerId!;
         for (var index = 0; index < _villagers.Count; index++)
         {
             var observer = _villagers[index];
             if (observer.WorldLevel != _activeWorldLevel ||
-                !string.Equals(
-                    observer.Id, item.OwnerId,
+                item.OwnerId is not null && !string.Equals(
+                    observer.Id, item.OwnerId, StringComparison.Ordinal) ||
+                item.GroupOwnerId is not null && !string.Equals(
+                    observer.SettlementGroupId,
+                    item.GroupOwnerId,
                     StringComparison.Ordinal) ||
                 Vector2.DistanceSquared(
                     new(observer.PositionX, observer.PositionY),
@@ -2317,7 +2389,7 @@ internal sealed partial class GameHostWindow
                     observer,
                     item.Id,
                     item.ItemId,
-                    item.OwnerId,
+                    ownershipId,
                     _activePlayer.Id,
                     _worldGameSeconds,
                     confidence: 1,

@@ -261,6 +261,16 @@ internal sealed class GameSaveRepository
             Path.Combine(WorldsRoot, worldId, "villagers.json"),
             villagers);
 
+    public SettlementGroupState? LoadSettlementGroup(string worldId) =>
+        ReadJson<SettlementGroupState>(Path.Combine(
+            WorldsRoot, worldId, "settlement-group.json"));
+
+    public void SaveSettlementGroup(
+        string worldId, SettlementGroupState group) =>
+        WriteJson(
+            Path.Combine(WorldsRoot, worldId, "settlement-group.json"),
+            group);
+
     public IReadOnlyList<PlayerDeathMarker> LoadPlayerDeaths(
         string worldId,
         string playerId) =>

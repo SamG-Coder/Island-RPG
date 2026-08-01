@@ -44,6 +44,14 @@ internal readonly record struct EntityFishingInteractionResult(
     string? ItemId = null,
     string? Failure = null);
 
+internal readonly record struct EntityCachedCraftResult(
+    bool Succeeded,
+    string?[] Inventory,
+    IReadOnlyList<Guid> ConsumedCacheObjectIds,
+    IReadOnlyList<string> ReturnedCacheItemIds,
+    string? ItemId = null,
+    string? Failure = null);
+
 /// <summary>
 /// Actor-neutral boundary for interactions that change inventories, skills,
 /// health, or world resources. Player and NPC controllers decide when an
@@ -104,6 +112,79 @@ internal static class EntityInteractionService
         bool stationAvailable = false) =>
         ActorActionService.Craft(
             inventory, recipe, craftingLevel, stationAvailable);
+
+    public static EntityCachedCraftResult CraftWithGroundCache(
+        string?[]? inventory,
+        IReadOnlyList<WorldGroundObject> cacheItems,
+        CraftingRecipe recipe,
+        int craftingLevel,
+        bool stationAvailable = false)
+    {
+        var actorInventory = PlayerInventory.Normalize(inventory);
+        var combined = (string?[])actorInventory.Clone();
+        var supplied = new Dictionary<int, WorldGroundObject>();
+        foreach (var ingredient in recipe.Ingredients)
+        {
+            var needed = Math.Max(
+                0,
+                ingredient.Count -
+                combined.Count(ingredient.Accepts));
+            foreach (var item in cacheItems.Where(value =>
+                         ingredient.Accepts(value.ItemId)))
+            {
+                if (needed <= 0 || supplied.Values.Any(value =>
+                        value.Id == item.Id))
+                    break;
+                var slot = Array.FindIndex(combined, value => value is null);
+                if (slot < 0) break;
+                combined[slot] = item.ItemId;
+                supplied.Add(slot, item);
+                needed--;
+            }
+        }
+        var crafted = ActorActionService.Craft(
+            combined, recipe, craftingLevel, stationAvailable);
+        if (!crafted.Succeeded)
+            return new(
+                false,
+                actorInventory,
+                [],
+                [],
+                Failure: crafted.Failure);
+
+        var updatedActor = (string?[])crafted.Inventory.Clone();
+        var returned = new List<string>();
+        var produced = new List<string>();
+        foreach (var (slot, source) in supplied)
+        {
+            if (updatedActor[slot] is { } remaining)
+            {
+                if (string.Equals(
+                        remaining,
+                        recipe.ResultItemId,
+                        StringComparison.OrdinalIgnoreCase))
+                    produced.Add(remaining);
+                else
+                    returned.Add(remaining);
+            }
+            updatedActor[slot] = null;
+        }
+        foreach (var itemId in produced)
+            if (!PlayerInventory.TryAdd(
+                    updatedActor, itemId, out updatedActor))
+                return new(
+                    false,
+                    actorInventory,
+                    [],
+                    [],
+                    Failure: "inventory_full");
+        return new(
+            true,
+            updatedActor,
+            supplied.Values.Select(value => value.Id).ToArray(),
+            returned,
+            recipe.ResultItemId);
+    }
 
     public static ActorInventoryResult Cook(
         string?[]? inventory,

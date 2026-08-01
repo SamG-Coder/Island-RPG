@@ -1,0 +1,146 @@
+using IslandRpg.World;
+using OpenTK.Mathematics;
+using System.Text.Json.Serialization;
+
+namespace IslandRpg.Gameplay;
+
+internal sealed record SettlementGroupState(
+    string Id,
+    string LeaderId,
+    IReadOnlyList<string> MemberIds,
+    float CampX,
+    float CampY,
+    int WorldLevel,
+    double FormedGameSeconds,
+    float CacheRadius = SettlementGroupService.DefaultCacheRadius,
+    IReadOnlyList<SettlementLocationReport>? SharedLocations = null)
+{
+    [JsonIgnore]
+    public Vector2 Camp => new(CampX, CampY);
+}
+
+internal sealed record SettlementLocationReport(
+    VillagerLocationType Type,
+    float PositionX,
+    float PositionY,
+    int WorldLevel,
+    float Confidence,
+    double LastObservedGameSeconds,
+    string ReporterId);
+
+internal static class SettlementGroupService
+{
+    public const float DefaultCacheRadius = 4;
+
+    public static SettlementGroupState Form(
+        string worldId,
+        string leaderId,
+        IEnumerable<string> memberIds,
+        Vector2 camp,
+        int worldLevel,
+        double gameSeconds) =>
+        new(
+            $"group-{worldId}",
+            leaderId,
+            memberIds.Distinct(StringComparer.Ordinal).ToArray(),
+            camp.X,
+            camp.Y,
+            worldLevel,
+            gameSeconds);
+
+    public static bool IsMember(
+        SettlementGroupState? group, string actorId) =>
+        group?.MemberIds.Contains(actorId, StringComparer.Ordinal) == true;
+
+    public static bool CanAccess(
+        VillagerState villager,
+        string? characterOwnerId,
+        string? groupOwnerId) =>
+        string.IsNullOrWhiteSpace(characterOwnerId) &&
+        string.IsNullOrWhiteSpace(groupOwnerId) ||
+        string.Equals(characterOwnerId, villager.Id,
+            StringComparison.Ordinal) ||
+        !string.IsNullOrWhiteSpace(groupOwnerId) &&
+        string.Equals(groupOwnerId, villager.SettlementGroupId,
+            StringComparison.Ordinal);
+
+    public static bool IsInCache(
+        SettlementGroupState group,
+        WorldGroundObject item) =>
+        item.GroupOwnerId == group.Id &&
+        Vector2.DistanceSquared(
+            new(item.X, item.Y), group.Camp) <=
+        group.CacheRadius * group.CacheRadius;
+
+    public static WorldGroundObject ClaimForGroup(
+        WorldGroundObject item, SettlementGroupState group) =>
+        item with
+        {
+            OwnerId = null,
+            GroupOwnerId = group.Id
+        };
+
+    public static SettlementGroupState ReportDiscoveries(
+        SettlementGroupState group,
+        VillagerState reporter)
+    {
+        if (!IsMember(group, reporter.Id) ||
+            reporter.LocationMemories is not { Count: > 0 })
+            return group;
+        var reports = group.SharedLocations?.ToList() ?? [];
+        foreach (var memory in reporter.LocationMemories.Where(value =>
+                     value.Confidence >=
+                     VillagerLocationMemoryService.MinimumUsefulConfidence))
+        {
+            var index = reports.FindIndex(value =>
+                value.Type == memory.Type &&
+                value.WorldLevel == memory.WorldLevel &&
+                Vector2.DistanceSquared(
+                    new(value.PositionX, value.PositionY),
+                    new(memory.PositionX, memory.PositionY)) <=
+                VillagerLocationMemoryService.MatchRadius *
+                VillagerLocationMemoryService.MatchRadius);
+            var report = new SettlementLocationReport(
+                memory.Type,
+                memory.PositionX,
+                memory.PositionY,
+                memory.WorldLevel,
+                memory.Confidence,
+                memory.LastObservedGameSeconds,
+                reporter.Id);
+            if (index < 0) reports.Add(report);
+            else if (reports[index].LastObservedGameSeconds <=
+                     report.LastObservedGameSeconds)
+                reports[index] = report;
+        }
+        if (reports.Count > 128)
+            reports = reports
+                .OrderByDescending(value => value.LastObservedGameSeconds)
+                .Take(128)
+                .ToList();
+        if ((group.SharedLocations ?? []).SequenceEqual(reports))
+            return group;
+        return group with { SharedLocations = reports };
+    }
+
+    public static VillagerState LearnReports(
+        VillagerState villager,
+        SettlementGroupState group,
+        double gameSeconds)
+    {
+        if (!IsMember(group, villager.Id) ||
+            group.SharedLocations is not { Count: > 0 })
+            return villager;
+        var result = villager;
+        foreach (var report in group.SharedLocations)
+            result = VillagerLocationMemoryService.Remember(
+                result,
+                report.Type,
+                new(report.PositionX, report.PositionY),
+                report.WorldLevel,
+                gameSeconds,
+                confidence: Math.Clamp(report.Confidence * .8f, 0, 1),
+                clearFailedLocation: false);
+        return result;
+    }
+}

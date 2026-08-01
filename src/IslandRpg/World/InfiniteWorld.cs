@@ -42,7 +42,8 @@ internal sealed record WorldGroundObject(
     int Health = 0,
     int MaxHealth = 0,
     WorldContainerContents? Container = null,
-    string? OwnerId = null);
+    string? OwnerId = null,
+    string? GroupOwnerId = null);
 internal sealed record WorldContainerContents(
     string?[] Items,
     int[] Quantities,

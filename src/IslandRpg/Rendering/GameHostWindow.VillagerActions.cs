@@ -200,6 +200,10 @@ internal sealed partial class GameHostWindow
         var slot = VillagerSettlementProjectService.ContributionSlot(
             villager, builder);
         if (slot < 0) return false;
+        if (_settlementGroup is { } group &&
+            villager.SettlementGroupId == group.Id)
+            return TryVillagerDepositProjectCache(
+                index, villager, tier, assignment, slot, group);
         var contributorPosition = new Vector2(
             villager.PositionX, villager.PositionY);
         var worksite = new Vector2(
@@ -275,6 +279,60 @@ internal sealed partial class GameHostWindow
             assignment.ProjectItemId,
             ItemId = itemId
         });
+        return true;
+    }
+
+    private bool TryVillagerDepositProjectCache(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier,
+        VillagerProjectAssignment assignment,
+        int slot,
+        SettlementGroupState group)
+    {
+        var cachePoint = VillagerSettlementProjectService.RendezvousPoint(
+            group.Camp, villager.Id, isBuilder: false);
+        var position = new Vector2(villager.PositionX, villager.PositionY);
+        if (Vector2.DistanceSquared(position, cachePoint) >
+            VillagerSimulation.InteractionRange *
+            VillagerSimulation.InteractionRange)
+        {
+            MoveVillagerForCapability(
+                index, villager, tier, cachePoint, VillagerNeed.Safe);
+            return true;
+        }
+        if (!TryFindGroundObjectDrop(
+                group.Camp, out var gpu, out var dropPosition, out _))
+            return false;
+        var dropped = EntityInteractionService.Drop(
+            villager.Inventory,
+            slot,
+            dropPosition.X,
+            dropPosition.Y,
+            villager.Id);
+        if (!dropped.Succeeded || dropped.Object is null) return false;
+        var cached = SettlementGroupService.ClaimForGroup(
+            dropped.Object, group);
+        gpu.Chunk.GroundObjects.Add(cached);
+        _villagers[index] = villager with
+        {
+            Inventory = dropped.Inventory,
+            Action = EntityAction.Idle,
+            ActionTime = 0,
+            NextDecisionGameSeconds = _worldGameSeconds
+        };
+        _completedProjectContributions.Add(ProjectContributionKey(
+            assignment.ProjectItemId, villager.Id, cached.ItemId));
+        QueueChunkSave(gpu.Chunk);
+        ObserveLog("settlement_cache_deposit", villager.Id, new
+        {
+            GroupId = group.Id,
+            assignment.ProjectItemId,
+            ItemId = cached.ItemId,
+            cached.Id,
+            Position = new { X = cached.X, Y = cached.Y }
+        });
+        _villagersDirty = true;
         return true;
     }
 
@@ -610,7 +668,37 @@ internal sealed partial class GameHostWindow
                 nearbyStations.Contains(recipe.RequiredStationItemId);
             var crafted = EntityInteractionService.Craft(
                 villager.Inventory, recipe, level, stationAvailable);
+            EntityCachedCraftResult cachedCraft = default;
+            if (!crafted.Succeeded &&
+                _settlementGroup is { } group &&
+                villager.SettlementGroupId == group.Id &&
+                villager.ProjectAssignment?.BuilderId == villager.Id &&
+                Vector2.DistanceSquared(
+                    new(villager.PositionX, villager.PositionY),
+                    group.Camp) <=
+                (group.CacheRadius + 2) * (group.CacheRadius + 2))
+            {
+                var cacheItems = _worldChunks.Values
+                    .Where(IsActiveSimulationChunk)
+                    .SelectMany(value => value.Chunk.GroundObjects)
+                    .Where(value =>
+                        SettlementGroupService.IsInCache(group, value))
+                    .ToArray();
+                cachedCraft = EntityInteractionService.CraftWithGroundCache(
+                    villager.Inventory,
+                    cacheItems,
+                    recipe,
+                    level,
+                    stationAvailable);
+                if (cachedCraft.Succeeded)
+                    crafted = new(
+                        true,
+                        cachedCraft.Inventory,
+                        cachedCraft.ItemId);
+            }
             if (!crafted.Succeeded) continue;
+            if (cachedCraft.Succeeded && _settlementGroup is { } cacheGroup)
+                ApplySettlementCacheCraft(cacheGroup, cachedCraft);
             var experience = CraftingSkill.AwardExperience(
                 villager.CraftingExperience, recipe,
                 crafted.Inventory);
@@ -636,6 +724,40 @@ internal sealed partial class GameHostWindow
             return true;
         }
         return false;
+    }
+
+    private void ApplySettlementCacheCraft(
+        SettlementGroupState group,
+        in EntityCachedCraftResult craft)
+    {
+        var consumed = craft.ConsumedCacheObjectIds.ToHashSet();
+        foreach (var gpu in _worldChunks.Values)
+        {
+            if (!IsActiveSimulationChunk(gpu)) continue;
+            var removed = gpu.Chunk.GroundObjects.RemoveAll(value =>
+                consumed.Contains(value.Id));
+            if (removed > 0) QueueChunkSave(gpu.Chunk);
+        }
+        foreach (var itemId in craft.ReturnedCacheItemIds)
+        {
+            if (!TryFindGroundObjectDrop(
+                    group.Camp, out var gpu, out var position, out _))
+                continue;
+            gpu.Chunk.GroundObjects.Add(new(
+                Guid.NewGuid(),
+                itemId,
+                position.X,
+                position.Y,
+                GroupOwnerId: group.Id));
+            QueueChunkSave(gpu.Chunk);
+        }
+        ObserveLog("settlement_cache_consumed", group.LeaderId, new
+        {
+            GroupId = group.Id,
+            craft.ItemId,
+            Consumed = craft.ConsumedCacheObjectIds.Count,
+            Returned = craft.ReturnedCacheItemIds
+        });
     }
 
     private bool TryVillagerFish(

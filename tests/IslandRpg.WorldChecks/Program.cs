@@ -2092,6 +2092,95 @@ Require(
     bluntedToolInventory[0] == ItemIds.BluntStoneAxe &&
     toolInventory[0] == ItemIds.StoneAxe,
     "player and NPC stone tools must share durability mutation without modifying the input inventory");
+var settlementGroup = SettlementGroupService.Form(
+    "world-check",
+    "group-leader",
+    ["group-leader", "group-builder", "group-scout"],
+    new(10, 12),
+    0,
+    500);
+var groupMember = new VillagerState(
+    "group-builder", "Builder", EntityGender.Male,
+    0, 0, 10, 12, 0, 100, 100,
+    PlayerInventory.CreateStartingInventory(),
+    SettlementGroupId: settlementGroup.Id);
+var groupOutsider = groupMember with
+{
+    Id = "outsider",
+    SettlementGroupId = null
+};
+var unclaimedCacheItem = new WorldGroundObject(
+    Guid.NewGuid(), ItemIds.PlantFibres, 10.5f, 12.5f);
+var groupCacheItem = SettlementGroupService.ClaimForGroup(
+    unclaimedCacheItem, settlementGroup);
+Require(
+    groupCacheItem.OwnerId is null &&
+    groupCacheItem.GroupOwnerId == settlementGroup.Id &&
+    SettlementGroupService.IsInCache(
+        settlementGroup, groupCacheItem) &&
+    SettlementGroupService.CanAccess(
+        groupMember,
+        groupCacheItem.OwnerId,
+        groupCacheItem.GroupOwnerId) &&
+    !SettlementGroupService.CanAccess(
+        groupOutsider,
+        groupCacheItem.OwnerId,
+        groupCacheItem.GroupOwnerId),
+    "ground-cache ownership must grant group members access without making settlement items public");
+var cacheFibres = Enumerable.Range(0, 3)
+    .Select(index => SettlementGroupService.ClaimForGroup(
+        new(
+            Guid.NewGuid(),
+            ItemIds.PlantFibres,
+            10 + index * .2f,
+            12),
+        settlementGroup))
+    .ToArray();
+var cachedRopeCraft = EntityInteractionService.CraftWithGroundCache(
+    groupMember.Inventory,
+    cacheFibres,
+    ropeRecipe,
+    craftingLevel: 1,
+    stationAvailable: true);
+var failedCachedRopeCraft = EntityInteractionService.CraftWithGroundCache(
+    groupMember.Inventory,
+    cacheFibres.Take(2).ToArray(),
+    ropeRecipe,
+    craftingLevel: 1,
+    stationAvailable: true);
+Require(
+    cachedRopeCraft.Succeeded &&
+    cachedRopeCraft.Inventory.Count(value => value == ItemIds.Rope) == 1 &&
+    cachedRopeCraft.ConsumedCacheObjectIds.Count == 3 &&
+    cachedRopeCraft.ReturnedCacheItemIds.Count == 0 &&
+    !failedCachedRopeCraft.Succeeded &&
+    failedCachedRopeCraft.ConsumedCacheObjectIds.Count == 0 &&
+    failedCachedRopeCraft.Inventory.SequenceEqual(groupMember.Inventory),
+    "builders must atomically craft from group-owned ground materials without consuming cache items on failure");
+var scout = groupMember with
+{
+    Id = "group-scout",
+    LocationMemories =
+    [
+        new(
+            30, 40, 0,
+            VillagerLocationType.FoodSource,
+            .9f,
+            600)
+    ]
+};
+var reportedGroup = SettlementGroupService.ReportDiscoveries(
+    settlementGroup, scout);
+var informedBuilder = SettlementGroupService.LearnReports(
+    groupMember, reportedGroup, 620);
+Require(
+    reportedGroup.SharedLocations is { Count: 1 } &&
+    reportedGroup.SharedLocations[0].ReporterId == scout.Id &&
+    informedBuilder.LocationMemories?.Any(memory =>
+        memory.Type == VillagerLocationType.FoodSource &&
+        memory.PositionX == 30 && memory.PositionY == 40 &&
+        memory.Confidence < .9f) == true,
+    "scouts must report personally discovered locations and members must learn lower-confidence shared knowledge");
 
 var observeOptions = AppOptions.Parse([
     "--observe", "--observe-seconds", "45",
@@ -7394,6 +7483,16 @@ try
     var world = saves.CreateWorld("Test Realm", 4321, player.Id);
     Require(!world.AiNpcsEnabled && world.AiNpcCount == 0,
         "world creation must default to a solo world");
+    saves.SaveSettlementGroup(world.Id, settlementGroup);
+    Require(saves.LoadSettlementGroup(world.Id) is
+        {
+            Id: var loadedGroupId,
+            LeaderId: "group-leader",
+            MemberIds.Count: 3,
+            CampX: 10,
+            CampY: 12
+        } && loadedGroupId == settlementGroup.Id,
+        "settlement membership, leadership, camp and cache must persist with the world");
     var aiWorld = saves.CreateWorld(
         "AI Realm", 9876, player.Id,
         aiNpcsEnabled: true, aiNpcCount: 2,
