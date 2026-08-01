@@ -117,7 +117,12 @@ internal sealed partial class GameHostWindow
                 {
                     _npcController.Cancel(roleVillager.Id);
                     _villagerWork.ReleaseActor(roleVillager.Id);
-                    _villagers[roleIndex] = roleVillager with { WorkRole = role };
+                    _villagers[roleIndex] =
+                        VillagerSimulation.CompleteAction(roleVillager) with
+                        {
+                            WorkRole = role,
+                            NextDecisionGameSeconds = _worldGameSeconds
+                        };
                     _villagersDirty = true;
                 }
             }
@@ -329,6 +334,12 @@ internal sealed partial class GameHostWindow
                     {
                         PositionX = sidestep.X,
                         PositionY = sidestep.Y,
+                        BlockedMoveAttempts = 0
+                    };
+                else if (VillagerSimulation.ShouldYieldThroughActor(
+                             previous.BlockedMoveAttempts))
+                    villager = villager with
+                    {
                         BlockedMoveAttempts = 0
                     };
                 else
@@ -1099,80 +1110,25 @@ internal sealed partial class GameHostWindow
         }
         if (action.Kind == VillagerWorldActionKind.TakeItem)
         {
-            var takenItemId = CropService.IsCrop(target)
-                ? target.FuelItemId!
-                : target.ItemId;
-            var gathered = ActorActionService.Gather(
-                villager.Inventory,
-                takenItemId,
-                CropService.IsCrop(target)
-                    ? CropService.HarvestCount(villager.Inventory)
-                    : 1);
-            if (target.OwnerId is { Length: > 0 } owner &&
-                !string.Equals(
-                    owner, villager.Id,
-                    StringComparison.Ordinal) ||
-                !gathered.Succeeded)
-            {
-                ObserveLog("world_action_failed", villager.Id, new
-                {
-                    Action = action.Kind.ToString(),
-                    target.Id,
-                    target.ItemId,
-                    Reason = target.OwnerId is { Length: > 0 }
-                        ? "owned_by_another_actor"
-                        : "inventory_full"
-                });
+            var reservationKey = ResourceReservationKey(
+                "ground", target.Id.ToString());
+            if (!_villagerWork.TryReserve(
+                    reservationKey, villager.Id, _worldGameSeconds))
                 return false;
-            }
-            if (!targetGpu.Chunk.GroundObjects.Remove(target))
-            {
-                ObserveLog("world_action_cancelled", villager.Id, new
-                {
-                    Action = action.Kind.ToString(),
-                    target.Id,
-                    Reason = "target_changed"
-                });
-                return false;
-            }
-            var harvestedCount = gathered.Inventory.Count(value =>
-                                     value == takenItemId) -
-                                 villager.Inventory.Count(value =>
-                                     value == takenItemId);
-            var updatedVillager = villager with
-            {
-                Inventory = gathered.Inventory,
-                FarmingExperience = CropService.IsCrop(target)
-                    ? FarmingSkill.AwardExperience(
-                        villager.FarmingExperience,
-                        FarmingSkill.PlantingExperience *
-                        harvestedCount)
-                        .Experience
-                    : villager.FarmingExperience,
-                Need = VillagerNeed.Explore,
-                Action = EntityAction.Idle,
-                ActionTime = 0,
-                GoalObjectId = null,
-                NextDecisionGameSeconds =
-                    _worldGameSeconds +
-                    Math.Max(
-                        VillagerSimulation.DecisionInterval(tier),
-                        VillagerSimulation.GatherPauseSeconds),
-                LastSimulatedGameSeconds = _worldGameSeconds
-            };
-            _villagers[villagerIndex] =
-                VillagerCommitmentService.RecordAcquiredItem(
-                    updatedVillager, takenItemId);
-            ObserveLog("world_action_succeeded", villager.Id, new
-            {
-                Action = action.Kind.ToString(),
-                target.Id,
-                ItemId = takenItemId,
-                PreviousOwner = target.OwnerId
-            });
-            QueueChunkSave(targetGpu.Chunk);
-            _villagersDirty = true;
-            return true;
+            var intent = new NpcBrainIntent(
+                "take_item", EntityAction.Gather,
+                new(target.X, target.Y), target.Id.ToString());
+            return BeginNpcControlledAction(
+                villagerIndex,
+                villager,
+                intent,
+                () => CompleteVillagerGroundPickup(
+                    villager.Id, targetGpu, target.Id,
+                    reservationKey, tier, intent),
+                VillagerSimulation.GatherPauseSeconds,
+                reservationKey,
+                () => targetGpu.Chunk.GroundObjects.Any(value =>
+                    value.Id == target.Id));
         }
 
         if (action.Kind !=
@@ -1232,6 +1188,92 @@ internal sealed partial class GameHostWindow
         QueueChunkSave(targetGpu.Chunk);
         _villagersDirty = true;
         return true;
+    }
+
+    private NpcActionResult CompleteVillagerGroundPickup(
+        string actorId,
+        GpuWorldChunk targetGpu,
+        Guid targetId,
+        string reservationKey,
+        VillagerSimulationTier tier,
+        NpcBrainIntent intent)
+    {
+        var actorIndex = VillagerIndex(actorId);
+        var target = targetGpu.Chunk.GroundObjects.FirstOrDefault(value =>
+            value.Id == targetId);
+        if (actorIndex < 0 || target is null)
+        {
+            _villagerWork.ReleaseTarget(reservationKey, actorId);
+            return new(intent, false, "target_unavailable");
+        }
+        var villager = _villagers[actorIndex];
+        var takenItemId = CropService.IsCrop(target)
+            ? target.FuelItemId!
+            : target.ItemId;
+        var gathered = ActorActionService.Gather(
+            villager.Inventory,
+            takenItemId,
+            CropService.IsCrop(target)
+                ? CropService.HarvestCount(villager.Inventory)
+                : 1);
+        var ownedByAnother = target.OwnerId is { Length: > 0 } owner &&
+                             !string.Equals(
+                                 owner, actorId,
+                                 StringComparison.Ordinal);
+        if (ownedByAnother || !gathered.Succeeded)
+        {
+            _villagerWork.ReleaseTarget(reservationKey, actorId);
+            ObserveLog("world_action_failed", actorId, new
+            {
+                Action = VillagerWorldActionKind.TakeItem.ToString(),
+                target.Id,
+                target.ItemId,
+                Reason = ownedByAnother
+                    ? "owned_by_another_actor"
+                    : "inventory_full"
+            });
+            return new(intent, false,
+                ownedByAnother ? "owned_by_another_actor" : "inventory_full");
+        }
+        if (!targetGpu.Chunk.GroundObjects.Remove(target))
+        {
+            _villagerWork.ReleaseTarget(reservationKey, actorId);
+            return new(intent, false, "target_changed");
+        }
+        var harvestedCount = gathered.Inventory.Count(value =>
+                                 value == takenItemId) -
+                             villager.Inventory.Count(value =>
+                                 value == takenItemId);
+        var updated = villager with
+        {
+            Inventory = gathered.Inventory,
+            FarmingExperience = CropService.IsCrop(target)
+                ? FarmingSkill.AwardExperience(
+                    villager.FarmingExperience,
+                    FarmingSkill.PlantingExperience * harvestedCount)
+                    .Experience
+                : villager.FarmingExperience,
+            Need = VillagerNeed.Explore,
+            GoalObjectId = null,
+            NextDecisionGameSeconds = _worldGameSeconds + Math.Max(
+                VillagerSimulation.DecisionInterval(tier),
+                VillagerSimulation.GatherPauseSeconds),
+            LastSimulatedGameSeconds = _worldGameSeconds
+        };
+        _villagers[actorIndex] =
+            VillagerCommitmentService.RecordAcquiredItem(
+                updated, takenItemId);
+        _villagerWork.ReleaseTarget(reservationKey, actorId);
+        ObserveLog("world_action_succeeded", actorId, new
+        {
+            Action = VillagerWorldActionKind.TakeItem.ToString(),
+            target.Id,
+            ItemId = takenItemId,
+            PreviousOwner = target.OwnerId
+        });
+        QueueChunkSave(targetGpu.Chunk);
+        _villagersDirty = true;
+        return new(intent, true);
     }
 
     private VillagerState ReconcileVillagerLocationMemory(

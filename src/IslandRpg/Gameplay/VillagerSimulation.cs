@@ -257,6 +257,7 @@ internal static class VillagerSimulation
     public const float FollowStopDistance = 1.8f;
     public const float FollowResumeDistance = 2.4f;
     public const float FollowRetargetDistance = .6f;
+    public const double FailedTargetRetryGameSeconds = 15 * 60;
     public const double GameSecondsPerRealSecond = 60;
     public const double MinimumReflectionRealSeconds = .35;
     public const double MaximumReflectionRealSeconds = 1.2;
@@ -1811,7 +1812,7 @@ internal static class VillagerSimulation
         if (failedId is { } targetId)
             failedTargets.Add(new(
                 targetId,
-                gameSeconds + Math.Min(10, 2 + attempts) * 60));
+                gameSeconds + FailedTargetRetryGameSeconds));
         return state with
         {
             Activity = VillagerActivity.Blocked,
@@ -1830,6 +1831,9 @@ internal static class VillagerSimulation
                 GameSecondsPerRealSecond
         };
     }
+
+    public static bool ShouldYieldThroughActor(int blockedMoveAttempts) =>
+        blockedMoveAttempts >= 2;
 
     private static VillagerState DeadState(VillagerState state) =>
         state with

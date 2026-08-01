@@ -1056,6 +1056,26 @@ Require(campfireProject is
             .Where(value => value.ItemId == ItemIds.LargeRock)
             .Sum(value => value.Quantity) == 3,
     "settlement planning must select a crafter and divide campfire resources across villagers");
+var reassignedProjectVillagers = projectVillagers
+    .Select(value => value with
+    {
+        WorkRole = value.Id == "project-food"
+            ? VillagerWorkRole.Crafting
+            : value.WorkRole,
+        CraftingExperience = value.Id == "project-food" ? 10_000 : 0,
+        ProjectAssignment = new(
+            ItemIds.Campfire,
+            "project-builder",
+            [],
+            100)
+    })
+    .ToArray();
+Require(
+    VillagerSettlementProjectService.Plan(
+        reassignedProjectVillagers,
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase))?.BuilderId ==
+        "project-builder",
+    "active settlement projects must retain their living builder across role reassignment");
 var workbenchProject = VillagerSettlementProjectService.Plan(
     projectVillagers,
     new HashSet<string>([ItemIds.Campfire],
@@ -2775,8 +2795,9 @@ Require(
     reflectedState.NextDecisionGameSeconds ==
     reflectionState.ActivityUntilGameSeconds,
     "reflection must release into a deliberate decision at its scheduled time");
+var blockedTargetId = Guid.NewGuid();
 var blockedState = VillagerSimulation.AdvanceMovement(
-    movementState,
+    movementState with { GoalObjectId = blockedTargetId },
     .25f,
     canOccupy: _ => false,
     gameSeconds: 2_000);
@@ -2787,6 +2808,13 @@ Require(
     blockedState.BlockedMoveAttempts == 1 &&
     blockedState.NextDecisionGameSeconds > 2_000,
     "blocked movement must clear stale targets and schedule a bounded replan");
+Require(
+    blockedState.FailedTargets?.Single(value =>
+        value.TargetId == blockedTargetId).RetryAfterGameSeconds ==
+        2_000 + VillagerSimulation.FailedTargetRetryGameSeconds &&
+    !VillagerSimulation.ShouldYieldThroughActor(1) &&
+    VillagerSimulation.ShouldYieldThroughActor(2),
+    "failed targets must remain blacklisted and repeatedly blocked actors must yield through each other");
 var movementProbeEntity = new WorldEntity(Vector2.Zero);
 Require(
     movementProbeEntity.MoveSpeed ==

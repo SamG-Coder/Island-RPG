@@ -28,35 +28,42 @@ internal static class VillagerSettlementProjectService
     {
         var living = villagers.Where(value => value.Health > 0).ToArray();
         if (living.Length < 2) return null;
-        var builder = living
+        string projectItemId;
+        IReadOnlyList<VillagerProjectRequirement> requirements;
+        if (!placedItems.Contains(ItemIds.Campfire))
+        {
+            projectItemId = ItemIds.Campfire;
+            requirements = [new(ItemIds.LargeRock, 3)];
+        }
+        else if (!placedItems.Contains(ItemIds.Workbench))
+        {
+            projectItemId = ItemIds.Workbench;
+            requirements = [new(ItemIds.Logs, 4), new(ItemIds.Sticks, 2)];
+        }
+        else if (!placedItems.Contains(ItemIds.StorageChest))
+        {
+            projectItemId = ItemIds.StorageChest;
+            requirements =
+            [
+                new(ItemIds.Logs, 6), new(ItemIds.Sticks, 2),
+                new(ItemIds.PlantFibres, 3)
+            ];
+        }
+        else return null;
+        var incumbentBuilderId = living
+            .Select(value => value.ProjectAssignment)
+            .Where(value => value?.ProjectItemId == projectItemId)
+            .Select(value => value!.BuilderId)
+            .FirstOrDefault(id => living.Any(value => value.Id == id));
+        var builder = incumbentBuilderId is null
+            ? living
             .OrderByDescending(value =>
                 value.WorkRole == VillagerWorkRole.Crafting)
             .ThenByDescending(value => value.CraftingExperience)
             .ThenBy(value => value.Id, StringComparer.Ordinal)
-            .First();
-        if (!placedItems.Contains(ItemIds.Campfire))
-            return Assign(
-                ItemIds.Campfire,
-                builder.Id,
-                living,
-                [new(ItemIds.LargeRock, 3)]);
-        if (!placedItems.Contains(ItemIds.Workbench))
-            return Assign(
-                ItemIds.Workbench,
-                builder.Id,
-                living,
-                [new(ItemIds.Logs, 4), new(ItemIds.Sticks, 2)]);
-        if (!placedItems.Contains(ItemIds.StorageChest))
-            return Assign(
-                ItemIds.StorageChest,
-                builder.Id,
-                living,
-                [
-                    new(ItemIds.Logs, 6),
-                    new(ItemIds.Sticks, 2),
-                    new(ItemIds.PlantFibres, 3)
-                ]);
-        return null;
+            .First()
+            : living.First(value => value.Id == incumbentBuilderId);
+        return Assign(projectItemId, builder.Id, living, requirements);
     }
 
     public static bool MatchesRequirement(
