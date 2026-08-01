@@ -389,18 +389,19 @@ internal sealed partial class GameHostWindow
                 _villagers[index] = villager;
                 _villagersDirty = true;
             }
-            if (TryExecuteVillagerSocialGoal(
-                    index, villager, tier))
+            if (tier != VillagerSimulationTier.Distant &&
+                TryExecuteVillagerUrgentAction(index, villager, tier))
                 continue;
             if (tier != VillagerSimulationTier.Distant &&
-                villager.ProjectAssignment?.Requirements.Any(requirement =>
-                    VillagerSettlementProjectService.NeedsItem(
-                        villager, requirement.ItemId)) == true &&
+                TryExecuteVillagerCommittedAction(index, villager, tier))
+                continue;
+            if (tier != VillagerSimulationTier.Distant &&
+                VillagerIntentPriorityService.ShouldProtectCommittedWork(
+                    villager) &&
                 TryExecuteVillagerWorldAction(
                     index, villager, tier))
                 continue;
-            if (tier != VillagerSimulationTier.Distant &&
-                TryExecuteVillagerCapabilityAction(
+            if (TryExecuteVillagerSocialGoal(
                     index, villager, tier))
                 continue;
             if (tier != VillagerSimulationTier.Distant &&

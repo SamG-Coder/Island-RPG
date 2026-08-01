@@ -20,6 +20,8 @@ internal sealed partial class GameHostWindow
     private bool _observeRosterLeftWasDown;
     private ObserveVillagerTab _observeVillagerTab;
     private int _observeMemoryOffset;
+    private int _observeRosterOffset;
+    private const int ObserveVisibleRosterRows = 5;
 
     private void UpdateObserveUi()
     {
@@ -33,9 +35,15 @@ internal sealed partial class GameHostWindow
         if (clicked)
         {
             var pointer = MouseState.Position;
-            for (var index = 0; index < _villagers.Count; index++)
+            var rosterEnd = Math.Min(
+                _villagers.Count,
+                _observeRosterOffset + ObserveVisibleRosterRows);
+            for (var index = _observeRosterOffset;
+                 index < rosterEnd;
+                 index++)
             {
-                if (!ObserveVillagerRowBounds(index).Contains(pointer))
+                if (!ObserveVillagerRowBounds(
+                        index - _observeRosterOffset).Contains(pointer))
                     continue;
                 _observedVillagerId = _villagers[index].Id;
                 _observeMemoryOffset = 0;
@@ -107,14 +115,15 @@ internal sealed partial class GameHostWindow
     private Vector4 ObserveVillagerPanelBounds()
     {
         const float width = 292;
-        var height = 42 + Math.Min(8, _villagers.Count) * 70;
+        var height = 42 + Math.Min(
+            ObserveVisibleRosterRows, _villagers.Count) * 70;
         return new(12, 12, width, height);
     }
 
-    private Vector4 ObserveVillagerRowBounds(int index)
+    private Vector4 ObserveVillagerRowBounds(int visibleIndex)
     {
         var panel = ObserveVillagerPanelBounds();
-        return new(panel.X + 8, panel.Y + 34 + index * 70,
+        return new(panel.X + 8, panel.Y + 34 + visibleIndex * 70,
             panel.Z - 16, 62);
     }
 
@@ -123,12 +132,18 @@ internal sealed partial class GameHostWindow
         var panel = ObserveVillagerPanelBounds();
         DrawAoEPanelBorder(panel);
         DrawPanelCaption("Survivors", panel);
-        for (var index = 0;
-             index < _villagers.Count && index < 8;
+        _observeRosterOffset = Math.Clamp(
+            _observeRosterOffset, 0,
+            Math.Max(0, _villagers.Count - ObserveVisibleRosterRows));
+        var end = Math.Min(
+            _villagers.Count,
+            _observeRosterOffset + ObserveVisibleRosterRows);
+        for (var index = _observeRosterOffset;
+             index < end;
              index++)
         {
             var villager = _villagers[index];
-            var row = ObserveVillagerRowBounds(index);
+            var row = ObserveVillagerRowBounds(index - _observeRosterOffset);
             var selected = villager.Id == _observedVillagerId;
             var hovered = row.Contains(MouseState.Position);
             DrawRoundedUiColor(
@@ -157,6 +172,11 @@ internal sealed partial class GameHostWindow
                 new(row.X + 9, row.Y + 43),
                 new FSColor(176, 170, 151, 255));
         }
+        if (_villagers.Count > ObserveVisibleRosterRows)
+            DrawUiText(
+                $"{_observeRosterOffset + 1}-{end} of {_villagers.Count}  ·  scroll",
+                new(panel.X + panel.Z - 142, panel.Y + 12),
+                new FSColor(157, 151, 129, 255));
     }
 
     private Vector4 ObserveVillagerDetailBounds() =>
@@ -431,6 +451,18 @@ internal sealed partial class GameHostWindow
             _observeMemoryOffset - Math.Sign(offset),
             0,
             Math.Max(0, count - 5));
+        return true;
+    }
+
+    private bool ScrollObserveRoster(Vector2 pointer, float offset)
+    {
+        if (!ObserveVillagerPanelBounds().Contains(pointer) || offset == 0 ||
+            _villagers.Count <= ObserveVisibleRosterRows)
+            return false;
+        _observeRosterOffset = Math.Clamp(
+            _observeRosterOffset - Math.Sign(offset),
+            0,
+            _villagers.Count - ObserveVisibleRosterRows);
         return true;
     }
 

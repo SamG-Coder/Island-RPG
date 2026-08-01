@@ -54,6 +54,45 @@ var settlementFourSource = VillagerSimulation.CreateInitial(
     2187, Vector2.Zero, population: 4);
 var settlementFourConfigured = ObserveScenarioService.Configure(
     ObserveScenarioService.SettlementFour, 2187, settlementFourSource);
+var settlementTenSource = VillagerSimulation.CreateInitial(
+    2187, Vector2.Zero, population: 10);
+var settlementTenConfigured = ObserveScenarioService.Configure(
+    ObserveScenarioService.SettlementTen, 2187, settlementTenSource);
+var priorityVillager = settlementTenSource[0] with
+{
+    ProjectAssignment = new(
+        ItemIds.Campfire,
+        settlementTenSource[0].Id,
+        [new(ItemIds.LargeRock, 1)],
+        0),
+    GoalObjectId = Guid.NewGuid()
+};
+Require(
+    VillagerIntentPriorityService.HasCommittedWork(priorityVillager) &&
+    VillagerIntentPriorityService.HasAssignedProject(priorityVillager) &&
+    VillagerIntentPriorityService.ShouldProtectCommittedWork(
+        priorityVillager) &&
+    !VillagerIntentPriorityService.ShouldProtectCommittedWork(
+        priorityVillager with { Hunger = 20 }) &&
+    VillagerIntentPriorityService.HasUrgentOverride(
+        priorityVillager with { Hunger = 20 }) &&
+    !VillagerIntentPriorityService.ShouldProtectCommittedWork(
+        priorityVillager with
+        {
+            Energy = 10,
+            Activity = VillagerActivity.Resting
+        }) &&
+    !VillagerIntentPriorityService.HasCommittedWork(
+        priorityVillager with
+        {
+            ProjectAssignment = null,
+            GoalObjectId = null
+        }) &&
+    !VillagerIntentPriorityService.HasAssignedProject(
+        priorityVillager with { ProjectAssignment = null }) &&
+    !VillagerIntentPriorityService.HasCommittedWork(
+        priorityVillager with { Health = 0 }),
+    "committed work must be protected from optional goals while yielding to urgent needs, fatigue, and death");
 Require(
     new GameSettings().UnlimitedZoom,
     "unlimited zoom must be enabled by default");
@@ -1425,8 +1464,12 @@ Require(
         ObserveScenarioService.IslandFuturesTrio) == 3 &&
     ObserveModePolicy.RequiredVillagerCount(
         ObserveScenarioService.SettlementFour) == 4 &&
+    ObserveModePolicy.RequiredVillagerCount(
+        ObserveScenarioService.SettlementTen) == 10 &&
     ObserveScenarioService.IsSupported(
         ObserveScenarioService.SettlementFour) &&
+    ObserveScenarioService.IsSupported(
+        ObserveScenarioService.SettlementTen) &&
     VillagerSimulation.NamePoolSize == 100 &&
     VillagerSimulation.AvailableNameCount == 100 &&
     VillagerSimulation.NamesForPopulation(4, 2187).Count == 4 &&
@@ -1435,6 +1478,9 @@ Require(
         VillagerSimulation.NamesForPopulation(4, 2187)) &&
     settlementFourConfigured.Count == 4 &&
     !ReferenceEquals(settlementFourConfigured, settlementFourSource) &&
+    settlementTenConfigured.Count == 10 &&
+    settlementTenConfigured.Select(value => value.Name).Distinct().Count() == 10 &&
+    !ReferenceEquals(settlementTenConfigured, settlementTenSource) &&
     !ObserveModePolicy.ObserverParticipatesInSimulation,
     "Observe CLI configuration must request exactly two villagers and exclude the hidden observer");
 var acceleratedHunger = VillagerSimulation.CatchUp(

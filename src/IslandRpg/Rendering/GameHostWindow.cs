@@ -154,7 +154,13 @@ internal sealed partial class GameHostWindow : GameWindow
         new("1", "1 survivor"),
         new("2", "2 survivors"),
         new("3", "3 survivors"),
-        new("4", "4 survivors")
+        new("4", "4 survivors"),
+        new("5", "5 survivors"),
+        new("6", "6 survivors"),
+        new("7", "7 survivors"),
+        new("8", "8 survivors"),
+        new("9", "9 survivors"),
+        new("10", "10 survivors")
     ];
     private readonly TextBoxControlState _seedTextBox =
         new(Random.Shared.NextInt64().ToString());
@@ -2899,6 +2905,9 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_screen != ScreenState.WorldPreview || e.OffsetY == 0) return;
         if (_mode == PreviewMode.Game && IsObserveWorld &&
             ScrollObserveMemories(MouseState.Position, e.OffsetY))
+            return;
+        if (_mode == PreviewMode.Game && IsObserveWorld &&
+            ScrollObserveRoster(MouseState.Position, e.OffsetY))
             return;
         if (_mode == PreviewMode.Game &&
             _itemContainerWindow.Visible)

@@ -51,9 +51,7 @@ internal sealed partial class GameHostWindow
     {
         if (villager.Health <= 0) return false;
         if (VillagerFatigueService.ShouldRest(villager)) return false;
-        if (TryVillagerResolveNpcConflict(index, villager, tier) ||
-            TryVillagerDefendSelf(index, villager, tier) ||
-            TryVillagerEat(index, villager, tier) ||
+        if (TryExecuteVillagerUrgentAction(index, villager, tier) ||
             TryVillagerSettlementContribution(index, villager, tier) ||
             TryVillagerWithdrawWorkItem(index, villager) ||
             TryVillagerRoleAction(index, villager, tier) ||
@@ -73,6 +71,36 @@ internal sealed partial class GameHostWindow
             TryVillagerFulfilGift(index, villager, tier))
             return true;
         return false;
+    }
+
+    private bool TryExecuteVillagerUrgentAction(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier) =>
+        villager.Health > 0 &&
+        (TryVillagerResolveNpcConflict(index, villager, tier) ||
+         TryVillagerDefendSelf(index, villager, tier) ||
+         TryVillagerEat(index, villager, tier));
+
+    private bool TryExecuteVillagerCommittedAction(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier)
+    {
+        if (!VillagerIntentPriorityService.HasAssignedProject(villager) ||
+            !VillagerIntentPriorityService.ShouldProtectCommittedWork(
+                villager))
+            return false;
+        return TryVillagerSettlementContribution(index, villager, tier) ||
+               TryVillagerWithdrawWorkItem(index, villager) ||
+               TryVillagerCraft(index, villager) ||
+               TryVillagerGatherTreeSticks(index, villager, tier) ||
+               TryVillagerForage(index, villager, tier) ||
+               TryVillagerCutTree(index, villager, tier) ||
+               TryVillagerMine(index, villager, tier) ||
+               TryVillagerPlaceObject(index, villager) ||
+               TryVillagerPlaceOrTendCampfire(index, villager) ||
+               TryVillagerProjectExplore(index, villager, tier);
     }
 
     private bool TryVillagerRoleAction(
