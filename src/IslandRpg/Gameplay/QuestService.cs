@@ -62,41 +62,43 @@ internal static class QuestService
             "washed-ashore",
             "Washed Ashore",
             "SURVIVAL",
-            "Learn to gather the island's basic natural materials.",
-            "Search the shoreline and nearby trees for useful materials.",
+            "Gather enough shoreline material to make tools and a fire ring.",
+            "Search the dark shoreline carefully for stone, sticks and fibre.",
             "I gathered the first materials I need to survive.",
             50,
             [
-                new("rocks", "Pick up small rocks", QuestEventType.GatherItem, ItemIds.SmallRocks),
-                new("sticks", "Gather a stick", QuestEventType.GatherItem, ItemIds.Sticks),
-                new("fibres", "Gather plant fibres", QuestEventType.GatherItem, ItemIds.PlantFibres)
+                new("rocks", "Gather small rocks", QuestEventType.GatherItem, ItemIds.SmallRocks, 3),
+                new("large-rocks", "Gather large rocks", QuestEventType.GatherItem, ItemIds.LargeRock, 3),
+                new("sticks", "Gather sticks", QuestEventType.GatherItem, ItemIds.Sticks, 2),
+                new("fibres", "Gather plant fibres", QuestEventType.GatherItem, ItemIds.PlantFibres, 2)
             ]),
-        new(
-            "first-light",
-            "First Light",
-            "FIREMAKING",
-            "Build and light a campfire before darkness falls.",
-            "Craft a campfire, place it, then gather what is needed to light it.",
-            "I made fire and secured warmth against the island night.",
-            150,
-            [
-                new("campfire", "Craft a campfire", QuestEventType.CraftItem, ItemIds.Campfire),
-                new("light", "Light the campfire", QuestEventType.LightCampfire)
-            ],
-            "washed-ashore"),
         new(
             "tools-of-survival",
             "Tools of Survival",
             "CRAFTING",
-            "Make the first tools needed to work the island.",
-            "Use gathered stone, sticks and fibres to craft basic tools.",
+            "Shape the tools needed to cut fuel and prepare food.",
+            "Knapp two sharp stones, then bind a knife and an axe.",
             "I shaped crude materials into dependable tools.",
             200,
             [
+                new("sharp-rock", "Craft sharpened rocks", QuestEventType.CraftItem, ItemIds.SharpenedRock, 2),
                 new("knife", "Craft a stone knife", QuestEventType.CraftItem, ItemIds.StoneKnife),
                 new("axe", "Craft a stone axe", QuestEventType.CraftItem, ItemIds.StoneAxe)
             ],
-            "first-light"),
+            "washed-ashore"),
+        new(
+            "first-light",
+            "First Light",
+            "FIREMAKING",
+            "Build and light a campfire while the shore is still dark.",
+            "Cut a log with the axe, place a stone fire ring, add fuel and light it.",
+            "I made fire and secured warmth against the island night.",
+            150,
+            [
+                new("campfire", "Craft a campfire", QuestEventType.CraftItem, ItemIds.Campfire),
+                new("light", "Place, fuel and light the campfire", QuestEventType.LightCampfire)
+            ],
+            "tools-of-survival"),
         new(
             "island-provision",
             "Island Provision",
@@ -106,19 +108,22 @@ internal static class QuestService
             "I proved that the island can provide more than scraps.",
             250,
             [
+                new("net", "Craft a primitive fishing net", QuestEventType.CraftItem, ItemIds.PrimitiveFishingNet),
                 new("fish", "Catch a fish", QuestEventType.CatchFish),
                 new("cook", "Cook food", QuestEventType.CookFood)
             ],
-            "tools-of-survival"),
+            "first-light"),
         new(
             "a-place-for-everything",
             "A Place for Everything",
             "BUILDING",
             "Establish a small working camp.",
-            "Craft and place a workbench and a storage chest.",
+            "Prepare a hammer and timber, then place a workbench and storage chest.",
             "My camp now has a place for work and supplies.",
             300,
             [
+                new("hammer", "Craft a stone hammer", QuestEventType.CraftItem, ItemIds.StoneHammer),
+                new("planks", "Carve planks", QuestEventType.CraftItem, ItemIds.Plank, 10),
                 new("workbench", "Build a workbench", QuestEventType.BuildObject, ItemIds.Workbench),
                 new("storage", "Build a storage chest", QuestEventType.BuildObject, ItemIds.StorageChest)
             ],
@@ -128,11 +133,14 @@ internal static class QuestService
             "Beneath the Surface",
             "EXPLORATION",
             "Open a route underground and recover ore.",
-            "Dig a cave entrance, secure a rope and descend below the island.",
+            "Prepare digging and mining tools, secure a rope and descend below the island.",
             "I descended beneath the island and returned with ore.",
             500,
             [
-                new("enter", "Enter a cave", QuestEventType.EnterCave),
+                new("rope", "Craft a rope", QuestEventType.CraftItem, ItemIds.Rope),
+                new("shovel", "Craft a stone shovel", QuestEventType.CraftItem, ItemIds.StoneShovel),
+                new("pickaxe", "Craft a stone pickaxe", QuestEventType.CraftItem, ItemIds.StonePickaxe),
+                new("enter", "Dig and enter a cave", QuestEventType.EnterCave),
                 new("ore", "Mine ore underground", QuestEventType.MineOre)
             ],
             "a-place-for-everything")
@@ -160,6 +168,16 @@ internal static class QuestService
                 unlocked ? QuestStatus.InProgress : QuestStatus.Locked));
         }
         return UnlockAvailable(result);
+    }
+
+    public static (QuestDefinition Definition, QuestProgress Progress)?
+        ActiveQuest(IReadOnlyList<QuestProgress>? progress)
+    {
+        var normalized = Normalize(progress);
+        for (var index = 0; index < Definitions.Count; index++)
+            if (normalized[index].Status == QuestStatus.InProgress)
+                return (Definitions[index], normalized[index]);
+        return null;
     }
 
     public static QuestUpdateResult Apply(

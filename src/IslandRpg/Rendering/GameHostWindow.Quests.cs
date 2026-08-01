@@ -205,6 +205,52 @@ internal sealed partial class GameHostWindow
         DrawMenuButton(QuestBackBounds(window), "Back");
     }
 
+    private void RenderActiveQuestTracker(Vector4 scene)
+    {
+        if (_activePlayer is null ||
+            QuestService.ActiveQuest(_activePlayer.Quests) is not { } active)
+            return;
+        var objectiveCount = active.Definition.Objectives.Count;
+        var width = Math.Min(310, Math.Max(230, scene.Z * .27f));
+        var height = 55 + objectiveCount * 25;
+        var bounds = new Vector4(
+            scene.X + scene.Z - width - 16,
+            scene.Y + MinimapControlState.Diameter + 48,
+            width, height);
+        DrawUiColor(bounds, new(.025f, .024f, .019f, .82f));
+        DrawPanelOutline(bounds, 1, new(.34f, .27f, .14f, .9f));
+        DrawUiText(
+            active.Definition.Title,
+            new(bounds.X + 12, bounds.Y + 10),
+            new FSColor(231, 198, 91, 255));
+        DrawUiColor(
+            new(bounds.X + 12, bounds.Y + 37, bounds.Z - 24, 1),
+            new(.32f, .25f, .12f, .9f));
+        var counts = active.Progress.ObjectiveCounts ??
+                     new Dictionary<string, int>();
+        var y = bounds.Y + 45;
+        foreach (var objective in active.Definition.Objectives)
+        {
+            var count = Math.Min(
+                objective.Required,
+                counts.GetValueOrDefault(objective.Id));
+            var complete = count >= objective.Required;
+            DrawUiText(
+                complete ? "-" : ">",
+                new(bounds.X + 12, y),
+                complete
+                    ? new FSColor(104, 181, 105, 255)
+                    : new FSColor(224, 191, 92, 255));
+            DrawUiText(
+                $"{objective.Description}: {count}/{objective.Required}",
+                new(bounds.X + 30, y),
+                complete
+                    ? new FSColor(133, 158, 127, 255)
+                    : new FSColor(220, 211, 181, 255));
+            y += 25;
+        }
+    }
+
     private void RenderQuestListRow(
         int index,
         QuestDefinition definition,

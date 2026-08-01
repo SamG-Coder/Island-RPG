@@ -4154,6 +4154,7 @@ internal sealed partial class GameHostWindow : GameWindow
         RenderPlayerStatus();
         RenderChatUi();
         RenderWorldClock(scene);
+        RenderActiveQuestTracker(scene);
         if (_gameUi.Panel.Visible)
             DrawAoEPanelBorder(_gameUi.Panel.Bounds);
         if (_gameUi.ActivePanel == GameUiPanel.Skills)

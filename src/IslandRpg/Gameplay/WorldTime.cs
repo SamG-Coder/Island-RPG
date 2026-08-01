@@ -5,6 +5,7 @@ internal readonly record struct WorldTimeSnapshot(
 
 internal static class WorldTime
 {
+    public const double NewGameStartGameSeconds = 3 * 60 * 60;
     public const double RealSecondsPerGameDay = 24 * 60;
     public const double GameSecondsPerDay = 24 * 60 * 60;
     public const double GameMinutesPerRealSecond = 1;

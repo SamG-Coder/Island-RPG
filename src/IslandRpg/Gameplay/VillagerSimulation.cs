@@ -140,7 +140,7 @@ internal sealed record VillagerState(
     double NextSocialGameSeconds = 0,
     string? FollowingActorId = null,
     VillagerPersona? Persona = null,
-    double AwakenedGameSeconds = 8 * 60 * 60,
+    double AwakenedGameSeconds = WorldTime.NewGameStartGameSeconds,
     VillagerActivity Activity = VillagerActivity.Idle,
     double ActivityUntilGameSeconds = 0,
     string? ConversationPartnerId = null,

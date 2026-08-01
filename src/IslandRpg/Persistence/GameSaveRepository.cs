@@ -11,7 +11,7 @@ internal sealed record WorldProfile(
     DateTime CreatedUtc,
     DateTime UpdatedUtc,
     string? LastPlayerId = null,
-    double ElapsedGameSeconds = 8 * 60 * 60,
+    double ElapsedGameSeconds = WorldTime.NewGameStartGameSeconds,
     bool AiNpcsEnabled = false,
     int AiNpcCount = 0,
     IReadOnlyList<VillagerPersona>? AiNpcPersonas = null,

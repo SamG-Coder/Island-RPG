@@ -3627,9 +3627,10 @@ Require(
 var questExperience = 0;
 foreach (var questEvent in new[]
          {
-             new QuestEvent(QuestEventType.GatherItem, ItemIds.SmallRocks),
-             new QuestEvent(QuestEventType.GatherItem, ItemIds.Sticks),
-             new QuestEvent(QuestEventType.GatherItem, ItemIds.PlantFibres)
+             new QuestEvent(QuestEventType.GatherItem, ItemIds.SmallRocks, 3),
+             new QuestEvent(QuestEventType.GatherItem, ItemIds.LargeRock, 3),
+             new QuestEvent(QuestEventType.GatherItem, ItemIds.Sticks, 2),
+             new QuestEvent(QuestEventType.GatherItem, ItemIds.PlantFibres, 2)
          })
 {
     var update = QuestService.Apply(
@@ -3640,8 +3641,12 @@ foreach (var questEvent in new[]
 Require(
     questProgress[0].Status == QuestStatus.Complete &&
     questProgress[1].Status == QuestStatus.InProgress &&
+    QuestService.Definitions[1].Id == "tools-of-survival" &&
+    QuestService.Definitions[2].Id == "first-light" &&
+    QuestService.ActiveQuest(questProgress)?.Definition.Id ==
+        "tools-of-survival" &&
     questExperience == 50,
-    "completing the first quest must award Adventure XP and unlock its successor");
+    "shoreline gathering must unlock tools before the fuel-dependent fire quest");
 var duplicateQuestUpdate = QuestService.Apply(
     questProgress,
     questExperience,
@@ -3839,9 +3844,12 @@ Require(GameHostWindow.SeedTreeType(ItemIds.OakSeeds) == "FOAK_NN" &&
         GameHostWindow.SeedTreeType(ItemIds.Logs) is null,
     "each seed must map to its matching tree graphic");
 var morning = WorldTime.At(8 * 60 * 60);
+var newGameTime = WorldTime.At(WorldTime.NewGameStartGameSeconds);
 var midnight = WorldTime.At(0);
 var nextDay = WorldTime.At(24 * 60 * 60);
-Require(morning.Day == 1 && morning.Hour == 8 &&
+Require(newGameTime.Day == 1 && newGameTime.Hour == 3 &&
+        newGameTime.Daylight < morning.Daylight &&
+        morning.Day == 1 && morning.Hour == 8 &&
         midnight.Daylight < morning.Daylight &&
         nextDay.Day == 2 && nextDay.Hour == 0,
     "world time must track day number, clock time, and daylight");

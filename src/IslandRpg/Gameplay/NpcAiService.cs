@@ -571,7 +571,7 @@ internal sealed class NpcAiService : IDisposable
             system =
                 "Create distinct grounded survivors for a social survival game. " +
                 HistoricalKnowledgePolicy.PromptRule + " " +
-                "It is day 1, 08:00: each person has just awakened after an unknown " +
+                "It is day 1, 03:00: each person has just awakened after an unknown " +
                 "wreck and cannot know later island events. Give each a concise " +
                 "pre-island history, temperament, former trade, uncertain arrival " +
                 "memory, and reason to learn about other survivors. knownToolIds may " +
@@ -581,7 +581,7 @@ internal sealed class NpcAiService : IDisposable
             {
                 worldName,
                 worldSeed,
-                timeline = "Day 1, 08:00; newly awake on an unknown island",
+                timeline = "Day 1, 03:00; newly awake on an unknown island",
                 names
             }, JsonOptions),
             stream = false,
