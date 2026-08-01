@@ -388,7 +388,7 @@ internal static class VillagerCommitmentService
             promisor.Inventory,
             item => string.Equals(
                 item, promise.ItemId, StringComparison.OrdinalIgnoreCase));
-        if (!ActorActionService.TryTransfer(
+        if (!EntityInteractionService.TryTransfer(
                 promisor.Inventory,
                 promisee.Inventory,
                 inventorySlot,

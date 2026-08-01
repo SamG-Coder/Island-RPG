@@ -1,5 +1,6 @@
 using FontStashSharp;
 using IslandRpg.Gameplay;
+using IslandRpg.Persistence;
 using IslandRpg.Rendering.Ui;
 using IslandRpg.World;
 using OpenTK.Mathematics;
@@ -103,12 +104,19 @@ internal sealed partial class GameHostWindow
             if (_playerDefeated && index == 0 &&
                 _clock < _deathOverlayAt)
                 continue;
-            var marker = _playerDeaths[index];
+            RenderDeathMarker(_playerDeaths[index]);
+        }
+        for (var index = 0; index < _villagerDeaths.Count; index++)
+            RenderDeathMarker(_villagerDeaths[index]);
+    }
+
+    private void RenderDeathMarker(PlayerDeathMarker marker)
+    {
             if (marker.WorldLevel != _activeWorldLevel ||
                 !_skeletonAnimations.TryGetValue(
                     marker.Gender, out var animation) ||
                 animation.Graphic.Sprite.Frames.Count == 0)
-                continue;
+                return;
 
             const int storedVillagerAngles = 5;
             var framesPerAngle = Math.Max(
@@ -132,7 +140,6 @@ internal sealed partial class GameHostWindow
                 world,
                 opacity: .68f,
                 mirror: directional.Mirror);
-        }
     }
 
     private Vector4 DeathPanel() => FrontendPanel(400, 330);

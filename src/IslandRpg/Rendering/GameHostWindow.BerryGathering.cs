@@ -91,7 +91,7 @@ internal sealed partial class GameHostWindow
                             _activePlayer.Inventory);
         var previousInventory = PlayerInventory.Normalize(
             _activePlayer.Inventory);
-        var harvest = ActorActionService.Gather(
+        var harvest = EntityInteractionService.Gather(
             previousInventory, itemId, requested);
         var inventory = harvest.Inventory;
         var gathered = inventory.Count(value => value == itemId) -

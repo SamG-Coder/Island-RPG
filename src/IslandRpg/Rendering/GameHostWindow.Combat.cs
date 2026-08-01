@@ -149,12 +149,15 @@ internal sealed partial class GameHostWindow
         _nextMeleeAttackAt += MeleeCombatService.AttackIntervalSeconds;
         _meleeReturnToIdleAt = _clock + MeleeRecoveryDelay();
 
-        var roll = MeleeCombatService.Roll(
+        var interaction = EntityInteractionService.MeleeAttack(
             _activePlayer.AttackExperience,
             _activePlayer.StrengthExperience,
+            MeleeCombatService.ExperienceForStance(
+                _activePlayer, _activePlayer.CombatStance),
             Random.Shared.NextSingle(),
             Random.Shared.NextSingle(),
             _activePlayer.Inventory);
+        var roll = interaction.Attack;
         if (!roll.Hit)
         {
             _combatHitSplat = new(
@@ -184,10 +187,7 @@ internal sealed partial class GameHostWindow
             };
         QueueChunkSave(location.Chunk);
 
-        var award = SkillService.AwardExperience(
-            MeleeCombatService.ExperienceForStance(
-                _activePlayer, _activePlayer.CombatStance),
-            roll.Experience);
+        var award = interaction.Experience;
         _activePlayer = _activePlayer.CombatStance switch
         {
             MeleeCombatStance.Accurate => _activePlayer with
@@ -275,12 +275,15 @@ internal sealed partial class GameHostWindow
             MeleeCombatService.AttackIntervalSeconds;
         _meleeReturnToIdleAt = _clock + MeleeRecoveryDelay();
 
-        var roll = MeleeCombatService.Roll(
+        var interaction = EntityInteractionService.MeleeAttack(
             _activePlayer.AttackExperience,
             _activePlayer.StrengthExperience,
+            MeleeCombatService.ExperienceForStance(
+                _activePlayer, _activePlayer.CombatStance),
             Random.Shared.NextSingle(),
             Random.Shared.NextSingle(),
             _activePlayer.Inventory);
+        var roll = interaction.Attack;
         if (!roll.Hit)
         {
             _combatHitSplat = new(
@@ -290,6 +293,7 @@ internal sealed partial class GameHostWindow
                 ChatMessageStyle.Miss);
             return;
         }
+        ApplyPlayerCombatExperience(interaction.Experience);
         villager = VillagerSimulation.RecordAttack(
             villager,
             _activePlayer.Id,
@@ -689,4 +693,37 @@ internal sealed partial class GameHostWindow
             MeleeCombatStance.Aggressive => "Strength",
             _ => "Defence"
         };
+
+    private void ApplyPlayerCombatExperience(
+        SkillExperienceChange experience)
+    {
+        if (_activePlayer is null || experience.Gained <= 0) return;
+        _activePlayer = _activePlayer.CombatStance switch
+        {
+            MeleeCombatStance.Accurate => _activePlayer with
+            {
+                AttackExperience = experience.Experience
+            },
+            MeleeCombatStance.Aggressive => _activePlayer with
+            {
+                StrengthExperience = experience.Experience
+            },
+            _ => _activePlayer with
+            {
+                DefenceExperience = experience.Experience
+            }
+        };
+        AwardAdventureExperience(experience.Gained);
+        _activePlayer = _activePlayer with { UpdatedUtc = DateTime.UtcNow };
+        _saves.SavePlayer(_activePlayer);
+        _chatUi.AddMessage(
+            $"+{experience.Gained} " +
+            $"{CombatStatName(_activePlayer.CombatStance)} XP.",
+            ChatMessageStyle.Experience);
+        if (experience.LevelledUp)
+            _chatUi.AddMessage(
+                $"Your {CombatStatName(_activePlayer.CombatStance)} " +
+                $"level is now {experience.Level}.",
+                ChatMessageStyle.LevelUp);
+    }
 }

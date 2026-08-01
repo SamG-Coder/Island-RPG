@@ -198,7 +198,7 @@ internal sealed partial class GameHostWindow
 
         var level = CookingSkill.LevelForExperience(
             _activePlayer.CookingExperience);
-        var result = CookingSkill.Roll(
+        var result = EntityInteractionService.ResolveCooking(
             cooking.RawItemId,
             level,
             Random.Shared.NextSingle());

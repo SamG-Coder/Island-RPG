@@ -251,13 +251,9 @@ internal sealed partial class GameHostWindow
         var beforeInventory = PlayerInventory.Normalize(
             _activePlayer.Inventory);
         var gathered = crop
-            ? ActorActionService.Gather(
-                beforeInventory, itemId,
-                CropService.HarvestCount(beforeInventory))
-            : new ActorInventoryResult(
-                PlayerInventory.TryAdd(
-                    beforeInventory, itemId, out var added),
-                added);
+            ? EntityInteractionService.Harvest(
+                beforeInventory, groundObject, _worldGameSeconds)
+            : EntityInteractionService.Pickup(beforeInventory, itemId);
         if (!gathered.Succeeded)
         {
             ReportBlockedAction(
@@ -266,10 +262,7 @@ internal sealed partial class GameHostWindow
             return;
         }
         if (!chunk.Chunk.GroundObjects.Remove(groundObject)) return;
-        var harvestedCount = gathered.Inventory.Count(value =>
-                                 value == itemId) -
-                             beforeInventory.Count(value =>
-                                 value == itemId);
+        var harvestedCount = gathered.Quantity;
         NotifyVillagersOfTaking(crop
             ? groundObject with { ItemId = itemId }
             : groundObject);
@@ -648,21 +641,42 @@ internal sealed partial class GameHostWindow
             _player.Stop();
             return;
         }
-        if (!PlayerInventory.TryRemove(
+        string?[] inventory;
+        WorldGroundObject placed;
+        if (PlaceableObjectCatalog.IsPlaceable(drop.ItemId))
+        {
+            var interaction = EntityInteractionService.Place(
                 _activePlayer!.Inventory,
                 drop.InventorySlot,
-                out var inventory))
+                drop.Target.X,
+                drop.Target.Y,
+                _activePlayer.Id);
+            if (!interaction.Succeeded || interaction.Object is null)
+            {
+                _player.Stop();
+                return;
+            }
+            inventory = interaction.Inventory;
+            placed = interaction.Object;
+        }
+        else
         {
-            _player.Stop();
-            return;
+            var interaction = EntityInteractionService.Drop(
+                _activePlayer!.Inventory,
+                drop.InventorySlot,
+                drop.Target.X,
+                drop.Target.Y,
+                _activePlayer.Id);
+            if (!interaction.Succeeded || interaction.Object is null)
+            {
+                _player.Stop();
+                return;
+            }
+            inventory = interaction.Inventory;
+            placed = interaction.Object;
         }
 
-        gpu.Chunk.GroundObjects.Add(new(
-            Guid.NewGuid(),
-            drop.ItemId,
-            drop.Target.X,
-            drop.Target.Y,
-            OwnerId: _activePlayer.Id));
+        gpu.Chunk.GroundObjects.Add(placed);
         _activePlayer = _activePlayer with
         {
             Inventory = inventory,

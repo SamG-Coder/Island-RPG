@@ -17,20 +17,20 @@ internal sealed partial class GameHostWindow
             !InventoryContainsAt(inventorySlot, fuelItemId))
             return false;
         var location = FindGroundObjectLocation(campfireId);
-        if (location is null ||
-            !CampfireService.CanAddFuel(
-                location.Value.Object, fuelItemId, _worldGameSeconds) ||
-            !PlayerInventory.TryRemove(
-                _activePlayer.Inventory, inventorySlot,
-                out var inventory))
+        if (location is null)
             return false;
+        var interaction = EntityInteractionService.AddCampfireFuel(
+            _activePlayer.Inventory,
+            inventorySlot,
+            location.Value.Object,
+            _worldGameSeconds);
+        if (!interaction.Succeeded || interaction.Object is null) return false;
 
         location.Value.Chunk.GroundObjects[location.Value.Index] =
-            CampfireService.AddFuel(
-                location.Value.Object, fuelItemId, _worldGameSeconds);
+            interaction.Object;
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = interaction.Inventory,
             UpdatedUtc = DateTime.UtcNow
         };
         if (_activeInventorySlot == inventorySlot)
@@ -122,13 +122,13 @@ internal sealed partial class GameHostWindow
     {
         if (_activePlayer is null) return;
         var location = FindGroundObjectLocation(campfireId);
-        if (location is null ||
-            !CampfireService.CanRemoveFuel(
-                location.Value.Object, _worldGameSeconds) ||
-            location.Value.Object.FuelItemId is not { } fuelItemId)
-            return;
-        if (!PlayerInventory.TryAdd(
-                _activePlayer.Inventory, fuelItemId, out var inventory))
+        if (location is null) return;
+        var interaction = EntityInteractionService.TakeCampfireFuel(
+            _activePlayer.Inventory,
+            location.Value.Object,
+            _worldGameSeconds);
+        if (!interaction.Succeeded || interaction.Object is null ||
+            interaction.ItemId is not { } fuelItemId)
         {
             ReportBlockedAction(
                 "campfire-take-fuel-full",
@@ -136,11 +136,10 @@ internal sealed partial class GameHostWindow
             return;
         }
         location.Value.Chunk.GroundObjects[location.Value.Index] =
-            CampfireService.RemoveFuel(
-                location.Value.Object, _worldGameSeconds);
+            interaction.Object;
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = interaction.Inventory,
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
@@ -169,8 +168,11 @@ internal sealed partial class GameHostWindow
         var level = FiremakingSkill.LevelForExperience(
             _activePlayer.FiremakingExperience);
         location.Value.Chunk.GroundObjects[location.Value.Index] =
-            CampfireService.Light(
-                location.Value.Object, _worldGameSeconds, level);
+            EntityInteractionService.LightCampfire(
+                location.Value.Object,
+                _activePlayer.Inventory,
+                _worldGameSeconds,
+                level);
         var award = FiremakingSkill.AwardExperience(
             _activePlayer.FiremakingExperience);
         AwardAdventureExperience(award.Gained);

@@ -154,15 +154,15 @@ internal sealed partial class GameHostWindow
                     (int)MathF.Floor(value.X) == x &&
                     (int)MathF.Floor(value.Y) == y))
                 continue;
-            if (!PlayerInventory.TryRemove(
-                    villager.Inventory, seedSlot, out var inventory))
-                return false;
-            gpu.Chunk.GroundObjects.Add(CropService.Plant(
-                seedItemId, x + .5f, y + .5f,
-                _worldGameSeconds, villager.Id));
+            var planted = EntityInteractionService.Plant(
+                villager.Inventory, seedSlot,
+                x + .5f, y + .5f,
+                _worldGameSeconds, villager.Id);
+            if (!planted.Succeeded || planted.Object is null) return false;
+            gpu.Chunk.GroundObjects.Add(planted.Object);
             _villagers[index] = villager with
             {
-                Inventory = inventory,
+                Inventory = planted.Inventory,
                 FarmingExperience = FarmingSkill.AwardExperience(
                     villager.FarmingExperience,
                     FarmingSkill.PlantingExperience).Experience,
@@ -245,7 +245,7 @@ internal sealed partial class GameHostWindow
                 VillagerNeed.Safe);
             return true;
         }
-        if (!ActorActionService.TryTransfer(
+        if (!EntityInteractionService.TryTransfer(
                 villager.Inventory,
                 builder.Inventory,
                 slot,
@@ -396,7 +396,7 @@ internal sealed partial class GameHostWindow
                         "target_unavailable");
                 }
                 var actor = _villagers[actorIndex];
-                var gathered = ActorActionService.Gather(
+                var gathered = EntityInteractionService.Gather(
                     actor.Inventory, ItemIds.Sticks, 1);
                 if (!gathered.Succeeded)
                 {
@@ -538,7 +538,7 @@ internal sealed partial class GameHostWindow
                     return new(intent, false, "target_unavailable");
                 }
                 var actor = _villagers[actorIndex];
-                var gathered = ActorActionService.Gather(
+                var gathered = EntityInteractionService.Gather(
                     actor.Inventory, itemId, amount);
                 if (!gathered.Succeeded)
                 {
@@ -608,7 +608,7 @@ internal sealed partial class GameHostWindow
             var stationAvailable =
                 recipe.RequiredStationItemId is null ||
                 nearbyStations.Contains(recipe.RequiredStationItemId);
-            var crafted = ActorActionService.Craft(
+            var crafted = EntityInteractionService.Craft(
                 villager.Inventory, recipe, level, stationAvailable);
             if (!crafted.Succeeded) continue;
             var experience = CraftingSkill.AwardExperience(
@@ -726,22 +726,20 @@ internal sealed partial class GameHostWindow
                     return new(intent, false, "target_unavailable");
                 }
                 var actor = _villagers[actorIndex];
-                var gathered = ActorActionService.Gather(
-                    actor.Inventory, profile.ItemId, 1);
-                if (!gathered.Succeeded)
+                var caught = EntityInteractionService.CatchFish(
+                    actor.Inventory, actor.FishingExperience, species);
+                if (!caught.Succeeded)
                 {
                     _villagerWork.ReleaseTarget(reservationKey, villager.Id);
                     return new(intent, false, "inventory_full");
                 }
-                var award = FishingSkill.AwardExperience(
-                    actor.FishingExperience, species);
                 actionGpu.Chunk.FishRemaining[fishKey] = remaining - 1;
                 _villagers[actorIndex] =
                     VillagerCommitmentService.RecordAcquiredItem(
                         actor with
                         {
-                            Inventory = gathered.Inventory,
-                            FishingExperience = award.Experience
+                            Inventory = caught.Inventory,
+                            FishingExperience = caught.Experience.Experience
                         },
                         profile.ItemId);
                 QueueChunkSave(actionGpu.Chunk);
@@ -831,13 +829,30 @@ internal sealed partial class GameHostWindow
                 }
                 var actor = _villagers[actorIndex];
                 var tree = actionGpu.Chunk.TreeInstances[treeIndex];
-                var strike = ResourceStrikeService.Woodcut(
+                if (axe.Id == ItemIds.StoneAxe &&
+                    EntityInteractionService.TryBluntStoneTool(
+                        actor.Inventory,
+                        axe.Id,
+                        Random.Shared.NextSingle(),
+                        out var bluntedInventory))
+                {
+                    _villagers[actorIndex] = actor with
+                    {
+                        Inventory = bluntedInventory
+                    };
+                    _villagerWork.ReleaseTarget(
+                        reservationKey, actor.Id);
+                    _villagersDirty = true;
+                    return new(intent, false, "tool_blunted");
+                }
+                var strike = EntityInteractionService.StrikeResource(new(
+                    EntityResourceAction.Woodcut,
                     actor.WoodcuttingExperience,
                     tree.Health,
                     tree.MaxHealth,
                     axe.WoodcuttingPower,
                     Random.Shared.NextSingle(),
-                    Random.Shared.NextSingle());
+                    Random.Shared.NextSingle()));
                 if (!strike.Hit)
                 {
                     _villagers[actorIndex] = LogVillagerResourceStrike(
@@ -856,7 +871,7 @@ internal sealed partial class GameHostWindow
                 };
                 var inventory = actor.Inventory;
                 if (felled)
-                    inventory = ActorActionService.Gather(
+                    inventory = EntityInteractionService.Gather(
                         inventory, ItemIds.Logs, 1).Inventory;
                 var updated = actor with
                 {
@@ -951,13 +966,15 @@ internal sealed partial class GameHostWindow
                 var actor = _villagers[actorIndex];
                 var state = actionGpu.Chunk.MiningStates.FirstOrDefault(value =>
                     value.StableKey == nodeKey);
-                var strike = ResourceStrikeService.Mine(
+                var strike = EntityInteractionService.StrikeResource(new(
+                    EntityResourceAction.Mine,
                     actor.MiningExperience,
                     state?.Health ?? nodeDefinition.MaximumHealth,
+                    nodeDefinition.MaximumHealth,
                     pickaxe.MiningPower,
-                    nodeDefinition.CompletionExperience,
                     Random.Shared.NextSingle(),
-                    Random.Shared.NextSingle());
+                    Random.Shared.NextSingle(),
+                    nodeDefinition.CompletionExperience));
                 if (!strike.Hit)
                 {
                     _villagers[actorIndex] = LogVillagerResourceStrike(
@@ -972,7 +989,7 @@ internal sealed partial class GameHostWindow
                     nodeKey, strike.Health, nodeDefinition.MaximumHealth));
                 var inventory = actor.Inventory;
                 if (strike.Depleted && nodeDefinition.RewardItemId is { } reward)
-                    inventory = ActorActionService.Gather(
+                    inventory = EntityInteractionService.Gather(
                         inventory, reward, 1).Inventory;
                 var updated = actor with
                 {
@@ -1005,6 +1022,7 @@ internal sealed partial class GameHostWindow
         string target,
         ResourceStrikeResult strike)
     {
+        ShowNpcResourceHealth(skill, targetId);
         villager = VillagerActionMemoryService.RecordResourceStrike(
             villager, skill, targetId, target, strike,
             _worldGameSeconds);
@@ -1035,6 +1053,16 @@ internal sealed partial class GameHostWindow
         return villager;
     }
 
+    private void ShowNpcResourceHealth(string skill, string targetId)
+    {
+        _recentNpcResourceHealthUntil = _clock + 3;
+        if (skill.Equals("woodcutting", StringComparison.OrdinalIgnoreCase) &&
+            Guid.TryParse(targetId, out var treeId))
+            _recentNpcTreeHealthId = treeId;
+        else if (skill.Equals("mining", StringComparison.OrdinalIgnoreCase))
+            _recentNpcMiningHealthKey = targetId;
+    }
+
     private bool TryVillagerPlaceOrTendCampfire(
         int index, VillagerState villager)
     {
@@ -1053,16 +1081,17 @@ internal sealed partial class GameHostWindow
             var logSlot = Array.FindIndex(
                 inventoryState, value => value == ItemIds.Logs);
             if (logSlot < 0) return false;
-            updatedFire = CampfireService.AddFuel(
-                fire, ItemIds.Logs, _worldGameSeconds);
-            PlayerInventory.TryRemove(
-                inventoryState, logSlot, out inventoryState);
+            var fueled = EntityInteractionService.AddCampfireFuel(
+                inventoryState, logSlot, fire, _worldGameSeconds);
+            if (!fueled.Succeeded || fueled.Object is null) return false;
+            updatedFire = fueled.Object;
+            inventoryState = fueled.Inventory;
         }
         else if (fireState == CampfireState.Fueled &&
                  CampfireService.CanLight(
                      fire, inventoryState, _worldGameSeconds))
-            updatedFire = CampfireService.Light(
-                fire,
+            updatedFire = EntityInteractionService.LightCampfire(
+                fire, inventoryState,
                 _worldGameSeconds,
                 FiremakingSkill.LevelForExperience(
                     villager.FiremakingExperience));
@@ -1099,17 +1128,14 @@ internal sealed partial class GameHostWindow
             .4f);
         var position = new Vector2(
             villager.PositionX, villager.PositionY) + offset;
-        if (!PlayerInventory.TryRemove(
-                villager.Inventory, slot, out var inventory))
-            return false;
-        var placed = new WorldGroundObject(
-            Guid.NewGuid(), itemId,
-            position.X, position.Y,
-            OwnerId: villager.Id);
-        gpu.Chunk.GroundObjects.Add(placed);
+        var placed = EntityInteractionService.Place(
+            villager.Inventory, slot,
+            position.X, position.Y, villager.Id);
+        if (!placed.Succeeded || placed.Object is null) return false;
+        gpu.Chunk.GroundObjects.Add(placed.Object);
         _villagers[index] = villager with
         {
-            Inventory = inventory,
+            Inventory = placed.Inventory,
             Action = EntityAction.Work,
             ActionTime = 0,
             NextDecisionGameSeconds = _worldGameSeconds +
@@ -1137,7 +1163,7 @@ internal sealed partial class GameHostWindow
                 value.Object.OwnerId == villager.Id);
         if (storage.Object is null) return false;
         var container = StorageContainerService.Open(storage.Object);
-        if (!VillagerStorageTransfer.TryWithdrawFirst(
+        if (!EntityInteractionService.TryWithdrawFirst(
                 container,
                 villager.Inventory,
                 itemId => SurvivalService.TryFoodEffect(itemId, out _),
@@ -1174,7 +1200,7 @@ internal sealed partial class GameHostWindow
                 value.Object.OwnerId == villager.Id);
         if (storage.Object is null) return false;
         var container = StorageContainerService.Open(storage.Object);
-        if (!VillagerStorageTransfer.TryWithdrawFirst(
+        if (!EntityInteractionService.TryWithdrawFirst(
                 container,
                 villager.Inventory,
                 itemId => VillagerStorageTransfer.IsWorkItemForRole(
@@ -1220,27 +1246,51 @@ internal sealed partial class GameHostWindow
                 index, villager, tier, _player.Position, VillagerNeed.Safe);
             return true;
         }
-        var roll = MeleeCombatService.Roll(
-            villager.AttackExperience,
-            villager.StrengthExperience,
-            DeterministicRoll(villager.Id, "combat-hit"),
-            DeterministicRoll(villager.Id, "combat-damage"),
-            villager.Inventory);
-        if (roll.Hit)
-            ApplyPlayerDamage(roll.Damage, villager.Name);
-        var attackXp = SkillService.AwardExperience(
-            villager.AttackExperience, roll.Experience);
-        _villagers[index] = villager with
-        {
-            AttackExperience = attackXp.Experience,
-            Action = EntityAction.Attack,
-            ActionTime = 0,
-            NextDecisionGameSeconds = _worldGameSeconds +
-                MeleeCombatService.AttackIntervalSeconds *
-                VillagerSimulation.GameSecondsPerRealSecond
-        };
-        _villagersDirty = true;
-        return true;
+        var targetId = _activePlayer.Id;
+        var intent = new NpcBrainIntent(
+            "defend_self", EntityAction.Attack,
+            _player.Position, targetId);
+        return BeginNpcControlledAction(
+            index, villager, intent,
+            () =>
+            {
+                var actorIndex = VillagerIndex(villager.Id);
+                if (actorIndex < 0 || _activePlayer?.Id != targetId ||
+                    _player is null || _activePlayer.Health <= 0)
+                    return new(intent, false, "target_unavailable");
+                var actor = _villagers[actorIndex];
+                var interaction = EntityInteractionService.MeleeAttack(
+                    actor.AttackExperience,
+                    actor.StrengthExperience,
+                    actor.AttackExperience,
+                    DeterministicRoll(actor.Id, "combat-hit"),
+                    DeterministicRoll(actor.Id, "combat-damage"),
+                    actor.Inventory);
+                if (interaction.Attack.Hit)
+                    ApplyPlayerDamage(
+                        interaction.Attack.Damage, actor.Name);
+                _villagers[actorIndex] = actor with
+                {
+                    AttackExperience = interaction.Experience.Experience
+                };
+                _villagersDirty = true;
+                return new(intent, true);
+            },
+            MeleeCombatService.AttackIntervalSeconds *
+            VillagerSimulation.GameSecondsPerRealSecond,
+            targetAvailable: () =>
+            {
+                var actorIndex = VillagerIndex(villager.Id);
+                return _activePlayer?.Id == targetId &&
+                       _activePlayer.Health > 0 && _player is not null &&
+                       actorIndex >= 0 &&
+                       Vector2.DistanceSquared(
+                           new(_villagers[actorIndex].PositionX,
+                               _villagers[actorIndex].PositionY),
+                           _player.Position) <=
+                       MeleeCombatService.AttackRange *
+                       MeleeCombatService.AttackRange;
+            });
     }
 
     private bool TryVillagerCook(int index, VillagerState villager)
@@ -1260,7 +1310,7 @@ internal sealed partial class GameHostWindow
         if (fire.Object is null) return false;
         var level = CookingSkill.LevelForExperience(
             villager.CookingExperience);
-        var cooked = ActorActionService.Cook(
+        var cooked = EntityInteractionService.Cook(
             villager.Inventory,
             rawSlot,
             level,
@@ -1300,7 +1350,7 @@ internal sealed partial class GameHostWindow
                 value.Object.ItemId == ItemIds.CookingPot &&
                 HasNearbyLitCampfire(value.Object));
         if (pot.Object is null) return false;
-        var cooked = ActorActionService.CookStew(
+        var cooked = EntityInteractionService.CookStew(
             villager.Inventory, level);
         if (!cooked.Succeeded) return false;
         var xp = CookingSkill.AwardExperience(
@@ -1336,17 +1386,16 @@ internal sealed partial class GameHostWindow
                  value.Object.OwnerId == villager.Id) &&
                 CampfireService.CanRemoveFuel(
                     value.Object, _worldGameSeconds));
-        if (fire.Object?.FuelItemId is not { } fuelItemId ||
-            !PlayerInventory.TryAdd(
-                villager.Inventory, fuelItemId, out var inventory))
-            return false;
+        if (fire.Object is null) return false;
+        var taken = EntityInteractionService.TakeCampfireFuel(
+            villager.Inventory, fire.Object, _worldGameSeconds);
+        if (!taken.Succeeded || taken.Object is null) return false;
         ReplaceGroundObject(
             fire.Gpu, fire.Object,
-            CampfireService.RemoveFuel(
-                fire.Object, _worldGameSeconds));
+            taken.Object);
         _villagers[index] = villager with
         {
-            Inventory = inventory,
+            Inventory = taken.Inventory,
             Action = EntityAction.Gather,
             LastDeliberation = villager.LastDeliberation is { } trace
                 ? trace with { Action = "none", ItemId = "" }
@@ -1374,16 +1423,16 @@ internal sealed partial class GameHostWindow
             !TryGroundItemVisual(itemId, out _, out _, out _, out _) ||
             !TryFindGroundObjectDrop(
                 new(villager.PositionX, villager.PositionY),
-                out var gpu, out var position, out _) ||
-            !PlayerInventory.TryRemove(
-                villager.Inventory, slot, out var inventory))
+                out var gpu, out var position, out _))
             return false;
-        gpu.Chunk.GroundObjects.Add(new(
-            Guid.NewGuid(), itemId, position.X, position.Y,
-            OwnerId: villager.Id));
+        var dropped = EntityInteractionService.Drop(
+            villager.Inventory, slot,
+            position.X, position.Y, villager.Id);
+        if (!dropped.Succeeded || dropped.Object is null) return false;
+        gpu.Chunk.GroundObjects.Add(dropped.Object);
         _villagers[index] = villager with
         {
-            Inventory = inventory,
+            Inventory = dropped.Inventory,
             Action = EntityAction.Gather,
             LastDeliberation = villager.LastDeliberation is { } trace
                 ? trace with { Action = "none", ItemId = "" }

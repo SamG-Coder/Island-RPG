@@ -93,44 +93,79 @@ internal sealed partial class GameHostWindow
                 index, villager, tier, targetPosition, VillagerNeed.Safe);
             return true;
         }
-        var roll = MeleeCombatService.Roll(
-            villager.AttackExperience,
-            villager.StrengthExperience,
-            DeterministicRoll(villager.Id, $"npc-hit:{target.Id}"),
-            DeterministicRoll(villager.Id, $"npc-damage:{target.Id}"),
-            villager.Inventory);
-        var attackXp = SkillService.AwardExperience(
-            villager.AttackExperience, roll.Experience);
-        _villagers[index] = villager with
-        {
-            AttackExperience = attackXp.Experience,
-            Action = EntityAction.Attack,
-            ActionTime = 0,
-            NextDecisionGameSeconds = _worldGameSeconds +
-                MeleeCombatService.AttackIntervalSeconds *
-                VillagerSimulation.GameSecondsPerRealSecond
-        };
-        if (roll.Hit)
-        {
-            target = VillagerSimulation.RecordAttack(
-                target, villager.Id, villager.Name,
-                roll.Damage, _worldGameSeconds);
-            _villagers[targetIndex] = target;
-            ObserveNpcConflictWitnesses(index, targetIndex);
-            if (target.Health > 0)
-                StartVillagerConflict(
-                    index, targetIndex,
-                    villager.ConflictMotive ?? "attack", true);
-        }
-        ObserveLog("conflict_attack", villager.Id, new
-        {
-            TargetId = target.Id,
-            roll.Hit,
-            Damage = roll.Hit ? roll.Damage : 0,
-            Intent = villager.ConflictIntent.ToString()
-        });
-        _villagersDirty = true;
-        return true;
+        var targetId = target.Id;
+        var intent = new NpcBrainIntent(
+            "conflict_attack", EntityAction.Attack,
+            targetPosition, targetId);
+        return BeginNpcControlledAction(
+            index, villager, intent,
+            () =>
+            {
+                var actorIndex = VillagerIndex(villager.Id);
+                var currentTargetIndex = VillagerIndex(targetId);
+                if (actorIndex < 0 || currentTargetIndex < 0)
+                    return new(intent, false, "target_unavailable");
+                var actor = _villagers[actorIndex];
+                var currentTarget = _villagers[currentTargetIndex];
+                if (actor.Health <= 0 || currentTarget.Health <= 0)
+                    return new(intent, false, "target_unavailable");
+                var interaction = EntityInteractionService.MeleeAttack(
+                    actor.AttackExperience,
+                    actor.StrengthExperience,
+                    actor.AttackExperience,
+                    DeterministicRoll(actor.Id, $"npc-hit:{targetId}"),
+                    DeterministicRoll(actor.Id, $"npc-damage:{targetId}"),
+                    actor.Inventory);
+                var roll = interaction.Attack;
+                _villagers[actorIndex] = actor with
+                {
+                    AttackExperience = interaction.Experience.Experience
+                };
+                if (roll.Hit)
+                {
+                    currentTarget = VillagerSimulation.RecordAttack(
+                        currentTarget, actor.Id, actor.Name,
+                        roll.Damage, _worldGameSeconds);
+                    _villagers[currentTargetIndex] = currentTarget;
+                    ObserveNpcConflictWitnesses(
+                        actorIndex, currentTargetIndex);
+                    if (currentTarget.Health > 0)
+                        StartVillagerConflict(
+                            actorIndex, currentTargetIndex,
+                            actor.ConflictMotive ?? "attack", true);
+                }
+                _combatHitSplat = new(
+                    currentTarget.Id,
+                    roll.Hit ? roll.Damage : 0,
+                    roll.Hit,
+                    _clock);
+                ObserveLog("conflict_attack", actor.Id, new
+                {
+                    TargetId = currentTarget.Id,
+                    roll.Hit,
+                    Damage = roll.Hit ? roll.Damage : 0,
+                    Intent = actor.ConflictIntent.ToString()
+                });
+                _villagersDirty = true;
+                return new(intent, true);
+            },
+            MeleeCombatService.AttackIntervalSeconds *
+            VillagerSimulation.GameSecondsPerRealSecond,
+            targetAvailable: () =>
+            {
+                var actorIndex = VillagerIndex(villager.Id);
+                var currentTargetIndex = VillagerIndex(targetId);
+                return actorIndex >= 0 && currentTargetIndex >= 0 &&
+                       _villagers[actorIndex].Health > 0 &&
+                       _villagers[currentTargetIndex].Health > 0 &&
+                       Vector2.DistanceSquared(
+                           new(_villagers[actorIndex].PositionX,
+                               _villagers[actorIndex].PositionY),
+                           new(_villagers[currentTargetIndex].PositionX,
+                               _villagers[currentTargetIndex].PositionY)) <=
+                       MeleeCombatService.AttackRange *
+                       MeleeCombatService.AttackRange;
+            });
     }
 
     private void RequestConflictHelp(int callerIndex, int aggressorIndex)

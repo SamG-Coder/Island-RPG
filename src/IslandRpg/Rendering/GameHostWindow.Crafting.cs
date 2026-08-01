@@ -191,19 +191,20 @@ internal sealed partial class GameHostWindow
             return;
         }
         var beforeInventory = _activePlayer.Inventory;
-        var result = CraftingService.TryCraftDetailed(
-            recipe, level, beforeInventory,
-            out var inventory,
+        var crafted = EntityInteractionService.Craft(
+            beforeInventory,
+            recipe,
+            level,
             HasRequiredCraftingStation(recipe));
-        if (result == CraftingService.CraftResult.InventoryFull)
+        if (crafted.Failure == "inventoryfull")
         {
             ReportBlockedAction(
                 $"crafting-inventory-full-{recipe.Id}",
                 "You do not have enough inventory space for every crafting step.");
             return;
         }
-        if (result != CraftingService.CraftResult.Success)
-            return;
+        if (!crafted.Succeeded) return;
+        var inventory = crafted.Inventory;
 
         _activePlayer = _activePlayer with
         {

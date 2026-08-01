@@ -182,7 +182,8 @@ internal sealed record VillagerState(
     IReadOnlyList<VillagerLocationMemory>? LocationMemories = null,
     VillagerProjectAssignment? ProjectAssignment = null,
     string? RecognizedLeaderId = null,
-    double NextLeadershipChallengeGameSeconds = 0);
+    double NextLeadershipChallengeGameSeconds = 0,
+    string? DeathCause = null);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,
@@ -478,7 +479,9 @@ internal static class VillagerSimulation
             };
             remaining -= chunk;
         }
-        return simulated;
+        return simulated.Health <= 0 && simulated.DeathCause is null
+            ? simulated with { DeathCause = "Died from starvation." }
+            : simulated;
     }
 
     public static VillagerDecision Decide(
@@ -1252,6 +1255,9 @@ internal static class VillagerSimulation
                 ? EntityAction.Die
                 : EntityAction.Idle,
             ActionTime = 0,
+            DeathCause = villager.Health - damage <= 0
+                ? $"Killed by {attackerName}."
+                : villager.DeathCause,
             TargetX = null,
             TargetY = null,
             NextDecisionGameSeconds = gameSeconds
@@ -1506,22 +1512,23 @@ internal static class VillagerSimulation
         var health = state.Health;
         var wellFedSeconds = state.WellFedSeconds;
         var ate = false;
-        if ((uint)decision.ConsumeSlot < (uint)inventory.Length &&
-            inventory[decision.ConsumeSlot] is { } food &&
-            SurvivalService.TryFoodEffect(food, out var effect))
+        if ((uint)decision.ConsumeSlot < (uint)inventory.Length)
         {
-            inventory = (string?[])inventory.Clone();
-            inventory[decision.ConsumeSlot] = null;
-            var eaten = SurvivalService.Eat(
-                effect,
+            var eaten = EntityInteractionService.Eat(
+                inventory,
+                decision.ConsumeSlot,
                 hunger,
                 wellFedSeconds,
                 health,
                 AdventureService.BaseMaximumHealth);
-            hunger = eaten.Hunger;
-            health = eaten.Health;
-            wellFedSeconds = eaten.WellFedSeconds;
-            ate = true;
+            if (eaten.Succeeded)
+            {
+                inventory = eaten.Inventory;
+                hunger = eaten.Survival.Hunger;
+                health = eaten.Survival.Health;
+                wellFedSeconds = eaten.Survival.WellFedSeconds;
+                ate = true;
+            }
         }
         var previous = new Vector2(
             state.PositionX, state.PositionY);

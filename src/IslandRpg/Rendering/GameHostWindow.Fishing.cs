@@ -257,8 +257,11 @@ internal sealed partial class GameHostWindow
     {
         if (_activePlayer is null) return false;
         var profile = FishingSkill.Profile(fish.Species);
-        if (!PlayerInventory.TryAdd(
-                _activePlayer.Inventory, profile.ItemId, out var inventory))
+        var caught = EntityInteractionService.CatchFish(
+            _activePlayer.Inventory,
+            _activePlayer.FishingExperience,
+            fish.Species);
+        if (!caught.Succeeded)
         {
             ReportBlockedAction(
                 "fishing-inventory-full",
@@ -266,12 +269,11 @@ internal sealed partial class GameHostWindow
             return false;
         }
 
-        var award = FishingSkill.AwardExperience(
-            _activePlayer.FishingExperience, fish.Species);
+        var award = caught.Experience;
         AwardAdventureExperience(award.Gained);
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = caught.Inventory,
             FishingExperience = award.Experience,
             UpdatedUtc = DateTime.UtcNow
         };

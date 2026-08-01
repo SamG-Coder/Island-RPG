@@ -147,26 +147,28 @@ internal sealed partial class GameHostWindow
             candidate.StableKey.Equals(_activeMiningKey,
                 StringComparison.Ordinal));
         var health = state?.Health ?? value.Definition.MaximumHealth;
-        var roll = MiningSkill.Roll(
+        var roll = EntityInteractionService.StrikeResource(new(
+            EntityResourceAction.Mine,
             _activePlayer.MiningExperience,
-            Random.Shared.NextSingle(), Random.Shared.NextSingle(),
-            pickaxe.MiningPower);
+            health,
+            value.Definition.MaximumHealth,
+            pickaxe.MiningPower,
+            Random.Shared.NextSingle(),
+            Random.Shared.NextSingle(),
+            value.Definition.CompletionExperience));
         PlaySoundCue("mining-impact");
         if (!roll.Hit)
         {
             _chatUi.AddMessage(
-                $"Mining {roll.Level}: you miss the " +
+                $"Mining {roll.Experience.Level}: you miss the " +
                 $"{value.Definition.DisplayName.ToLowerInvariant()}.",
                 ChatMessageStyle.Miss);
             return;
         }
 
-        var damage = Math.Min(health, roll.Damage);
-        health -= damage;
-        var experience = MiningSkill.AwardExperience(
-            _activePlayer.MiningExperience,
-            damage + (health == 0
-                ? value.Definition.CompletionExperience : 0));
+        var damage = roll.Damage;
+        health = roll.Health;
+        var experience = roll.Experience;
         AwardAdventureExperience(experience.Gained);
         var inventory = _activePlayer.Inventory;
         if (health == 0 &&
@@ -232,10 +234,15 @@ internal sealed partial class GameHostWindow
                     continue;
                 var active = cached.StableKey.Equals(
                     _activeMiningKey, StringComparison.Ordinal);
+                var recentlyStruck =
+                    _clock < _recentNpcResourceHealthUntil &&
+                    cached.StableKey.Equals(
+                        _recentNpcMiningHealthKey,
+                        StringComparison.Ordinal);
                 var state = gpu.Chunk.MiningStates.Find(candidate =>
                     candidate.StableKey.Equals(
                         cached.StableKey, StringComparison.Ordinal));
-                if (!active && state is null ||
+                if (!active && !recentlyStruck && state is null ||
                     state is { Health: <= 0 })
                     continue;
                 if (!_treeAtlas.TryGetValue(

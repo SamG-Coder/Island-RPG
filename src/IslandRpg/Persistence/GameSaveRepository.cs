@@ -67,7 +67,9 @@ internal sealed record PlayerDeathMarker(
     EntityGender Gender,
     DateTime DiedUtc,
     float FacingX = 1,
-    float FacingY = 1);
+    float FacingY = 1,
+    string? Name = null,
+    string? Cause = null);
 
 internal enum DisplayVSyncMode
 {
@@ -281,6 +283,28 @@ internal sealed class GameSaveRepository
         WriteJson(
             Path.Combine(
                 WorldsRoot, worldId, "players", playerId + "-deaths.json"),
+            deaths);
+    }
+
+    public IReadOnlyList<PlayerDeathMarker> LoadVillagerDeaths(
+        string worldId) =>
+        (ReadJson<List<PlayerDeathMarker>>(Path.Combine(
+             WorldsRoot, worldId, "villager-deaths.json")) ?? [])
+        .OrderByDescending(marker => marker.DiedUtc)
+        .Take(256)
+        .ToArray();
+
+    public void AddVillagerDeath(
+        string worldId,
+        PlayerDeathMarker marker)
+    {
+        var deaths = LoadVillagerDeaths(worldId)
+            .Prepend(marker)
+            .OrderByDescending(value => value.DiedUtc)
+            .Take(256)
+            .ToArray();
+        WriteJson(
+            Path.Combine(WorldsRoot, worldId, "villager-deaths.json"),
             deaths);
     }
 

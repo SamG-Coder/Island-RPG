@@ -66,7 +66,12 @@ internal sealed partial class GameHostWindow
         _settlementCouncilDeadline = 0;
         _settlementCouncilTimedOut = false;
         _nextVillagerRoleAssignment = 0;
+        _recentNpcTreeHealthId = null;
+        _recentNpcMiningHealthKey = null;
+        _recentNpcResourceHealthUntil = 0;
+        _playerWorldHealthUntil = 0;
         if (_activeWorld is null) return;
+        _villagerDeaths = _saves.LoadVillagerDeaths(_activeWorld.Id);
         if (!_activeWorld.AiNpcsEnabled ||
             _activeWorld.AiNpcCount <= 0)
         {
@@ -510,9 +515,63 @@ internal sealed partial class GameHostWindow
                     $"{villager.Name}: {speech}",
                     ChatMessageStyle.Normal);
         }
+        FinalizeVillagerDeaths();
         if (_villagersDirty &&
             _worldGameSeconds >= _villagersNextSaveAt)
             SaveVillagers();
+    }
+
+    private void FinalizeVillagerDeaths()
+    {
+        if (_activeWorld is null) return;
+        var removed = false;
+        for (var index = _villagers.Count - 1; index >= 0; index--)
+        {
+            var villager = _villagers[index];
+            if (villager.Health > 0 ||
+                villager.ActionTime < VillagerDeathAnimationSeconds(villager))
+                continue;
+            _npcController.Cancel(villager.Id);
+            _villagerWork.ReleaseActor(villager.Id);
+            _saves.AddVillagerDeath(
+                _activeWorld.Id,
+                new(
+                    villager.PositionX,
+                    villager.PositionY,
+                    villager.WorldLevel,
+                    villager.Gender,
+                    DateTime.UtcNow,
+                    villager.FacingX,
+                    villager.FacingY,
+                    villager.Name,
+                    villager.DeathCause ?? "Cause unknown."));
+            _villagerDeaths = _saves.LoadVillagerDeaths(_activeWorld.Id);
+            ObserveLog("villager_died", villager.Id, new
+            {
+                villager.Name,
+                Cause = villager.DeathCause ?? "Cause unknown."
+            });
+            _villagers.RemoveAt(index);
+            _villagerSpeechBubbles.Remove(villager.Id);
+            _nextProjectAccountability.Remove(villager.Id);
+            if (_observedVillagerId == villager.Id)
+                _observedVillagerId = null;
+            _villagersDirty = true;
+            removed = true;
+        }
+        if (removed)
+            SaveVillagers();
+    }
+
+    private double VillagerDeathAnimationSeconds(VillagerState villager)
+    {
+        if (!_entityAnimations.TryGetValue(
+                (villager.Gender, EntityAction.Die), out var animation))
+            return 1.4;
+        const int storedVillagerAngles = 5;
+        return Math.Max(1,
+                   animation.Graphic.Sprite.Frames.Count /
+                   storedVillagerAngles) * animation.SecondsPerFrame;
     }
 
     private void UpdateSettlementProjectAssignments()
@@ -1601,7 +1660,7 @@ internal sealed partial class GameHostWindow
             return false;
         }
         var container = StorageContainerService.Open(target);
-        var transfer = VillagerStorageTransfer.DepositAll(
+        var transfer = EntityInteractionService.DepositAll(
             container,
             villager.Inventory,
             villager.Id,
@@ -1662,15 +1721,13 @@ internal sealed partial class GameHostWindow
             return new(intent, false, "target_unavailable");
         }
         var villager = _villagers[actorIndex];
-        var takenItemId = CropService.IsCrop(target)
-            ? target.FuelItemId!
-            : target.ItemId;
-        var gathered = ActorActionService.Gather(
-            villager.Inventory,
-            takenItemId,
-            CropService.IsCrop(target)
-                ? CropService.HarvestCount(villager.Inventory)
-                : 1);
+        var crop = CropService.IsCrop(target);
+        var gathered = crop
+            ? EntityInteractionService.Harvest(
+                villager.Inventory, target, _worldGameSeconds)
+            : EntityInteractionService.Pickup(
+                villager.Inventory, target.ItemId);
+        var takenItemId = gathered.ItemId ?? target.ItemId;
         var ownedByAnother = target.OwnerId is { Length: > 0 } owner &&
                              !string.Equals(
                                  owner, actorId,
@@ -1695,14 +1752,11 @@ internal sealed partial class GameHostWindow
             _villagerWork.ReleaseTarget(reservationKey, actorId);
             return new(intent, false, "target_changed");
         }
-        var harvestedCount = gathered.Inventory.Count(value =>
-                                 value == takenItemId) -
-                             villager.Inventory.Count(value =>
-                                 value == takenItemId);
+        var harvestedCount = gathered.Quantity;
         var updated = villager with
         {
             Inventory = gathered.Inventory,
-            FarmingExperience = CropService.IsCrop(target)
+            FarmingExperience = crop
                 ? FarmingSkill.AwardExperience(
                     villager.FarmingExperience,
                     FarmingSkill.PlantingExperience * harvestedCount)

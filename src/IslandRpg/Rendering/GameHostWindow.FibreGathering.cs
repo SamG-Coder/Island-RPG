@@ -170,7 +170,7 @@ internal sealed partial class GameHostWindow
                             _activePlayer.Inventory);
         var previousInventory = PlayerInventory.Normalize(
             _activePlayer.Inventory);
-        var harvest = ActorActionService.Gather(
+        var harvest = EntityInteractionService.Gather(
             previousInventory,
             ItemIds.PlantFibres,
             requested);

@@ -91,11 +91,21 @@ internal sealed partial class GameHostWindow
             _player.Stop();
             return;
         }
-        if (!StewCookingService.TryPrepare(
-                _activePlayer.Inventory,
-                out var inventory,
-                out var fishItemId,
-                out var berryItemId))
+        var cookingInventory = PlayerInventory.Normalize(
+            _activePlayer.Inventory);
+        var fishItemId = cookingInventory.FirstOrDefault(itemId =>
+            itemId is not null &&
+            ItemCatalog.Get(itemId).HasTag(ItemTag.Fish) &&
+            CookingSkill.TryProfile(itemId, out _));
+        var berryItemId = cookingInventory.FirstOrDefault(itemId =>
+            itemId is not null &&
+            ItemCatalog.Get(itemId).HasTag(ItemTag.Berry) &&
+            CookingSkill.TryProfile(itemId, out _));
+        var cooked = EntityInteractionService.CookStew(
+            cookingInventory,
+            CookingSkill.LevelForExperience(
+                _activePlayer.CookingExperience));
+        if (!cooked.Succeeded)
         {
             ReportBlockedAction(
                 "stew-ingredients",
@@ -103,6 +113,7 @@ internal sealed partial class GameHostWindow
             _player.Stop();
             return;
         }
+        var inventory = cooked.Inventory;
 
         var award = CookingSkill.AwardExperience(
             _activePlayer.CookingExperience,
@@ -116,8 +127,8 @@ internal sealed partial class GameHostWindow
         };
         _saves.SavePlayer(_activePlayer);
         _chatUi.AddMessage(
-            $"You simmer the {ItemCatalog.Get(fishItemId).Name} " +
-            $"with {ItemCatalog.Get(berryItemId).Name}.",
+            $"You simmer the {ItemCatalog.Get(fishItemId!).Name} " +
+            $"with {ItemCatalog.Get(berryItemId!).Name}.",
             ChatMessageStyle.Action);
         _chatUi.AddMessage(
             $"You make {ItemCatalog.Get(ItemIds.FishBerryStew).Name}.",

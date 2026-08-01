@@ -49,6 +49,20 @@ internal sealed partial class GameHostWindow
         }
     }
 
+    private void RenderPlayerWorldHealthBar(Vector4 scene)
+    {
+        if (_clock >= _playerWorldHealthUntil ||
+            _activePlayer is null ||
+            GetPlayerVisual() is not { } visual)
+            return;
+        DrawWorldHealthBar(
+            scene,
+            SpriteBounds(visual.Frame, visual.World, visual.Mirror),
+            _activePlayer.Health /
+            (float)Math.Max(1, AdventureService.MaximumHealth(
+                _activePlayer.AdventureExperience)));
+    }
+
     private void UpdateSurvival(float elapsed)
     {
         if (_activePlayer is null || _playerDefeated || elapsed <= 0) return;
@@ -90,6 +104,7 @@ internal sealed partial class GameHostWindow
             Health = health,
             UpdatedUtc = DateTime.UtcNow
         };
+        _playerWorldHealthUntil = _clock + 3;
         _chatUi.AddMessage(
             $"{source} hits you for {damage}.",
             ChatMessageStyle.Damage);
@@ -172,16 +187,18 @@ internal sealed partial class GameHostWindow
                 "You are already full and healthy.");
             return;
         }
-        inventory[slot] = null;
-        var update = SurvivalService.Eat(
-            effect,
+        var eaten = EntityInteractionService.Eat(
+            inventory,
+            slot,
             _activePlayer.Hunger,
             _activePlayer.WellFedSeconds,
             _activePlayer.Health,
             maximumHealth);
+        if (!eaten.Succeeded) return;
+        var update = eaten.Survival;
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = eaten.Inventory,
             Hunger = update.Hunger,
             WellFedSeconds = update.WellFedSeconds,
             Health = update.Health,

@@ -19,7 +19,10 @@ internal static class VillagerOpeningIncidentService
         return villager with
         {
             Health = health,
-            Action = health == 0 ? EntityAction.Die : EntityAction.Hurt
+            Action = health == 0 ? EntityAction.Die : EntityAction.Hurt,
+            DeathCause = health == 0
+                ? "Died from wounds and exposure on the shore."
+                : villager.DeathCause
         };
     }
 

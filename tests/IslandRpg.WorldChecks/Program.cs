@@ -1924,7 +1924,7 @@ Require(
     "after crafting rope, food workers must gather only the remaining fibre needed for a fishing net");
 
 var sharedGatherInventory = PlayerInventory.CreateStartingInventory();
-var sharedGather = ActorActionService.Gather(
+var sharedGather = EntityInteractionService.Gather(
     sharedGatherInventory, ItemIds.PlantFibres, 3);
 Require(
     sharedGather.Succeeded &&
@@ -1933,7 +1933,7 @@ Require(
     "player and NPC gathering must share the same actor-neutral capacity mutation");
 var ropeRecipe = CraftingSkill.Recipes.Single(value =>
     value.ResultItemId == ItemIds.Rope);
-var sharedCraft = ActorActionService.Craft(
+var sharedCraft = EntityInteractionService.Craft(
     sharedGather.Inventory,
     ropeRecipe,
     craftingLevel: 1,
@@ -1945,7 +1945,7 @@ Require(
     "player and NPC crafting must execute the same CraftingService recipe and consumption rules");
 var cookingInventory = PlayerInventory.CreateStartingInventory();
 cookingInventory[0] = ItemIds.RawMinnows;
-var sharedCooking = ActorActionService.Cook(
+var sharedCooking = EntityInteractionService.Cook(
     cookingInventory, 0, cookingLevel: 100, roll: .99f);
 Require(
     sharedCooking.Succeeded &&
@@ -1954,7 +1954,7 @@ Require(
 var sharedStewInventory = PlayerInventory.CreateStartingInventory();
 sharedStewInventory[0] = ItemIds.RawMinnows;
 sharedStewInventory[1] = ItemIds.WildBerries;
-var sharedStew = ActorActionService.CookStew(
+var sharedStew = EntityInteractionService.CookStew(
     sharedStewInventory, StewCookingService.RequiredLevel);
 Require(
     sharedStew.Succeeded &&
@@ -1964,7 +1964,7 @@ Require(
         value != ItemIds.RawMinnows &&
         value != ItemIds.WildBerries),
     "player and NPC stew cooking must share ingredient consumption and output rules");
-var lockedStew = ActorActionService.CookStew(
+var lockedStew = EntityInteractionService.CookStew(
     sharedStewInventory, StewCookingService.RequiredLevel - 1);
 Require(
     !lockedStew.Succeeded &&
@@ -1976,7 +1976,7 @@ var transferSource = PlayerInventory.CreateStartingInventory();
 var transferDestination = PlayerInventory.CreateStartingInventory();
 transferSource[3] = ItemIds.CookedMinnows;
 Require(
-    ActorActionService.TryTransfer(
+    EntityInteractionService.TryTransfer(
         transferSource,
         transferDestination,
         3,
@@ -1988,6 +1988,110 @@ Require(
     transferredDestination.Count(value =>
         value == ItemIds.CookedMinnows) == 1,
     "gifts and coordinated item hand-offs must use one atomic actor-neutral transfer");
+var eatingInventory = PlayerInventory.CreateStartingInventory();
+eatingInventory[2] = ItemIds.CookedMinnows;
+var sharedEating = EntityInteractionService.Eat(
+    eatingInventory, 2, 40, 0, 50, 100);
+var invalidEating = EntityInteractionService.Eat(
+    eatingInventory, 1, 40, 0, 50, 100);
+Require(
+    sharedEating.Succeeded &&
+    sharedEating.Inventory[2] is null &&
+    sharedEating.Survival.Hunger > 40 &&
+    sharedEating.Survival.Health > 50 &&
+    !invalidEating.Succeeded &&
+    invalidEating.Inventory[2] == ItemIds.CookedMinnows &&
+    invalidEating.Survival.Hunger == 40,
+    "player and NPC eating must atomically consume food and apply the same survival effect");
+var plantingInventory = PlayerInventory.CreateStartingInventory();
+plantingInventory[4] = ItemIds.BeanSeeds;
+var sharedPlanting = EntityInteractionService.Plant(
+    plantingInventory, 4, 3.5f, 4.5f, 100, "actor");
+Require(
+    sharedPlanting.Succeeded &&
+    sharedPlanting.Inventory[4] is null &&
+    sharedPlanting.Object is
+    {
+        ItemId: ItemIds.BeanCrop,
+        OwnerId: "actor",
+        X: 3.5f,
+        Y: 4.5f
+    },
+    "player and NPC planting must consume one seed and create the same owned crop atomically");
+var sharedHarvest = EntityInteractionService.Harvest(
+    plantingInventory,
+    sharedPlanting.Object!,
+    100 + CropService.GrowthGameSeconds);
+var earlyHarvest = EntityInteractionService.Harvest(
+    plantingInventory, sharedPlanting.Object!, 100);
+Require(
+    sharedHarvest.Succeeded && sharedHarvest.Quantity >= 2 &&
+    sharedHarvest.ItemId == ItemIds.Beans &&
+    !earlyHarvest.Succeeded && earlyHarvest.Failure == "not_ready" &&
+    earlyHarvest.Inventory.SequenceEqual(plantingInventory),
+    "crop harvest readiness, yield and inventory failure behaviour must be actor-neutral");
+var sharedFishing = EntityInteractionService.CatchFish(
+    PlayerInventory.CreateStartingInventory(),
+    0,
+    WorldFishSpecies.ShoreMinnows);
+Require(
+    sharedFishing.Succeeded &&
+    sharedFishing.ItemId == ItemIds.RawMinnows &&
+    sharedFishing.Inventory.Count(value => value == ItemIds.RawMinnows) == 1 &&
+    sharedFishing.Experience.Gained ==
+    FishingSkill.Profile(WorldFishSpecies.ShoreMinnows).Experience,
+    "player and NPC fishing must share catch inventory and skill progression outcomes");
+var placementInventory = PlayerInventory.CreateStartingInventory();
+placementInventory[0] = ItemIds.Campfire;
+var sharedPlacement = EntityInteractionService.Place(
+    placementInventory, 0, 8, 9, "builder");
+Require(
+    sharedPlacement.Succeeded &&
+    sharedPlacement.Inventory[0] is null &&
+    sharedPlacement.Object is
+    {
+        ItemId: ItemIds.Campfire,
+        OwnerId: "builder",
+        X: 8,
+        Y: 9
+    },
+    "player and NPC placement must consume and create the same owned world object atomically");
+var droppedInteraction = EntityInteractionService.Drop(
+    sharedPlacement.Inventory,
+    0,
+    2,
+    3,
+    "actor");
+Require(
+    !droppedInteraction.Succeeded &&
+    droppedInteraction.Inventory.SequenceEqual(sharedPlacement.Inventory),
+    "failed entity drops must preserve inventory and create no world object");
+var fuelInventory = PlayerInventory.CreateStartingInventory();
+fuelInventory[0] = ItemIds.Logs;
+var interactionEmptyCampfire = sharedPlacement.Object!;
+var fueledInteraction = EntityInteractionService.AddCampfireFuel(
+    fuelInventory, 0, interactionEmptyCampfire, 200);
+var takenFuelInteraction = EntityInteractionService.TakeCampfireFuel(
+    PlayerInventory.CreateStartingInventory(),
+    fueledInteraction.Object!,
+    200);
+Require(
+    fueledInteraction.Succeeded &&
+    fueledInteraction.Inventory[0] is null &&
+    fueledInteraction.Object?.FuelItemId == ItemIds.Logs &&
+    takenFuelInteraction.Succeeded &&
+    takenFuelInteraction.Inventory.Count(value => value == ItemIds.Logs) == 1 &&
+    takenFuelInteraction.Object?.FuelItemId is null,
+    "campfire fuel addition and removal must atomically update actor inventory and the shared world object");
+var toolInventory = PlayerInventory.CreateStartingInventory();
+toolInventory[0] = ItemIds.StoneAxe;
+Require(
+    EntityInteractionService.TryBluntStoneTool(
+        toolInventory, ItemIds.StoneAxe, 0,
+        out var bluntedToolInventory) &&
+    bluntedToolInventory[0] == ItemIds.BluntStoneAxe &&
+    toolInventory[0] == ItemIds.StoneAxe,
+    "player and NPC stone tools must share durability mutation without modifying the input inventory");
 
 var observeOptions = AppOptions.Parse([
     "--observe", "--observe-seconds", "45",
@@ -3351,6 +3455,7 @@ var attackedVillager = VillagerSimulation.RecordAttack(
     261);
 Require(
     attackedVillager.Health == giftedVillager.Health - 7 &&
+    attackedVillager.Action == EntityAction.Idle &&
     attackedVillager.FollowingActorId is null &&
     attackedVillager.Need == VillagerNeed.Safe &&
     attackedVillager.Memories?.Any(memory =>
@@ -3382,6 +3487,7 @@ Require(
         value.CharacterId == "player").State.Resentment > 0 &&
     defeatedVillager.Health == 0 &&
     defeatedVillager.Action == EntityAction.Die &&
+    defeatedVillager.DeathCause == "Killed by Samuel." &&
     VillagerSimulation.CatchUp(
         defeatedVillager, 10_000).Health == 0,
     "nearby villagers must remember witnessed violence and defeated villagers must remain permanently dead");
@@ -3833,25 +3939,52 @@ Require(noviceMiningStrike.Hit && noviceMiningStrike.Damage > 0 &&
         !MiningSkill.Roll(0, .99f, 0, 1).Hit &&
         MiningSkill.HitChance(20) > MiningSkill.HitChance(1),
     "mining strikes must scale and retain a miss chance");
-var npcWoodcutStrike = ResourceStrikeService.Woodcut(
-    0, 100, 100, 1, 0, 0);
-var npcWoodcutMiss = ResourceStrikeService.Woodcut(
-    0, 100, 100, 1, 1, 0);
+var woodcutInteraction = new EntityResourceInteraction(
+    EntityResourceAction.Woodcut, 0, 100, 100, 1, 0, 0);
+var playerWoodcutStrike = EntityInteractionService.StrikeResource(
+    woodcutInteraction);
+var npcWoodcutStrike = EntityInteractionService.StrikeResource(
+    woodcutInteraction);
+var npcWoodcutMiss = EntityInteractionService.StrikeResource(
+    woodcutInteraction with { AccuracyRoll = 1 });
 Require(
+    playerWoodcutStrike == npcWoodcutStrike &&
     npcWoodcutStrike.Hit && npcWoodcutStrike.Damage > 0 &&
     npcWoodcutStrike.Health == 100 - npcWoodcutStrike.Damage &&
     npcWoodcutStrike.Experience.Gained == npcWoodcutStrike.Damage &&
     !npcWoodcutMiss.Hit && npcWoodcutMiss.Damage == 0 &&
     npcWoodcutMiss.Health == 100 &&
     npcWoodcutMiss.Experience.Gained == 0,
-    "actor woodcutting strikes must atomically apply damage and skill XP only on a hit");
-var npcMiningFinish = ResourceStrikeService.Mine(
-    0, 1, 1, 25, 0, 0);
+    "player and NPC woodcutting must use the same atomic damage and skill outcome");
+var miningInteraction = new EntityResourceInteraction(
+    EntityResourceAction.Mine, 0, 1, 1, 1, 0, 0, 25);
+var playerMiningFinish = EntityInteractionService.StrikeResource(
+    miningInteraction);
+var npcMiningFinish = EntityInteractionService.StrikeResource(
+    miningInteraction);
 Require(
+    playerMiningFinish == npcMiningFinish &&
     npcMiningFinish.Hit && npcMiningFinish.Depleted &&
     npcMiningFinish.Damage == 1 && npcMiningFinish.Health == 0 &&
     npcMiningFinish.Experience.Gained == 26,
-    "actor mining strikes must clamp damage and award completion XP on depletion");
+    "player and NPC mining must clamp damage and award identical completion XP");
+var sharedMeleeInventory = PlayerInventory.CreateStartingInventory();
+sharedMeleeInventory[0] = ItemIds.StoneKnife;
+var playerMeleeInteraction = EntityInteractionService.MeleeAttack(
+    250, 500, 250, 0, .5f, sharedMeleeInventory);
+var npcMeleeInteraction = EntityInteractionService.MeleeAttack(
+    250, 500, 250, 0, .5f, sharedMeleeInventory);
+var missedMeleeInteraction = EntityInteractionService.MeleeAttack(
+    250, 500, 250, 1, .5f, sharedMeleeInventory);
+Require(
+    playerMeleeInteraction == npcMeleeInteraction &&
+    playerMeleeInteraction.Attack.Hit &&
+    playerMeleeInteraction.Attack.Damage > 1 &&
+    playerMeleeInteraction.Experience.Gained ==
+    playerMeleeInteraction.Attack.Experience &&
+    !missedMeleeInteraction.Attack.Hit &&
+    missedMeleeInteraction.Experience.Gained == 0,
+    "player and NPC melee must share hit, weapon damage, and progression outcomes");
 var actionMemoryVillager = new VillagerState(
     "skill-memory", "Rin", EntityGender.Female, 0, 0,
     0, 0, 0, 100, 100, PlayerInventory.CreateStartingInventory());
@@ -7439,6 +7572,23 @@ try
         deaths[0].FacingX == -1 &&
         deaths[0].FacingY == 1,
         "death markers must persist newest-first with position, layer, facing, gender, and a ten-marker cap");
+    saves.AddVillagerDeath(
+        world.Id,
+        new(
+            7, 8, 0, EntityGender.Female,
+            DateTime.UtcNow,
+            FacingX: -1,
+            FacingY: 0,
+            Name: "Margery",
+            Cause: "Died from starvation."));
+    Require(saves.LoadVillagerDeaths(world.Id).Single() is
+        {
+            PositionX: 7,
+            PositionY: 8,
+            Name: "Margery",
+            Cause: "Died from starvation."
+        },
+        "permanent villager remains must persist identity, cause, position, facing, level, and gender");
     saves.DeletePlayer(player.Id);
     Require(saves.ListPlayers().Count == 0 &&
             saves.LoadWorldPlayer(world.Id, player.Id) is null &&

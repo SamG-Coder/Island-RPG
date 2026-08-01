@@ -184,6 +184,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private double _deathOverlayAt;
     private string _deathMessage = "";
     private IReadOnlyList<PlayerDeathMarker> _playerDeaths = [];
+    private IReadOnlyList<PlayerDeathMarker> _villagerDeaths = [];
     private readonly Dictionary<EntityGender, EntityAnimation>
         _skeletonAnimations = [];
     private readonly PauseMenuController _pauseMenu;
@@ -381,6 +382,10 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _pathRequestId;
     private QueuedWorldAction? _queuedAction;
     private Guid? _activeTreeId;
+    private Guid? _recentNpcTreeHealthId;
+    private string? _recentNpcMiningHealthKey;
+    private double _recentNpcResourceHealthUntil;
+    private double _playerWorldHealthUntil;
     private Guid? _activeTreeStickGatherId;
     private Guid? _activeGroundPickupId;
     private GroundDropPreview? _groundDropPreview;
@@ -2447,7 +2452,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 return;
             }
             if (axe.Id == ItemIds.StoneAxe &&
-                PlayerInventory.TryBluntStoneTool(
+                EntityInteractionService.TryBluntStoneTool(
                     _activePlayer?.Inventory,
                     axe.Id,
                     Random.Shared.NextSingle(),
@@ -2468,21 +2473,24 @@ internal sealed partial class GameHostWindow : GameWindow
                 return;
             }
             var experience = _activePlayer?.WoodcuttingExperience ?? 0;
-            var strikeResult = WoodcuttingSkill.Roll(
+            var strikeResult = EntityInteractionService.StrikeResource(new(
+                EntityResourceAction.Woodcut,
                 experience,
+                instance.Health,
+                instance.MaxHealth,
+                axe.WoodcuttingPower,
                 Random.Shared.NextSingle(),
-                Random.Shared.NextSingle(),
-                axe.WoodcuttingPower);
+                Random.Shared.NextSingle()));
             PlaySoundCue("woodcutting-impact");
             if (!strikeResult.Hit)
             {
                 _chatUi.AddMessage(
-                    $"Woodcutting {strikeResult.Level}: you miss the tree.",
+                    $"Woodcutting {strikeResult.Experience.Level}: you miss the tree.",
                     ChatMessageStyle.Miss);
                 return;
             }
-            var damage = Math.Min(instance.Health, strikeResult.Damage);
-            var health = Math.Max(0, instance.Health - damage);
+            var damage = strikeResult.Damage;
+            var health = strikeResult.Health;
             var state = health == 0
                 ? TreeLifecycleState.Stump
                 : TreeLifecycleState.Standing;
@@ -2496,13 +2504,11 @@ internal sealed partial class GameHostWindow : GameWindow
                 $"You hit the {TreeDisplayName(instance.TreeType)} for {damage} damage " +
                 $"({health}/{instance.MaxHealth}).",
                 ChatMessageStyle.Damage);
-            AwardWoodcuttingExperience(
-                damage + (state == TreeLifecycleState.Stump
-                    ? Math.Max(10, instance.MaxHealth / 5)
-                    : 0));
+            AwardWoodcuttingExperience(strikeResult.Experience.Gained);
             if (state == TreeLifecycleState.Standing &&
                 WoodcuttingSkill.GrantsSwingLog(
-                    strikeResult.Level, Random.Shared.NextSingle()))
+                    strikeResult.Experience.Level,
+                    Random.Shared.NextSingle()))
             {
                 AddWoodcuttingLog(instance.TreeType);
                 _chatUi.AddMessage(
@@ -4276,6 +4282,7 @@ internal sealed partial class GameHostWindow : GameWindow
         RenderTreeHealthBars(scene);
         RenderMiningHealthBars(scene);
         RenderDigSiteHealthBar(scene);
+        RenderPlayerWorldHealthBar(scene);
         RenderCombatTargetHealthBar(scene);
         RenderOverheadSpeech(scene);
         RenderVillagerOverheadSpeech(scene);
@@ -4736,17 +4743,23 @@ internal sealed partial class GameHostWindow : GameWindow
         }
 
         var inventory = PlayerInventory.Normalize(_activePlayer.Inventory);
-        if ((uint)slot >= (uint)inventory.Length ||
-            inventory[slot] != itemId)
+        if ((uint)slot >= (uint)inventory.Length || inventory[slot] != itemId)
             return;
-        inventory[slot] = null;
         var (plantX, plantY, targetGpu) = planting.Value;
         if (cropSeed)
-            targetGpu.Chunk.GroundObjects.Add(CropService.Plant(
-                itemId, plantX + .5f, plantY + .5f,
-                _worldGameSeconds, _activePlayer.Id));
+        {
+            var planted = EntityInteractionService.Plant(
+                inventory, slot,
+                plantX + .5f, plantY + .5f,
+                _worldGameSeconds, _activePlayer.Id);
+            if (!planted.Succeeded || planted.Object is null) return;
+            inventory = planted.Inventory;
+            targetGpu.Chunk.GroundObjects.Add(planted.Object);
+        }
         else
         {
+            if (!PlayerInventory.TryRemove(
+                    inventory, slot, out inventory)) return;
             var frameIndex = WorldTreeCatalog.SelectFrame(
                 _worldSeed, plantX, plantY, treeType!);
             targetGpu.Chunk.Trees =
@@ -5032,7 +5045,9 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             if (instance.State != TreeLifecycleState.Standing ||
                 instance.Health >= instance.MaxHealth &&
-                instance.Id != _activeTreeId)
+                instance.Id != _activeTreeId &&
+                !(_clock < _recentNpcResourceHealthUntil &&
+                  instance.Id == _recentNpcTreeHealthId))
                 continue;
             var sourceTree = gpu.Chunk.Trees.FirstOrDefault(tree =>
                 tree.X == instance.X && tree.Y == instance.Y);
