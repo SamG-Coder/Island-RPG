@@ -108,38 +108,46 @@ internal sealed class VillagerWorkCoordinator
         if (living.Length == 0) return roles;
         var forecast = VillagerWorkPlanner.Forecast(living);
 
-        var hungriest = living
-            .OrderBy(value => value.Hunger)
-            .ThenBy(value => value.Id, StringComparer.Ordinal)
-            .First();
+        if (living.Length == 1)
+        {
+            roles[living[0].Id] = DevelopmentRole(living[0], forecast);
+            return roles;
+        }
         var incumbentFood = living
             .Where(value => value.WorkRole == VillagerWorkRole.Food)
             .OrderBy(value => value.Id, StringComparer.Ordinal)
             .FirstOrDefault();
-        var foodCandidates = forecast.WoodDeficit > 0 &&
-                             living.Length > 1 &&
-                             living.Any(value =>
-                                 !HasSpecialistTool(value) ||
-                                 value.Hunger <= 35)
-            ? living.Where(value =>
-                !HasSpecialistTool(value) ||
-                value.Hunger <= 35).ToArray()
-            : living;
+        var foodCandidates = living
+            .Where(value => value.Health > 20 && value.Hunger > 15)
+            .DefaultIfEmpty(living
+                .OrderByDescending(value => value.Health)
+                .First())
+            .ToArray();
+        var bestFood = foodCandidates
+            .OrderByDescending(value => VillagerWorkPlanner.Suitability(
+                value, VillagerWorkRole.Food, forecast))
+            .ThenBy(value => value.Id, StringComparer.Ordinal)
+            .First();
         var food = incumbentFood is not null &&
                    foodCandidates.Contains(incumbentFood) &&
-                   incumbentFood.Hunger <=
-                   hungriest.Hunger + FoodRoleHungerHysteresis
+                   VillagerWorkPlanner.Suitability(
+                       incumbentFood, VillagerWorkRole.Food, forecast) >=
+                   VillagerWorkPlanner.Suitability(
+                       bestFood, VillagerWorkRole.Food, forecast) -
+                   FoodRoleHungerHysteresis
             ? incumbentFood
-            : foodCandidates
-                .OrderByDescending(value => VillagerWorkPlanner.Suitability(
-                    value, VillagerWorkRole.Food, forecast))
-                .ThenBy(value => value.Id, StringComparer.Ordinal)
-                .First();
+            : bestFood;
         roles[food.Id] = VillagerWorkRole.Food;
 
         var remaining = living.Where(value => value.Id != food.Id).ToArray();
         if (remaining.Length > 0)
         {
+            if (living.Length == 2)
+            {
+                roles[remaining[0].Id] =
+                    DevelopmentRole(remaining[0], forecast);
+                return roles;
+            }
             var incumbentWood = remaining
                 .Where(value => value.WorkRole == VillagerWorkRole.Wood)
                 .OrderBy(value => value.Id, StringComparer.Ordinal)
@@ -166,11 +174,18 @@ internal sealed class VillagerWorkCoordinator
         return roles;
     }
 
-    private static bool HasSpecialistTool(VillagerState villager) =>
-        PlayerInventory.BestAxe(villager.Inventory) is not null ||
-        PlayerInventory.BestKnife(villager.Inventory) is not null ||
-        PlayerInventory.BestHammer(villager.Inventory) is not null ||
-        PlayerInventory.BestPickaxe(villager.Inventory) is not null;
+    private static VillagerWorkRole DevelopmentRole(
+        VillagerState villager,
+        VillagerResourceForecast forecast)
+    {
+        var crafting = VillagerWorkPlanner.Suitability(
+            villager, VillagerWorkRole.Crafting, forecast);
+        var exploration = VillagerWorkPlanner.Suitability(
+            villager, VillagerWorkRole.Exploration, forecast);
+        return crafting >= exploration
+            ? VillagerWorkRole.Crafting
+            : VillagerWorkRole.Exploration;
+    }
 
     private void Remove(VillagerTargetReservation reservation)
     {

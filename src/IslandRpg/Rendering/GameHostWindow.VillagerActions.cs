@@ -44,6 +44,7 @@ internal sealed partial class GameHostWindow
         VillagerState villager,
         VillagerSimulationTier tier)
     {
+        if (villager.Health <= 0) return false;
         if (TryVillagerResolveNpcConflict(index, villager, tier) ||
             TryVillagerDefendSelf(index, villager, tier) ||
             TryVillagerEat(index, villager, tier) ||
@@ -1120,37 +1121,27 @@ internal sealed partial class GameHostWindow
                 VillagerNeed.Social);
             return true;
         }
-        var slot = Array.FindIndex(
-            villager.Inventory, value => value == promise.ItemId);
-        if (!ActorActionService.TryTransfer(
-                villager.Inventory,
-                receiver.Inventory,
-                slot,
-                out var source,
-                out var destination,
-                out var itemId))
-            return false;
-        var deliveredPromisor = villager with { Inventory = source };
-        var deliveredReceiver = VillagerSimulation.RecordGift(
-            receiver,
-            villager.Id,
-            villager.Name,
-            Guid.NewGuid(),
-            itemId!,
-            _worldGameSeconds) with { Inventory = destination };
+        var priorProgress = promise.Progress;
+        var deliveredPromisor = villager;
+        var deliveredReceiver = receiver;
         (deliveredPromisor, deliveredReceiver) =
             VillagerCommitmentService.CompleteDelivery(
                 deliveredPromisor,
                 deliveredReceiver,
                 promise.Id,
                 _worldGameSeconds);
+        var deliveredPromise = deliveredPromisor.Promises?
+            .FirstOrDefault(value => value.Id == promise.Id);
+        if (deliveredPromise is null ||
+            deliveredPromise.Progress == priorProgress)
+            return false;
         _villagers[index] = deliveredPromisor;
         _villagers[receiverIndex] = deliveredReceiver;
         ObserveLog("favor_completed", villager.Id, new
         {
             PromiseId = promise.Id,
             PromiseeId = receiver.Id,
-            ItemId = itemId
+            promise.ItemId
         });
         _villagersDirty = true;
         return true;

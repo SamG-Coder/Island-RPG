@@ -23,7 +23,7 @@ internal sealed partial class GameHostWindow
     private readonly SpriteFrame?[] _toolbarActionIconFrames =
         new SpriteFrame?[2];
     private readonly int[] _toolbarActionIconTextures = new int[2];
-    private float _starvationElapsed;
+    private float _starvationDamageRemainder;
 
     private void AwardAdventureExperience(int actionExperience)
     {
@@ -54,22 +54,21 @@ internal sealed partial class GameHostWindow
         if (_activePlayer is null || _playerDefeated || elapsed <= 0) return;
         var maximumHealth = AdventureService.MaximumHealth(
             _activePlayer.AdventureExperience);
-        if (!_godMode && _activePlayer.Hunger <= 0)
-            _starvationElapsed += elapsed;
-        else
-            _starvationElapsed = 0;
-        var damageElapsed = _starvationElapsed >= 2
-            ? _starvationElapsed
-            : 0;
-        if (damageElapsed > 0)
-            _starvationElapsed = 0;
         var update = SurvivalService.Advance(
             _activePlayer.Hunger,
             _activePlayer.WellFedSeconds,
             Math.Clamp(_activePlayer.Health, 0, maximumHealth),
-            damageElapsed > 0 ? damageElapsed : elapsed);
+            elapsed,
+            starvationDamageRemainder:
+                _starvationDamageRemainder);
         if (_godMode && update.Health < _activePlayer.Health)
-            update = update with { Health = _activePlayer.Health };
+            update = update with
+            {
+                Health = _activePlayer.Health,
+                StarvationDamageRemainder = 0
+            };
+        _starvationDamageRemainder =
+            update.StarvationDamageRemainder;
         _activePlayer = _activePlayer with
         {
             Hunger = update.Hunger,

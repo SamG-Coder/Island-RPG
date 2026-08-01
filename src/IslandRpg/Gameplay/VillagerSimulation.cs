@@ -55,6 +55,10 @@ internal sealed record VillagerMemory(
     string? ItemId = null,
     float? ObservedValue = null);
 
+internal sealed record VillagerFailedTarget(
+    Guid TargetId,
+    double RetryAfterGameSeconds);
+
 internal sealed record VillagerRelationship(
     string CharacterId,
     RelationshipState State,
@@ -159,7 +163,10 @@ internal sealed record VillagerState(
     string? ConflictTargetId = null,
     VillagerConflictIntent ConflictIntent = VillagerConflictIntent.None,
     string? ConflictMotive = null,
-    double ConflictExpiresGameSeconds = 0);
+    double ConflictExpiresGameSeconds = 0,
+    float StarvationDamageRemainder = 0,
+    IReadOnlyList<VillagerFailedTarget>? FailedTargets = null,
+    IReadOnlyList<Guid>? ObservedOwnershipIncidentIds = null);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,
@@ -228,6 +235,7 @@ internal static class VillagerSimulation
         120 * GameSecondsPerRealSecond;
     public const int MaximumMemories = 64;
     public const int MaximumConversationTurns = 12;
+    public const int MaximumObservedOwnershipIncidents = 256;
     public const float InteractionRange = 1.5f;
     public const float ResourceSearchRadius = 24;
     public const int StorageDepositThreshold = 8;
@@ -235,10 +243,8 @@ internal static class VillagerSimulation
     public const float FootBoxDepth = .34f;
     public const double GatherPauseSeconds =
         45 * GameSecondsPerRealSecond;
-    public const double SocialCooldownSeconds =
-        120 * GameSecondsPerRealSecond;
-    public const double IntroductionCooldownSeconds =
-        45 * GameSecondsPerRealSecond;
+    public const double SocialCooldownRealSeconds = 120;
+    public const double IntroductionCooldownRealSeconds = 45;
     public const double RelationshipCheckInSeconds = 6 * 60 * 60;
     public const float SocialRange = 8;
     public const float FollowStopDistance = 1.8f;
@@ -386,26 +392,35 @@ internal static class VillagerSimulation
                 SurvivalTimeScaleVersion = 1
             };
         }
-        var elapsed = Math.Clamp(
-            gameSeconds - state.LastSimulatedGameSeconds,
-            0,
-            24 * 60 * 60);
+        var elapsed = Math.Max(
+            0, gameSeconds - state.LastSimulatedGameSeconds);
         if (elapsed <= 0) return state;
-        var realSeconds =
-            elapsed / GameSecondsPerRealSecond;
-        var survival = SurvivalService.Advance(
-            state.Hunger,
-            state.WellFedSeconds,
-            state.Health,
-            (float)realSeconds,
-            hungerLossMultiplier);
-        return state with
+        const double maximumChunkGameSeconds = 24 * 60 * 60;
+        var simulated = state;
+        var remaining = elapsed;
+        while (remaining > 0)
         {
-            Hunger = survival.Hunger,
-            Health = survival.Health,
-            WellFedSeconds = survival.WellFedSeconds,
-            LastSimulatedGameSeconds = gameSeconds
-        };
+            var chunk = Math.Min(remaining, maximumChunkGameSeconds);
+            var survival = SurvivalService.Advance(
+                simulated.Hunger,
+                simulated.WellFedSeconds,
+                simulated.Health,
+                (float)(chunk / GameSecondsPerRealSecond),
+                hungerLossMultiplier,
+                simulated.StarvationDamageRemainder);
+            simulated = simulated with
+            {
+                Hunger = survival.Hunger,
+                Health = survival.Health,
+                WellFedSeconds = survival.WellFedSeconds,
+                StarvationDamageRemainder =
+                    survival.StarvationDamageRemainder,
+                LastSimulatedGameSeconds =
+                    simulated.LastSimulatedGameSeconds + chunk
+            };
+            remaining -= chunk;
+        }
+        return simulated;
     }
 
     public static VillagerDecision Decide(
@@ -413,6 +428,7 @@ internal static class VillagerSimulation
         Vector2 playerPosition,
         double gameSeconds)
     {
+        if (state.Health <= 0) return default;
         if (state.Health <= 20)
             return new(VillagerNeed.Safe, AwayFrom(
                 new(state.PositionX, state.PositionY),
@@ -455,8 +471,10 @@ internal static class VillagerSimulation
 
     public static VillagerWorldAction SelectWorldAction(
         VillagerState state,
-        ReadOnlySpan<VillagerWorldObject> objects)
+        ReadOnlySpan<VillagerWorldObject> objects,
+        double gameSeconds = 0)
     {
+        if (state.Health <= 0) return default;
         var position = new Vector2(
             state.PositionX, state.PositionY);
         var carried = PlayerInventory.Count(state.Inventory);
@@ -469,6 +487,8 @@ internal static class VillagerSimulation
             for (var index = 0; index < objects.Length; index++)
             {
                 ref readonly var candidate = ref objects[index];
+                if (IsFailedTarget(state, candidate.Id, gameSeconds))
+                    continue;
                 if (!candidate.IsStorage ||
                     !string.Equals(
                         candidate.OwnerId, state.Id,
@@ -501,6 +521,8 @@ internal static class VillagerSimulation
         for (var index = 0; index < objects.Length; index++)
         {
             ref readonly var candidate = ref objects[index];
+            if (IsFailedTarget(state, candidate.Id, gameSeconds))
+                continue;
             if (candidate.IsStorage ||
                 candidate.OwnerId is { Length: > 0 } owner &&
                 !string.Equals(
@@ -536,17 +558,26 @@ internal static class VillagerSimulation
                 VillagerWorldActionKind.TakeItem,
                 best.Id,
                 best.Position)
-            : new(
+             : new(
                 VillagerWorldActionKind.ApproachItem,
                 best.Id,
-                StepToward(position, best.Position));
+                 StepToward(position, best.Position));
     }
+
+    private static bool IsFailedTarget(
+        VillagerState state,
+        Guid targetId,
+        double gameSeconds) =>
+        state.FailedTargets?.Any(failed =>
+            failed.TargetId == targetId &&
+            failed.RetryAfterGameSeconds > gameSeconds) == true;
 
     public static VillagerSocialGoal SelectSocialGoal(
         VillagerState state,
         ReadOnlySpan<SocialActorObservation> actors,
         double gameSeconds = 0)
     {
+        if (state.Health <= 0) return default;
         var projectedFoodNeed =
             state.Hunger <= 35 ||
             VillagerNeedPatternMemory.NeedsFoodSoon(
@@ -1083,6 +1114,8 @@ internal static class VillagerSimulation
         int damage,
         double gameSeconds)
     {
+        if (damage <= 0 || villager.Health <= 0)
+            return villager;
         var relationships =
             villager.Relationships?.ToList() ?? [];
         var relationshipIndex = relationships.FindIndex(value =>
@@ -1141,6 +1174,7 @@ internal static class VillagerSimulation
         string victimName,
         double gameSeconds)
     {
+        if (witness.Health <= 0) return DeadState(witness);
         var relationships =
             witness.Relationships?.ToList() ?? [];
         var relationshipIndex = relationships.FindIndex(value =>
@@ -1313,11 +1347,11 @@ internal static class VillagerSimulation
             VillagerSocialIntent.RequestFood => 30,
             VillagerSocialIntent.OfferFood => 50,
             VillagerSocialIntent.Introduce =>
-                IntroductionCooldownSeconds,
+                IntroductionCooldownRealSeconds,
             VillagerSocialIntent.AskOrigin => 75,
             VillagerSocialIntent.AskSurvival => 100,
             VillagerSocialIntent.AskTools => 115,
-            _ => SocialCooldownSeconds
+            _ => SocialCooldownRealSeconds
         };
         if (state.Need == VillagerNeed.Social)
             seconds *= .65;
@@ -1366,10 +1400,13 @@ internal static class VillagerSimulation
         VillagerSimulationTier tier,
         double gameSeconds)
     {
+        if (state.Health <= 0)
+            return DeadState(state);
         var inventory = state.Inventory;
         var hunger = state.Hunger;
         var health = state.Health;
         var wellFedSeconds = state.WellFedSeconds;
+        var ate = false;
         if ((uint)decision.ConsumeSlot < (uint)inventory.Length &&
             inventory[decision.ConsumeSlot] is { } food &&
             SurvivalService.TryFoodEffect(food, out var effect))
@@ -1385,6 +1422,7 @@ internal static class VillagerSimulation
             hunger = eaten.Hunger;
             health = eaten.Health;
             wellFedSeconds = eaten.WellFedSeconds;
+            ate = true;
         }
         var previous = new Vector2(
             state.PositionX, state.PositionY);
@@ -1406,7 +1444,7 @@ internal static class VillagerSimulation
                 VillagerNeed.Explore => VillagerActivity.Exploring,
                 _ => VillagerActivity.Exploring
             };
-        return state with
+        var applied = state with
         {
             Inventory = inventory,
             Hunger = hunger,
@@ -1428,6 +1466,9 @@ internal static class VillagerSimulation
                 state.Id, gameSeconds, DecisionInterval(tier)),
             LastSimulatedGameSeconds = gameSeconds
         };
+        return ate
+            ? VillagerNeedPatternMemory.RecordMeal(applied, gameSeconds)
+            : applied;
     }
 
     public static VillagerState RetargetFollowing(
@@ -1435,6 +1476,7 @@ internal static class VillagerSimulation
         Vector2 target,
         double gameSeconds)
     {
+        if (state.Health <= 0) return DeadState(state);
         var position = new Vector2(
             state.PositionX, state.PositionY);
         var direction = target - position;
@@ -1511,6 +1553,7 @@ internal static class VillagerSimulation
         Func<Vector2, bool>? canOccupy = null,
         double gameSeconds = 0)
     {
+        if (state.Health <= 0) return DeadState(state);
         if (elapsed <= 0)
             return state;
         if (state.Action != EntityAction.Move ||
@@ -1561,6 +1604,7 @@ internal static class VillagerSimulation
 
     public static VillagerState CompleteAction(VillagerState state)
     {
+        if (state.Health <= 0) return DeadState(state);
         return state with
         {
             Action = EntityAction.Idle,
@@ -1597,6 +1641,7 @@ internal static class VillagerSimulation
         double gameSeconds,
         double realSeconds)
     {
+        if (state.Health <= 0) return DeadState(state);
         var holdRealSeconds = double.IsFinite(realSeconds)
             ? Math.Max(0, realSeconds)
             : double.MaxValue;
@@ -1621,6 +1666,7 @@ internal static class VillagerSimulation
         VillagerState state,
         double gameSeconds)
     {
+        if (state.Health <= 0) return DeadState(state);
         var reflectionSeconds = MathHelper.Lerp(
             (float)MaximumReflectionRealSeconds,
             (float)MinimumReflectionRealSeconds,
@@ -1642,8 +1688,9 @@ internal static class VillagerSimulation
 
     public static VillagerState ResumeAfterConversation(
         VillagerState state,
-        double gameSeconds) =>
-        state with
+        double gameSeconds) => state.Health <= 0
+        ? DeadState(state)
+        : state with
         {
             Activity = VillagerActivity.Idle,
             ActivityUntilGameSeconds = 0,
@@ -1670,9 +1717,20 @@ internal static class VillagerSimulation
 
     public static VillagerState BlockMovement(
         VillagerState state,
-        double gameSeconds)
+        double gameSeconds,
+        Guid? failedTargetId = null)
     {
+        if (state.Health <= 0) return DeadState(state);
         var attempts = Math.Min(8, state.BlockedMoveAttempts + 1);
+        var failedTargets = (state.FailedTargets ?? [])
+            .Where(value => value.RetryAfterGameSeconds > gameSeconds &&
+                            value.TargetId != (failedTargetId ?? state.GoalObjectId))
+            .ToList();
+        var failedId = failedTargetId ?? state.GoalObjectId;
+        if (failedId is { } targetId)
+            failedTargets.Add(new(
+                targetId,
+                gameSeconds + Math.Min(10, 2 + attempts) * 60));
         return state with
         {
             Activity = VillagerActivity.Blocked,
@@ -1685,11 +1743,30 @@ internal static class VillagerSimulation
             TargetY = null,
             GoalObjectId = null,
             BlockedMoveAttempts = attempts,
+            FailedTargets = failedTargets,
             NextDecisionGameSeconds =
                 gameSeconds + (1.5 + attempts * .5) *
                 GameSecondsPerRealSecond
         };
     }
+
+    private static VillagerState DeadState(VillagerState state) =>
+        state with
+        {
+            Health = 0,
+            Action = EntityAction.Die,
+            ActionTime = 0,
+            Activity = VillagerActivity.Idle,
+            ActivityUntilGameSeconds = 0,
+            TargetX = null,
+            TargetY = null,
+            FollowingActorId = null,
+            ConversationPartnerId = null,
+            ConflictTargetId = null,
+            ConflictIntent = VillagerConflictIntent.None,
+            ConflictMotive = null,
+            ConflictExpiresGameSeconds = 0
+        };
 
     public static bool FootBoxesOverlap(
         in Vector2 first,
@@ -1732,7 +1809,7 @@ internal static class VillagerSimulation
 
     public static VillagerState ObserveUnauthorizedTaking(
         VillagerState observer,
-        Guid itemId,
+        Guid incidentId,
         string itemType,
         string ownerId,
         string suspectId,
@@ -1741,6 +1818,16 @@ internal static class VillagerSimulation
         int itemValue,
         out OwnershipReaction reaction)
     {
+        if (observer.Health <= 0)
+        {
+            reaction = OwnershipReaction.None;
+            return DeadState(observer);
+        }
+        if (observer.ObservedOwnershipIncidentIds?.Contains(incidentId) == true)
+        {
+            reaction = OwnershipReaction.None;
+            return observer;
+        }
         var relationships =
             observer.Relationships?.ToList() ?? [];
         var relationshipIndex = relationships.FindIndex(value =>
@@ -1751,7 +1838,7 @@ internal static class VillagerSimulation
             ? relationships[relationshipIndex]
             : new VillagerRelationship(suspectId, default);
         var incident = new OwnershipIncident(
-            itemId, itemType, ownerId, suspectId,
+            incidentId, itemType, ownerId, suspectId,
             Math.Clamp(confidence, 0, 1),
             itemValue,
             existing.OwnershipOffences,
@@ -1771,18 +1858,27 @@ internal static class VillagerSimulation
             incident, updated.State);
         var memories = observer.Memories?.ToList() ?? [];
         memories.Add(new(
-            itemId,
+            incidentId,
             "unauthorized-item-taken",
             suspectId,
-            itemId,
+            incidentId,
             confidence,
             gameSeconds));
         if (memories.Count > MaximumMemories)
             memories.RemoveRange(0, memories.Count - MaximumMemories);
+        var observedIncidents =
+            observer.ObservedOwnershipIncidentIds?.ToList() ?? [];
+        observedIncidents.Add(incidentId);
+        if (observedIncidents.Count > MaximumObservedOwnershipIncidents)
+            observedIncidents.RemoveRange(
+                0,
+                observedIncidents.Count -
+                MaximumObservedOwnershipIncidents);
         return observer with
         {
             Relationships = relationships,
-            Memories = memories
+            Memories = memories,
+            ObservedOwnershipIncidentIds = observedIncidents
         };
     }
 

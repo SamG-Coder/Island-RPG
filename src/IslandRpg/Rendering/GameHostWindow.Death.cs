@@ -41,7 +41,7 @@ internal sealed partial class GameHostWindow
         CancelFishingBoatAction();
         _fishingBoatBoarded = false;
         _caveEntranceLightWorld = null;
-        _starvationElapsed = 0;
+        _starvationDamageRemainder = 0;
         _playerDefeated = false;
         _modalScreen.Close(ModalScreenKind.Death);
         _player.TeleportTo(spawn);

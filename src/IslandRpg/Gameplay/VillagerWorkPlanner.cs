@@ -37,11 +37,15 @@ internal static class VillagerWorkPlanner
         VillagerResourceForecast forecast) => role switch
     {
         VillagerWorkRole.Food =>
-            (int)(100 - villager.Hunger) * 3 +
-            SkillLevel(villager.FishingExperience) * 4 +
-            SkillLevel(villager.CookingExperience) * 3 +
-            SkillLevel(villager.FarmingExperience) * 2 +
-            forecast.FoodDeficit * 20,
+            Math.Max(0, villager.Health) * 2 +
+            (int)Math.Clamp(villager.Hunger - 25, 0, 75) +
+            VillagerSimulation.CountFood(villager.Inventory) * 6 +
+            SkillLevel(villager.FishingExperience) * 8 +
+            SkillLevel(villager.CookingExperience) * 6 +
+            SkillLevel(villager.FarmingExperience) * 5 +
+            (PlayerInventory.BestFishingNet(villager.Inventory)?.FishingPower ?? 0) * 20 +
+            forecast.FoodDeficit * 12 -
+            NonFoodSpecialistPenalty(villager),
         VillagerWorkRole.Wood =>
             SkillLevel(villager.WoodcuttingExperience) * 5 +
             (PlayerInventory.BestAxe(villager.Inventory)?.WoodcuttingPower ?? 0) * 40 +
@@ -60,4 +64,12 @@ internal static class VillagerWorkPlanner
 
     private static int SkillLevel(int experience) =>
         SkillService.LevelForExperience(experience);
+
+    private static int NonFoodSpecialistPenalty(VillagerState villager) =>
+        PlayerInventory.BestAxe(villager.Inventory) is not null ||
+        PlayerInventory.BestKnife(villager.Inventory) is not null ||
+        PlayerInventory.BestHammer(villager.Inventory) is not null ||
+        PlayerInventory.BestPickaxe(villager.Inventory) is not null
+            ? 60
+            : 0;
 }

@@ -71,6 +71,10 @@ internal static class VillagerNeedPatternMemory
             .ToArray() ?? [];
         if (samples.Length == 0) return SurvivalService.MaximumHunger;
         var latest = samples[^1];
+        if (gameSeconds - latest.GameSeconds >
+            PlanningHorizonRealSeconds *
+            VillagerSimulation.GameSecondsPerRealSecond)
+            return latest.ObservedValue!.Value;
         if (samples.Length == 1) return latest.ObservedValue!.Value;
         var earliest = samples[0];
         var elapsed = latest.GameSeconds - earliest.GameSeconds;
@@ -95,4 +99,24 @@ internal static class VillagerNeedPatternMemory
         double gameSeconds) =>
         ForecastHunger(observer, subjectId, gameSeconds) <=
         FoodPlanningThreshold;
+
+    public static VillagerState RecordMeal(
+        VillagerState villager,
+        double gameSeconds)
+    {
+        var memories = villager.Memories?.Where(memory =>
+            memory.Kind != HungerSampleKind ||
+            memory.SubjectId != villager.Id).ToList() ?? [];
+        memories.Add(new(
+            Guid.NewGuid(),
+            HungerSampleKind,
+            villager.Id,
+            null,
+            1,
+            gameSeconds,
+            Summary: $"{villager.Name}'s hunger rose to " +
+                     $"{MathF.Round(villager.Hunger)} after eating.",
+            ObservedValue: villager.Hunger));
+        return villager with { Memories = memories };
+    }
 }

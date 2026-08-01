@@ -16,6 +16,9 @@ internal static class VillagerConflictService
         bool wasAttacked,
         int nearbyAllies = 0)
     {
+        if (responder.Health <= 0 || aggressor.Health <= 0)
+            return new(VillagerConflictIntent.None,
+                "A dead actor cannot enter conflict.", 0);
         var relationship = responder.Relationships?.FirstOrDefault(value =>
             value.CharacterId == aggressor.Id)?.State ?? default;
         var health = responder.Health;
@@ -66,6 +69,9 @@ internal static class VillagerConflictService
         string motive,
         double gameSeconds)
     {
+        if (responder.Health <= 0 || aggressor.Health <= 0 ||
+            decision.Intent == VillagerConflictIntent.None)
+            return Clear(responder, gameSeconds);
         var clearsConflict = decision.Intent is
             VillagerConflictIntent.Forgive or
             VillagerConflictIntent.Deescalate;
@@ -104,6 +110,15 @@ internal static class VillagerConflictService
             Action = state.Health <= 0 ? EntityAction.Die : EntityAction.Idle,
             NextDecisionGameSeconds = gameSeconds
         };
+
+    public static VillagerState Expire(
+        VillagerState state,
+        double gameSeconds) =>
+        state.ConflictIntent != VillagerConflictIntent.None &&
+        state.ConflictExpiresGameSeconds > 0 &&
+        state.ConflictExpiresGameSeconds <= gameSeconds
+            ? Clear(state, gameSeconds)
+            : state;
 
     public static string ActionName(VillagerConflictIntent intent) => intent switch
     {

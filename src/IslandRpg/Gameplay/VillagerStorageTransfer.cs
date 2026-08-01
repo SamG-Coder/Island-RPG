@@ -40,9 +40,22 @@ internal static class VillagerStorageTransfer
             if (container.Items[slot] is not { } candidate ||
                 !accepts(candidate) ||
                 !PlayerInventory.TryAdd(
-                    updatedInventory, candidate, out var withItem) ||
-                !container.TryTake(slot, 1, out itemId))
+                    updatedInventory, candidate, out var withItem))
                 continue;
+            var ownerId = container.OwnerIds[slot];
+            if (!container.TryTake(slot, 1, out var removedItem))
+                continue;
+            if (!string.Equals(
+                    removedItem, candidate,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                if (removedItem is not null)
+                    container.TryAdd(
+                        removedItem, ownerId: ownerId);
+                itemId = null;
+                continue;
+            }
+            itemId = removedItem;
             updatedInventory = withItem;
             return true;
         }

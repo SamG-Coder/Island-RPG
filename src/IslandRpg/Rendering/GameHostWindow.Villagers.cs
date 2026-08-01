@@ -111,12 +111,15 @@ internal sealed partial class GameHostWindow
                     : VillagerWorkRole.Unassigned;
                 if (roleVillager.WorkRole != role)
                 {
+                    _npcController.Cancel(roleVillager.Id);
+                    _villagerWork.ReleaseActor(roleVillager.Id);
                     _villagers[roleIndex] = roleVillager with { WorkRole = role };
                     _villagersDirty = true;
                 }
             }
             _nextVillagerRoleAssignment = _worldGameSeconds + 30 * 60;
         }
+        UpdateVillagerPromiseDeadlines();
         _villagerReservedObjects.Clear();
         foreach (var villager in _villagers)
             if (villager.GoalObjectId is { } goal)
@@ -147,6 +150,22 @@ internal sealed partial class GameHostWindow
                     };
                 continue;
             }
+            if (previous.ConflictIntent != VillagerConflictIntent.None &&
+                previous.ConflictExpiresGameSeconds > 0 &&
+                previous.ConflictExpiresGameSeconds <= _worldGameSeconds)
+            {
+                previous = VillagerConflictService.Expire(
+                    previous, _worldGameSeconds);
+                _villagers[index] = previous;
+                _villagerWork.ReleaseActor(previous.Id);
+                _villagersDirty = true;
+            }
+            if (previous.Activity is
+                    VillagerActivity.Conversing or
+                    VillagerActivity.Reflecting or
+                    VillagerActivity.Following ||
+                previous.ConflictIntent != VillagerConflictIntent.None)
+                _villagerWork.ReleaseActor(previous.Id);
             if (previous.Activity == VillagerActivity.Conversing &&
                 ConversationHasFinished(previous))
             {
@@ -243,9 +262,13 @@ internal sealed partial class GameHostWindow
                     (int)MathF.Floor(candidate.Y),
                     previous.WorldLevel),
                 _worldGameSeconds);
-            villager =
-                VillagerCommitmentService.UpdateDeadlines(
-                    villager, _worldGameSeconds);
+            if (villager.Activity == VillagerActivity.Blocked &&
+                previous.Activity != VillagerActivity.Blocked)
+                _villagerWork.ReleaseActor(villager.Id);
+            if (villager.Action == EntityAction.Idle &&
+                villager.Activity == VillagerActivity.Idle &&
+                !_npcController.IsBusy(villager.Id))
+                _villagerWork.ReleaseActor(villager.Id);
             var movedPosition = new Vector2(
                 villager.PositionX, villager.PositionY);
             for (var otherIndex = 0;
@@ -394,11 +417,45 @@ internal sealed partial class GameHostWindow
             SaveVillagers();
     }
 
+    private void UpdateVillagerPromiseDeadlines()
+    {
+        for (var promisorIndex = 0;
+             promisorIndex < _villagers.Count;
+             promisorIndex++)
+        {
+            var promisor = _villagers[promisorIndex];
+            var expiredPromisees = promisor.Promises?
+                .Where(value =>
+                    value.Status == CommitmentStatus.Active &&
+                    value.DeadlineGameSeconds <= _worldGameSeconds)
+                .Select(value => value.PromiseeId)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray() ?? [];
+            foreach (var promiseeId in expiredPromisees)
+            {
+                var promiseeIndex = _villagers.FindIndex(value =>
+                    value.Id == promiseeId);
+                if (promiseeIndex < 0) continue;
+                var result = VillagerCommitmentService.UpdateDeadlines(
+                    _villagers[promisorIndex],
+                    _villagers[promiseeIndex],
+                    _worldGameSeconds);
+                _villagers[promisorIndex] = result.Promisor;
+                _villagers[promiseeIndex] = result.Promisee;
+                _villagersDirty = true;
+            }
+            _villagers[promisorIndex] =
+                VillagerCommitmentService.UpdateDeadlines(
+                    _villagers[promisorIndex], _worldGameSeconds);
+        }
+    }
+
     private bool TryExecuteVillagerSocialGoal(
         int villagerIndex,
         VillagerState villager,
         VillagerSimulationTier tier)
     {
+        if (villager.Health <= 0) return false;
         if (_player is null || _activePlayer is null ||
             tier == VillagerSimulationTier.Distant)
             return false;
@@ -729,7 +786,8 @@ internal sealed partial class GameHostWindow
             ActionTime = 0,
             NextDecisionGameSeconds =
                 _worldGameSeconds +
-                    VillagerSimulation.SocialCooldownSeconds,
+                    VillagerSimulation.SocialCooldownRealSeconds *
+                    VillagerSimulation.GameSecondsPerRealSecond,
             LastDeliberation = completedTradeItem is null
                 ? receiver.LastDeliberation
                 : null,
@@ -744,7 +802,8 @@ internal sealed partial class GameHostWindow
             ActionTime = 0,
             NextDecisionGameSeconds =
                 _worldGameSeconds +
-                VillagerSimulation.SocialCooldownSeconds,
+                VillagerSimulation.SocialCooldownRealSeconds *
+                VillagerSimulation.GameSecondsPerRealSecond,
             LastSimulatedGameSeconds =
                 _worldGameSeconds
         };
@@ -775,6 +834,7 @@ internal sealed partial class GameHostWindow
         VillagerState villager,
         VillagerSimulationTier tier)
     {
+        if (villager.Health <= 0) return false;
         _villagerWorldObjects.Clear();
         foreach (var gpu in _worldChunks.Values)
         {
@@ -795,7 +855,8 @@ internal sealed partial class GameHostWindow
         }
         var action = VillagerSimulation.SelectWorldAction(
             villager,
-            CollectionsMarshal.AsSpan(_villagerWorldObjects));
+            CollectionsMarshal.AsSpan(_villagerWorldObjects),
+            _worldGameSeconds);
         ObserveLog("world_decision", villager.Id, new
         {
             Kind = action.Kind.ToString(),
@@ -833,7 +894,7 @@ internal sealed partial class GameHostWindow
                 });
                 _villagers[villagerIndex] =
                     VillagerSimulation.BlockMovement(
-                        villager, _worldGameSeconds);
+                        villager, _worldGameSeconds, action.ObjectId);
                 _villagersDirty = true;
                 return false;
             }
@@ -1438,6 +1499,8 @@ internal sealed partial class GameHostWindow
                     out var reaction);
             _villagers[index] = observer;
             _villagersDirty = true;
+            if (reaction == OwnershipReaction.None)
+                continue;
             _chatUi.AddMessage(
                 $"{observer.Name}: " +
                 VillagerSimulation.ReactionSpeech(

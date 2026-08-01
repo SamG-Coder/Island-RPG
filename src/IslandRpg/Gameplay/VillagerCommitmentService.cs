@@ -304,6 +304,47 @@ internal static class VillagerCommitmentService
             : state with { Promises = updated };
     }
 
+    public static (VillagerState Promisor, VillagerState Promisee)
+        UpdateDeadlines(
+            VillagerState promisor,
+            VillagerState promisee,
+            double gameSeconds)
+    {
+        var promises = promisor.Promises?.ToList() ?? [];
+        var broken = promises
+            .Select((promise, index) => (promise, index))
+            .Where(value =>
+                value.promise.Status == CommitmentStatus.Active &&
+                value.promise.PromiseeId == promisee.Id &&
+                value.promise.DeadlineGameSeconds <= gameSeconds)
+            .ToArray();
+        if (broken.Length == 0) return (promisor, promisee);
+        foreach (var entry in broken)
+        {
+            promises[entry.index] = entry.promise with
+            {
+                Status = CommitmentStatus.Broken
+            };
+            promisee = AddRelationshipOutcome(
+                promisee, promisor.Id, CommitmentStatus.Broken);
+            promisee = AddMemory(
+                promisee,
+                "promise-broken",
+                promisor.Id,
+                gameSeconds,
+                $"{promisor.Name} broke a promise.",
+                -20);
+        }
+        promisor = AddMemory(
+            promisor with { Promises = promises },
+            "promise-broken",
+            promisee.Id,
+            gameSeconds,
+            $"Failed to keep a promise to {promisee.Name}.",
+            -12);
+        return (promisor, promisee);
+    }
+
     public static RelationshipState ApplyOutcome(
         in RelationshipState relationship,
         CommitmentStatus outcome) =>
@@ -342,6 +383,25 @@ internal static class VillagerCommitmentService
             value.PromiseeId == promisee.Id);
         if (index < 0) return (promisor, promisee);
         var promise = promises[index];
+        if (promise.ItemId is null) return (promisor, promisee);
+        var inventorySlot = Array.FindIndex(
+            promisor.Inventory,
+            item => string.Equals(
+                item, promise.ItemId, StringComparison.OrdinalIgnoreCase));
+        if (!ActorActionService.TryTransfer(
+                promisor.Inventory,
+                promisee.Inventory,
+                inventorySlot,
+                out var sourceInventory,
+                out var destinationInventory,
+                out var transferredItem) ||
+            !string.Equals(
+                transferredItem,
+                promise.ItemId,
+                StringComparison.OrdinalIgnoreCase))
+            return (promisor, promisee);
+        promisor = promisor with { Inventory = sourceInventory };
+        promisee = promisee with { Inventory = destinationInventory };
         var progress = Math.Min(
             promise.TargetQuantity, promise.Progress + 1);
         var fulfilled = progress >= promise.TargetQuantity;
@@ -357,7 +417,7 @@ internal static class VillagerCommitmentService
             "favor-delivered",
             promisee.Id,
             gameSeconds,
-            $"Delivered {ItemCatalog.Get(promise.ItemId!).Name} to {promisee.Name}.",
+            $"Delivered {ItemCatalog.Get(promise.ItemId).Name} to {promisee.Name}.",
             fulfilled ? 12 : 5);
         if (!fulfilled) return (promisor, promisee);
         promisee = AddRelationshipOutcome(
@@ -367,7 +427,7 @@ internal static class VillagerCommitmentService
             "favor-completed",
             promisor.Id,
             gameSeconds,
-            $"{promisor.Name} kept a promise to bring {ItemCatalog.Get(promise.ItemId!).Name}.",
+            $"{promisor.Name} kept a promise to bring {ItemCatalog.Get(promise.ItemId).Name}.",
             20);
         return (promisor, promisee);
     }

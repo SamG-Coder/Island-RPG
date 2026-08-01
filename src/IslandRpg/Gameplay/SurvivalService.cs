@@ -8,7 +8,8 @@ internal readonly record struct FoodEffect(
 internal readonly record struct SurvivalUpdate(
     float Hunger,
     float WellFedSeconds,
-    int Health);
+    int Health,
+    float StarvationDamageRemainder = 0);
 
 internal static class SurvivalService
 {
@@ -42,25 +43,54 @@ internal static class SurvivalService
         float wellFedSeconds,
         int health,
         float elapsed,
-        float hungerLossMultiplier = 1)
+        float hungerLossMultiplier = 1,
+        float starvationDamageRemainder = 0)
     {
         elapsed = Math.Max(0, elapsed);
         hungerLossMultiplier = Math.Max(0, hungerLossMultiplier);
         hunger = Math.Clamp(hunger, 0, MaximumHunger);
         wellFedSeconds = Math.Max(0, wellFedSeconds);
+        starvationDamageRemainder = Math.Clamp(
+            starvationDamageRemainder, 0, .999999f);
         var protectedTime = Math.Min(elapsed, wellFedSeconds);
         var normalTime = elapsed - protectedTime;
-        hunger = Math.Max(
-            0,
-            hunger - BaseHungerLossPerSecond *
-            (protectedTime * WellFedHungerMultiplier + normalTime) *
+        var starvingTime = ConsumePeriod(
+            ref hunger,
+            protectedTime,
+            BaseHungerLossPerSecond * WellFedHungerMultiplier *
             hungerLossMultiplier);
+        starvingTime += ConsumePeriod(
+            ref hunger,
+            normalTime,
+            BaseHungerLossPerSecond * hungerLossMultiplier);
         wellFedSeconds = Math.Max(0, wellFedSeconds - elapsed);
-        if (hunger <= 0)
-            health = Math.Max(
-                0, health -
-                (int)MathF.Floor(StarvationDamagePerSecond * elapsed));
-        return new(hunger, wellFedSeconds, health);
+        var accumulatedDamage = starvationDamageRemainder +
+                                StarvationDamagePerSecond * starvingTime;
+        var wholeDamage = (int)MathF.Floor(accumulatedDamage);
+        health = Math.Max(0, health - wholeDamage);
+        return new(
+            hunger,
+            wellFedSeconds,
+            health,
+            accumulatedDamage - wholeDamage);
+    }
+
+    private static float ConsumePeriod(
+        ref float hunger,
+        float elapsed,
+        float hungerLossPerSecond)
+    {
+        if (elapsed <= 0) return 0;
+        if (hunger <= 0) return elapsed;
+        if (hungerLossPerSecond <= 0) return 0;
+        var secondsUntilStarving = hunger / hungerLossPerSecond;
+        if (secondsUntilStarving >= elapsed)
+        {
+            hunger = Math.Max(0, hunger - hungerLossPerSecond * elapsed);
+            return 0;
+        }
+        hunger = 0;
+        return elapsed - secondsUntilStarving;
     }
 
     public static SurvivalUpdate Eat(

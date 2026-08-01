@@ -87,6 +87,97 @@ Require(advancedVillagers[0].Name == "Elara" &&
         advancedVillagers[0].Inventory.Contains(ItemIds.StoneAxe) &&
         advancedVillagers[1].Inventory.Contains(ItemIds.StoneKnife),
     "initial NPC creation must apply advanced names and starting inventories");
+var lateStarvation = SurvivalService.Advance(1, 0, 100, 20);
+Require(lateStarvation.Hunger == 0 && lateStarvation.Health == 96,
+    "starvation damage must apply only to time spent at zero hunger");
+var fractionalStarvation = SurvivalService.Advance(0, 0, 100, .5f);
+for (var index = 0; index < 3; index++)
+    fractionalStarvation = SurvivalService.Advance(
+        fractionalStarvation.Hunger,
+        fractionalStarvation.WellFedSeconds,
+        fractionalStarvation.Health,
+        .5f,
+        starvationDamageRemainder:
+            fractionalStarvation.StarvationDamageRemainder);
+Require(fractionalStarvation.Health == 99 &&
+        fractionalStarvation.StarvationDamageRemainder == 0,
+    "fractional starvation damage must survive frequent small updates");
+var longCatchUp = VillagerSimulation.CatchUp(
+    advancedVillagers[0] with
+    {
+        SurvivalTimeScaleVersion = 1,
+        LastSimulatedGameSeconds = 0,
+        Hunger = 100,
+        WellFedSeconds = 4000
+    },
+    48 * 60 * 60,
+    hungerLossMultiplier: 0);
+Require(longCatchUp.LastSimulatedGameSeconds == 48 * 60 * 60 &&
+        Math.Abs(longCatchUp.WellFedSeconds - 1120) < .01f,
+    "villager catch-up must process elapsed time beyond the first game day");
+var deadVillager = advancedVillagers[0] with
+{
+    Health = 0,
+    Action = EntityAction.Move,
+    TargetX = 9,
+    TargetY = 9,
+    ConflictIntent = VillagerConflictIntent.Retaliate
+};
+Require(VillagerSimulation.Decide(deadVillager, Vector2.Zero, 100) == default &&
+        VillagerSimulation.SelectSocialGoal(deadVillager, [], 100) == default &&
+        VillagerSimulation.SelectWorldAction(deadVillager, [], 100) == default,
+    "dead villagers must not produce decisions, social goals, or work actions");
+var immobileDeadVillager = VillagerSimulation.AdvanceMovement(
+    deadVillager, 1, gameSeconds: 100);
+Require(immobileDeadVillager.Action == EntityAction.Die &&
+        immobileDeadVillager.PositionX == deadVillager.PositionX &&
+        immobileDeadVillager.PositionY == deadVillager.PositionY &&
+        immobileDeadVillager.TargetX is null,
+    "dead villagers must not continue moving");
+Require(VillagerConflictService.DecideResponse(
+            deadVillager, advancedVillagers[1], true).Intent ==
+        VillagerConflictIntent.None,
+    "dead villagers must not make conflict decisions");
+var theftIncidentId = Guid.NewGuid();
+var theftObserver = VillagerSimulation.ObserveUnauthorizedTaking(
+    advancedVillagers[0], theftIncidentId, ItemIds.Sticks,
+    advancedVillagers[0].Id, advancedVillagers[1].Id,
+    100, 1, 5, out _);
+var duplicateTheftObserver = VillagerSimulation.ObserveUnauthorizedTaking(
+    theftObserver, theftIncidentId, ItemIds.Sticks,
+    advancedVillagers[0].Id, advancedVillagers[1].Id,
+    101, 1, 5, out var duplicateReaction);
+Require(duplicateTheftObserver.Relationships![0].OwnershipOffences == 1 &&
+        duplicateTheftObserver.Memories!.Count == theftObserver.Memories!.Count &&
+        duplicateReaction == OwnershipReaction.None,
+    "the same theft incident must be counted only once");
+var failedObjectId = Guid.NewGuid();
+var fallbackObjectId = Guid.NewGuid();
+var blockedTargetVillager = VillagerSimulation.BlockMovement(
+    advancedVillagers[0] with
+    {
+        GoalObjectId = failedObjectId,
+        Hunger = 30,
+        Inventory = new string?[28]
+    },
+    100);
+var fallbackAction = VillagerSimulation.SelectWorldAction(
+    blockedTargetVillager,
+    [
+        new(failedObjectId, ItemIds.WildBerries, new(1, 0), null, false),
+        new(fallbackObjectId, ItemIds.WildBerries, new(2, 0), null, false)
+    ],
+    101);
+Require(fallbackAction.ObjectId == fallbackObjectId,
+    "blocked resource targets must be temporarily blacklisted");
+var invalidDamageVictim = advancedVillagers[0];
+Require(VillagerSimulation.RecordAttack(
+            invalidDamageVictim, advancedVillagers[1].Id,
+            advancedVillagers[1].Name, 0, 100) == invalidDamageVictim &&
+        VillagerSimulation.RecordAttack(
+            invalidDamageVictim, advancedVillagers[1].Id,
+            advancedVillagers[1].Name, -5, 100) == invalidDamageVictim,
+    "zero and negative combat damage must have no effects");
 Require(EntityActionLifecycle.HasCompletedAnimation(
         EntityAction.Gather, 1, 5, .2f),
     "NPCs and players must share action-animation completion semantics");
@@ -637,8 +728,7 @@ Require(
         VillagerSimulation.GameSecondsPerRealSecond >= 8 &&
     VillagerSimulation.GatherPauseSeconds /
         VillagerSimulation.GameSecondsPerRealSecond >= 45 &&
-    VillagerSimulation.SocialCooldownSeconds /
-        VillagerSimulation.GameSecondsPerRealSecond >= 90,
+    VillagerSimulation.SocialCooldownRealSeconds >= 90,
     "ordinary decisions, gathering, and social speech cooldowns must be authored in real-time seconds");
 var hungryVillagerInventory = PlayerInventory.CreateStartingInventory();
 hungryVillagerInventory[0] = ItemIds.CookedMinnows;
@@ -702,10 +792,25 @@ var roleAssignments = VillagerWorkCoordinator.AssignRoles([
     hungryVillager with { Id = "third", Hunger = 80 }
 ]);
 Require(
-    roleAssignments["hungry"] == VillagerWorkRole.Food &&
+    roleAssignments["hungry"] != VillagerWorkRole.Food &&
+    roleAssignments["third"] == VillagerWorkRole.Food &&
     roleAssignments["woodworker"] == VillagerWorkRole.Wood &&
     roleAssignments.Values.Distinct().Count() == 3,
-    "temporary roles must cover urgent food, best-equipped wood work, and a complementary third job");
+    "temporary roles must protect a near-starving villager while covering food, specialist wood work, and a complementary third job");
+var soloRoles = VillagerWorkCoordinator.AssignRoles([
+    hungryVillager with { Id = "solo-builder", Hunger = 80 }
+]);
+var duoRoles = VillagerWorkCoordinator.AssignRoles([
+    hungryVillager with { Id = "duo-food", Hunger = 80 },
+    hungryVillager with { Id = "duo-builder", Hunger = 75 }
+]);
+Require(soloRoles["solo-builder"] is
+            VillagerWorkRole.Crafting or VillagerWorkRole.Exploration &&
+        duoRoles.Values.Contains(VillagerWorkRole.Food) &&
+        duoRoles.Values.Any(value => value is
+            VillagerWorkRole.Crafting or VillagerWorkRole.Exploration) &&
+        !duoRoles.Values.Contains(VillagerWorkRole.Wood),
+    "one- and two-person groups must retain a technology progression role instead of locking every survivor into food and wood");
 var stableRoles = VillagerWorkCoordinator.AssignRoles([
     hungryVillager with
     {
@@ -736,9 +841,11 @@ var urgentRoleChange = VillagerWorkCoordinator.AssignRoles([
 ]);
 Require(
     stableRoles["food-incumbent"] == VillagerWorkRole.Food &&
-    stableRoles["wood-incumbent"] == VillagerWorkRole.Wood &&
-    urgentRoleChange["wood-incumbent"] == VillagerWorkRole.Food,
-    "work roles must survive small hunger differences but still change for a material food emergency");
+    stableRoles["wood-incumbent"] is
+        VillagerWorkRole.Crafting or VillagerWorkRole.Exploration &&
+    urgentRoleChange["food-incumbent"] == VillagerWorkRole.Food &&
+    urgentRoleChange["wood-incumbent"] != VillagerWorkRole.Food,
+    "two-person work roles must retain food coverage while assigning the other survivor to technology progression instead of permanent wood duty");
 var skillAwareAxeInventory = PlayerInventory.CreateStartingInventory();
 skillAwareAxeInventory[0] = ItemIds.StoneAxe;
 var skillAwareKnifeInventory = PlayerInventory.CreateStartingInventory();
@@ -950,6 +1057,25 @@ Require(
     !VillagerNeedPatternMemory.NeedsFoodSoon(
         stableNeedMemory, stableNeedMemory.Id, 700),
     "NPC planning must react to a repeated declining need pattern without treating a stable history as a crisis");
+var mealInventory = new string?[28];
+mealInventory[0] = ItemIds.CookedMinnows;
+var fedForecastVillager = VillagerSimulation.ApplyDecision(
+    decliningNeedMemory with
+    {
+        Inventory = mealInventory,
+        Hunger = 20
+    },
+    new(VillagerNeed.Food, MoveTarget: null, ConsumeSlot: 0),
+    VillagerSimulationTier.Nearby,
+    gameSeconds: 5000);
+Require(!VillagerNeedPatternMemory.NeedsFoodSoon(
+            fedForecastVillager,
+            fedForecastVillager.Id,
+            5000) &&
+        fedForecastVillager.Memories!.Count(memory =>
+            memory.Kind == VillagerNeedPatternMemory.HungerSampleKind &&
+            memory.SubjectId == fedForecastVillager.Id) == 1,
+    "eating must reset stale downward hunger forecasts with an immediate post-meal sample");
 var futureFoodProvider = new SocialActorObservation(
     "future-provider",
     "Tomas",
@@ -1135,6 +1261,13 @@ Require(
     clearedConflict.ConflictTargetId is null &&
     clearedConflict.ConflictIntent == VillagerConflictIntent.None,
     "NPC conflict decisions must persist as executable actions and cleanly de-escalate");
+var automaticallyExpiredConflict = VillagerConflictService.Expire(
+    persistedConflict,
+    persistedConflict.ConflictExpiresGameSeconds + 1);
+Require(automaticallyExpiredConflict.ConflictIntent ==
+            VillagerConflictIntent.None &&
+        automaticallyExpiredConflict.ConflictTargetId is null,
+    "expired conflicts must clear through lifecycle processing without another hostile decision");
 var tradeSeekingState = VillagerRequestApprovalService.ApplyRefusal(
     traderRequester, requestOwner, tradePlan, gameSeconds: 800).Requester;
 Require(
@@ -1881,6 +2014,31 @@ Require(
         default,
         CommitmentStatus.Broken).Trust < 0,
     "expired promises must become broken commitments with negative social consequences");
+var brokenPromisor = VillagerCommitmentService.AddPromise(
+    villagerSpawnA[0],
+    acceptance.Promise! with
+    {
+        PromisorId = villagerSpawnA[0].Id,
+        PromiseeId = villagerSpawnA[1].Id,
+        DeadlineGameSeconds = 10
+    });
+var brokenPromisee = villagerSpawnA[1];
+(brokenPromisor, brokenPromisee) =
+    VillagerCommitmentService.UpdateDeadlines(
+        brokenPromisor, brokenPromisee, 11);
+var brokenTrust = brokenPromisee.Relationships!.Single(value =>
+    value.CharacterId == brokenPromisor.Id).State.Trust;
+(brokenPromisor, brokenPromisee) =
+    VillagerCommitmentService.UpdateDeadlines(
+        brokenPromisor, brokenPromisee, 12);
+Require(brokenPromisor.Promises!.Single().Status ==
+            CommitmentStatus.Broken &&
+        brokenPromisee.Memories!.Count(value =>
+            value.Kind == "promise-broken" &&
+            value.SubjectId == brokenPromisor.Id) == 1 &&
+        brokenPromisee.Relationships!.Single(value =>
+            value.CharacterId == brokenPromisor.Id).State.Trust == brokenTrust,
+    "broken promises must reduce trust, create one memory, and apply consequences only once");
 var favorAcceptance = VillagerCommitmentService.TryAccept(
     villagerSpawnA[0],
     villagerSpawnA[1].Id,
@@ -1889,8 +2047,31 @@ var favorAcceptance = VillagerCommitmentService.TryAccept(
     quantity: 2,
     gameSeconds: 400);
 var favorPromisor = VillagerCommitmentService.AddPromise(
-    villagerSpawnA[0], favorAcceptance.Promise!);
+    villagerSpawnA[0] with
+    {
+        Inventory = new string?[28]
+        {
+            ItemIds.Sticks, ItemIds.Sticks,
+            null, null, null, null, null,
+            null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null
+        }
+    }, favorAcceptance.Promise!);
 var favorPromisee = villagerSpawnA[1];
+var emptyDeliveryPromisor = VillagerCommitmentService.AddPromise(
+    villagerSpawnA[0] with { Inventory = new string?[28] },
+    favorAcceptance.Promise!);
+var emptyDeliveryPromisee = villagerSpawnA[1];
+(emptyDeliveryPromisor, emptyDeliveryPromisee) =
+    VillagerCommitmentService.CompleteDelivery(
+        emptyDeliveryPromisor,
+        emptyDeliveryPromisee,
+        favorAcceptance.Promise!.Id,
+        405);
+Require(emptyDeliveryPromisor.Promises!.Single().Progress == 0 &&
+        !emptyDeliveryPromisee.Inventory.Contains(ItemIds.Sticks),
+    "promise delivery must not progress when the promised item is absent");
 (favorPromisor, favorPromisee) =
     VillagerCommitmentService.CompleteDelivery(
         favorPromisor,
@@ -1900,17 +2081,21 @@ var favorPromisee = villagerSpawnA[1];
 Require(
     favorPromisor.Promises?.Single() is
         { Progress: 1, Status: CommitmentStatus.Active } &&
+    favorPromisor.Inventory.Count(value => value == ItemIds.Sticks) == 1 &&
+    favorPromisee.Inventory.Count(value => value == ItemIds.Sticks) == 1 &&
     favorPromisee.Relationships is null,
     "partial favor delivery must retain the promise without awarding completion gratitude early");
 (favorPromisor, favorPromisee) =
     VillagerCommitmentService.CompleteDelivery(
         favorPromisor,
         favorPromisee,
-        favorAcceptance.Promise.Id,
+        favorAcceptance.Promise!.Id,
         gameSeconds: 420);
 Require(
     favorPromisor.Promises?.Single() is
         { Progress: 2, Status: CommitmentStatus.Fulfilled } &&
+    !favorPromisor.Inventory.Contains(ItemIds.Sticks) &&
+    favorPromisee.Inventory.Count(value => value == ItemIds.Sticks) == 2 &&
     favorPromisor.Memories?.Any(memory =>
         memory.Kind == "favor-delivered" &&
         memory.SubjectId == favorPromisee.Id) == true &&

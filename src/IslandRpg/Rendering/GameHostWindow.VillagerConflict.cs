@@ -40,6 +40,7 @@ internal sealed partial class GameHostWindow
         VillagerState villager,
         VillagerSimulationTier tier)
     {
+        if (villager.Health <= 0) return false;
         if (villager.ConflictIntent == VillagerConflictIntent.None)
             return false;
         var targetIndex = _villagers.FindIndex(value =>
