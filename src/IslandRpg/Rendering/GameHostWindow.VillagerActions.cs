@@ -51,6 +51,7 @@ internal sealed partial class GameHostWindow
         if (TryVillagerResolveNpcConflict(index, villager, tier) ||
             TryVillagerDefendSelf(index, villager, tier) ||
             TryVillagerEat(index, villager, tier) ||
+            TryVillagerSettlementContribution(index, villager, tier) ||
             TryVillagerWithdrawWorkItem(index, villager) ||
             TryVillagerRoleAction(index, villager, tier) ||
             TryVillagerCookStew(index, villager) ||
@@ -89,7 +90,8 @@ internal sealed partial class GameHostWindow
                 TryVillagerForage(index, villager, tier),
             VillagerWorkRole.Wood =>
                 TryVillagerCutTree(index, villager, tier) ||
-                TryVillagerGatherTreeSticks(index, villager, tier),
+                TryVillagerGatherTreeSticks(index, villager, tier) ||
+                TryVillagerProjectExplore(index, villager, tier),
             VillagerWorkRole.Crafting =>
                 TryVillagerCraft(index, villager) ||
                 TryVillagerPlaceObject(index, villager) ||
@@ -98,6 +100,84 @@ internal sealed partial class GameHostWindow
                 TryVillagerMine(index, villager, tier),
             _ => false
         };
+    }
+
+    private bool TryVillagerSettlementContribution(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier)
+    {
+        if (villager.ProjectAssignment is not { } assignment ||
+            villager.Id == assignment.BuilderId)
+            return false;
+        var builderIndex = _villagers.FindIndex(value =>
+            value.Id == assignment.BuilderId && value.Health > 0);
+        if (builderIndex < 0) return false;
+        var builder = _villagers[builderIndex];
+        var slot = VillagerSettlementProjectService.ContributionSlot(
+            villager, builder);
+        if (slot < 0) return false;
+        var contributorPosition = new Vector2(
+            villager.PositionX, villager.PositionY);
+        var builderPosition = new Vector2(
+            builder.PositionX, builder.PositionY);
+        if (Vector2.DistanceSquared(
+                contributorPosition, builderPosition) >
+            VillagerSimulation.InteractionRange *
+            VillagerSimulation.InteractionRange)
+        {
+            MoveVillagerForCapability(
+                index, villager, tier, builderPosition, VillagerNeed.Safe);
+            return true;
+        }
+        if (!ActorActionService.TryTransfer(
+                villager.Inventory,
+                builder.Inventory,
+                slot,
+                out var contributorInventory,
+                out var builderInventory,
+                out var itemId))
+            return false;
+        _villagers[index] = villager with
+        {
+            Inventory = contributorInventory,
+            Action = EntityAction.Work,
+            ActionTime = 0
+        };
+        _villagers[builderIndex] = builder with
+        {
+            Inventory = builderInventory,
+            Action = EntityAction.Work,
+            ActionTime = 0,
+            NextDecisionGameSeconds = _worldGameSeconds
+        };
+        _villagersDirty = true;
+        ObserveLog("settlement_contribution_delivered", villager.Id, new
+        {
+            BuilderId = builder.Id,
+            assignment.ProjectItemId,
+            ItemId = itemId
+        });
+        return true;
+    }
+
+    private bool TryVillagerProjectExplore(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier)
+    {
+        if (villager.ProjectAssignment?.Requirements.Any(requirement =>
+                VillagerSettlementProjectService.NeedsItem(
+                    villager, requirement.ItemId)) != true)
+            return false;
+        MoveVillagerForCapability(
+            index,
+            villager,
+            tier,
+            VillagerSettlementProjectService.ExplorationTarget(
+                villager, _worldGameSeconds),
+            VillagerNeed.Explore);
+        return true;
     }
 
     private bool TryVillagerGatherTreeSticks(
@@ -371,7 +451,10 @@ internal sealed partial class GameHostWindow
                      villager.WorkRole))
         {
             if (!VillagerCraftPlanner.Needs(
-                    desired, villager.Inventory) ||
+                    desired, villager) ||
+                villager.ProjectAssignment is { } project &&
+                ItemCatalog.Get(desired).HasTag(ItemTag.PlaceableObject) &&
+                project.ProjectItemId != desired ||
                 desired == ItemIds.Campfire && hasCampfire ||
                 ItemCatalog.Get(desired).HasTag(ItemTag.PlaceableObject) &&
                 nearbyObjects.Any(value =>

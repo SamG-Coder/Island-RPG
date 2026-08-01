@@ -32,6 +32,7 @@ internal static class VillagerCraftPlanner
                 ItemIds.StoneKnife,
                 ItemIds.StoneHammer,
                 ItemIds.Campfire,
+                ItemIds.Plank,
                 ItemIds.Workbench,
                 ItemIds.StorageChest,
                 ItemIds.Bloomery,
@@ -89,4 +90,28 @@ internal static class VillagerCraftPlanner
                    candidate.KnifePower;
         return !inventory.Contains(itemId);
     }
+
+    public static bool Needs(string itemId, VillagerState villager)
+    {
+        var project = villager.ProjectAssignment?.ProjectItemId;
+        if (itemId == ItemIds.SmallRocks && project == ItemIds.Campfire)
+            return Count(villager.Inventory, ItemIds.SmallRocks) < 3;
+        if (itemId == ItemIds.MediumRock && project == ItemIds.Campfire)
+            return Count(villager.Inventory, ItemIds.SmallRocks) < 3 &&
+                   Count(villager.Inventory, ItemIds.MediumRock) < 2;
+        if (itemId == ItemIds.Plank)
+        {
+            var target = project switch
+            {
+                ItemIds.Workbench => 4,
+                ItemIds.StorageChest => 6,
+                _ => 1
+            };
+            return Count(villager.Inventory, ItemIds.Plank) < target;
+        }
+        return Needs(itemId, villager.Inventory);
+    }
+
+    private static int Count(string?[] inventory, string itemId) =>
+        inventory.Count(value => value == itemId);
 }

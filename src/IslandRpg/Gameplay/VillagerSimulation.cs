@@ -170,7 +170,8 @@ internal sealed record VillagerState(
     IReadOnlyList<Guid>? ObservedOwnershipIncidentIds = null,
     float Energy = VillagerFatigueService.MaximumEnergy,
     double? LastEnergyGameSeconds = null,
-    IReadOnlyList<VillagerLocationMemory>? LocationMemories = null);
+    IReadOnlyList<VillagerLocationMemory>? LocationMemories = null,
+    VillagerProjectAssignment? ProjectAssignment = null);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,

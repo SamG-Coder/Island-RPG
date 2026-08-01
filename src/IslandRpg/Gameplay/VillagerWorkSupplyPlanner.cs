@@ -7,6 +7,7 @@ namespace IslandRpg.Gameplay;
 internal static class VillagerWorkSupplyPlanner
 {
     public static bool NeedsItem(VillagerState villager, string itemId) =>
+        VillagerSettlementProjectService.NeedsItem(villager, itemId) ||
         itemId switch
         {
             ItemIds.PlantFibres => NeedsFibre(villager),

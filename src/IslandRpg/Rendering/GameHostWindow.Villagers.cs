@@ -9,6 +9,9 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
+    private string? _settlementProjectKey;
+    private readonly Dictionary<string, double>
+        _nextProjectAccountability = [];
     private readonly List<VillagerState> _villagers = [];
     private readonly List<VillagerWorldObject>
         _villagerWorldObjects = [];
@@ -119,6 +122,8 @@ internal sealed partial class GameHostWindow
             }
             _nextVillagerRoleAssignment = _worldGameSeconds + 30 * 60;
         }
+        UpdateSettlementProjectAssignments();
+        TryPromptStalledProject();
         UpdateVillagerPromiseDeadlines();
         _villagerReservedObjects.Clear();
         foreach (var villager in _villagers)
@@ -376,6 +381,13 @@ internal sealed partial class GameHostWindow
                     index, villager, tier))
                 continue;
             if (tier != VillagerSimulationTier.Distant &&
+                villager.ProjectAssignment?.Requirements.Any(requirement =>
+                    VillagerSettlementProjectService.NeedsItem(
+                        villager, requirement.ItemId)) == true &&
+                TryExecuteVillagerWorldAction(
+                    index, villager, tier))
+                continue;
+            if (tier != VillagerSimulationTier.Distant &&
                 TryExecuteVillagerCapabilityAction(
                     index, villager, tier))
                 continue;
@@ -433,6 +445,111 @@ internal sealed partial class GameHostWindow
         if (_villagersDirty &&
             _worldGameSeconds >= _villagersNextSaveAt)
             SaveVillagers();
+    }
+
+    private void UpdateSettlementProjectAssignments()
+    {
+        var placedItems = _worldChunks.Values
+            .Where(IsActiveSimulationChunk)
+            .SelectMany(value => value.Chunk.GroundObjects)
+            .Select(value => value.ItemId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var plan = VillagerSettlementProjectService.Plan(
+            _villagers, placedItems);
+        var key = plan is null
+            ? null
+            : $"{plan.ProjectItemId}:{plan.BuilderId}";
+        for (var index = 0; index < _villagers.Count; index++)
+        {
+            var villager = _villagers[index];
+            VillagerProjectAssignment? assignment = null;
+            if (plan is not null)
+            {
+                var requirements = plan.Assignments.GetValueOrDefault(
+                    villager.Id, []);
+                var assignedAt = villager.ProjectAssignment is
+                    { } existing &&
+                    existing.ProjectItemId == plan.ProjectItemId &&
+                    existing.BuilderId == plan.BuilderId
+                        ? existing.AssignedGameSeconds
+                        : _worldGameSeconds;
+                assignment = new(
+                    plan.ProjectItemId,
+                    plan.BuilderId,
+                    requirements,
+                    assignedAt);
+            }
+            if (VillagerSettlementProjectService.SameAssignment(
+                    villager.ProjectAssignment, assignment))
+                continue;
+            _villagers[index] = villager with
+            {
+                ProjectAssignment = assignment
+            };
+            _villagersDirty = true;
+        }
+        if (key == _settlementProjectKey) return;
+        _settlementProjectKey = key;
+        ObserveLog("settlement_project", null, plan is null
+            ? new { Status = "complete" }
+            : new
+            {
+                Status = "active",
+                plan.ProjectItemId,
+                plan.BuilderId,
+                Assignments = plan.Assignments
+            });
+    }
+
+    private void TryPromptStalledProject()
+    {
+        var stalled = _villagers.FirstOrDefault(value =>
+            VillagerSettlementProjectService.IsStalled(
+                value, _worldGameSeconds));
+        if (stalled is null ||
+            stalled.ProjectAssignment is not { } assignment ||
+            _nextProjectAccountability.GetValueOrDefault(stalled.Id) >
+            _worldGameSeconds)
+            return;
+        var builderIndex = _villagers.FindIndex(value =>
+            value.Id == assignment.BuilderId && value.Health > 0);
+        if (builderIndex < 0) return;
+        var builder = _villagers[builderIndex];
+        if (Vector2.DistanceSquared(
+                new(builder.PositionX, builder.PositionY),
+                new(stalled.PositionX, stalled.PositionY)) >
+            VillagerSimulation.SocialRange * VillagerSimulation.SocialRange)
+            return;
+        var requirement = assignment.Requirements.First();
+        var itemName = ItemCatalog.Get(requirement.ItemId).Name;
+        var text = $"{stalled.Name}, we still need {itemName} for " +
+                   $"the {ItemCatalog.Get(assignment.ProjectItemId).Name}. " +
+                   "What is stopping you?";
+        ShowVillagerSpeech(
+            builderIndex,
+            text,
+            new(stalled.PositionX, stalled.PositionY));
+        var stalledIndex = _villagers.FindIndex(value =>
+            value.Id == stalled.Id);
+        if (stalledIndex >= 0)
+        {
+            var shared = VillagerSimulation.RecordSharedDialogueLine(
+                _villagers[builderIndex],
+                _villagers[stalledIndex],
+                text,
+                _worldGameSeconds);
+            _villagers[builderIndex] = shared.Speaker;
+            _villagers[stalledIndex] = shared.Listener;
+            _villagersDirty = true;
+        }
+        _nextProjectAccountability[stalled.Id] = _worldGameSeconds +
+            VillagerSettlementProjectService.AccountabilityDelayGameSeconds;
+        ObserveLog("settlement_accountability", builder.Id, new
+        {
+            ContributorId = stalled.Id,
+            assignment.ProjectItemId,
+            requirement.ItemId
+        });
     }
 
     private void UpdateVillagerPromiseDeadlines()

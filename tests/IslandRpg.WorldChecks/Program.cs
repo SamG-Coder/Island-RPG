@@ -1003,6 +1003,126 @@ Require(
     roleAssignments["woodworker"] == VillagerWorkRole.Wood &&
     roleAssignments.Values.Distinct().Count() == 3,
     "temporary roles must protect a near-starving villager while covering food, specialist wood work, and a complementary third job");
+var projectVillagers = new[]
+{
+    hungryVillager with
+    {
+        Id = "project-food",
+        Hunger = 80,
+        WorkRole = VillagerWorkRole.Food
+    },
+    hungryVillager with
+    {
+        Id = "project-wood",
+        Hunger = 80,
+        WorkRole = VillagerWorkRole.Wood,
+        Inventory = woodInventory
+    },
+    hungryVillager with
+    {
+        Id = "project-builder",
+        Hunger = 80,
+        WorkRole = VillagerWorkRole.Crafting
+    }
+};
+var campfireProject = VillagerSettlementProjectService.Plan(
+    projectVillagers,
+    new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+Require(campfireProject is
+        {
+            ProjectItemId: ItemIds.Campfire,
+            BuilderId: "project-builder"
+        } &&
+        campfireProject.Assignments.Values
+            .SelectMany(value => value)
+            .Where(value => value.ItemId == ItemIds.LargeRock)
+            .Sum(value => value.Quantity) == 3,
+    "settlement planning must select a crafter and divide campfire resources across villagers");
+var workbenchProject = VillagerSettlementProjectService.Plan(
+    projectVillagers,
+    new HashSet<string>([ItemIds.Campfire],
+        StringComparer.OrdinalIgnoreCase));
+var storageProject = VillagerSettlementProjectService.Plan(
+    projectVillagers,
+    new HashSet<string>([ItemIds.Campfire, ItemIds.Workbench],
+        StringComparer.OrdinalIgnoreCase));
+Require(workbenchProject?.ProjectItemId == ItemIds.Workbench &&
+        workbenchProject.Assignments["project-wood"].Any(value =>
+            value.ItemId == ItemIds.Logs) &&
+        storageProject?.ProjectItemId == ItemIds.StorageChest &&
+        VillagerSettlementProjectService.Plan(
+            projectVillagers,
+            new HashSet<string>(
+                [ItemIds.Campfire, ItemIds.Workbench, ItemIds.StorageChest],
+                StringComparer.OrdinalIgnoreCase)) is null,
+    "settlement projects must progress from campfire through required workbench infrastructure to storage");
+var assignedProjectVillager = projectVillagers[0] with
+{
+    ProjectAssignment = new(
+        ItemIds.Campfire,
+        "project-builder",
+        [new(ItemIds.LargeRock, 1)],
+        AssignedGameSeconds: 100)
+};
+Require(VillagerSettlementProjectService.NeedsItem(
+            assignedProjectVillager, ItemIds.LargeRock) &&
+        VillagerResourcePriority.Score(
+            assignedProjectVillager, ItemIds.LargeRock) == 90 &&
+        VillagerSettlementProjectService.IsStalled(
+            assignedProjectVillager,
+            100 +
+            VillagerSettlementProjectService.AccountabilityDelayGameSeconds),
+    "project assignments must drive resource gathering and expose stalled idle contributors for accountability");
+var contributionInventory = new string?[28];
+contributionInventory[0] = ItemIds.OakLogs;
+var logContributor = assignedProjectVillager with
+{
+    Inventory = contributionInventory,
+    ProjectAssignment = new(
+        ItemIds.Workbench,
+        "project-builder",
+        [new(ItemIds.Logs, 1)],
+        AssignedGameSeconds: 100)
+};
+Require(VillagerSettlementProjectService.ContributionSlot(
+            logContributor,
+            projectVillagers[2]) == 0 &&
+        VillagerSettlementProjectService.MatchesRequirement(
+            ItemIds.OakLogs, ItemIds.Logs),
+    "project delivery must accept interchangeable log types through the shared contribution contract");
+var projectCraftInventory = new string?[28];
+projectCraftInventory[0] = ItemIds.SmallRocks;
+projectCraftInventory[1] = ItemIds.SmallRocks;
+projectCraftInventory[2] = ItemIds.Plank;
+var projectBuilder = projectVillagers[2] with
+{
+    Inventory = projectCraftInventory,
+    ProjectAssignment = new(
+        ItemIds.Campfire,
+        "project-builder",
+        [],
+        100)
+};
+var completedCampfireRockInventory =
+    (string?[])projectCraftInventory.Clone();
+completedCampfireRockInventory[3] = ItemIds.SmallRocks;
+Require(VillagerCraftPlanner.Needs(ItemIds.SmallRocks, projectBuilder) &&
+        !VillagerCraftPlanner.Needs(
+            ItemIds.SmallRocks,
+            projectBuilder with
+            {
+                Inventory = completedCampfireRockInventory
+            }) &&
+        VillagerCraftPlanner.Needs(
+            ItemIds.Plank,
+            projectBuilder with
+            {
+                ProjectAssignment = projectBuilder.ProjectAssignment! with
+                {
+                    ProjectItemId = ItemIds.Workbench
+                }
+            }),
+    "project crafting must continue until campfire rock and infrastructure plank quantities are complete");
 var soloRoles = VillagerWorkCoordinator.AssignRoles([
     hungryVillager with { Id = "solo-builder", Hunger = 80 }
 ]);

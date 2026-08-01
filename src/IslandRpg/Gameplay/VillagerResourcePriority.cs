@@ -13,6 +13,8 @@ internal static class VillagerResourcePriority
                 StringComparison.OrdinalIgnoreCase))
             return 95;
         if (IsPromised(villager, itemId)) return 100;
+        if (VillagerSettlementProjectService.NeedsItem(villager, itemId))
+            return 90;
         if (MatchesActiveGoal(villager, item)) return 80;
         if (VillagerWorkSupplyPlanner.NeedsItem(villager, itemId))
             return 60;
