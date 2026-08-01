@@ -42,7 +42,9 @@ internal sealed partial class GameHostWindow
         long Seed,
         Vector2 Spawn,
         PlayerProfile Player,
-        int Population);
+        int Population,
+        bool ObserveWorld = false,
+        string SharedStory = "");
 
     private void BeginNpcAiCheck()
     {
@@ -70,7 +72,9 @@ internal sealed partial class GameHostWindow
     {
         if (_pendingNewWorldCreation is not null) return;
         _pendingNewWorldCreation = new(
-            name, seed, spawn, player, population);
+            name, seed, spawn, player, population,
+            _newWorldObserveToggle.IsChecked,
+            _newWorldSharedStoryTextBox.Text.Trim());
         _frontendError =
             "Creating survivor histories and personalities...";
         _npcPersonaGenerationTask =
@@ -78,7 +82,12 @@ internal sealed partial class GameHostWindow
                 _saves.LoadSettings().EffectiveAi,
                 name,
                 seed,
-                VillagerSimulation.NamesForPopulation(population));
+                Enumerable.Range(0, population)
+                    .Select(index =>
+                        string.IsNullOrWhiteSpace(_newWorldNpcNameTextBoxes[index].Text)
+                            ? VillagerSimulation.NamesForPopulation(population)[index]
+                            : _newWorldNpcNameTextBoxes[index].Text.Trim())
+                    .ToArray());
     }
 
     private void UpdateAiWorldCreation()
@@ -96,7 +105,13 @@ internal sealed partial class GameHostWindow
             .ToArray();
         _pendingNewWorldCreation = null;
         _npcPersonaGenerationTask = null;
-        CompleteNewWorldCreation(pending, personas);
+        var setups = BuildNewWorldSetups(personas);
+        CompleteNewWorldCreation(
+            pending,
+            setups.Select(value => value.Persona).ToArray(),
+            pending.ObserveWorld,
+            pending.SharedStory,
+            setups);
     }
 
     private void InitializeNpcAiSettingsFields(

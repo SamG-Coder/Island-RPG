@@ -14,7 +14,10 @@ internal sealed record WorldProfile(
     double ElapsedGameSeconds = 8 * 60 * 60,
     bool AiNpcsEnabled = false,
     int AiNpcCount = 0,
-    IReadOnlyList<VillagerPersona>? AiNpcPersonas = null);
+    IReadOnlyList<VillagerPersona>? AiNpcPersonas = null,
+    bool ObserveWorld = false,
+    string SharedStory = "",
+    IReadOnlyList<NewWorldSurvivorSetup>? AiNpcSetups = null);
 
 internal sealed record PlayerProfile(
     string Id,
@@ -132,7 +135,10 @@ internal sealed class GameSaveRepository
         string? playerId,
         bool aiNpcsEnabled = false,
         int aiNpcCount = 0,
-        IReadOnlyList<VillagerPersona>? aiNpcPersonas = null)
+        IReadOnlyList<VillagerPersona>? aiNpcPersonas = null,
+        bool observeWorld = false,
+        string sharedStory = "",
+        IReadOnlyList<NewWorldSurvivorSetup>? aiNpcSetups = null)
     {
         var now = DateTime.UtcNow;
         var id = UniqueId(WorldsRoot, name);
@@ -143,7 +149,10 @@ internal sealed class GameSaveRepository
             id, CleanName(name, "New World"), seed, now, now, playerId,
             AiNpcsEnabled: aiNpcsEnabled && aiNpcCount > 0,
             AiNpcCount: aiNpcCount,
-            AiNpcPersonas: aiNpcPersonas?.Take(aiNpcCount).ToArray());
+            AiNpcPersonas: aiNpcPersonas?.Take(aiNpcCount).ToArray(),
+            ObserveWorld: observeWorld && aiNpcCount > 0,
+            SharedStory: sharedStory.Trim(),
+            AiNpcSetups: aiNpcSetups?.Take(aiNpcCount).ToArray());
         SaveWorld(profile);
         return profile;
     }

@@ -39,6 +39,7 @@ internal sealed partial class GameHostWindow : GameWindow
         CharacterSelect,
         CharacterCreate,
         NewWorld,
+        NewWorldAdvanced,
         LoadWorld,
         Settings,
         Credits
@@ -783,9 +784,11 @@ internal sealed partial class GameHostWindow : GameWindow
             {
                 if (_mode == PreviewMode.Game)
                 {
-                    if (_observeMode is null)
+                    if (!IsObserveWorld)
                         UpdateGameUi();
                     UpdateGame((float)e.Time);
+                    if (IsObserveWorld)
+                        UpdateCamera((float)e.Time);
                     UpdateObserveMode();
                 }
                 else
@@ -941,6 +944,9 @@ internal sealed partial class GameHostWindow : GameWindow
             case FrontendPage.NewWorld:
                 UpdateNewWorldClick(pointer);
                 break;
+            case FrontendPage.NewWorldAdvanced:
+                UpdateNewWorldAdvancedClick(pointer);
+                break;
             case FrontendPage.LoadWorld:
                 UpdateLoadWorldClick(pointer);
                 break;
@@ -1028,6 +1034,9 @@ internal sealed partial class GameHostWindow : GameWindow
                 _frontendError = null;
             }
         }
+        else if (_newWorldAiToggle.IsChecked &&
+                 NewWorldAdvancedButtonBounds().Contains(pointer))
+            OpenNewWorldAdvanced();
         else if (CreateWorldButtonBounds().Contains(pointer))
             CreateAndEnterWorld();
         else if (BackButtonBounds().Contains(pointer))
@@ -1185,6 +1194,11 @@ internal sealed partial class GameHostWindow : GameWindow
             _newWorldAiNpcCount > 0;
         if (aiEnabled)
         {
+            if (ValidateNewWorldAdvancedItems() is { } advancedError)
+            {
+                _frontendError = advancedError;
+                return;
+            }
             BeginAiWorldCreation(
                 _worldNameTextBox.Text,
                 seed,
@@ -1200,12 +1214,15 @@ internal sealed partial class GameHostWindow : GameWindow
                 spawn,
                 player,
                 0),
-            []);
+            [], false, "", []);
     }
 
     private void CompleteNewWorldCreation(
         PendingNewWorldCreation pending,
-        IReadOnlyList<VillagerPersona> personas)
+        IReadOnlyList<VillagerPersona> personas,
+        bool observeWorld,
+        string sharedStory,
+        IReadOnlyList<NewWorldSurvivorSetup> setups)
     {
         var world = _saves.CreateWorld(
             pending.Name,
@@ -1213,7 +1230,10 @@ internal sealed partial class GameHostWindow : GameWindow
             pending.Player.Id,
             pending.Population > 0,
             pending.Population,
-            personas);
+            personas,
+            observeWorld,
+            sharedStory,
+            setups);
         _saves.SaveWorldPlayer(
             world.Id,
             new(
@@ -1470,7 +1490,8 @@ internal sealed partial class GameHostWindow : GameWindow
             _worldNameTextBox, _seedTextBox, _playerNameTextBox,
             _aiUrlTextBox, _aiModelTextBox, _aiPasswordTextBox
         }
-            .FirstOrDefault(control => control.Focused);
+            .FirstOrDefault(control => control.Focused) ??
+        FocusedAdvancedTextBox();
 
     private void FocusTextBox(
         TextBoxControlState control, Vector4 bounds, Vector2 pointer)
@@ -1488,6 +1509,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _aiUrlTextBox.Blur();
         _aiModelTextBox.Blur();
         _aiPasswordTextBox.Blur();
+        BlurAdvancedTextBoxes();
     }
 
     private void FocusTextBoxAtEnd(TextBoxControlState control)
@@ -1530,7 +1552,7 @@ internal sealed partial class GameHostWindow : GameWindow
             UpdateGameSimulation(Math.Clamp(elapsed, 0, .25f));
             return;
         }
-        if (_observeMode is not null)
+        if (IsObserveWorld)
         {
             _gameSimulationAccumulator = Math.Min(
                 .25,
@@ -1775,7 +1797,7 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         _worldGameSeconds = WorldTime.Advance(
             _worldGameSeconds, elapsed);
-        if (_observeMode is null)
+        if (!IsObserveWorld)
             UpdateSurvival(elapsed);
         UpdateExpiredCampfires();
         var currentTerrain = SamplePlayerTerrain(
@@ -1826,7 +1848,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 ? _moveMarker with { Time = nextTime }
                 : null;
         }
-        FollowPlayer();
+        if (!IsObserveWorld)
+            FollowPlayer();
     }
 
     private void UpdateGameUi()
@@ -3143,7 +3166,7 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         else if (_screen == ScreenState.WorldPreview &&
             _mode == PreviewMode.Game && !_atlasOpen &&
-            _observeMode is null)
+            !IsObserveWorld)
         {
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
             if (_modalScreen.BlursBackground) BlurComposedFrame();
@@ -3192,6 +3215,9 @@ internal sealed partial class GameHostWindow : GameWindow
                 break;
             case FrontendPage.NewWorld:
                 RenderNewWorldMenu();
+                break;
+            case FrontendPage.NewWorldAdvanced:
+                RenderNewWorldAdvancedMenu();
                 break;
             case FrontendPage.LoadWorld:
                 RenderLoadWorldMenu();
@@ -3476,6 +3502,8 @@ internal sealed partial class GameHostWindow : GameWindow
         var aiReady = _npcAiState.Ready;
         LayoutNewWorldAiControls();
         RenderNewWorldAiControls(aiReady);
+        if (_newWorldAiToggle.IsChecked)
+            DrawMenuButton(NewWorldAdvancedButtonBounds(), "Advanced");
 
         var character = NewWorldCharacterBounds();
         DrawUiColor(character, new(.025f, .027f, .024f, .72f));
@@ -3792,6 +3820,7 @@ internal sealed partial class GameHostWindow : GameWindow
             FrontendPage.CharacterCreate => FrontendPanel(760, 640),
             FrontendPage.CharacterSelect => CharacterSelectionPanel(),
             FrontendPage.NewWorld => FrontendPanel(760, 640),
+            FrontendPage.NewWorldAdvanced => FrontendPanel(760, 640),
             FrontendPage.LoadWorld => WorldSelectionPanel(),
             FrontendPage.Settings => SettingsPanel(),
             FrontendPage.Credits => FrontendPanel(600, 560),
@@ -3871,13 +3900,13 @@ internal sealed partial class GameHostWindow : GameWindow
     private Vector4 NewWorldAiToggleBounds()
     {
         var details = NewWorldDetailsBounds();
-        return new(details.X + 18, details.Y + 376, 224, 50);
+        return new(details.X + 18, details.Y + 376, 184, 50);
     }
 
     private Vector4 NewWorldAiCountBounds()
     {
         var details = NewWorldDetailsBounds();
-        return new(details.X + 250, details.Y + 380, 140, 42);
+        return new(details.X + 210, details.Y + 380, 100, 42);
     }
 
     private void LayoutNewWorldAiControls()
@@ -3939,6 +3968,7 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             FrontendPage.CharacterCreate => FrontendPanel(760, 640),
             FrontendPage.NewWorld => FrontendPanel(760, 640),
+            FrontendPage.NewWorldAdvanced => FrontendPanel(760, 640),
             FrontendPage.Settings => SettingsPanel(),
             FrontendPage.Credits => FrontendPanel(600, 560),
             _ => FrontendPanel(480, 360)
@@ -5688,7 +5718,7 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         if (_mode == PreviewMode.Game) DrawMoveMarker();
 
-        var player = _mode == PreviewMode.Game && _observeMode is null
+        var player = _mode == PreviewMode.Game && !IsObserveWorld
             ? GetPlayerVisual()
             : null;
         var distantDetailOpacity = Math.Clamp(
@@ -6190,26 +6220,40 @@ internal sealed partial class GameHostWindow : GameWindow
             FloorDiv((int)MathF.Floor(mapCenter.X), WorldChunk.Size),
             FloorDiv((int)MathF.Floor(mapCenter.Y), WorldChunk.Size),
             _activeWorldLevel);
+        var centers = new List<ChunkCoordinate> { center };
+        if (_activeWorld?.ObserveWorld == true)
+            foreach (var villager in _villagers)
+            {
+                if (villager.WorldLevel != _activeWorldLevel) continue;
+                var npcCenter = new ChunkCoordinate(
+                    FloorDiv((int)MathF.Floor(villager.PositionX), WorldChunk.Size),
+                    FloorDiv((int)MathF.Floor(villager.PositionY), WorldChunk.Size),
+                    _activeWorldLevel);
+                if (!centers.Contains(npcCenter)) centers.Add(npcCenter);
+            }
         var loadRadius = WorldStreamLoadRadius();
         var unloadRadius = loadRadius + 1;
 
         var wanted = new List<ChunkCoordinate>();
-        for (var y = center.Y - loadRadius; y <= center.Y + loadRadius; y++)
-        for (var x = center.X - loadRadius; x <= center.X + loadRadius; x++)
-            if ((x - center.X) * (x - center.X) +
-                (y - center.Y) * (y - center.Y) <=
-                loadRadius * loadRadius &&
-                !_worldChunks.ContainsKey(
-                    new(x, y, _activeWorldLevel)) &&
-                (_pendingChunkTask is null ||
-                 _pendingChunkCoordinate !=
-                 new ChunkCoordinate(x, y, _activeWorldLevel)))
-                wanted.Add(new(x, y, _activeWorldLevel));
+        foreach (var streamCenter in centers)
+            for (var y = streamCenter.Y - loadRadius;
+                 y <= streamCenter.Y + loadRadius; y++)
+            for (var x = streamCenter.X - loadRadius;
+                 x <= streamCenter.X + loadRadius; x++)
+                if ((x - streamCenter.X) * (x - streamCenter.X) +
+                    (y - streamCenter.Y) * (y - streamCenter.Y) <=
+                    loadRadius * loadRadius &&
+                    !_worldChunks.ContainsKey(new(x, y, _activeWorldLevel)) &&
+                    (_pendingChunkTask is null ||
+                     _pendingChunkCoordinate !=
+                     new ChunkCoordinate(x, y, _activeWorldLevel)))
+                    wanted.Add(new(x, y, _activeWorldLevel));
         if (wanted.Count > 0 && _pendingChunkTask is null)
         {
             _pendingChunkCoordinate = wanted.OrderBy(value =>
-                (value.X - center.X) * (value.X - center.X) +
-                (value.Y - center.Y) * (value.Y - center.Y)).First();
+                centers.Min(streamCenter =>
+                    (value.X - streamCenter.X) * (value.X - streamCenter.X) +
+                    (value.Y - streamCenter.Y) * (value.Y - streamCenter.Y))).First();
             var store = _worldStore;
             var coordinate = _pendingChunkCoordinate;
             _pendingChunkCancellation = new();
@@ -6223,8 +6267,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
         foreach (var coordinate in _worldChunks.Keys
                      .Where(value =>
-                         WorldChunkCachePolicy.IsOutsideRetentionRadius(
-                             value, center, unloadRadius))
+                         centers.All(streamCenter =>
+                             WorldChunkCachePolicy.IsOutsideRetentionRadius(
+                                 value, streamCenter, unloadRadius)))
                      .ToArray())
             UnloadWorldChunk(coordinate, save: true);
     }
@@ -7353,7 +7398,24 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private bool IsActiveSimulationChunk(GpuWorldChunk gpu) =>
         IsActiveWorldChunk(gpu) &&
-        (_observeMode is null || IsChunkInsideWorldRenderCircle(gpu));
+        (_observeMode is null || IsChunkInsideWorldRenderCircle(gpu)) &&
+        (_activeWorld?.ObserveWorld != true ||
+         IsChunkInsideNpcSimulationCircle(gpu));
+
+    private bool IsChunkInsideNpcSimulationCircle(GpuWorldChunk gpu)
+    {
+        const int simulationRadius = 5;
+        return _villagers.Any(villager =>
+        {
+            if (villager.WorldLevel != gpu.Chunk.Coordinate.Level) return false;
+            var x = FloorDiv((int)MathF.Floor(villager.PositionX), WorldChunk.Size);
+            var y = FloorDiv((int)MathF.Floor(villager.PositionY), WorldChunk.Size);
+            var deltaX = gpu.Chunk.Coordinate.X - x;
+            var deltaY = gpu.Chunk.Coordinate.Y - y;
+            return deltaX * deltaX + deltaY * deltaY <=
+                   simulationRadius * simulationRadius;
+        });
+    }
 
     private bool IsChunkInsideWorldRenderCircle(GpuWorldChunk gpu)
     {

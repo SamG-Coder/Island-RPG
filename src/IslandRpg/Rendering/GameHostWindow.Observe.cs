@@ -206,10 +206,12 @@ internal sealed partial class GameHostWindow
     private Vector2 ObservationFocusPosition()
     {
         var fallback = _player?.Position ?? Vector2.Zero;
+        if (_activeWorld?.ObserveWorld == true && _observeMode is null)
+            return ScreenToTerrain(
+                new(ReferenceWidth * .5f, ReferenceHeight * .5f));
         return _observeMode is null
             ? fallback
-            : ObserveModePolicy.Focus(
-                _villagers, _activeWorldLevel, fallback);
+            : ObserveModePolicy.Focus(_villagers, _activeWorldLevel, fallback);
     }
 
     private void UpdateObserveMode()

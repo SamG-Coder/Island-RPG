@@ -43,6 +43,40 @@ Require(
     new GameSettings().UnlimitedZoom,
     "unlimited zoom must be enabled by default");
 var defaultAi = new GameSettings().EffectiveAi;
+
+var advancedGenerated = new[]
+{
+    VillagerSimulation.DefaultPersona(0),
+    VillagerSimulation.DefaultPersona(1)
+};
+var advancedSetups = NewWorldSurvivorSetupService.Build(
+    2,
+    advancedGenerated,
+    ["Elara", "Bram"],
+    ["Bold but generous", ""],
+    ["", "Sailor"],
+    ["Raised by a healer", ""],
+    ["stone axe, cooked minnows", "stone knife"],
+    "Their ship broke apart in a night storm.");
+Require(advancedSetups[0].Name == "Elara" &&
+        advancedSetups[0].Persona.Personality == "Bold but generous" &&
+        advancedSetups[0].Persona.PriorTrade == advancedGenerated[0].PriorTrade,
+    "advanced survivor setup must merge explicit overrides with generated personas");
+Require(advancedSetups.All(value =>
+        value.Persona.ArrivalMemory == "Their ship broke apart in a night storm."),
+    "advanced survivor setup must give every NPC the shared story");
+Require(advancedSetups[0].StartingItems.Contains(ItemIds.StoneAxe) &&
+        advancedSetups[1].StartingItems.Contains(ItemIds.StoneKnife),
+    "advanced survivor setup must resolve catalog item names");
+Require(NewWorldSurvivorSetupService.UnknownItems("stone axe, laser gun")
+        .SequenceEqual(["laser gun"]),
+    "advanced survivor setup must report unknown starting items");
+var advancedVillagers = VillagerSimulation.CreateInitial(
+    991, Vector2.Zero, _ => true, population: 2, setups: advancedSetups);
+Require(advancedVillagers[0].Name == "Elara" &&
+        advancedVillagers[0].Inventory.Contains(ItemIds.StoneAxe) &&
+        advancedVillagers[1].Inventory.Contains(ItemIds.StoneKnife),
+    "initial NPC creation must apply advanced names and starting inventories");
 Require(
     defaultAi.Enabled &&
     defaultAi.BaseUrl == "http://localhost:11434" &&

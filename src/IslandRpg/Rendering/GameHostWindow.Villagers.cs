@@ -63,7 +63,8 @@ internal sealed partial class GameHostWindow
                         (int)WorldLevel.Overworld),
                     gameSeconds: _worldGameSeconds,
                     population: _activeWorld.AiNpcCount,
-                    personas: _activeWorld.AiNpcPersonas));
+                    personas: _activeWorld.AiNpcPersonas,
+                    setups: _activeWorld.AiNpcSetups));
             _villagersDirty = true;
         }
         _villagersNextSaveAt = _worldGameSeconds + 30;
@@ -302,7 +303,9 @@ internal sealed partial class GameHostWindow
                 continue;
             var position = new Vector2(
                 villager.PositionX, villager.PositionY);
-            var simulationFocus = ObservationFocusPosition();
+            var simulationFocus = _activeWorld?.ObserveWorld == true
+                ? position
+                : ObservationFocusPosition();
             var tier = VillagerSimulation.Tier(
                 position, simulationFocus);
             villager = VillagerSimulation.CatchUp(

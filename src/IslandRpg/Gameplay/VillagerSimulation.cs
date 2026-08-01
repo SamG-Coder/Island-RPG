@@ -261,7 +261,8 @@ internal static class VillagerSimulation
         Func<Vector2, bool>? canStand = null,
         double gameSeconds = 0,
         int population = InitialPopulation,
-        IReadOnlyList<VillagerPersona>? personas = null)
+        IReadOnlyList<VillagerPersona>? personas = null,
+        IReadOnlyList<NewWorldSurvivorSetup>? setups = null)
     {
         population = Math.Clamp(population, 0, InitialPopulation);
         var result = new VillagerState[population];
@@ -270,9 +271,17 @@ internal static class VillagerSimulation
             var position = FindSpawn(
                 worldSeed, index, origin, canStand);
             var id = StableId(worldSeed, index);
+            var setup = setups is not null && index < setups.Count
+                ? setups[index]
+                : null;
+            var inventory = PlayerInventory.CreateStartingInventory();
+            if (setup is not null)
+                for (var slot = 0; slot < setup.StartingItems.Count &&
+                                   slot < inventory.Length; slot++)
+                    inventory[slot] = setup.StartingItems[slot];
             result[index] = new(
                 id,
-                Names[index],
+                setup?.Name ?? Names[index],
                 index == 0 ? EntityGender.Female : EntityGender.Male,
                 PositiveMod(Hash(worldSeed, index, 17), 5),
                 index + 1,
@@ -281,16 +290,16 @@ internal static class VillagerSimulation
                 WorldLevel: 0,
                 Health: AdventureService.BaseMaximumHealth,
                 Hunger: SurvivalService.MaximumHunger,
-                Inventory: PlayerInventory.CreateStartingInventory(),
+                Inventory: inventory,
                 NextDecisionGameSeconds: gameSeconds,
                 LastSimulatedGameSeconds: gameSeconds,
                 Sociability: Unit(Hash(worldSeed, index, 31)),
                 Honesty: Unit(Hash(worldSeed, index, 47)),
                 Boldness: Unit(Hash(worldSeed, index, 61)),
-                Persona: personas is not null &&
+                Persona: setup?.Persona ?? (personas is not null &&
                          index < personas.Count
                     ? personas[index]
-                    : DefaultPersona(index),
+                    : DefaultPersona(index)),
                 AwakenedGameSeconds: gameSeconds,
                 Goals: VillagerCommitmentService.InitialGoals(
                     id, gameSeconds),
