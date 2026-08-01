@@ -1631,7 +1631,10 @@ internal static class VillagerSimulation
                 TargetX = null,
                 TargetY = null,
                 Activity = VillagerActivity.Idle,
-                BlockedMoveAttempts = 0
+                BlockedMoveAttempts = 0,
+                NextDecisionGameSeconds = Math.Min(
+                    state.NextDecisionGameSeconds,
+                    gameSeconds)
             };
         }
         var facing = displacement / distance;

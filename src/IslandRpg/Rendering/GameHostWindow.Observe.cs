@@ -97,6 +97,37 @@ internal static class ObserveModePolicy
 
 internal static class ObserveEventLog
 {
+    private static readonly object OutputLock = new();
+    private static StreamWriter? _fileWriter;
+    public static string? OutputPath { get; private set; }
+
+    public static void ConfigureOutputFolder(string folder)
+    {
+        var resolved = Path.GetFullPath(folder);
+        Directory.CreateDirectory(resolved);
+        var path = Path.Combine(
+            resolved,
+            $"observe-{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}.jsonl");
+        var stream = new FileStream(
+            path,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 4096,
+            FileOptions.WriteThrough);
+        lock (OutputLock)
+        {
+            _fileWriter?.Dispose();
+            _fileWriter = new(
+                stream,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
+            {
+                AutoFlush = true
+            };
+            OutputPath = path;
+        }
+    }
+
     public static string Serialize(
         double realSeconds,
         double gameSeconds,
@@ -123,10 +154,16 @@ internal static class ObserveEventLog
         string eventType,
         object? data)
     {
-        writer.WriteLine(Serialize(
+        var line = Serialize(
             realSeconds, gameSeconds, gameTime,
-            villagerId, eventType, data));
+            villagerId, eventType, data);
+        writer.WriteLine(line);
         writer.Flush();
+        lock (OutputLock)
+        {
+            _fileWriter?.WriteLine(line);
+            _fileWriter?.Flush();
+        }
     }
 }
 

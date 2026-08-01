@@ -4,5 +4,6 @@ obj/
 AssetCache/
 /aoe-cursor-sheet.png
 /TestExport/
+/.observe-live/
 *.csproj.user
 *.pubxml.user

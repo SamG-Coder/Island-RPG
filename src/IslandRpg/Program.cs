@@ -6,6 +6,8 @@ using IslandRpg.Rendering;
 try
 {
     var options = AppOptions.Parse(args);
+    if (options.Observe && options.ObserveOutputFolder is { } outputFolder)
+        ObserveEventLog.ConfigureOutputFolder(outputFolder);
     if (options.Observe)
         ObserveConsole.AttachToParent();
     var saves = new GameSaveRepository();
@@ -204,7 +206,7 @@ catch (Exception ex)
     Console.Error.WriteLine(ex.Message);
     Console.Error.WriteLine(
         "Usage: IslandRpg [--game | --world] [--seed <number>] [--island | --catalog] " +
-        "[--observe [--observe-seconds <seconds>] [--observe-log-interval <seconds>] [--observe-scenario <name>] [--observe-hunger-rate <multiplier>] [--observe-food-count <count>]] " +
+        "[--observe [--observe-seconds <seconds>] [--observe-log-interval <seconds>] [--observe-output <folder>] [--observe-scenario <name>] [--observe-hunger-rate <multiplier>] [--observe-food-count <count>]] " +
         "[--age2-path <folder>] [--graphic <SLP id> | --graphic-name <DAT name>]");
     Environment.ExitCode = 1;
 }
@@ -224,7 +226,8 @@ internal sealed record AppOptions(
     double ObserveLogIntervalSeconds,
     string ObserveScenario,
     float ObserveHungerRateMultiplier,
-    int ObserveStartingFoodCount)
+    int ObserveStartingFoodCount,
+    string? ObserveOutputFolder)
 {
     public static AppOptions Parse(string[] args)
     {
@@ -244,6 +247,7 @@ internal sealed record AppOptions(
         var observeScenario = ObserveScenarioService.Default;
         float observeHungerRateMultiplier = 1;
         var observeStartingFoodCount = 20;
+        string? observeOutputFolder = null;
         long seed = 2187;
         for (var i = 0; i < args.Length; i++)
         {
@@ -316,6 +320,10 @@ internal sealed record AppOptions(
                          out var parsedLogInterval) &&
                      parsedLogInterval > 0)
                 observeLogIntervalSeconds = parsedLogInterval;
+            else if (args[i] == "--observe-output" &&
+                     i + 1 < args.Length &&
+                     !string.IsNullOrWhiteSpace(args[i + 1]))
+                observeOutputFolder = args[++i];
             else if (args[i] == "--observe-scenario" &&
                      i + 1 < args.Length &&
                      ObserveScenarioService.IsSupported(args[i + 1]))
@@ -344,6 +352,6 @@ internal sealed record AppOptions(
             catalog, island, world, game, seed,
             observe, observeSeconds, observeLogIntervalSeconds,
             observeScenario, observeHungerRateMultiplier,
-            observeStartingFoodCount);
+            observeStartingFoodCount, observeOutputFolder);
     }
 }

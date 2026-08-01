@@ -312,6 +312,20 @@ Require(immobileDeadVillager.Action == EntityAction.Die &&
         immobileDeadVillager.PositionY == deadVillager.PositionY &&
         immobileDeadVillager.TargetX is null,
     "dead villagers must not continue moving");
+var immediatelyReconsideringVillager = VillagerSimulation.AdvanceMovement(
+    advancedVillagers[0] with
+    {
+        Action = EntityAction.Move,
+        Activity = VillagerActivity.Exploring,
+        TargetX = advancedVillagers[0].PositionX + .1f,
+        TargetY = advancedVillagers[0].PositionY,
+        NextDecisionGameSeconds = 1_000
+    },
+    elapsed: 1,
+    gameSeconds: 200);
+Require(immediatelyReconsideringVillager.Action == EntityAction.Idle &&
+        immediatelyReconsideringVillager.NextDecisionGameSeconds == 200,
+    "NPCs must reconsider immediately after reaching an intermediate movement target instead of standing until the old deadline");
 var caughtUpDeadVillager = VillagerSimulation.CatchUp(
     deadVillager, 600, hungerLossMultiplier: 0);
 Require(caughtUpDeadVillager.Energy == deadVillager.Energy,
@@ -1210,6 +1224,7 @@ Require(
 var observeOptions = AppOptions.Parse([
     "--observe", "--observe-seconds", "45",
     "--observe-log-interval", "1.5",
+    "--observe-output", ".observe-live",
     "--observe-scenario", ObserveScenarioService.DesertSurplus,
     "--observe-hunger-rate", "4",
     "--observe-food-count", "3"
@@ -1218,6 +1233,7 @@ Require(
     observeOptions.Observe && observeOptions.Game &&
     observeOptions.ObserveSeconds == 45 &&
     observeOptions.ObserveLogIntervalSeconds == 1.5 &&
+    observeOptions.ObserveOutputFolder == ".observe-live" &&
     observeOptions.ObserveScenario ==
         ObserveScenarioService.DesertSurplus &&
     observeOptions.ObserveHungerRateMultiplier == 4 &&

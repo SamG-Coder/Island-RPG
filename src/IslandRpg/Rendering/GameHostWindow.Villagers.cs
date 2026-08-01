@@ -923,7 +923,7 @@ internal sealed partial class GameHostWindow
                     VillagerSimulation.BlockMovement(
                         villager, _worldGameSeconds, action.ObjectId);
                 _villagersDirty = true;
-                return false;
+                return true;
             }
             var decision = new VillagerDecision(
                 action.Kind ==
