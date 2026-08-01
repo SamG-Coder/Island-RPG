@@ -2500,6 +2500,15 @@ internal sealed partial class GameHostWindow : GameWindow
                 damage + (state == TreeLifecycleState.Stump
                     ? Math.Max(10, instance.MaxHealth / 5)
                     : 0));
+            if (state == TreeLifecycleState.Standing &&
+                WoodcuttingSkill.GrantsSwingLog(
+                    strikeResult.Level, Random.Shared.NextSingle()))
+            {
+                AddWoodcuttingLog(instance.TreeType);
+                _chatUi.AddMessage(
+                    "You cut away a usable piece of wood.",
+                    ChatMessageStyle.Action);
+            }
             if (state == TreeLifecycleState.Stump)
             {
                 AddWoodcuttingLog(instance.TreeType);

@@ -24,6 +24,16 @@ internal static class WoodcuttingSkill
         Math.Clamp(.48f + (Math.Clamp(level, 1, MaximumLevel) - 1) * .026f,
             .48f, .974f);
 
+    public static float SwingLogChance(int level)
+    {
+        var progress = (Math.Clamp(level, 1, MaximumLevel) - 1f) /
+                       (MaximumLevel - 1f);
+        return .05f + progress * .20f;
+    }
+
+    public static bool GrantsSwingLog(int level, float roll) =>
+        Math.Clamp(roll, 0, .999999f) < SwingLogChance(level);
+
     public static int MinimumDamage(int level, int axePower = 1) =>
         3 + Math.Clamp(level, 1, MaximumLevel) +
         Math.Max(0, axePower - 1) * 2;

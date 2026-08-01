@@ -364,7 +364,7 @@ internal static class CraftingSkill
             RequiredStationItemId: ItemIds.SmithingAnvil),
         new(
             "storage-chest", ItemIds.StorageChest,
-            CraftingCategory.Furniture, 5, 85,
+            CraftingCategory.Furniture, 4, 85,
             [
                 new(ItemIds.Plank, 6),
                 new(ItemIds.Sticks, 2),

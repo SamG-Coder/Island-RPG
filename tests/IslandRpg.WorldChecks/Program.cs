@@ -3984,6 +3984,13 @@ for (var level = 2; level < WoodcuttingSkill.MaximumLevel; level++)
 Require(
     WoodcuttingSkill.HitChance(20) > WoodcuttingSkill.HitChance(1),
     "higher woodcutting levels must hit more reliably");
+Require(
+    Math.Abs(WoodcuttingSkill.SwingLogChance(1) - .05f) < .00001f &&
+    Math.Abs(WoodcuttingSkill.SwingLogChance(20) - .25f) < .00001f &&
+    WoodcuttingSkill.GrantsSwingLog(1, .0499f) &&
+    !WoodcuttingSkill.GrantsSwingLog(1, .0501f) &&
+    WoodcuttingSkill.GrantsSwingLog(20, .2499f),
+    "damaging woodcutting swings must have a log chance scaling from 5 to 25 percent");
 var noviceHit = WoodcuttingSkill.Roll(0, 0, 0);
 var masterHit = WoodcuttingSkill.Roll(
     WoodcuttingSkill.ExperienceForLevel(20), 0, .999f);
@@ -4152,6 +4159,11 @@ Require(CraftingSkill.Availability(
     "the level-one stone pickaxe must still require all of its resources");
 var workbenchRecipe = CraftingSkill.Recipes.Single(
     recipe => recipe.ResultItemId == ItemIds.Workbench);
+var storageChestRecipe = CraftingSkill.Recipes.Single(
+    recipe => recipe.ResultItemId == ItemIds.StorageChest);
+Require(
+    storageChestRecipe.RequiredLevel == 4,
+    "the wooden storage chest must unlock at Crafting level four");
 Require(workbenchRecipe.Category == CraftingCategory.Furniture &&
         workbenchRecipe.RequiredLevel == 3 &&
         workbenchRecipe.Experience == 75 &&
