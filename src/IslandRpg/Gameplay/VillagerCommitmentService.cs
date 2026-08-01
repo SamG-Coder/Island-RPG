@@ -327,6 +327,89 @@ internal static class VillagerCommitmentService
             _ => relationship
         };
 
+    public static (VillagerState Promisor, VillagerState Promisee)
+        CompleteDelivery(
+            VillagerState promisor,
+            VillagerState promisee,
+            Guid promiseId,
+            double gameSeconds)
+    {
+        var promises = promisor.Promises?.ToList() ?? [];
+        var index = promises.FindIndex(value =>
+            value.Id == promiseId &&
+            value.Status == CommitmentStatus.Active &&
+            value.Kind == VillagerPromiseKind.GiveItem &&
+            value.PromiseeId == promisee.Id);
+        if (index < 0) return (promisor, promisee);
+        var promise = promises[index];
+        var progress = Math.Min(
+            promise.TargetQuantity, promise.Progress + 1);
+        var fulfilled = progress >= promise.TargetQuantity;
+        promises[index] = promise with
+        {
+            Progress = progress,
+            Status = fulfilled
+                ? CommitmentStatus.Fulfilled
+                : CommitmentStatus.Active
+        };
+        promisor = AddMemory(
+            promisor with { Promises = promises },
+            "favor-delivered",
+            promisee.Id,
+            gameSeconds,
+            $"Delivered {ItemCatalog.Get(promise.ItemId!).Name} to {promisee.Name}.",
+            fulfilled ? 12 : 5);
+        if (!fulfilled) return (promisor, promisee);
+        promisee = AddRelationshipOutcome(
+            promisee, promisor.Id, CommitmentStatus.Fulfilled);
+        promisee = AddMemory(
+            promisee,
+            "favor-completed",
+            promisor.Id,
+            gameSeconds,
+            $"{promisor.Name} kept a promise to bring {ItemCatalog.Get(promise.ItemId!).Name}.",
+            20);
+        return (promisor, promisee);
+    }
+
+    private static VillagerState AddRelationshipOutcome(
+        VillagerState state,
+        string actorId,
+        CommitmentStatus outcome)
+    {
+        var relationships = state.Relationships?.ToList() ?? [];
+        var index = relationships.FindIndex(value =>
+            value.CharacterId == actorId);
+        var existing = index >= 0
+            ? relationships[index]
+            : new VillagerRelationship(actorId, default);
+        var updated = existing with
+        {
+            State = ApplyOutcome(existing.State, outcome)
+        };
+        if (index >= 0) relationships[index] = updated;
+        else relationships.Add(updated);
+        return state with { Relationships = relationships };
+    }
+
+    private static VillagerState AddMemory(
+        VillagerState state,
+        string kind,
+        string subjectId,
+        double gameSeconds,
+        string summary,
+        int sentiment)
+    {
+        var memories = state.Memories?.ToList() ?? [];
+        memories.Add(new(
+            Guid.NewGuid(), kind, subjectId, null, 1,
+            gameSeconds, sentiment, summary));
+        if (memories.Count > VillagerSimulation.MaximumMemories)
+            memories.RemoveRange(
+                0, memories.Count - VillagerSimulation.MaximumMemories);
+        return state with { Memories = memories };
+    }
+
     private static Guid StableId(
         string ownerId,
         string purpose,

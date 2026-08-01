@@ -1758,6 +1758,46 @@ Require(
         default,
         CommitmentStatus.Broken).Trust < 0,
     "expired promises must become broken commitments with negative social consequences");
+var favorAcceptance = VillagerCommitmentService.TryAccept(
+    villagerSpawnA[0],
+    villagerSpawnA[1].Id,
+    VillagerPromiseKind.GiveItem,
+    ItemIds.Sticks,
+    quantity: 2,
+    gameSeconds: 400);
+var favorPromisor = VillagerCommitmentService.AddPromise(
+    villagerSpawnA[0], favorAcceptance.Promise!);
+var favorPromisee = villagerSpawnA[1];
+(favorPromisor, favorPromisee) =
+    VillagerCommitmentService.CompleteDelivery(
+        favorPromisor,
+        favorPromisee,
+        favorAcceptance.Promise!.Id,
+        gameSeconds: 410);
+Require(
+    favorPromisor.Promises?.Single() is
+        { Progress: 1, Status: CommitmentStatus.Active } &&
+    favorPromisee.Relationships is null,
+    "partial favor delivery must retain the promise without awarding completion gratitude early");
+(favorPromisor, favorPromisee) =
+    VillagerCommitmentService.CompleteDelivery(
+        favorPromisor,
+        favorPromisee,
+        favorAcceptance.Promise.Id,
+        gameSeconds: 420);
+Require(
+    favorPromisor.Promises?.Single() is
+        { Progress: 2, Status: CommitmentStatus.Fulfilled } &&
+    favorPromisor.Memories?.Any(memory =>
+        memory.Kind == "favor-delivered" &&
+        memory.SubjectId == favorPromisee.Id) == true &&
+    favorPromisee.Memories?.Any(memory =>
+        memory.Kind == "favor-completed" &&
+        memory.SubjectId == favorPromisor.Id) == true &&
+    favorPromisee.Relationships?.Single(value =>
+        value.CharacterId == favorPromisor.Id).State is
+        { Trust: > 0, Respect: > 0, Gratitude: > 0 },
+    "completed favors must persist delivery, fulfillment, gratitude, trust, and respect for both actors");
 var commitmentBenchmark =
     System.Diagnostics.Stopwatch.StartNew();
 for (var index = 0; index < 100_000; index++)

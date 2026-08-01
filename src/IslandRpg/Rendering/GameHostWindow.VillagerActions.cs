@@ -29,7 +29,7 @@ internal sealed partial class GameHostWindow
             TryVillagerPlaceOrTendCampfire(index, villager) ||
             TryVillagerTakeCampfireFuel(index, villager) ||
             TryVillagerDropRequestedItem(index, villager) ||
-            TryVillagerFulfilGift(index, villager))
+            TryVillagerFulfilGift(index, villager, tier))
             return true;
         return false;
     }
@@ -990,7 +990,10 @@ internal sealed partial class GameHostWindow
             StringComparer.OrdinalIgnoreCase);
     }
 
-    private bool TryVillagerFulfilGift(int index, VillagerState villager)
+    private bool TryVillagerFulfilGift(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier)
     {
         var promise = villager.Promises?.FirstOrDefault(value =>
             value.Status == CommitmentStatus.Active &&
@@ -1006,7 +1009,15 @@ internal sealed partial class GameHostWindow
             new(receiver.PositionX, receiver.PositionY));
         if (distance > VillagerSimulation.InteractionRange *
                        VillagerSimulation.InteractionRange)
-            return false;
+        {
+            MoveVillagerForCapability(
+                index,
+                villager,
+                tier,
+                new(receiver.PositionX, receiver.PositionY),
+                VillagerNeed.Social);
+            return true;
+        }
         var slot = Array.FindIndex(
             villager.Inventory, value => value == promise.ItemId);
         if (!ActorActionService.TryTransfer(
@@ -1017,14 +1028,28 @@ internal sealed partial class GameHostWindow
                 out var destination,
                 out var itemId))
             return false;
-        _villagers[index] = villager with { Inventory = source };
-        _villagers[receiverIndex] = VillagerSimulation.RecordGift(
+        var deliveredPromisor = villager with { Inventory = source };
+        var deliveredReceiver = VillagerSimulation.RecordGift(
             receiver,
             villager.Id,
             villager.Name,
             Guid.NewGuid(),
             itemId!,
             _worldGameSeconds) with { Inventory = destination };
+        (deliveredPromisor, deliveredReceiver) =
+            VillagerCommitmentService.CompleteDelivery(
+                deliveredPromisor,
+                deliveredReceiver,
+                promise.Id,
+                _worldGameSeconds);
+        _villagers[index] = deliveredPromisor;
+        _villagers[receiverIndex] = deliveredReceiver;
+        ObserveLog("favor_completed", villager.Id, new
+        {
+            PromiseId = promise.Id,
+            PromiseeId = receiver.Id,
+            ItemId = itemId
+        });
         _villagersDirty = true;
         return true;
     }
