@@ -335,6 +335,12 @@ internal sealed partial class GameHostWindow : GameWindow
         new SpriteFrame?[ItemSpriteSheetCatalog.PersonalGoals.CellCount];
     private readonly SpriteFrame?[] _personalGoalItemShadowFrames =
         new SpriteFrame?[ItemSpriteSheetCatalog.PersonalGoals.CellCount];
+    private readonly int[] _cropTextures =
+        new int[ItemSpriteSheetCatalog.Crops.CellCount];
+    private readonly SpriteFrame?[] _cropFrames =
+        new SpriteFrame?[ItemSpriteSheetCatalog.Crops.CellCount];
+    private readonly SpriteFrame?[] _cropShadowFrames =
+        new SpriteFrame?[ItemSpriteSheetCatalog.Crops.CellCount];
     private readonly int[] _stoneToolTextures = new int[14];
     private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[14];
     private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[14];
@@ -4655,6 +4661,7 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.AdvancedToolSprite) ||
             item.HasTag(ItemTag.FishingNetUpgradeSprite) ||
             item.HasTag(ItemTag.PersonalGoalSprite) ||
+            item.HasTag(ItemTag.CropSprite) ||
             item.HasTag(ItemTag.Fish) ||
             item.HasTag(ItemTag.FibreNetSprite) ||
             item.HasTag(ItemTag.PlaceableObject))
@@ -4715,6 +4722,11 @@ internal sealed partial class GameHostWindow : GameWindow
             return item.SpriteCell is { } goalCell &&
                    (uint)goalCell < (uint)_personalGoalItemTextures.Length
                 ? _personalGoalItemTextures[goalCell]
+                : 0;
+        if (item.HasTag(ItemTag.CropSprite))
+            return item.SpriteCell is { } cropCell &&
+                   (uint)cropCell < (uint)_cropTextures.Length
+                ? _cropTextures[cropCell]
                 : 0;
         if (item.HasTag(ItemTag.CoastalSprite))
             return item.SpriteCell is { } coastalCell &&
@@ -4785,6 +4797,9 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.HasTag(ItemTag.PersonalGoalSprite) &&
             (uint)cell < (uint)_personalGoalItemFrames.Length)
             return _personalGoalItemFrames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.CropSprite) &&
+            (uint)cell < (uint)_cropFrames.Length)
+            return _cropFrames[cell] ?? WoodcuttingItemsFrame;
         if (item.HasTag(ItemTag.CoastalSprite) &&
             (uint)cell < (uint)_coastalSprites.Frames.Length)
             return _coastalSprites.Frames[cell] ?? WoodcuttingItemsFrame;
@@ -4821,6 +4836,7 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.AdvancedToolSprite) ||
             item.HasTag(ItemTag.FishingNetUpgradeSprite) ||
             item.HasTag(ItemTag.PersonalGoalSprite) ||
+            item.HasTag(ItemTag.CropSprite) ||
             item.HasTag(ItemTag.SupplementalSprite) ||
             item.HasTag(ItemTag.NaturalMaterial) ||
             item.HasTag(ItemTag.Fish) ||
@@ -6585,6 +6601,9 @@ internal sealed partial class GameHostWindow : GameWindow
             _personalGoalItemFrames,
             _personalGoalItemShadowFrames,
             _personalGoalItemTextures);
+        LoadHorizontalItemSheet(
+            ItemSpriteSheetCatalog.Crops.FileName,
+            _cropFrames, _cropShadowFrames, _cropTextures);
         var stoneToolSheetPath = Path.Combine(
             AppContext.BaseDirectory, "Resources", "Images",
             "stone-tools-items.png");
@@ -7153,6 +7172,13 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_personalGoalItemShadowFrames[cell] is { } shadowFrame)
                 Place(PersonalGoalAtlasKey(cell, true), null, shadowFrame);
         }
+        for (var cell = 0; cell < _cropFrames.Length; cell++)
+        {
+            if (_cropFrames[cell] is { } itemFrame)
+                Place(CropAtlasKey(cell, false), null, itemFrame);
+            if (_cropShadowFrames[cell] is { } shadowFrame)
+                Place(CropAtlasKey(cell, true), null, shadowFrame);
+        }
         for (var cell = 0; cell < _stoneToolFrames.Length; cell++)
         {
             if (_stoneToolFrames[cell] is { } itemFrame)
@@ -7291,6 +7317,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static string PersonalGoalAtlasKey(int cell, bool shadow) =>
         shadow ? $"PERSONAL_GOAL_SHADOW#{cell}" : $"PERSONAL_GOAL#{cell}";
+
+    private static string CropAtlasKey(int cell, bool shadow) =>
+        shadow ? $"CROP_SHADOW#{cell}" : $"CROP#{cell}";
 
     private static string StoneToolAtlasKey(int cell, bool shadow) =>
         shadow ? $"STONE_TOOL_SHADOW#{cell}" : $"STONE_TOOL#{cell}";

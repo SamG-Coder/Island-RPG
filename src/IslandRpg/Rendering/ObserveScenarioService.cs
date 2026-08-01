@@ -10,13 +10,19 @@ internal static class ObserveScenarioService
     public const string DesertSurplus = "desert-surplus";
     public const string DesertKnifeConflict = "desert-knife-conflict";
     public const string IslandResourceTrio = "island-resource-trio";
+    public const string IslandFuturesTrio = "island-futures-trio";
 
     public static bool IsSupported(string value) =>
         value is Default or DesertSurplus or DesertKnifeConflict or
-            IslandResourceTrio;
+            IslandResourceTrio or IslandFuturesTrio;
 
     public static int RequiredVillagerCount(string scenario) =>
-        scenario == IslandResourceTrio ? 3 : 2;
+        scenario switch
+        {
+            IslandResourceTrio => 3,
+            IslandFuturesTrio => 3,
+            _ => 2
+        };
 
     public static IReadOnlyList<VillagerState> Configure(
         string scenario,
@@ -31,6 +37,8 @@ internal static class ObserveScenarioService
         if (scenario == Default) return villagers;
         if (scenario == IslandResourceTrio)
             return ConfigureIslandResourceTrio(seed, villagers);
+        if (scenario == IslandFuturesTrio)
+            return ConfigureIslandFuturesTrio(seed, villagers);
         if (scenario is not (DesertSurplus or DesertKnifeConflict) ||
             villagers.Count != 2)
             throw new InvalidOperationException(
@@ -65,6 +73,55 @@ internal static class ObserveScenarioService
                 Hunger = scenario == DesertKnifeConflict ? 8 : 70,
                 Boldness = scenario == DesertKnifeConflict
                     ? .82f : villagers[1].Boldness
+            }
+        ];
+    }
+
+    private static IReadOnlyList<VillagerState> ConfigureIslandFuturesTrio(
+        long seed,
+        IReadOnlyList<VillagerState> villagers)
+    {
+        var positions = FindIslandTrio(seed);
+        var farmer = PlayerInventory.CreateStartingInventory();
+        farmer[0] = ItemIds.GatheringBasket;
+        farmer[1] = ItemIds.WildGrainSeeds;
+        farmer[2] = ItemIds.BeanSeeds;
+        farmer[3] = ItemIds.RootSeeds;
+        farmer[4] = ItemIds.CookedMinnows;
+        farmer[5] = ItemIds.CookedMinnows;
+        var woodworker = PlayerInventory.CreateStartingInventory();
+        woodworker[0] = ItemIds.StoneAxe;
+        var crafter = PlayerInventory.CreateStartingInventory();
+        crafter[0] = ItemIds.StoneKnife;
+        crafter[1] = ItemIds.StoneHammer;
+        crafter[2] = ItemIds.StonePickaxe;
+        crafter[3] = ItemIds.StoneShovel;
+        crafter[4] = ItemIds.PortableTorch;
+        return
+        [
+            villagers[0] with
+            {
+                PositionX = positions.FoodHolder.X,
+                PositionY = positions.FoodHolder.Y,
+                Inventory = farmer,
+                Hunger = 52,
+                Boldness = .35f
+            },
+            villagers[1] with
+            {
+                PositionX = positions.AxeHolder.X,
+                PositionY = positions.AxeHolder.Y,
+                Inventory = woodworker,
+                Hunger = 47,
+                Boldness = .55f
+            },
+            villagers[2] with
+            {
+                PositionX = positions.KnifeHolder.X,
+                PositionY = positions.KnifeHolder.Y,
+                Inventory = crafter,
+                Hunger = 42,
+                Boldness = .7f
             }
         ];
     }
@@ -124,6 +181,7 @@ internal static class ObserveScenarioService
         throw new InvalidOperationException(
             $"No walkable island trio was found within {maximumRadius} tiles.");
     }
+
 
     public static (Vector2 FoodHolder, Vector2 KnifeHolder)
         FindDesertPair(long seed, int maximumRadius = 2048)

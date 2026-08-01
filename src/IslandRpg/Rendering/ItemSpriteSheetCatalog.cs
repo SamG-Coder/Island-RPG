@@ -22,4 +22,6 @@ internal static class ItemSpriteSheetCatalog
 
     public static readonly ItemSpriteSheetDefinition PersonalGoals =
         new("personal-goals-items.png", 10, Columns: 5);
+    public static readonly ItemSpriteSheetDefinition Crops =
+        new("planted-crops.png", 3);
 }

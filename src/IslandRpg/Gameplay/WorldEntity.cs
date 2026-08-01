@@ -34,6 +34,11 @@ internal enum EntityAction
 
 internal static class EntityActionLifecycle
 {
+    public const int DirectionCount = 5;
+
+    public static int FramesPerDirection(int totalFrameCount) =>
+        Math.Max(1, totalFrameCount / DirectionCount);
+
     public static bool CompletesAfterAnimation(EntityAction action) =>
         action is EntityAction.Attack or EntityAction.Work or
             EntityAction.Gather or EntityAction.Dig or

@@ -12,7 +12,8 @@ internal sealed partial class GameHostWindow
         NpcBrainIntent intent,
         Func<NpcActionResult> interaction,
         double recoveryGameSeconds,
-        string? reservationKey = null)
+        string? reservationKey = null,
+        Func<bool>? targetAvailable = null)
     {
         if (!_npcController.TryBegin(
                 villager.Id,
@@ -21,7 +22,8 @@ internal sealed partial class GameHostWindow
                 reservationKey is null
                     ? null
                     : () => _villagerWork.ReleaseTarget(
-                        reservationKey, villager.Id)))
+                        reservationKey, villager.Id),
+                targetAvailable))
             return false;
         _villagers[index] = villager with
         {
@@ -134,7 +136,7 @@ internal sealed partial class GameHostWindow
                 FarmingExperience = FarmingSkill.AwardExperience(
                     villager.FarmingExperience,
                     FarmingSkill.PlantingExperience).Experience,
-                Action = EntityAction.Work,
+                Action = EntityAction.Idle,
                 ActionTime = 0,
                 NextDecisionGameSeconds = _worldGameSeconds +
                     VillagerSimulation.NearbyDecisionSeconds
@@ -192,17 +194,19 @@ internal sealed partial class GameHostWindow
         _villagers[index] = villager with
         {
             Inventory = contributorInventory,
-            Action = EntityAction.Work,
+            Action = EntityAction.Idle,
             ActionTime = 0
         };
         _villagers[builderIndex] = builder with
         {
             Inventory = builderInventory,
-            Action = EntityAction.Work,
+            Action = EntityAction.Idle,
             ActionTime = 0,
             NextDecisionGameSeconds = _worldGameSeconds
         };
         _villagersDirty = true;
+        _completedProjectContributions.Add(ProjectContributionKey(
+            assignment.ProjectItemId, villager.Id, itemId!));
         ObserveLog("settlement_contribution_delivered", villager.Id, new
         {
             BuilderId = builder.Id,
@@ -779,7 +783,10 @@ internal sealed partial class GameHostWindow
                 return new(intent, true);
             },
             VillagerSimulation.NearbyDecisionSeconds,
-            reservationKey);
+            reservationKey,
+            () => actionGpu.Chunk.TreeInstances.Any(value =>
+                value.Id == treeId &&
+                value.State == TreeLifecycleState.Standing));
     }
 
     private bool TryVillagerMine(

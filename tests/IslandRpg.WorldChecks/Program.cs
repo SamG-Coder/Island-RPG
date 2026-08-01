@@ -377,6 +377,8 @@ Require(VillagerSimulation.RecordAttack(
 Require(EntityActionLifecycle.HasCompletedAnimation(
         EntityAction.Gather, 1, 5, .2f),
     "NPCs and players must share action-animation completion semantics");
+Require(EntityActionLifecycle.FramesPerDirection(75) == 15,
+    "NPC action completion must use one facing cycle rather than all directional textures");
 var npcController = new NpcController();
 var impactCount = 0;
 var gatherIntent = new NpcBrainIntent(
@@ -401,18 +403,30 @@ Require(impactCount == 0 &&
     "NPC world interaction must wait for the action impact frame");
 npcController.Advance("npc-controller-check", EntityAction.Gather, .55, 1);
 Require(impactCount == 1 &&
-        npcController.Phase("npc-controller-check") == NpcActionPhase.Recovering,
-    "NPC world interaction must run exactly once at the impact frame");
+        !npcController.IsBusy("npc-controller-check"),
+    "NPC world interaction must finish at the impact frame instead of holding a stale animation");
 npcController.Advance("npc-controller-check", EntityAction.Gather, .9, 1);
 Require(impactCount == 1,
-    "NPC world interaction must not repeat during animation recovery");
-npcController.Advance("npc-controller-check", EntityAction.Gather, 1, 1);
-Require(!npcController.IsBusy("npc-controller-check") &&
-        npcController.TryDequeueResult(out var controlledActorId,
+    "NPC world interaction must not repeat after completion");
+Require(npcController.TryDequeueResult(out var controlledActorId,
             out var controlledResult) &&
         controlledActorId == "npc-controller-check" &&
         controlledResult.Succeeded,
     "NPC controller must return the interaction result to the brain queue");
+var targetStillAvailable = true;
+var validationController = new NpcController();
+Require(validationController.TryBegin(
+        "validated-npc", gatherIntent,
+        () => new(gatherIntent, true),
+        targetAvailable: () => targetStillAvailable),
+    "NPC controller must accept a live target validator");
+targetStillAvailable = false;
+validationController.Advance("validated-npc", EntityAction.Gather, .1, 1);
+Require(!validationController.IsBusy("validated-npc") &&
+        validationController.TryDequeueResult(
+            out _, out var unavailableResult) &&
+        unavailableResult.Reason == "target_unavailable",
+    "NPC actions must cancel immediately when their world target disappears");
 var interruptedController = new NpcController();
 var cancellationCount = 0;
 Require(interruptedController.TryBegin(
@@ -1362,6 +1376,8 @@ Require(
         ObserveScenarioService.DesertSurplus) == 2 &&
     ObserveModePolicy.RequiredVillagerCount(
         ObserveScenarioService.IslandResourceTrio) == 3 &&
+    ObserveModePolicy.RequiredVillagerCount(
+        ObserveScenarioService.IslandFuturesTrio) == 3 &&
     !ObserveModePolicy.ObserverParticipatesInSimulation,
     "Observe CLI configuration must request exactly two villagers and exclude the hidden observer");
 var acceleratedHunger = VillagerSimulation.CatchUp(
@@ -1708,6 +1724,31 @@ Require(
             Vector2.Distance(position, other))).All(distance =>
                 distance is >= 1 and <= 1.5f),
     "island resource trio scenarios must place three nearby survivors on land with exactly two fish, one axe, and one knife");
+var islandFuturesTrio = ObserveScenarioService.Configure(
+    ObserveScenarioService.IslandFuturesTrio,
+    2187,
+    villagerSpawnA);
+Require(
+    ObserveScenarioService.IsSupported(
+        ObserveScenarioService.IslandFuturesTrio) &&
+    islandFuturesTrio.Count == 3 &&
+    islandFuturesTrio[0].Inventory.Contains(ItemIds.GatheringBasket) &&
+    islandFuturesTrio[0].Inventory.Contains(ItemIds.WildGrainSeeds) &&
+    islandFuturesTrio[0].Inventory.Contains(ItemIds.BeanSeeds) &&
+    islandFuturesTrio[0].Inventory.Contains(ItemIds.RootSeeds) &&
+    VillagerSimulation.CountFood(islandFuturesTrio[0].Inventory) == 2 &&
+    islandFuturesTrio[1].Inventory.Contains(ItemIds.StoneAxe) &&
+    islandFuturesTrio[2].Inventory.Contains(ItemIds.StoneKnife) &&
+    islandFuturesTrio[2].Inventory.Contains(ItemIds.StoneHammer) &&
+    islandFuturesTrio[2].Inventory.Contains(ItemIds.StonePickaxe) &&
+    islandFuturesTrio[2].Inventory.Contains(ItemIds.StoneShovel) &&
+    islandFuturesTrio[2].Inventory.Contains(ItemIds.PortableTorch) &&
+    islandFuturesTrio.All(value => WorldLevelNavigation.IsWalkable(
+        2187,
+        (int)MathF.Floor(value.PositionX),
+        (int)MathF.Floor(value.PositionY),
+        (int)WorldLevel.Overworld)),
+    "island futures scenarios must start three nearby specialists with crops, scarce food, tools, and cave equipment");
 var observeFocus = ObserveModePolicy.Focus(
     [
         villagerSpawnA[0] with { PositionX = 10, PositionY = 20 },
@@ -6639,6 +6680,8 @@ var plantedCrop = CropService.Plant(
     ItemIds.BeanSeeds, 4.5f, 8.5f, 1_000, "farmer");
 Require(
     CropService.IsCrop(plantedCrop) &&
+    plantedCrop.ItemId == ItemIds.BeanCrop &&
+    ItemCatalog.Get(plantedCrop.ItemId).HasTag(ItemTag.CropSprite) &&
     !CropService.IsReady(
         plantedCrop, 1_000 + CropService.GrowthGameSeconds - 1) &&
     CropService.IsReady(
@@ -6646,6 +6689,18 @@ Require(
     plantedCrop.FuelItemId == ItemIds.Beans &&
     CropService.HarvestCount([ItemIds.GatheringBasket]) == 3,
     "crop planting must persist its harvest, maturity time, owner and basket yield");
+var cropSheetPath = Path.Combine(
+    AppContext.BaseDirectory, "Resources", "Images",
+    ItemSpriteSheetCatalog.Crops.FileName);
+using (var cropSheetStream = File.OpenRead(cropSheetPath))
+{
+    var cropSheet = ImageResult.FromStream(
+        cropSheetStream, ColorComponents.RedGreenBlueAlpha);
+    Require(
+        cropSheet.Width == ItemSpriteSheetCatalog.Crops.Width &&
+        cropSheet.Height == ItemSpriteSheetCatalog.Crops.Height,
+        "planted crops must use the converted three-cell world sprite sheet");
+}
 
 Console.WriteLine(
     $"World checks passed: {macroBiomes.Count} macro biomes, deterministic generation, seams, " +

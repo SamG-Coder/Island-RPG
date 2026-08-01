@@ -33,11 +33,13 @@ internal sealed class NpcController
     private sealed class ControlledAction(
         NpcBrainIntent intent,
         Func<NpcActionResult> interaction,
-        Action? cancelled)
+        Action? cancelled,
+        Func<bool>? targetAvailable)
     {
         public NpcBrainIntent Intent { get; } = intent;
         public Func<NpcActionResult> Interaction { get; } = interaction;
         public Action? Cancelled { get; } = cancelled;
+        public Func<bool>? TargetAvailable { get; } = targetAvailable;
         public NpcActionPhase Phase { get; set; } = NpcActionPhase.Queued;
     }
 
@@ -56,10 +58,12 @@ internal sealed class NpcController
         string actorId,
         NpcBrainIntent intent,
         Func<NpcActionResult> interaction,
-        Action? cancelled = null)
+        Action? cancelled = null,
+        Func<bool>? targetAvailable = null)
     {
         if (IsBusy(actorId)) return false;
-        var action = new ControlledAction(intent, interaction, cancelled)
+        var action = new ControlledAction(
+            intent, interaction, cancelled, targetAvailable)
         {
             Phase = NpcActionPhase.Acting
         };
@@ -86,6 +90,15 @@ internal sealed class NpcController
             Promote(actorId);
             return;
         }
+        if (action.TargetAvailable?.Invoke() == false)
+        {
+            action.Cancelled?.Invoke();
+            _results.Enqueue((actorId,
+                new(action.Intent, false, "target_unavailable")));
+            _active.Remove(actorId);
+            Promote(actorId);
+            return;
+        }
 
         if (action.Phase == NpcActionPhase.Acting &&
             actionTime >= animationDuration * DefaultImpactFraction)
@@ -100,7 +113,9 @@ internal sealed class NpcController
                 result = new(action.Intent, false, exception.Message);
             }
             _results.Enqueue((actorId, result));
-            action.Phase = NpcActionPhase.Recovering;
+            _active.Remove(actorId);
+            Promote(actorId);
+            return;
         }
 
         if (actionTime >= animationDuration)

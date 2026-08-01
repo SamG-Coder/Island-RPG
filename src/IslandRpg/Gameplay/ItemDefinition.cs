@@ -1,7 +1,7 @@
 namespace IslandRpg.Gameplay;
 
 [Flags]
-internal enum ItemTag
+internal enum ItemTag : long
 {
     None = 0,
     Axe = 1 << 0,
@@ -35,7 +35,8 @@ internal enum ItemTag
     AdvancedToolSprite = 1 << 28,
     FishingNetUpgradeSprite = 1 << 29,
     Weapon = 1 << 30,
-    PersonalGoalSprite = 1 << 31
+    PersonalGoalSprite = 1L << 31,
+    CropSprite = 1L << 32
 }
 
 internal sealed record ItemDefinition(
@@ -108,6 +109,9 @@ internal static class ItemIds
     public const string GatheringBasket = "gathering_basket";
     public const string Pearl = "pearl";
     public const string StoneSickle = "stone_sickle";
+    public const string WildGrainCrop = "wild_grain_crop";
+    public const string BeanCrop = "bean_crop";
+    public const string RootCrop = "root_crop";
     public const string SharpenedRock = "sharpened_rock";
     public const string Coal = "coal";
     public const string TinOre = "tin_ore";
@@ -388,6 +392,12 @@ internal static class ItemCatalog
                 Tags: ItemTag.Tool | ItemTag.Sickle |
                       ItemTag.PersonalGoalSprite,
                 FarmingPower: 1),
+            [ItemIds.WildGrainCrop] = Crop(
+                ItemIds.WildGrainCrop, "wild grain crop", 0),
+            [ItemIds.BeanCrop] = Crop(
+                ItemIds.BeanCrop, "bean crop", 1),
+            [ItemIds.RootCrop] = Crop(
+                ItemIds.RootCrop, "root crop", 2),
             [ItemIds.SharpenedRock] = new(
                 ItemIds.SharpenedRock, "sharpened rock", "Sharp rock",
                 "A stone deliberately knapped to form a sharp edge.", 8,
@@ -665,6 +675,12 @@ internal static class ItemCatalog
         new(
             id, name, caption, examine, cell,
             Tags: tags | ItemTag.PersonalGoalSprite);
+
+    private static ItemDefinition Crop(string id, string name, int cell) =>
+        new(
+            id, name, name,
+            "A planted crop growing in worked soil.", cell,
+            Droppable: false, Tags: ItemTag.CropSprite);
 
     private static ItemDefinition MetalTool(
         string id, string name, string caption, string examine, int cell,

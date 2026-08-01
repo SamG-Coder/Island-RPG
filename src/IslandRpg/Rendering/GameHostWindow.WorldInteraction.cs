@@ -968,6 +968,27 @@ internal sealed partial class GameHostWindow
             return true;
         }
 
+        if (item.HasTag(ItemTag.CropSprite))
+        {
+            if ((uint)cell >= (uint)_cropFrames.Length ||
+                _cropFrames[cell] is not { } cropFrame ||
+                _cropTextures[cell] == 0)
+            {
+                frame = null!;
+                texture = 0;
+                atlasKey = "";
+                shadowKey = null;
+                return false;
+            }
+            frame = cropFrame;
+            texture = _cropTextures[cell];
+            atlasKey = CropAtlasKey(cell, false);
+            shadowKey = _cropShadowFrames[cell] is null
+                ? null
+                : CropAtlasKey(cell, true);
+            return true;
+        }
+
         if (item.HasTag(ItemTag.CoastalSprite))
         {
             if ((uint)cell >= (uint)_coastalSprites.GroundFrames.Length ||

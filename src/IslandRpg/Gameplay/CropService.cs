@@ -18,6 +18,18 @@ internal static class CropService
         return itemId.Length > 0;
     }
 
+    public static bool TryCropItem(string seedItemId, out string itemId)
+    {
+        itemId = seedItemId switch
+        {
+            ItemIds.WildGrainSeeds => ItemIds.WildGrainCrop,
+            ItemIds.BeanSeeds => ItemIds.BeanCrop,
+            ItemIds.RootSeeds => ItemIds.RootCrop,
+            _ => ""
+        };
+        return itemId.Length > 0;
+    }
+
     public static WorldGroundObject Plant(
         string seedItemId, float x, float y, double gameSeconds,
         string? ownerId = null)
@@ -25,16 +37,22 @@ internal static class CropService
         if (!TryHarvestItem(seedItemId, out var harvestItemId))
             throw new ArgumentException("The item is not a crop seed.",
                 nameof(seedItemId));
+        _ = TryCropItem(seedItemId, out var cropItemId);
         return new(
-            Guid.NewGuid(), seedItemId, x, y,
+            Guid.NewGuid(), cropItemId, x, y,
             FuelItemId: harvestItemId,
             LitUntilGameSeconds: gameSeconds + GrowthGameSeconds,
             OwnerId: ownerId);
     }
 
     public static bool IsCrop(WorldGroundObject value) =>
-        TryHarvestItem(value.ItemId, out var harvest) &&
-        value.FuelItemId == harvest;
+        value.ItemId switch
+        {
+            ItemIds.WildGrainCrop => value.FuelItemId == ItemIds.WildGrain,
+            ItemIds.BeanCrop => value.FuelItemId == ItemIds.Beans,
+            ItemIds.RootCrop => value.FuelItemId == ItemIds.EdibleRoots,
+            _ => false
+        };
 
     public static bool IsReady(
         WorldGroundObject value, double gameSeconds) =>

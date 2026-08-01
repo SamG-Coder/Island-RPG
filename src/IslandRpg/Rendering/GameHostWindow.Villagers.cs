@@ -12,6 +12,7 @@ internal sealed partial class GameHostWindow
     private string? _settlementProjectKey;
     private readonly Dictionary<string, double>
         _nextProjectAccountability = [];
+    private readonly HashSet<string> _completedProjectContributions = [];
     private readonly List<VillagerState> _villagers = [];
     private readonly List<VillagerWorldObject>
         _villagerWorldObjects = [];
@@ -459,6 +460,8 @@ internal sealed partial class GameHostWindow
         var key = plan is null
             ? null
             : $"{plan.ProjectItemId}:{plan.BuilderId}";
+        if (key != _settlementProjectKey)
+            _completedProjectContributions.Clear();
         for (var index = 0; index < _villagers.Count; index++)
         {
             var villager = _villagers[index];
@@ -466,7 +469,14 @@ internal sealed partial class GameHostWindow
             if (plan is not null)
             {
                 var requirements = plan.Assignments.GetValueOrDefault(
-                    villager.Id, []);
+                    villager.Id, [])
+                    .Where(requirement =>
+                        !_completedProjectContributions.Contains(
+                            ProjectContributionKey(
+                                plan.ProjectItemId,
+                                villager.Id,
+                                requirement.ItemId)))
+                    .ToArray();
                 var assignedAt = villager.ProjectAssignment is
                     { } existing &&
                     existing.ProjectItemId == plan.ProjectItemId &&
@@ -501,9 +511,14 @@ internal sealed partial class GameHostWindow
             });
     }
 
+    private static string ProjectContributionKey(
+        string projectItemId, string contributorId, string itemId) =>
+        $"{projectItemId}:{contributorId}:{itemId}";
+
     private void TryPromptStalledProject()
     {
         var stalled = _villagers.FirstOrDefault(value =>
+            value.ProjectAssignment?.BuilderId != value.Id &&
             VillagerSettlementProjectService.IsStalled(
                 value, _worldGameSeconds));
         if (stalled is null ||
@@ -1135,7 +1150,7 @@ internal sealed partial class GameHostWindow
                         .Experience
                     : villager.FarmingExperience,
                 Need = VillagerNeed.Explore,
-                Action = EntityAction.Gather,
+                Action = EntityAction.Idle,
                 ActionTime = 0,
                 GoalObjectId = null,
                 NextDecisionGameSeconds =
@@ -1459,7 +1474,8 @@ internal sealed partial class GameHostWindow
             !EntityActionLifecycle.HasCompletedAnimation(
                 villager.Action,
                 villager.ActionTime,
-                animation.Textures.Length,
+                EntityActionLifecycle.FramesPerDirection(
+                    animation.Textures.Length),
                 animation.SecondsPerFrame /
                 VillagerFatigueService.WorkEffectiveness(
                     villager.Energy)))
@@ -1472,11 +1488,13 @@ internal sealed partial class GameHostWindow
         if (!_entityAnimations.TryGetValue(
                 (villager.Gender, villager.Action), out var animation))
             return villager;
+        var wasBusy = _npcController.IsBusy(villager.Id);
         _npcController.Advance(
             villager.Id,
             villager.Action,
             villager.ActionTime,
-            animation.Textures.Length * animation.SecondsPerFrame /
+            EntityActionLifecycle.FramesPerDirection(
+                animation.Textures.Length) * animation.SecondsPerFrame /
             VillagerFatigueService.WorkEffectiveness(villager.Energy));
         while (_npcController.TryDequeueResult(
                    out var actorId, out var result))
@@ -1495,7 +1513,12 @@ internal sealed partial class GameHostWindow
         }
         var refreshedIndex = _villagers.FindIndex(value =>
             value.Id == villager.Id);
-        return refreshedIndex >= 0 ? _villagers[refreshedIndex] : villager;
+        var refreshed = refreshedIndex >= 0
+            ? _villagers[refreshedIndex]
+            : villager;
+        return wasBusy && !_npcController.IsBusy(villager.Id)
+            ? VillagerSimulation.CompleteAction(refreshed)
+            : refreshed;
     }
 
     private void DrawVillagerSpeechBubble(

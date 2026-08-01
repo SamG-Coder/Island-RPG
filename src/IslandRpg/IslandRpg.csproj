@@ -40,6 +40,7 @@
     <Content Include="Resources\Images\metal-tools-progression.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\fishing-net-upgrades.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\personal-goals-items.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\planted-crops.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\stone-shovel-item.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\rope-item.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\dirt-item.png" CopyToOutputDirectory="PreserveNewest" />
