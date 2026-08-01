@@ -580,7 +580,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 "VMMIN_TN", "VFMIN_TN",
                 "VMFOR_TN", "VFFOR_TN",
                 "VMFIS_TN", "VFFIS_TN", "MOVEX_NN", "SHIPF5SF",
-                "COGXX_A0", "SHIP_3BF"
+                "COGX_1H", "SHIP_3BF"
             })
                 names.Add(name);
         }

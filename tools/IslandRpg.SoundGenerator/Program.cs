@@ -13,19 +13,21 @@ for (var index = 0; index < samples.Length; index++)
     var noise = random.NextDouble() * 2 - 1;
     low += (noise - low) * .018;
     slower += (low - slower) * .0035;
-    var firstCrack = Math.Exp(-time * 12) *
-                     Math.Sin(time * 2 * Math.PI * 47);
+    var attack = Math.Min(1, time * 1800);
+    var firstCrack = attack * Math.Exp(-time * 19) *
+                     (Math.Sin(time * 2 * Math.PI * 47) * .55 +
+                      noise * .45);
     var secondCrackTime = Math.Max(0, time - .23);
     var secondCrack = time >= .23
         ? Math.Exp(-secondCrackTime * 18) *
           Math.Sin(secondCrackTime * 2 * Math.PI * 71)
         : 0;
-    var rumbleEnvelope = Math.Exp(-time * .72) *
-                         Math.Min(1, time * 8);
+    var rumbleEnvelope = Math.Exp(-time * .58) *
+                         Math.Min(1, time * 5);
     var distantRoll = Math.Sin(time * 2 * Math.PI * 22 +
                                Math.Sin(time * 5.7) * 2.4);
-    var value = (firstCrack * .34 + secondCrack * .22 +
-                 slower * 8.5 + distantRoll * .12) * rumbleEnvelope;
+    var rollingBody = (slower * 9.5 + distantRoll * .11) * rumbleEnvelope;
+    var value = firstCrack * .78 + secondCrack * .26 + rollingBody;
     value = Math.Tanh(value * 1.35) * .88;
     samples[index] = (short)Math.Clamp(
         (int)Math.Round(value * short.MaxValue),

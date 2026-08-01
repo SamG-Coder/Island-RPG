@@ -70,6 +70,9 @@ Require(
     cinematicDirector.CurrentZoom(cinematicShot.Value) < 1.4f &&
     cinematicDirector.CurrentZoom(cinematicShot.Value) > .8f,
     "cinematic directors must emit ordered cues once and interpolate reusable camera shots");
+Require(
+    Math.Abs(GameHostWindow.AnchoredSpriteTop(610, 320, 282, 320) - 328) < .001,
+    "cinematic ships must place their authored hull anchor on the ocean waterline");
 var settlementFourSource = VillagerSimulation.CreateInitial(
     2187, Vector2.Zero, population: 4);
 var settlementFourConfigured = ObserveScenarioService.Configure(

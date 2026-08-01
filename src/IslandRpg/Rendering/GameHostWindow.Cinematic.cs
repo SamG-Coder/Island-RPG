@@ -7,6 +7,9 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
+    private const float OpeningSeaEndsAt = 14f;
+    private const float OpeningCinematicEndsAt = 21f;
+    private const float CinematicWaterlineRatio = .61f;
     private CinematicSceneDirector? _sceneDirector;
     private bool _openingRevealInitialized;
     private SpriteFrame? _cinematicShipFrame;
@@ -18,19 +21,22 @@ internal sealed partial class GameHostWindow
     private void StartOpeningCinematic()
     {
         _sceneDirector = new(
-            duration: 14,
+            duration: OpeningCinematicEndsAt,
             shots:
             [
-                new(0, 8, SceneCameraTarget.Actor,
+                new(0, OpeningSeaEndsAt, SceneCameraTarget.Actor,
                     Vector2.Zero, 1, 1, "wreck-ship"),
-                new(8, 14, SceneCameraTarget.Player,
+                new(OpeningSeaEndsAt, OpeningCinematicEndsAt,
+                    SceneCameraTarget.Player,
                     Vector2.Zero, 1.45f, .8f)
             ],
             cues:
             [
-                new(1.7, "thunder"),
-                new(4.4, "thunder"),
-                new(6.65, "ship-impact")
+                // Light arrives first. These delays place the strikes at
+                // roughly 250 m and 500 m using 3 seconds per kilometre.
+                new(2.75, "thunder"),
+                new(7.8, "thunder"),
+                new(12.75, "ship-impact")
             ]);
         _openingRevealInitialized = false;
         _sceneDirector.Start();
@@ -44,7 +50,7 @@ internal sealed partial class GameHostWindow
         const int anchorY = 282;
         var hull = _catalog!.Graphics.Values.FirstOrDefault(value =>
             value.Definition.Name.Equals(
-                "COGXX_A0", StringComparison.OrdinalIgnoreCase));
+                "COGX_1H", StringComparison.OrdinalIgnoreCase));
         var sails = _catalog.Graphics.Values.FirstOrDefault(value =>
             value.Definition.Name.Equals(
                 "SHIP_3BF", StringComparison.OrdinalIgnoreCase));
@@ -75,7 +81,7 @@ internal sealed partial class GameHostWindow
         while (_sceneDirector.TryDequeueCue(out var cue))
             if (cue == "thunder") PlayGeneratedSound("thunder.wav");
             else PlaySoundCue(cue);
-        if (_sceneDirector.Time >= 8 && _player is not null)
+        if (_sceneDirector.Time >= OpeningSeaEndsAt && _player is not null)
         {
             if (!_openingRevealInitialized)
             {
@@ -102,7 +108,7 @@ internal sealed partial class GameHostWindow
         var width = Math.Max(1, ClientSize.X);
         var height = Math.Max(1, ClientSize.Y);
         var time = (float)director.Time;
-        if (time < 8.5f)
+        if (time < OpeningSeaEndsAt + .5f)
         {
             DrawUiColor(new(0, 0, width, height),
                 new(.018f, .035f, .075f, 1));
@@ -119,10 +125,10 @@ internal sealed partial class GameHostWindow
         var fade = time switch
         {
             < .7f => 1 - time / .7f,
-            >= 6.7f and < 8.2f =>
-                Math.Clamp((time - 6.7f) / .8f, 0, 1),
-            >= 8.2f and < 10f =>
-                1 - Math.Clamp((time - 8.2f) / 1.8f, 0, 1),
+            >= 12.8f and < 14.2f =>
+                Math.Clamp((time - 12.8f) / 1.0f, 0, 1),
+            >= 14.2f and < 16.4f =>
+                1 - Math.Clamp((time - 14.2f) / 2.2f, 0, 1),
             _ => 0
         };
         if (fade > 0)
@@ -150,8 +156,7 @@ internal sealed partial class GameHostWindow
             _cinematicOceanProgram, "time"), time);
         GL.Uniform1(GL.GetUniformLocation(
             _cinematicOceanProgram, "lightning"),
-            Math.Max(LightningFlash(time, 1.7f),
-                LightningFlash(time, 4.4f)));
+            CinematicLightningAt(time));
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2DArray, _terrainArray);
         GL.ActiveTexture(TextureUnit.Texture1);
@@ -171,13 +176,15 @@ internal sealed partial class GameHostWindow
         if (_cinematicShipFrame is not { } frame ||
             _cinematicShipTexture == 0) return;
         var progress = CinematicSceneDirector.SmoothStep(
-            Math.Clamp(time / 7f, 0, 1));
+            Math.Clamp(time / 13f, 0, 1));
         var shipWidth = Math.Min(width * .42f, frame.Width * 2.8f);
         var shipHeight = shipWidth * frame.Height /
             Math.Max(1, frame.Width);
         var x = -shipWidth + (width * .82f + shipWidth) * progress;
-        var y = height * .48f - shipHeight * .62f +
-                MathF.Sin(time * 2.2f) * 5;
+        var waterline = height * CinematicWaterlineRatio;
+        var y = AnchoredSpriteTop(
+                    waterline, shipHeight, frame.HotspotY, frame.Height) +
+                MathF.Sin(time * 1.35f) * 3;
         DrawUiSprite(frame, _cinematicShipTexture,
             new(x, y, shipWidth, shipHeight),
             brightness: -.18f,
@@ -187,7 +194,7 @@ internal sealed partial class GameHostWindow
 
     private void RenderSeaRock(int width, int height, float time)
     {
-        if (time < 4.8f) return;
+        if (time < 9.5f) return;
         var x = width * .79f;
         var water = height * .61f;
         DrawUiColor(new(x + 22, water - 64, 18, 64),
@@ -198,31 +205,49 @@ internal sealed partial class GameHostWindow
             new(.055f, .065f, .07f, 1));
     }
 
-    private static float LightningFlash(float time, float at)
+    internal static float AnchoredSpriteTop(
+        float waterline, float displayHeight, int hotspotY, int frameHeight) =>
+        waterline - displayHeight * hotspotY / Math.Max(1, frameHeight);
+
+    private static float LightningStroke(float time, float at, float width,
+        float strength)
     {
         var distance = MathF.Abs(time - at);
-        if (distance > .16f) return 0;
-        return (1 - distance / .16f) * .72f;
+        if (distance > width) return 0;
+        return (1 - distance / width) * strength;
+    }
+
+    private static float CinematicLightningAt(float time)
+    {
+        // Real flashes commonly contain several return strokes. The narrow
+        // white pulse carries the brightness; its smaller echoes create the
+        // irregular flicker perceived by the eye.
+        var first = Math.Max(
+            LightningStroke(time, 2f, .045f, .98f),
+            Math.Max(LightningStroke(time, 2.09f, .035f, .58f),
+                LightningStroke(time, 2.18f, .05f, .34f)));
+        var second = Math.Max(
+            LightningStroke(time, 6.3f, .055f, 1f),
+            LightningStroke(time, 6.42f, .045f, .48f));
+        return Math.Max(first, second);
     }
 
     private float CinematicLightningIntensity()
     {
         if (_sceneDirector is not { Active: true } director) return 0;
         var time = (float)director.Time;
-        return Math.Max(
-            LightningFlash(time, 1.7f),
-            LightningFlash(time, 4.4f));
+        return CinematicLightningAt(time);
     }
 
     private float? CinematicDarknessOverride()
     {
         if (_sceneDirector is not { Active: true } director) return null;
-        if (director.Time < 10) return .9f;
+        if (director.Time < 16.4) return .9f;
         var morning = WorldLighting.Darkness(
             WorldTime.At(_worldGameSeconds).Daylight,
             _activeWorldLevel);
         var progress = CinematicSceneDirector.SmoothStep(
-            Math.Clamp((float)((director.Time - 10) / 4), 0, 1));
+            Math.Clamp((float)((director.Time - 16.4) / 4.6), 0, 1));
         return .9f + (morning - .9f) * progress;
     }
 

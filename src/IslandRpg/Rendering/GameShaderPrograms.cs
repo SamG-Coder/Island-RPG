@@ -16,14 +16,14 @@ internal static class GameShaderPrograms
             uniform float time;
             uniform float lightning;
             void main() {
-                vec2 flowA = vec2(time * 0.025, time * 0.008);
-                vec2 flowB = vec2(-time * 0.014, time * 0.019);
+                vec2 flowA = vec2(time * 0.016, time * 0.005);
+                vec2 flowB = vec2(-time * 0.009, time * 0.012);
                 vec2 n1 = texture(waterNormals,
                     vec3(uv * vec2(8.0, 5.0) + flowA, 0.0)).xy * 2.0 - 1.0;
                 vec2 n2 = texture(waterNormals,
                     vec3(uv * vec2(5.0, 8.0) + flowB, 1.0)).xy * 2.0 - 1.0;
                 vec2 waves = n1 * 0.65 + n2 * 0.35;
-                float swell = sin((uv.x * 19.0 + uv.y * 7.0) - time * 2.2) * 0.5 + 0.5;
+                float swell = sin((uv.x * 19.0 + uv.y * 7.0) - time * 1.35) * 0.5 + 0.5;
                 vec2 sampleUv = uv * vec2(7.0, 4.5) + waves * 0.045;
                 vec3 ageWater = texture(terrain, vec3(sampleUv, 0.0)).rgb;
                 float crest = smoothstep(0.64, 0.95,
@@ -32,6 +32,10 @@ internal static class GameShaderPrograms
                 night += vec3(0.08, 0.16, 0.22) * crest;
                 night += vec3(0.55, 0.66, 0.78) * lightning *
                     (0.35 + crest * 0.65);
+                float rainCell = fract((uv.x * 1.7 + uv.y) * 86.0 - time * 1.9);
+                float rainBand = step(0.965, rainCell) *
+                    step(fract(uv.x * 173.0 + time * 0.37), 0.42);
+                night += vec3(0.18, 0.24, 0.31) * rainBand * 0.24;
                 color = vec4(night, 1.0);
             }
             """;
