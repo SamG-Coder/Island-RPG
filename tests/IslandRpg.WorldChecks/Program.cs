@@ -3141,6 +3141,44 @@ Require(noviceMiningStrike.Hit && noviceMiningStrike.Damage > 0 &&
         !MiningSkill.Roll(0, .99f, 0, 1).Hit &&
         MiningSkill.HitChance(20) > MiningSkill.HitChance(1),
     "mining strikes must scale and retain a miss chance");
+var npcWoodcutStrike = ResourceStrikeService.Woodcut(
+    0, 100, 100, 1, 0, 0);
+var npcWoodcutMiss = ResourceStrikeService.Woodcut(
+    0, 100, 100, 1, 1, 0);
+Require(
+    npcWoodcutStrike.Hit && npcWoodcutStrike.Damage > 0 &&
+    npcWoodcutStrike.Health == 100 - npcWoodcutStrike.Damage &&
+    npcWoodcutStrike.Experience.Gained == npcWoodcutStrike.Damage &&
+    !npcWoodcutMiss.Hit && npcWoodcutMiss.Damage == 0 &&
+    npcWoodcutMiss.Health == 100 &&
+    npcWoodcutMiss.Experience.Gained == 0,
+    "actor woodcutting strikes must atomically apply damage and skill XP only on a hit");
+var npcMiningFinish = ResourceStrikeService.Mine(
+    0, 1, 1, 25, 0, 0);
+Require(
+    npcMiningFinish.Hit && npcMiningFinish.Depleted &&
+    npcMiningFinish.Damage == 1 && npcMiningFinish.Health == 0 &&
+    npcMiningFinish.Experience.Gained == 26,
+    "actor mining strikes must clamp damage and award completion XP on depletion");
+var actionMemoryVillager = new VillagerState(
+    "skill-memory", "Rin", EntityGender.Female, 0, 0,
+    0, 0, 0, 100, 100, PlayerInventory.CreateStartingInventory());
+actionMemoryVillager = VillagerActionMemoryService.RecordResourceStrike(
+    actionMemoryVillager, "mining", "coal:1", "coal seam",
+    npcMiningFinish, 120);
+var firstSkillMemory = actionMemoryVillager.Memories!.Single(memory =>
+    memory.Kind == VillagerActionMemoryService.SkillActionKind);
+actionMemoryVillager = VillagerActionMemoryService.RecordResourceStrike(
+    actionMemoryVillager, "mining", "coal:1", "coal seam",
+    ResourceStrikeService.Mine(26, 10, 1, 25, 1, 0), 180);
+var refreshedSkillMemory = actionMemoryVillager.Memories!.Single(memory =>
+    memory.Kind == VillagerActionMemoryService.SkillActionKind);
+Require(
+    refreshedSkillMemory.EventId == firstSkillMemory.EventId &&
+    refreshedSkillMemory.GameSeconds == 180 &&
+    refreshedSkillMemory.Summary!.Contains("missed") &&
+    refreshedSkillMemory.ObservedValue == 26,
+    "NPC skill feedback must persist in bounded memory and consolidate repeated actions");
 Require(
     MiningNodeCatalog.TryGet(
         new(0, 0, UndergroundResourceGenerator.Coal, 0,

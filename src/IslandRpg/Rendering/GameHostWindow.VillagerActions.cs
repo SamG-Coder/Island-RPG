@@ -1,4 +1,5 @@
 using IslandRpg.Gameplay;
+using IslandRpg.Rendering.Ui;
 using IslandRpg.World;
 using OpenTK.Mathematics;
 
@@ -729,7 +730,6 @@ internal sealed partial class GameHostWindow
                 index, villager, tier, target, VillagerNeed.Safe);
             return true;
         }
-        var damage = Math.Max(1, axe.WoodcuttingPower);
         var actionGpu = best.Value.Gpu;
         var treeId = best.Value.Tree.Id;
         var intent = new NpcBrainIntent(
@@ -749,11 +749,25 @@ internal sealed partial class GameHostWindow
                 }
                 var actor = _villagers[actorIndex];
                 var tree = actionGpu.Chunk.TreeInstances[treeIndex];
-                var health = Math.Max(0, tree.Health - damage);
-                var felled = health == 0;
+                var strike = ResourceStrikeService.Woodcut(
+                    actor.WoodcuttingExperience,
+                    tree.Health,
+                    tree.MaxHealth,
+                    axe.WoodcuttingPower,
+                    Random.Shared.NextSingle(),
+                    Random.Shared.NextSingle());
+                if (!strike.Hit)
+                {
+                    _villagers[actorIndex] = LogVillagerResourceStrike(
+                        actor, "woodcutting", treeId.ToString(),
+                        TreeDisplayName(tree.TreeType), strike);
+                    _villagersDirty = true;
+                    return new(intent, true);
+                }
+                var felled = strike.Depleted;
                 actionGpu.Chunk.TreeInstances[treeIndex] = tree with
                 {
-                    Health = health,
+                    Health = strike.Health,
                     State = felled
                         ? TreeLifecycleState.Stump
                         : TreeLifecycleState.Standing
@@ -762,16 +776,14 @@ internal sealed partial class GameHostWindow
                 if (felled)
                     inventory = ActorActionService.Gather(
                         inventory, ItemIds.Logs, 1).Inventory;
-                var xp = SkillService.AwardExperience(
-                    actor.WoodcuttingExperience,
-                    damage + (felled
-                        ? Math.Max(10, tree.MaxHealth / 5)
-                        : 0));
                 var updated = actor with
                 {
                     Inventory = inventory,
-                    WoodcuttingExperience = xp.Experience
+                    WoodcuttingExperience = strike.Experience.Experience
                 };
+                updated = LogVillagerResourceStrike(
+                    updated, "woodcutting", treeId.ToString(),
+                    TreeDisplayName(tree.TreeType), strike);
                 _villagers[actorIndex] = felled
                     ? VillagerCommitmentService.RecordAcquiredItem(
                         updated, ItemIds.Logs)
@@ -837,7 +849,6 @@ internal sealed partial class GameHostWindow
                 index, villager, tier, target, VillagerNeed.Explore);
             return true;
         }
-        var damage = Math.Max(1, pickaxe.MiningPower);
         var actionGpu = best.Value.Gpu;
         var nodeKey = best.Value.Cached.StableKey;
         var nodeDefinition = best.Value.Definition;
@@ -858,40 +869,88 @@ internal sealed partial class GameHostWindow
                 var actor = _villagers[actorIndex];
                 var state = actionGpu.Chunk.MiningStates.FirstOrDefault(value =>
                     value.StableKey == nodeKey);
-                var health = Math.Max(0,
-                    (state?.Health ?? nodeDefinition.MaximumHealth) - damage);
+                var strike = ResourceStrikeService.Mine(
+                    actor.MiningExperience,
+                    state?.Health ?? nodeDefinition.MaximumHealth,
+                    pickaxe.MiningPower,
+                    nodeDefinition.CompletionExperience,
+                    Random.Shared.NextSingle(),
+                    Random.Shared.NextSingle());
+                if (!strike.Hit)
+                {
+                    _villagers[actorIndex] = LogVillagerResourceStrike(
+                        actor, "mining", nodeKey,
+                        nodeDefinition.DisplayName, strike);
+                    _villagersDirty = true;
+                    return new(intent, true);
+                }
                 actionGpu.Chunk.MiningStates.RemoveAll(value =>
                     value.StableKey == nodeKey);
                 actionGpu.Chunk.MiningStates.Add(new(
-                    nodeKey, health, nodeDefinition.MaximumHealth));
+                    nodeKey, strike.Health, nodeDefinition.MaximumHealth));
                 var inventory = actor.Inventory;
-                if (health == 0 && nodeDefinition.RewardItemId is { } reward)
+                if (strike.Depleted && nodeDefinition.RewardItemId is { } reward)
                     inventory = ActorActionService.Gather(
                         inventory, reward, 1).Inventory;
-                var xp = SkillService.AwardExperience(
-                    actor.MiningExperience,
-                    damage + (health == 0
-                        ? nodeDefinition.CompletionExperience
-                        : 0));
                 var updated = actor with
                 {
                     Inventory = inventory,
-                    MiningExperience = xp.Experience
+                    MiningExperience = strike.Experience.Experience
                 };
+                updated = LogVillagerResourceStrike(
+                    updated, "mining", nodeKey,
+                    nodeDefinition.DisplayName, strike);
                 _villagers[actorIndex] =
-                    health == 0 &&
+                    strike.Depleted &&
                     nodeDefinition.RewardItemId is { } acquiredReward
                         ? VillagerCommitmentService.RecordAcquiredItem(
                             updated, acquiredReward)
                         : updated;
                 QueueChunkSave(actionGpu.Chunk);
-                if (health == 0)
+                if (strike.Depleted)
                     _villagerWork.ReleaseTarget(reservationKey, villager.Id);
                 _villagersDirty = true;
                 return new(intent, true);
             },
             VillagerSimulation.NearbyDecisionSeconds,
             reservationKey);
+    }
+
+    private VillagerState LogVillagerResourceStrike(
+        VillagerState villager,
+        string skill,
+        string targetId,
+        string target,
+        ResourceStrikeResult strike)
+    {
+        villager = VillagerActionMemoryService.RecordResourceStrike(
+            villager, skill, targetId, target, strike,
+            _worldGameSeconds);
+        var skillName = char.ToUpperInvariant(skill[0]) + skill[1..];
+        _chatUi.AddMessage(
+            strike.Hit
+                ? $"{villager.Name} hits the {target.ToLowerInvariant()} for " +
+                  $"{strike.Damage} damage ({strike.Health} health); " +
+                  $"{villager.Name} gains {strike.Experience.Gained} " +
+                  $"{skillName} XP."
+                : $"{villager.Name} misses the {target.ToLowerInvariant()} " +
+                  $"({skillName} level {strike.Experience.Level}).",
+            strike.Hit ? ChatMessageStyle.Experience : ChatMessageStyle.Miss);
+        ObserveLog("resource_strike", villager.Id, new
+        {
+            ActorId = villager.Id,
+            ActorName = villager.Name,
+            Skill = skill,
+            Target = target,
+            strike.Hit,
+            strike.Damage,
+            RemainingHealth = strike.Health,
+            ExperienceGained = strike.Experience.Gained,
+            SkillExperience = strike.Experience.Experience,
+            SkillLevel = strike.Experience.Level,
+            strike.Depleted
+        });
+        return villager;
     }
 
     private bool TryVillagerPlaceOrTendCampfire(
