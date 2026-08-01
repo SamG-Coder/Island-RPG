@@ -127,6 +127,14 @@ internal sealed partial class GameHostWindow
         for (var index = 0; index < _villagers.Count; index++)
         {
             var previous = _villagers[index];
+            var energized = VillagerFatigueService.Advance(
+                previous, _worldGameSeconds);
+            if (!ReferenceEquals(previous, energized))
+            {
+                previous = energized;
+                _villagers[index] = previous;
+                _villagersDirty = true;
+            }
             if (previous.Health <= 0)
             {
                 _npcController.Cancel(previous.Id);
@@ -159,6 +167,16 @@ internal sealed partial class GameHostWindow
                 _villagers[index] = previous;
                 _villagerWork.ReleaseActor(previous.Id);
                 _villagersDirty = true;
+            }
+            if (VillagerFatigueService.ShouldRest(previous))
+            {
+                _npcController.Cancel(previous.Id);
+                _villagerWork.ReleaseActor(previous.Id);
+                previous = VillagerFatigueService.BeginRest(
+                    previous, _worldGameSeconds);
+                _villagers[index] = previous;
+                _villagersDirty = true;
+                continue;
             }
             if (previous.Activity is
                     VillagerActivity.Conversing or
@@ -1212,7 +1230,9 @@ internal sealed partial class GameHostWindow
                 villager.Action,
                 villager.ActionTime,
                 animation.Textures.Length,
-                animation.SecondsPerFrame))
+                animation.SecondsPerFrame /
+                VillagerFatigueService.WorkEffectiveness(
+                    villager.Energy)))
             return villager;
         return VillagerSimulation.CompleteAction(villager);
     }
@@ -1226,7 +1246,8 @@ internal sealed partial class GameHostWindow
             villager.Id,
             villager.Action,
             villager.ActionTime,
-            animation.Textures.Length * animation.SecondsPerFrame);
+            animation.Textures.Length * animation.SecondsPerFrame /
+            VillagerFatigueService.WorkEffectiveness(villager.Energy));
         while (_npcController.TryDequeueResult(
                    out var actorId, out var result))
         {

@@ -27,6 +27,7 @@ internal enum VillagerActivity : byte
     Socializing,
     SeekingResource,
     Exploring,
+    Resting,
     Blocked
 }
 
@@ -166,7 +167,9 @@ internal sealed record VillagerState(
     double ConflictExpiresGameSeconds = 0,
     float StarvationDamageRemainder = 0,
     IReadOnlyList<VillagerFailedTarget>? FailedTargets = null,
-    IReadOnlyList<Guid>? ObservedOwnershipIncidentIds = null);
+    IReadOnlyList<Guid>? ObservedOwnershipIncidentIds = null,
+    float Energy = VillagerFatigueService.MaximumEnergy,
+    double? LastEnergyGameSeconds = null);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,
@@ -310,7 +313,8 @@ internal static class VillagerSimulation
                 AwakenedGameSeconds: gameSeconds,
                 Goals: VillagerCommitmentService.InitialGoals(
                     id, gameSeconds),
-                SurvivalTimeScaleVersion: 1);
+                SurvivalTimeScaleVersion: 1,
+                LastEnergyGameSeconds: gameSeconds);
         }
         return result;
     }
@@ -392,6 +396,7 @@ internal static class VillagerSimulation
                 SurvivalTimeScaleVersion = 1
             };
         }
+        state = VillagerFatigueService.Advance(state, gameSeconds);
         var elapsed = Math.Max(
             0, gameSeconds - state.LastSimulatedGameSeconds);
         if (elapsed <= 0) return state;
@@ -442,6 +447,8 @@ internal static class VillagerSimulation
                     return new(VillagerNeed.Food, null, slot);
             return new(VillagerNeed.Food, null);
         }
+        if (VillagerFatigueService.ShouldRest(state))
+            return new(VillagerNeed.Idle, null);
         var socialRoll = Unit(Hash(
             StableHash(state.Id),
             (int)Math.Floor(gameSeconds / 10),
@@ -475,6 +482,7 @@ internal static class VillagerSimulation
         double gameSeconds = 0)
     {
         if (state.Health <= 0) return default;
+        if (VillagerFatigueService.ShouldRest(state)) return default;
         var position = new Vector2(
             state.PositionX, state.PositionY);
         var carried = PlayerInventory.Count(state.Inventory);
@@ -1570,6 +1578,7 @@ internal static class VillagerSimulation
         var distance = displacement.Length;
         var maximumStep =
             ActorMovementService.BaseMoveSpeed *
+            VillagerFatigueService.MovementEffectiveness(state.Energy) *
             Math.Clamp(terrainSpeedMultiplier, .35f, 1f) *
             elapsed;
         if (distance <= Math.Max(.03f, maximumStep))

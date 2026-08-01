@@ -29,7 +29,9 @@ internal sealed partial class GameHostWindow
             ActionTime = 0,
             TargetX = null,
             TargetY = null,
-            NextDecisionGameSeconds = _worldGameSeconds + recoveryGameSeconds,
+            NextDecisionGameSeconds = _worldGameSeconds +
+                VillagerFatigueService.AdjustedWorkDuration(
+                    recoveryGameSeconds, villager.Energy),
             LastSimulatedGameSeconds = _worldGameSeconds
         };
         _villagersDirty = true;
@@ -45,6 +47,7 @@ internal sealed partial class GameHostWindow
         VillagerSimulationTier tier)
     {
         if (villager.Health <= 0) return false;
+        if (VillagerFatigueService.ShouldRest(villager)) return false;
         if (TryVillagerResolveNpcConflict(index, villager, tier) ||
             TryVillagerDefendSelf(index, villager, tier) ||
             TryVillagerEat(index, villager, tier) ||
@@ -385,7 +388,9 @@ internal sealed partial class GameHostWindow
                 Action = EntityAction.Work,
                 ActionTime = 0,
                 NextDecisionGameSeconds = _worldGameSeconds +
-                    VillagerSimulation.NearbyDecisionSeconds,
+                    VillagerFatigueService.AdjustedWorkDuration(
+                        VillagerSimulation.NearbyDecisionSeconds,
+                        villager.Energy),
                 LastSimulatedGameSeconds = _worldGameSeconds
             };
             ObserveLog("world_action_succeeded", villager.Id, new

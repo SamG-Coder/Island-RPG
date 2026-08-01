@@ -116,9 +116,98 @@ var longCatchUp = VillagerSimulation.CatchUp(
 Require(longCatchUp.LastSimulatedGameSeconds == 48 * 60 * 60 &&
         Math.Abs(longCatchUp.WellFedSeconds - 1120) < .01f,
     "villager catch-up must process elapsed time beyond the first game day");
+foreach (var tiringAction in new[]
+         {
+             EntityAction.Move, EntityAction.Gather, EntityAction.Work,
+             EntityAction.Attack, EntityAction.Dig, EntityAction.Mine,
+             EntityAction.Fish
+         })
+{
+    var tiredWorker = VillagerFatigueService.Advance(
+        advancedVillagers[0] with
+        {
+            Action = tiringAction,
+            Energy = 100,
+            LastEnergyGameSeconds = 0
+        },
+        10 * VillagerSimulation.GameSecondsPerRealSecond);
+    Require(tiredWorker.Energy < 100,
+        $"{tiringAction} must consume villager energy");
+}
+var restedVillager = VillagerFatigueService.Advance(
+    advancedVillagers[0] with
+    {
+        Action = EntityAction.Idle,
+        Activity = VillagerActivity.Resting,
+        Energy = 10,
+        LastEnergyGameSeconds = 0
+    },
+    10 * VillagerSimulation.GameSecondsPerRealSecond);
+Require(restedVillager.Energy == 25,
+    "resting must recover villager energy using elapsed real time");
+var exhaustedWorker = advancedVillagers[0] with
+{
+    Hunger = 80,
+    Energy = 10,
+    Action = EntityAction.Work,
+    Activity = VillagerActivity.SeekingResource,
+    TargetX = 4,
+    TargetY = 5,
+    GoalObjectId = Guid.NewGuid()
+};
+var restingWorker = VillagerFatigueService.BeginRest(exhaustedWorker, 100);
+Require(VillagerFatigueService.ShouldRest(exhaustedWorker) &&
+        restingWorker.Activity == VillagerActivity.Resting &&
+        restingWorker.Action == EntityAction.Idle &&
+        restingWorker.TargetX is null &&
+        restingWorker.TargetY is null &&
+        restingWorker.GoalObjectId is null,
+    "low energy must interrupt non-essential work and clear its target");
+var hungryExhausted = exhaustedWorker with { Hunger = 30 };
+var endangeredExhausted = exhaustedWorker with { Health = 20 };
+var fightingExhausted = exhaustedWorker with
+{
+    ConflictIntent = VillagerConflictIntent.Defend
+};
+Require(!VillagerFatigueService.ShouldRest(hungryExhausted) &&
+        VillagerSimulation.Decide(hungryExhausted, Vector2.Zero, 100).Need ==
+            VillagerNeed.Food &&
+        !VillagerFatigueService.ShouldRest(endangeredExhausted) &&
+        VillagerSimulation.Decide(endangeredExhausted, Vector2.Zero, 100).Need ==
+            VillagerNeed.Safe &&
+        !VillagerFatigueService.ShouldRest(fightingExhausted),
+    "hunger, immediate danger, and active conflict must override resting");
+var fatigueCatchUpStart = advancedVillagers[0] with
+{
+    Hunger = 100,
+    Energy = 100,
+    Action = EntityAction.Work,
+    LastSimulatedGameSeconds = 0,
+    LastEnergyGameSeconds = 0
+};
+var singleFatigueCatchUp = VillagerSimulation.CatchUp(
+    fatigueCatchUpStart, 600, hungerLossMultiplier: 0);
+var steppedFatigueCatchUp = fatigueCatchUpStart;
+for (var step = 1; step <= 10; step++)
+    steppedFatigueCatchUp = VillagerSimulation.CatchUp(
+        steppedFatigueCatchUp, step * 60, hungerLossMultiplier: 0);
+Require(Math.Abs(singleFatigueCatchUp.Energy -
+                 steppedFatigueCatchUp.Energy) < .001f &&
+        singleFatigueCatchUp.LastEnergyGameSeconds == 600 &&
+        steppedFatigueCatchUp.LastEnergyGameSeconds == 600,
+    "fatigue catch-up must match equivalent smaller simulation steps");
+Require(VillagerFatigueService.MovementEffectiveness(25) <
+            VillagerFatigueService.MovementEffectiveness(100) &&
+        VillagerFatigueService.WorkEffectiveness(25) <
+            VillagerFatigueService.WorkEffectiveness(100) &&
+        VillagerFatigueService.AdjustedWorkDuration(10, 25) >
+            VillagerFatigueService.AdjustedWorkDuration(10, 100),
+    "low energy must reduce movement speed and work effectiveness");
 var deadVillager = advancedVillagers[0] with
 {
     Health = 0,
+    Energy = 42,
+    LastEnergyGameSeconds = 0,
     Action = EntityAction.Move,
     TargetX = 9,
     TargetY = 9,
@@ -135,6 +224,10 @@ Require(immobileDeadVillager.Action == EntityAction.Die &&
         immobileDeadVillager.PositionY == deadVillager.PositionY &&
         immobileDeadVillager.TargetX is null,
     "dead villagers must not continue moving");
+var caughtUpDeadVillager = VillagerSimulation.CatchUp(
+    deadVillager, 600, hungerLossMultiplier: 0);
+Require(caughtUpDeadVillager.Energy == deadVillager.Energy,
+    "dead villagers must never gain or lose energy");
 Require(VillagerConflictService.DecideResponse(
             deadVillager, advancedVillagers[1], true).Intent ==
         VillagerConflictIntent.None,
@@ -6145,6 +6238,8 @@ try
             persistedPromise) with
         {
             FollowingActorId = player.Id,
+            Energy = 37.5f,
+            LastEnergyGameSeconds = 812,
             LastDeliberation = new(
                 "Helping build shelter benefits both of us.",
                 "accept",
@@ -6178,6 +6273,8 @@ try
         loadedVillagers[0].Promises?.Single().Id ==
             persistedPromise.Id &&
         loadedVillagers[0].FollowingActorId == player.Id &&
+        loadedVillagers[0].Energy == 37.5f &&
+        loadedVillagers[0].LastEnergyGameSeconds == 812 &&
         loadedVillagers[0].LastDeliberation is
         {
             Decision: "accept",
