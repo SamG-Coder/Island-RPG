@@ -51,18 +51,21 @@ internal static class GameShaderPrograms
             uniform sampler2DArray waterNormals;
             uniform float time;
             uniform float lightning;
+            uniform float cameraZoom;
             uniform vec2 cameraOffset;
             void main() {
+                vec2 cameraUv = (uv - vec2(.5)) /
+                    max(cameraZoom, .001) + vec2(.5);
                 vec2 flowA = vec2(time * 0.016, time * 0.005);
                 vec2 flowB = vec2(-time * 0.009, time * 0.012);
                 vec2 n1 = texture(waterNormals,
-                    vec3(uv * vec2(8.0, 5.0) + flowA, 0.0)).xy * 2.0 - 1.0;
+                    vec3(cameraUv * vec2(8.0, 5.0) + flowA, 0.0)).xy * 2.0 - 1.0;
                 vec2 n2 = texture(waterNormals,
-                    vec3(uv * vec2(5.0, 8.0) + flowB, 1.0)).xy * 2.0 - 1.0;
+                    vec3(cameraUv * vec2(5.0, 8.0) + flowB, 1.0)).xy * 2.0 - 1.0;
                 vec2 waves = n1 * 0.82 + n2 * 0.58;
                 float swell = sin((uv.x * 19.0 + uv.y * 7.0) - time * 1.35) * 0.5 + 0.5;
                 float crossSwell = sin((uv.x * -11.0 + uv.y * 17.0) - time * 1.08) * 0.5 + 0.5;
-                vec2 sampleUv = (uv + cameraOffset) * vec2(7.0, 4.5) + waves * 0.075;
+                vec2 sampleUv = (cameraUv + cameraOffset) * vec2(7.0, 4.5) + waves * 0.075;
                 vec3 ageWater = texture(terrain, vec3(sampleUv, 0.0)).rgb;
                 float wavePeak = length(waves) * 0.62 + swell * 0.38 + crossSwell * 0.22;
                 float crest = smoothstep(0.68, 0.94, wavePeak);

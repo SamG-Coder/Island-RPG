@@ -86,8 +86,36 @@ Require(
     GameHostWindow.ShipTrackedTravel(28) -
         GameHostWindow.ShipTrackedTravel(27) &&
     GameHostWindow.CreditOpacity(8, 7, 16) > .99f &&
-    GameHostWindow.CreditOpacity(16, 7, 16) == 0,
+    GameHostWindow.CreditOpacity(16, 7, 16) == 0 &&
+    GameHostWindow.CinematicShipScreenX(12.07f, 1280, 400) > 750 &&
+    GameHostWindow.CinematicShipScreenX(12.09f, 1280, 400) < -395 &&
+    GameHostWindow.CinematicSceneLoopFade(
+        12.083333f, 1280, 400) > .98f &&
+    GameHostWindow.CinematicSceneLoopFade(22, 1280, 400) == 0 &&
+    GameHostWindow.CinematicShipScreenX(24, 1280, 400) >
+        GameHostWindow.CinematicShipScreenX(22, 1280, 400),
     "wreck cinematics must keep ships afloat before impact and sink gradually afterwards");
+var seededStormA = GameHostWindow.BuildStormCues(new Random(1200));
+var seededStormB = GameHostWindow.BuildStormCues(new Random(1200));
+Require(
+    seededStormA.SequenceEqual(seededStormB) &&
+    seededStormA.Count(value => value.Name == "ship-impact") == 1 &&
+    seededStormA.Count(value => value.Name.StartsWith("thunder")) >= 6 &&
+    seededStormA.Any(value => value.Name == "thunder-flash") &&
+    Math.Abs(GameHostWindow.CinematicSeaZoom(31) - 1) < .001f &&
+    Math.Abs(GameHostWindow.CinematicSeaZoom(36) - 1.45f) < .001f &&
+    GameHostWindow.CinematicFireVisibility(33) == 1 &&
+    GameHostWindow.CinematicFireVisibility(36) == 0,
+    "opening storms must randomize reproducibly and push into the beach reveal zoom");
+var reusablePanCamera = new CinematicPanCamera();
+reusablePanCamera.Update(700, 1000, .1f);
+var reusablePanStarted = reusablePanCamera.Panning;
+for (var index = 0; index < 24; index++)
+    reusablePanCamera.Update(700, 1000, .1f);
+Require(
+    reusablePanStarted && !reusablePanCamera.Panning &&
+    Math.Abs(700 - reusablePanCamera.Offset - 200) < .01f,
+    "reusable cinematic pan cameras must restore their authored screen mark");
 var settlementFourSource = VillagerSimulation.CreateInitial(
     2187, Vector2.Zero, population: 4);
 var settlementFourConfigured = ObserveScenarioService.Configure(

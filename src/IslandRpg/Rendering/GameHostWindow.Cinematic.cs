@@ -22,13 +22,28 @@ internal sealed partial class GameHostWindow
     private int[] _cinematicSinkingTextures = [];
     private int _cinematicOceanProgram;
     private int _cinematicLightningProgram;
+    private double[] _cinematicLightningTimes = [];
     private readonly UiSpriteLight[] _cinematicShipLights =
-        new UiSpriteLight[4];
+        new UiSpriteLight[6];
+    private Vector3[] _hullFireAnchors =
+    [
+        // X/Y coordinates stay within the composite cog's visible hull band.
+        // Delay values spread fire outward from the lightning contact point.
+        new(.56f, .67f, 0),
+        new(.48f, .69f, .65f),
+        new(.64f, .70f, .95f),
+        new(.39f, .72f, 1.35f),
+        new(.72f, .73f, 1.7f)
+    ];
 
     private bool CinematicActive => _sceneDirector?.Active == true;
 
     private void StartOpeningCinematic()
     {
+        var stormCues = BuildStormCues(Random.Shared);
+        _cinematicLightningTimes = stormCues
+            .Where(value => value.Name == "thunder-flash")
+            .Select(value => value.At).ToArray();
         _sceneDirector = new(
             duration: OpeningCinematicEndsAt,
             shots:
@@ -39,17 +54,34 @@ internal sealed partial class GameHostWindow
                     SceneCameraTarget.Player,
                     Vector2.Zero, 1.45f, .8f)
             ],
-            cues:
-            [
-                // Light arrives first. These delays place the strikes at
-                // roughly 250 m and 500 m using 3 seconds per kilometre.
-                new(2.75, "thunder"),
-                new(7.8, "thunder"),
-                new(LightningStrikeAt, "ship-impact"),
-                new(18.8, "thunder")
-            ]);
+            cues: stormCues);
         _openingRevealInitialized = false;
         _sceneDirector.Start();
+    }
+
+    internal static SceneTimedCue[] BuildStormCues(Random random)
+    {
+        var cues = new List<SceneTimedCue>(16);
+        var at = 1.4 + random.NextDouble() * 2.4;
+        while (at < OpeningSeaEndsAt - 1)
+        {
+            if (Math.Abs(at - LightningStrikeAt) > 1.2)
+            {
+                var flash = cues.Count == 0 || random.NextDouble() < .55;
+                cues.Add(new(at, flash ? "thunder-flash" : "thunder"));
+                if (random.NextDouble() < .38)
+                    cues.Add(new(
+                        Math.Min(at + .12 + random.NextDouble() * .26,
+                            OpeningSeaEndsAt - .1),
+                        "thunder"));
+            }
+            at += 3.8 + random.NextDouble() * 2.3;
+        }
+        cues.Add(new(LightningStrikeAt, "ship-impact"));
+        cues.Add(new(
+            LightningStrikeAt + .6 + random.NextDouble() * .6,
+            "thunder"));
+        return cues.OrderBy(value => value.At).ToArray();
     }
 
     private void PrepareCinematicShip()
@@ -74,6 +106,9 @@ internal sealed partial class GameHostWindow
         var hullIndex = Math.Min(4, hull.Sprite.Frames.Count - 1);
         var sailIndex = Math.Min(4, sails.Sprite.Frames.Count - 1);
         var pixels = new byte[canvasWidth * canvasHeight * 4];
+        _hullFireAnchors = FindHullFireAnchors(
+            hull.Sprite.Frames[hullIndex], canvasWidth, canvasHeight,
+            anchorX, anchorY);
         CompositeFishingBoatLayer(
             sails.Sprite.Frames[sailIndex], pixels,
             canvasWidth, canvasHeight, anchorX, anchorY);
@@ -100,7 +135,8 @@ internal sealed partial class GameHostWindow
         if (_sceneDirector?.Active != true) return false;
         _sceneDirector.Advance(Math.Clamp(elapsed, 0, .1f));
         while (_sceneDirector.TryDequeueCue(out var cue))
-            if (cue == "thunder") PlayGeneratedSound("thunder.wav");
+            if (cue.StartsWith("thunder", StringComparison.Ordinal))
+                PlayGeneratedSound("thunder.wav");
             else PlaySoundCue(cue);
         if (_sceneDirector.Time >= OpeningSeaEndsAt && _player is not null)
         {
@@ -165,6 +201,15 @@ internal sealed partial class GameHostWindow
         DrawUiColor(new(0, 0, width, bar), new(0, 0, 0, 1));
         DrawUiColor(new(0, height - bar, width, bar), new(0, 0, 0, 1));
         RenderOpeningCredits(width, height, time, bar);
+        var loopFade = CinematicSceneLoopFade(
+            time, width,
+            _cinematicShipFrame is { } loopShip
+                ? Math.Min(width * .42f, loopShip.Width * 2.8f) *
+                  CinematicSeaZoom(time)
+                : width * .42f);
+        if (loopFade > 0)
+            DrawUiColor(new(0, 0, width, height),
+                new(0, 0, 0, loopFade));
     }
 
     private void RenderOpeningCredits(
@@ -200,6 +245,13 @@ internal sealed partial class GameHostWindow
         return Math.Min(fadeIn, fadeOut);
     }
 
+    internal static float CinematicSeaZoom(float time)
+    {
+        var progress = CinematicSceneDirector.SmoothStep(
+            Math.Clamp((time - 31f) / 5f, 0, 1));
+        return 1 + .45f * progress;
+    }
+
     private void RenderCinematicLightningStrike(
         int width, int height, float time)
     {
@@ -218,17 +270,45 @@ internal sealed partial class GameHostWindow
         GL.Uniform1(GL.GetUniformLocation(
             _cinematicLightningProgram, "aspect"),
             width / (float)Math.Max(1, height));
+        var strikeTarget = CinematicShipStrikeTarget(width, height, time);
         GL.Uniform2(GL.GetUniformLocation(
-            _cinematicLightningProgram, "target"), .56f, .59f);
+            _cinematicLightningProgram, "target"),
+            strikeTarget.X, strikeTarget.Y);
         Draw([
             -1, 1, 0, 0, -1, -1, 0, 1,
             1, -1, 1, 1, 1, 1, 1, 0
         ]);
     }
 
+    private Vector2 CinematicShipStrikeTarget(
+        int width, int height, float time)
+    {
+        if (_cinematicShipFrame is not { } frame)
+            return new(.5f, .6f);
+        var shipWidth = Math.Min(width * .42f, frame.Width * 2.8f) *
+                        CinematicSeaZoom(time);
+        var shipHeight = shipWidth * frame.Height /
+                         Math.Max(1, frame.Width);
+        var diagonal = (1 - CinematicSceneDirector.SmoothStep(
+            Math.Clamp(time / 16f, 0, 1))) * height * .065f;
+        var waterline = height * CinematicWaterlineRatio + diagonal;
+        var shipX = CinematicShipScreenX(time, width, shipWidth);
+        var shipY = AnchoredSpriteTop(
+                        waterline, shipHeight,
+                        frame.HotspotY, frame.Height) +
+                    shipHeight * .045f + SinkingOffset(time, shipHeight) +
+                    MathF.Sin(time * 1.35f) * 4;
+        var contact = _hullFireAnchors[0];
+        return new(
+            Math.Clamp((shipX + shipWidth * contact.X) /
+                       Math.Max(1, width), 0, 1),
+            Math.Clamp((shipY + shipHeight * contact.Y + 50) /
+                       Math.Max(1, height), 0, 1));
+    }
+
     private void RenderCinematicSea(int width, int height, float time)
     {
-        var horizon = height * .36f;
+        const float horizon = 0;
         if (_cinematicOceanProgram == 0) return;
         _fontRenderer?.Flush();
         _uiColorBatch.Flush();
@@ -243,8 +323,17 @@ internal sealed partial class GameHostWindow
         GL.Uniform1(GL.GetUniformLocation(
             _cinematicOceanProgram, "lightning"),
             CinematicLightningAt(time));
+        GL.Uniform1(GL.GetUniformLocation(
+            _cinematicOceanProgram, "cameraZoom"),
+            CinematicSeaZoom(time));
         var shake = CinematicCameraShake(time);
-        var oceanTravel = new Vector2(time * .018f, time * .003f);
+        var shipWidth = _cinematicShipFrame is { } ship
+            ? Math.Min(width * .42f, ship.Width * 2.8f) *
+              CinematicSeaZoom(time)
+            : width * .42f * CinematicSeaZoom(time);
+        var oceanTravel = new Vector2(
+            time * .018f,
+            time * .003f);
         GL.Uniform2(GL.GetUniformLocation(
             _cinematicOceanProgram, "cameraOffset"),
             oceanTravel.X + shake.X / Math.Max(1, width),
@@ -257,8 +346,6 @@ internal sealed partial class GameHostWindow
             -1, top, 0, 0,
             -1, -1, 0, 1,
             1, -1, 1, 1,
-            -1, top, 0, 0,
-            1, -1, 1, 1,
             1, top, 1, 0
         ]);
     }
@@ -267,17 +354,13 @@ internal sealed partial class GameHostWindow
     {
         if (_cinematicShipFrame is not { } frame ||
             _cinematicShipTexture == 0) return;
-        var shipWidth = Math.Min(width * .42f, frame.Width * 2.8f);
+        var shipWidth = Math.Min(width * .42f, frame.Width * 2.8f) *
+                        CinematicSeaZoom(time);
         var shipHeight = shipWidth * frame.Height /
             Math.Max(1, frame.Width);
-        // The ship enters the frame, then the virtual camera tracks it while
-        // the rock and ocean move relative to the vessel.
-        var entry = CinematicSceneDirector.SmoothStep(
-            Math.Clamp(time / 14f, 0, 1));
         var shake = CinematicCameraShake(time);
-        var trackedX = (width - shipWidth) * .48f +
-                       ShipTrackedTravel(time) * width;
-        var x = -shipWidth + (trackedX + shipWidth) * entry + shake.X;
+        var x = CinematicShipScreenX(
+            time, width, shipWidth) + shake.X;
         var diagonal = (1 - CinematicSceneDirector.SmoothStep(
             Math.Clamp(time / 16f, 0, 1))) * height * .065f;
         var waterline = height * CinematicWaterlineRatio + diagonal;
@@ -286,43 +369,48 @@ internal sealed partial class GameHostWindow
                     waterline, shipHeight, frame.HotspotY, frame.Height) +
                 shipHeight * .045f + sinking +
                 MathF.Sin(time * 1.35f) * 4 + shake.Y;
-        var fire = CinematicShipFire(time);
-        UpdateCinematicShipLights(time, fire);
+        var fire = CinematicShipFire(time) * CinematicFireVisibility(time);
+        UpdateCinematicShipLights(time, fire, 50 / Math.Max(1, shipHeight));
         var wreckProgress = Math.Clamp(
             (time - ShipDestructionAt) / 8f, 0, 1);
         var wreckBlend = CinematicSceneDirector.SmoothStep(
             Math.Clamp((time - ShipDestructionAt) / 1.1f, 0, 1));
-        DrawUiSprite(frame, _cinematicShipTexture,
-            new(x, y, shipWidth, shipHeight),
-            brightness: -.58f,
-            tint: new(.018f, .035f, .075f),
-            tintAmount: .64f,
-            sceneDarkness: .96f,
-            localLights: _cinematicShipLights,
-            drawOpacity: 1 - wreckBlend);
-        if (wreckBlend > 0 && _cinematicSinkingFrames.Length > 0)
+        var wreckComplete = wreckProgress >= 1;
+        if (!wreckComplete)
         {
-            var index = SinkingFrameIndex(
-                wreckProgress, _cinematicSinkingFrames.Length);
-            var wreck = _cinematicSinkingFrames[index];
-            var scale = shipWidth / frame.Width;
-            var anchorX = x + frame.HotspotX * scale;
-            var anchorY = y + frame.HotspotY * scale;
-            var wreckWidth = wreck.Width * scale;
-            var wreckHeight = wreck.Height * scale;
-            DrawUiSprite(wreck, _cinematicSinkingTextures[index],
-                new(anchorX - wreck.HotspotX * scale,
-                    anchorY - wreck.HotspotY * scale + sinking,
-                    wreckWidth, wreckHeight),
+            DrawUiSprite(frame, _cinematicShipTexture,
+                new(x, y, shipWidth, shipHeight),
                 brightness: -.58f,
-                tint: new(.018f, .035f, .075f), tintAmount: .64f,
-                drawOpacity: wreckBlend,
+                tint: new(.018f, .035f, .075f),
+                tintAmount: .64f,
                 sceneDarkness: .96f,
-                localLights: _cinematicShipLights);
+                localLights: _cinematicShipLights,
+                drawOpacity: 1 - wreckBlend);
+            if (wreckBlend > 0 && _cinematicSinkingFrames.Length > 0)
+            {
+                var index = SinkingFrameIndex(
+                    wreckProgress, _cinematicSinkingFrames.Length);
+                var wreck = _cinematicSinkingFrames[index];
+                var scale = shipWidth / frame.Width;
+                var anchorX = x + frame.HotspotX * scale;
+                var anchorY = y + frame.HotspotY * scale;
+                var wreckWidth = wreck.Width * scale;
+                var wreckHeight = wreck.Height * scale;
+                DrawUiSprite(wreck, _cinematicSinkingTextures[index],
+                    new(anchorX - wreck.HotspotX * scale,
+                        anchorY - wreck.HotspotY * scale + sinking,
+                        wreckWidth, wreckHeight),
+                    brightness: -.58f,
+                    tint: new(.018f, .035f, .075f), tintAmount: .64f,
+                    drawOpacity: wreckBlend,
+                    sceneDarkness: .96f,
+                    localLights: _cinematicShipLights);
+            }
+            if (fire > .02f)
+                RenderCinematicShipFires(
+                    x, y, shipWidth, shipHeight, fire, time);
         }
-        if (fire > .02f)
-            RenderCinematicShipFires(
-                x, y, shipWidth, shipHeight, fire, time);
+        RenderCinematicEmbers(x, y, shipWidth, shipHeight, time);
     }
 
     internal static float AnchoredSpriteTop(
@@ -343,18 +431,48 @@ internal sealed partial class GameHostWindow
 
     internal static float ShipTrackedTravel(float time)
     {
-        const float trackingStartsAt = 14f;
-        const float speed = .0032f;
-        if (time <= trackingStartsAt) return 0;
-        var beforeImpact = Math.Min(
-            time, ShipDestructionAt) - trackingStartsAt;
-        var result = Math.Max(0, beforeImpact) * speed;
-        if (time <= ShipDestructionAt) return result;
-        var afterImpact = time - ShipDestructionAt;
-        // Drag grows after the strike. Velocity approaches zero without a
-        // discontinuity, so the tracked vessel never visibly freezes.
-        result += speed * (1 - MathF.Exp(-afterImpact * .34f)) / .34f;
-        return result;
+        const float speed = .075f;
+        if (time <= 0) return 0;
+        var result = Math.Min(time, FireIgnitionAt) * speed;
+        if (time <= FireIgnitionAt) return result;
+        var burningFor = time - FireIgnitionAt;
+        // Fire and storm damage steadily rob the vessel of momentum. Keeping
+        // the velocity continuous avoids the old visible stop at impact.
+        return result + speed * (1 - MathF.Exp(-burningFor * .34f)) / .34f;
+    }
+
+    internal static float CinematicShipScreenX(
+        float time, float viewportWidth, float shipWidth)
+    {
+        viewportWidth = Math.Max(1, viewportWidth);
+        var spawnX = -shipWidth;
+        var distanceToCenter = viewportWidth * .75f + shipWidth * .5f;
+        var cycle = Math.Max(1, distanceToCenter);
+        if (time < FireIgnitionAt)
+            return spawnX + ShipTrackedTravel(time) * viewportWidth % cycle;
+        var ignitionTravel = FireIgnitionAt * .075f * viewportWidth;
+        var ignitionPhase = ignitionTravel % cycle;
+        var burningTravel = (ShipTrackedTravel(time) -
+                             FireIgnitionAt * .075f) * viewportWidth;
+        return spawnX + ignitionPhase + burningTravel;
+    }
+
+    internal static float CinematicSceneLoopFade(
+        float time, float viewportWidth, float shipWidth)
+    {
+        if (time <= 0 || time >= FireIgnitionAt) return 0;
+        var cycle = Math.Max(1, viewportWidth * .75f + shipWidth * .5f);
+        var travelled = ShipTrackedTravel(time) * Math.Max(1, viewportWidth);
+        var completed = (int)MathF.Floor(travelled / cycle);
+        var phase = travelled % cycle;
+        var fadeDistance = cycle * .07f;
+        if (phase >= cycle - fadeDistance)
+            return CinematicSceneDirector.SmoothStep(
+                (phase - cycle + fadeDistance) / fadeDistance);
+        if (completed > 0 && phase < fadeDistance)
+            return 1 - CinematicSceneDirector.SmoothStep(
+                phase / fadeDistance);
+        return 0;
     }
 
     private static float CinematicShipFire(float time)
@@ -366,7 +484,12 @@ internal sealed partial class GameHostWindow
                          MathF.Sin(time * 31f) * .07f);
     }
 
-    private void UpdateCinematicShipLights(float time, float fire)
+    internal static float CinematicFireVisibility(float time) =>
+        1 - CinematicSceneDirector.SmoothStep(
+            Math.Clamp((time - 33f) / 3f, 0, 1));
+
+    private void UpdateCinematicShipLights(
+        float time, float fire, float verticalOffset)
     {
         var lightning = CinematicLightningAt(time);
         _cinematicShipLights[0] = new(
@@ -374,19 +497,15 @@ internal sealed partial class GameHostWindow
             new(.72f, .84f, 1f), lightning * 1.5f);
         var flicker = CampfireLightSource.Opacity(_clock, .96f) *
                       FiremakingSkill.LightIntensity(1);
-        ReadOnlySpan<Vector3> fires =
-        [
-            new(.56f, .67f, 0),
-            new(.43f, .70f, FireSpreadAt - FireIgnitionAt),
-            new(.69f, .72f, FireSpreadAt - FireIgnitionAt + .65f)
-        ];
+        var fires = _hullFireAnchors;
         for (var index = 0; index < fires.Length; index++)
         {
             var point = fires[index];
             var growth = CinematicSceneDirector.SmoothStep(Math.Clamp(
                 (time - FireIgnitionAt - point.Z) / 1.15f, 0, 1));
             _cinematicShipLights[index + 1] = new(
-                new(point.X, point.Y), new(.30f, .24f),
+                new(point.X, Math.Clamp(point.Y + verticalOffset, 0, 1)),
+                new(.30f, .24f),
                 new(1f, .56f, .22f), fire * growth * flicker);
         }
     }
@@ -395,12 +514,7 @@ internal sealed partial class GameHostWindow
         float shipX, float shipY, float shipWidth, float shipHeight,
         float strength, float time)
     {
-        ReadOnlySpan<Vector3> fires =
-        [
-            new(.56f, .67f, 0),
-            new(.43f, .70f, FireSpreadAt - FireIgnitionAt),
-            new(.69f, .72f, FireSpreadAt - FireIgnitionAt + .65f)
-        ];
+        var fires = _hullFireAnchors;
         for (var index = 0; index < fires.Length; index++)
         {
             var point = fires[index];
@@ -412,15 +526,111 @@ internal sealed partial class GameHostWindow
             if (!_placeableObjectSprites.TryGetCampfireFlame(
                     animationFrame, out var flame))
                 continue;
-            var flameWidth = shipWidth * (.075f + growth * .025f);
+            var flameWidth = shipWidth * (.09f + growth * .035f);
             var flameHeight = flameWidth * flame.Frame.Height /
                               Math.Max(1, flame.Frame.Width);
             DrawUiSprite(flame.Frame, flame.Texture,
                 new(shipX + shipWidth * point.X - flameWidth * .5f,
-                    shipY + shipHeight * point.Y - flameHeight * .72f,
+                    shipY + shipHeight * point.Y - flameHeight * .72f + 50,
                     flameWidth, flameHeight),
                 brightness: .16f,
                 drawOpacity: strength * growth);
+        }
+    }
+
+    internal static Vector3[] FindHullFireAnchors(
+        SpriteFrame hull, int canvasWidth, int canvasHeight,
+        int anchorX, int anchorY)
+    {
+        ReadOnlySpan<(float X, float Delay)> samples =
+        [
+            (.5f, 0),
+            (.35f, .65f),
+            (.65f, .95f),
+            (.2f, 1.35f),
+            (.8f, 1.7f)
+        ];
+        var minX = hull.Width;
+        var maxX = -1;
+        for (var y = 0; y < hull.Height; y++)
+        for (var x = 0; x < hull.Width; x++)
+        {
+            if (hull.Rgba[(y * hull.Width + x) * 4 + 3] <= 48) continue;
+            minX = Math.Min(minX, x);
+            maxX = Math.Max(maxX, x);
+        }
+        if (maxX < minX)
+            return
+            [
+                new(.5f, .67f, 0), new(.35f, .69f, 2),
+                new(.65f, .69f, 2.35f), new(.2f, .72f, 2.85f),
+                new(.8f, .72f, 3.15f)
+            ];
+
+        var result = new Vector3[samples.Length];
+        var layerLeft = anchorX - hull.HotspotX;
+        var layerTop = anchorY - hull.HotspotY;
+        for (var index = 0; index < samples.Length; index++)
+        {
+            var targetX = minX + (int)MathF.Round(
+                (maxX - minX) * samples[index].X);
+            var foundX = targetX;
+            var foundY = hull.Height - 1;
+            var found = false;
+            for (var radius = 0; radius <= 8 && !found; radius++)
+            {
+                var count = radius == 0 ? 1 : 2;
+                for (var directionIndex = 0;
+                     directionIndex < count && !found; directionIndex++)
+                {
+                    var direction = radius == 0
+                        ? 0
+                        : directionIndex * 2 - 1;
+                    var x = Math.Clamp(targetX + radius * direction,
+                        0, hull.Width - 1);
+                    for (var y = 0; y < hull.Height; y++)
+                        if (hull.Rgba[(y * hull.Width + x) * 4 + 3] > 48)
+                        {
+                            foundX = x;
+                            foundY = y;
+                            found = true;
+                            break;
+                        }
+                }
+            }
+            result[index] = new(
+                Math.Clamp((layerLeft + foundX) /
+                           (float)Math.Max(1, canvasWidth), 0, 1),
+                Math.Clamp((layerTop + foundY) /
+                           (float)Math.Max(1, canvasHeight), 0, 1),
+                samples[index].Delay);
+        }
+        return result;
+    }
+
+    private void RenderCinematicEmbers(
+        float shipX, float shipY, float shipWidth, float shipHeight, float time)
+    {
+        var appear = CinematicSceneDirector.SmoothStep(
+            Math.Clamp((time - 32.5f) / .8f, 0, 1));
+        var fade = 1 - CinematicSceneDirector.SmoothStep(
+            Math.Clamp((time - 35.2f) / .8f, 0, 1));
+        var opacity = appear * fade;
+        if (opacity <= .01f) return;
+        for (var index = 0; index < 14; index++)
+        {
+            var phase = time * (1.4f + index * .037f) + index * 2.17f;
+            var rise = ((time - 32.5f) * (13 + index % 4 * 3) +
+                        index * 7) % 62;
+            var x = shipX + shipWidth * (.38f + index % 7 * .048f) +
+                    MathF.Sin(phase) * (5 + index % 3 * 2);
+            var y = shipY + shipHeight * .72f - rise;
+            var size = 2f + index % 3;
+            DrawUiColor(new(x - size * 1.8f, y - size * 1.8f,
+                    size * 3.6f, size * 3.6f),
+                new(1f, .2f, .025f, opacity * .16f));
+            DrawUiColor(new(x, y, size, size),
+                new(1f, .62f, .12f, opacity * .85f));
         }
     }
 
@@ -445,7 +655,7 @@ internal sealed partial class GameHostWindow
         return (1 - distance / width) * strength;
     }
 
-    private static float CinematicLightningAt(float time)
+    private float CinematicLightningAt(float time)
     {
         // Real flashes commonly contain several return strokes. The narrow
         // white pulse carries the brightness; its smaller echoes create the
@@ -460,7 +670,12 @@ internal sealed partial class GameHostWindow
         var ignition = Math.Max(
             LightningStroke(time, LightningStrikeAt, .05f, 1f),
             LightningStroke(time, LightningStrikeAt + .12f, .04f, .62f));
-        return Math.Max(first, Math.Max(second, ignition));
+        var dynamicFlash = 0f;
+        foreach (var at in _cinematicLightningTimes)
+            dynamicFlash = Math.Max(dynamicFlash,
+                LightningStroke(time, (float)at, .07f, .82f));
+        return Math.Max(dynamicFlash,
+            Math.Max(first, Math.Max(second, ignition)));
     }
 
     private float CinematicLightningIntensity()

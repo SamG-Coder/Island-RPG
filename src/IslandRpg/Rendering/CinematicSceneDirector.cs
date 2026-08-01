@@ -96,3 +96,45 @@ internal sealed class CinematicSceneDirector
         return value * value * (3 - 2 * value);
     }
 }
+
+internal sealed class CinematicPanCamera
+{
+    private float _startsAt;
+    private float _target;
+    private float _elapsed;
+
+    public float Offset { get; private set; }
+    public bool Panning { get; private set; }
+
+    public void Reset()
+    {
+        Offset = 0;
+        Panning = false;
+        _startsAt = 0;
+        _target = 0;
+        _elapsed = 0;
+    }
+
+    public void Update(
+        float subjectWorldCenterX, float viewportWidth, float elapsed)
+    {
+        const float duration = 2.2f;
+        // Every pan restores the same authored left-side starting mark.
+        const float targetScreenRatio = .20f;
+        viewportWidth = Math.Max(1, viewportWidth);
+        if (!Panning && subjectWorldCenterX - Offset >= viewportWidth * .5f)
+        {
+            Panning = true;
+            _startsAt = Offset;
+            _target = Math.Max(
+                Offset,
+                subjectWorldCenterX - viewportWidth * targetScreenRatio);
+            _elapsed = 0;
+        }
+        if (!Panning) return;
+        _elapsed = Math.Min(duration, _elapsed + Math.Max(0, elapsed));
+        var progress = CinematicSceneDirector.SmoothStep(_elapsed / duration);
+        Offset = _startsAt + (_target - _startsAt) * progress;
+        if (_elapsed >= duration) Panning = false;
+    }
+}
