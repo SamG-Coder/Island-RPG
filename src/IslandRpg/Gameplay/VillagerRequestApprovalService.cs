@@ -68,13 +68,18 @@ internal static class VillagerRequestApprovalService
         VillagerState owner)
     {
         var relationship = Relationship(requester, owner.Id);
-        if (requester.Hunger <= 10 && requester.Boldness >= .65f)
+        var knownWeaponPower = VillagerWeaponAwareness.KnownKnifePower(
+            requester, owner.Id);
+        var forceBoldness = .65f + knownWeaponPower * .08f;
+        var threatBoldness = .55f + knownWeaponPower * .08f;
+        if (requester.Hunger <= 10 &&
+            requester.Boldness >= forceBoldness)
             return new(
                 VillagerRefusalStrategy.TakeByForce,
                 "I may not survive another refusal. I could take the food by force.",
                 "take_food");
         if ((requester.Hunger <= 20 || relationship.Resentment >= 20) &&
-            requester.Boldness >= .55f)
+            requester.Boldness >= threatBoldness)
             return new(
                 VillagerRefusalStrategy.Threaten,
                 "Pressure might make them reconsider, but it could destroy trust.",

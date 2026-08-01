@@ -76,7 +76,29 @@ internal sealed partial class GameHostWindow
         _villagerWork.Expire(_worldGameSeconds);
         if (_worldGameSeconds >= _nextVillagerRoleAssignment)
         {
+            var forecast = VillagerWorkPlanner.Forecast(_villagers);
             var roles = VillagerWorkCoordinator.AssignRoles(_villagers);
+            ObserveLog("resource_plan", null, new
+            {
+                Forecast = forecast,
+                Assignments = _villagers.Select(value => new
+                {
+                    value.Id,
+                    Role = roles.GetValueOrDefault(
+                        value.Id, VillagerWorkRole.Unassigned).ToString(),
+                    Scores = new
+                    {
+                        Food = VillagerWorkPlanner.Suitability(
+                            value, VillagerWorkRole.Food, forecast),
+                        Wood = VillagerWorkPlanner.Suitability(
+                            value, VillagerWorkRole.Wood, forecast),
+                        Crafting = VillagerWorkPlanner.Suitability(
+                            value, VillagerWorkRole.Crafting, forecast),
+                        Exploration = VillagerWorkPlanner.Suitability(
+                            value, VillagerWorkRole.Exploration, forecast)
+                    }
+                }).ToArray()
+            });
             for (var roleIndex = 0; roleIndex < _villagers.Count; roleIndex++)
             {
                 var roleVillager = _villagers[roleIndex];

@@ -19,9 +19,26 @@ internal static class VillagerConflictService
         var relationship = responder.Relationships?.FirstOrDefault(value =>
             value.CharacterId == aggressor.Id)?.State ?? default;
         var health = responder.Health;
+        var weaponPower = VillagerWeaponAwareness.KnownKnifePower(
+            responder, aggressor.Id);
+        var weaponRisk = VillagerWeaponAwareness.RiskBonus(
+            responder, aggressor.Id);
         if (health <= 20)
             return new(VillagerConflictIntent.Surrender,
                 "I cannot survive another hit. I should surrender.", 10);
+        if (weaponPower > 0 && health <= 35)
+            return new(VillagerConflictIntent.Surrender,
+                $"I saw their {VillagerWeaponAwareness.BestKnownKnife(responder, aggressor.Id)!.Name}. Fighting now could kill me.",
+                Math.Min(100, 35 + weaponRisk));
+        if (weaponPower > 0 && responder.Boldness < .45f)
+            return new(VillagerConflictIntent.Flee,
+                "I know they are armed with a knife. I should get away.",
+                Math.Min(100, 40 + weaponRisk));
+        if (weaponPower > 0 && nearbyAllies > 0 &&
+            responder.Sociability >= .5f)
+            return new(VillagerConflictIntent.CallForHelp,
+                "They are armed. I should call an ally instead of facing them alone.",
+                Math.Min(100, 50 + weaponRisk));
         if (responder.Boldness < .3f || relationship.Fear >= 20)
             return new(VillagerConflictIntent.Flee,
                 "This is too dangerous. I should get away.", 20);
@@ -33,10 +50,11 @@ internal static class VillagerConflictService
             (relationship.Resentment >= 15 || responder.Boldness >= .75f))
             return new(VillagerConflictIntent.Retaliate,
                 "They attacked me. I will strike back while I still can.",
-                85, true);
+                Math.Min(100, 85 + weaponRisk), true);
         if (wasAttacked && responder.Boldness >= .5f)
             return new(VillagerConflictIntent.Defend,
-                "I need to defend myself and make them stop.", 65, true);
+                "I need to defend myself and make them stop.",
+                Math.Min(100, 65 + weaponRisk), true);
         return new(VillagerConflictIntent.Warn,
             "I should warn them before this becomes violence.", 35);
     }

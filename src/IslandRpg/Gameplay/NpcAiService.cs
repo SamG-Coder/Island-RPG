@@ -270,6 +270,7 @@ internal sealed class NpcAiService : IDisposable
             model = settings.Model,
             system =
                 "Convert speech into a safe NPC interpretation. " +
+                HistoricalKnowledgePolicy.PromptRule + " " +
                 "People are actor IDs only; never assume anyone is the player. " +
                 "Resolve 'you' to the addressed listener, names from nearbyActors, " +
                 "and general statements to a hint. Do not invent items or actions. " +
@@ -361,6 +362,7 @@ internal sealed class NpcAiService : IDisposable
             model = settings.Model,
             system =
                 "You are the addressed island survivor. Reply to the newest " +
+                HistoricalKnowledgePolicy.PromptRule + " " +
                 "speaker in one short, natural first-person sentence. Use only " +
                 "facts in the compact context brain: personal history, arrival " +
                 "memory, known goals, remembered facts, and recentConversation. " +
@@ -476,6 +478,7 @@ internal sealed class NpcAiService : IDisposable
             model = settings.Model,
             system =
                 "Return only one short first-person sentence of dialogue. " +
+                HistoricalKnowledgePolicy.PromptRule + " " +
                 "The speaker just woke on an unknown island. Preserve exactly " +
                 "the supplied deterministicMeaning. Never narrate actions, " +
                 "describe the speaker in third person, prepend a name, summarize " +
@@ -539,7 +542,7 @@ internal sealed class NpcAiService : IDisposable
             return null;
         using var timeout = CancellationTokenSource
             .CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(20));
+        timeout.CancelAfter(TimeSpan.FromSeconds(45));
         using var request = Request(
             HttpMethod.Post,
             new(baseUri, "api/generate"),
@@ -549,6 +552,7 @@ internal sealed class NpcAiService : IDisposable
             model = settings.Model,
             system =
                 "Create distinct grounded survivors for a social survival game. " +
+                HistoricalKnowledgePolicy.PromptRule + " " +
                 "It is day 1, 08:00: each person has just awakened after an unknown " +
                 "wreck and cannot know later island events. Give each a concise " +
                 "pre-island history, temperament, former trade, uncertain arrival " +
@@ -569,35 +573,35 @@ internal sealed class NpcAiService : IDisposable
             options = new
             {
                 temperature = .7,
-                num_predict = 520
+                num_predict = Math.Max(520, names.Count * 260)
             }
         });
         try
         {
             using var response = await _http.SendAsync(
                 request, timeout.Token);
-            if (!response.IsSuccessStatusCode) return null;
+            if (!response.IsSuccessStatusCode)
+                return DefaultPersonas(names.Count);
             var generated = await response.Content
                 .ReadFromJsonAsync<OllamaGenerate>(
                     JsonOptions, timeout.Token);
             if (string.IsNullOrWhiteSpace(generated?.Response))
-                return null;
+                return DefaultPersonas(names.Count);
             var cast = JsonSerializer.Deserialize<NpcCast>(
                 generated.Response, JsonOptions);
-            if (cast?.People is null ||
-                cast.People.Length != names.Count)
-                return null;
+            var people = cast?.People ?? [];
             var result = new VillagerPersona[names.Count];
             for (var index = 0; index < result.Length; index++)
-                result[index] = ValidatePersona(
-                    cast.People[index], index);
+                result[index] = index < people.Length
+                    ? ValidatePersona(people[index], index)
+                    : VillagerSimulation.DefaultPersona(index);
             return result;
         }
         catch (Exception exception) when (
             exception is OperationCanceledException or
                 HttpRequestException or JsonException)
         {
-            return null;
+            return DefaultPersonas(names.Count);
         }
     }
 
@@ -926,7 +930,8 @@ internal sealed class NpcAiService : IDisposable
         string? value,
         string speakerName)
     {
-        if (IsPlaceholder(value)) return null;
+        if (IsPlaceholder(value) ||
+            !HistoricalKnowledgePolicy.IsPlausible(value)) return null;
         var line = value!.Trim().Trim('"', '\'', '“', '”');
         var prefix = speakerName + ":";
         if (line.StartsWith(
@@ -1025,25 +1030,35 @@ internal sealed class NpcAiService : IDisposable
             .Take(3)
             .ToArray() ?? [];
         return new(
-            IsPlaceholder(value.BackgroundStory)
+            IsPlaceholder(value.BackgroundStory) ||
+            !HistoricalKnowledgePolicy.IsPlausible(value.BackgroundStory)
                 ? fallback.BackgroundStory
                 : Limit(value.BackgroundStory, 280),
-            IsPlaceholder(value.Personality)
+            IsPlaceholder(value.Personality) ||
+            !HistoricalKnowledgePolicy.IsPlausible(value.Personality)
                 ? fallback.Personality
                 : Limit(value.Personality, 140),
-            IsPlaceholder(value.PriorTrade)
+            IsPlaceholder(value.PriorTrade) ||
+            !HistoricalKnowledgePolicy.IsPlausible(value.PriorTrade)
                 ? fallback.PriorTrade
                 : Limit(value.PriorTrade, 60),
             tools.Length == 0
                 ? fallback.KnownToolIds
                 : tools,
-            IsPlaceholder(value.ArrivalMemory)
+            IsPlaceholder(value.ArrivalMemory) ||
+            !HistoricalKnowledgePolicy.IsPlausible(value.ArrivalMemory)
                 ? fallback.ArrivalMemory
                 : Limit(value.ArrivalMemory, 220),
-            IsPlaceholder(value.SocialDrive)
+            IsPlaceholder(value.SocialDrive) ||
+            !HistoricalKnowledgePolicy.IsPlausible(value.SocialDrive)
                 ? fallback.SocialDrive
                 : Limit(value.SocialDrive, 180));
     }
+
+    private static IReadOnlyList<VillagerPersona> DefaultPersonas(int count) =>
+        Enumerable.Range(0, count)
+            .Select(VillagerSimulation.DefaultPersona)
+            .ToArray();
 
     private static NpcAiRuntimeState State(
         NpcAiAvailability availability,

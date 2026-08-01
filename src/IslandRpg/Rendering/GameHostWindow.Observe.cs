@@ -76,7 +76,8 @@ internal sealed record ObserveModeOptions(
 
 internal static class ObserveModePolicy
 {
-    public const int RequiredVillagerCount = 2;
+    public static int RequiredVillagerCount(string scenario) =>
+        ObserveScenarioService.RequiredVillagerCount(scenario);
     public static bool ObserverParticipatesInSimulation => false;
 
     public static Vector2 Focus(
@@ -150,9 +151,11 @@ internal sealed partial class GameHostWindow
             throw new InvalidOperationException(
                 "Observe character no longer exists.");
         if (!world.AiNpcsEnabled ||
-            world.AiNpcCount != ObserveModePolicy.RequiredVillagerCount)
+            world.AiNpcCount != ObserveModePolicy.RequiredVillagerCount(
+                _observeMode.Scenario))
             throw new InvalidOperationException(
-                "Observe mode requires exactly two enabled AI villagers.");
+                $"Observe scenario '{_observeMode.Scenario}' requires " +
+                $"{ObserveModePolicy.RequiredVillagerCount(_observeMode.Scenario)} enabled AI villagers.");
 
         EnterWorld(world, player);
         if (_observeMode.Scenario != ObserveScenarioService.Default)

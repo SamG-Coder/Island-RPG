@@ -9,9 +9,14 @@ internal static class ObserveScenarioService
     public const string Default = "default";
     public const string DesertSurplus = "desert-surplus";
     public const string DesertKnifeConflict = "desert-knife-conflict";
+    public const string IslandResourceTrio = "island-resource-trio";
 
     public static bool IsSupported(string value) =>
-        value is Default or DesertSurplus or DesertKnifeConflict;
+        value is Default or DesertSurplus or DesertKnifeConflict or
+            IslandResourceTrio;
+
+    public static int RequiredVillagerCount(string scenario) =>
+        scenario == IslandResourceTrio ? 3 : 2;
 
     public static IReadOnlyList<VillagerState> Configure(
         string scenario,
@@ -19,7 +24,13 @@ internal static class ObserveScenarioService
         IReadOnlyList<VillagerState> villagers,
         int startingFoodCount = 20)
     {
+        if (villagers.Count != RequiredVillagerCount(scenario))
+            throw new InvalidOperationException(
+                $"Observe scenario '{scenario}' requires " +
+                $"{RequiredVillagerCount(scenario)} villagers.");
         if (scenario == Default) return villagers;
+        if (scenario == IslandResourceTrio)
+            return ConfigureIslandResourceTrio(seed, villagers);
         if (scenario is not (DesertSurplus or DesertKnifeConflict) ||
             villagers.Count != 2)
             throw new InvalidOperationException(
@@ -56,6 +67,62 @@ internal static class ObserveScenarioService
                     ? .82f : villagers[1].Boldness
             }
         ];
+    }
+
+    private static IReadOnlyList<VillagerState> ConfigureIslandResourceTrio(
+        long seed,
+        IReadOnlyList<VillagerState> villagers)
+    {
+        var positions = FindIslandTrio(seed);
+        var food = PlayerInventory.CreateStartingInventory();
+        food[0] = ItemIds.CookedMinnows;
+        food[1] = ItemIds.CookedMinnows;
+        var axe = PlayerInventory.CreateStartingInventory();
+        axe[0] = ItemIds.StoneAxe;
+        var knife = PlayerInventory.CreateStartingInventory();
+        knife[0] = ItemIds.StoneKnife;
+        return
+        [
+            villagers[0] with
+            {
+                PositionX = positions.FoodHolder.X,
+                PositionY = positions.FoodHolder.Y,
+                Inventory = food
+            },
+            villagers[1] with
+            {
+                PositionX = positions.AxeHolder.X,
+                PositionY = positions.AxeHolder.Y,
+                Inventory = axe
+            },
+            villagers[2] with
+            {
+                PositionX = positions.KnifeHolder.X,
+                PositionY = positions.KnifeHolder.Y,
+                Inventory = knife
+            }
+        ];
+    }
+
+    public static (Vector2 FoodHolder, Vector2 AxeHolder, Vector2 KnifeHolder)
+        FindIslandTrio(long seed, int maximumRadius = 2048)
+    {
+        for (var radius = 0; radius <= maximumRadius; radius += 8)
+        for (var y = -radius; y <= radius; y++)
+        for (var x = -radius; x <= radius; x++)
+        {
+            if (Math.Max(Math.Abs(x), Math.Abs(y)) != radius) continue;
+            if (!IsIslandLand(seed, x, y) ||
+                !IsIslandLand(seed, x + 1, y) ||
+                !IsIslandLand(seed, x, y + 1))
+                continue;
+            return (
+                new(x + .5f, y + .5f),
+                new(x + 1.5f, y + .5f),
+                new(x + .5f, y + 1.5f));
+        }
+        throw new InvalidOperationException(
+            $"No walkable island trio was found within {maximumRadius} tiles.");
     }
 
     public static (Vector2 FoodHolder, Vector2 KnifeHolder)
@@ -97,4 +164,8 @@ internal static class ObserveScenarioService
             seed,
             (int)position.X,
             (int)position.Y) is Biome.DesertSand or Biome.CrackedEarth;
+
+    private static bool IsIslandLand(long seed, int x, int y) =>
+        WorldLevelNavigation.IsWalkable(
+            seed, x, y, (int)WorldLevel.Overworld);
 }

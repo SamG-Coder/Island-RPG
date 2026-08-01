@@ -41,7 +41,8 @@ try
                 WorldName = $"Observation-{stamp}",
                 WorldSeed = options.Seed,
                 Names = VillagerSimulation.NamesForPopulation(
-                    ObserveModePolicy.RequiredVillagerCount),
+                    ObserveModePolicy.RequiredVillagerCount(
+                        options.ObserveScenario)),
                 aiSettings.Model
             });
         var personas = ai.GeneratePersonasAsync(
@@ -49,7 +50,8 @@ try
                 $"Observation-{stamp}",
                 options.Seed,
                 VillagerSimulation.NamesForPopulation(
-                    ObserveModePolicy.RequiredVillagerCount))
+                    ObserveModePolicy.RequiredVillagerCount(
+                        options.ObserveScenario)))
             .GetAwaiter().GetResult() ?? [];
         ObserveEventLog.Write(
             Console.Out, 0, 8 * 60 * 60, "Day 1 08:00", null,
@@ -63,7 +65,8 @@ try
             options.Seed,
             observer.Id,
             aiNpcsEnabled: true,
-            aiNpcCount: ObserveModePolicy.RequiredVillagerCount,
+            aiNpcCount: ObserveModePolicy.RequiredVillagerCount(
+                options.ObserveScenario),
             aiNpcPersonas: personas);
         observeMode = new(
             world.Id,

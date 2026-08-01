@@ -277,19 +277,25 @@ using (var personaAi = new NpcAiService(
            new HttpClient(new StubHttpHandler(_ =>
                StubHttpHandler.Json(
                    """
-                   {"response":"{\"people\":[{\"backgroundStory\":\"A cooper who repaired water barrels in a harbour town.\",\"personality\":\"Curious but careful.\",\"priorTrade\":\"Cooper\",\"knownToolIds\":[\"stone_hammer\",\"laser_rifle\"],\"arrivalMemory\":\"Woke beside broken timber at dawn.\",\"socialDrive\":\"Needs to learn who remembers the wreck.\"}]}","done":true}
+                   {"response":"{\"people\":[{\"backgroundStory\":\"A cooper who repaired water barrels in a harbour town.\",\"personality\":\"Curious but careful.\",\"priorTrade\":\"Structural engineer\",\"knownToolIds\":[\"stone_hammer\",\"laser_rifle\"],\"arrivalMemory\":\"Woke beside broken timber at dawn.\",\"socialDrive\":\"Needs to learn who remembers the wreck.\"}]}","done":true}
                    """)))))
 {
     var personas = await personaAi.GeneratePersonasAsync(
-        defaultAi, "Test Island", 42, ["Mira"]);
+        defaultAi, "Test Island", 42, ["Mira", "Tomas", "Rowan"]);
     Require(
-        personas?.Single() is
+        personas is { Count: 3 } &&
+        personas[0] is
         {
-            PriorTrade: "Cooper",
+            PriorTrade: "Carpenter",
             KnownToolIds.Count: 1
         } persona &&
-        persona.KnownToolIds[0] == ItemIds.StoneHammer,
-        "world creation must generate persistent grounded personas and reject invented tool knowledge");
+        persona.KnownToolIds[0] == ItemIds.StoneHammer &&
+        personas[1].PriorTrade ==
+            VillagerSimulation.DefaultPersona(1).PriorTrade &&
+        personas[2].PriorTrade ==
+            VillagerSimulation.DefaultPersona(2).PriorTrade &&
+        HistoricalKnowledgePolicy.IsPlausible(personas[0].BackgroundStory),
+        "world creation must complete partial casts, reject invented tools, and replace post-1200 AD trades");
 }
 
 var miraOwner = ItemOwner.Character("mira");
@@ -610,6 +616,42 @@ Require(
     stableRoles["wood-incumbent"] == VillagerWorkRole.Wood &&
     urgentRoleChange["wood-incumbent"] == VillagerWorkRole.Food,
     "work roles must survive small hunger differences but still change for a material food emergency");
+var skillAwareAxeInventory = PlayerInventory.CreateStartingInventory();
+skillAwareAxeInventory[0] = ItemIds.StoneAxe;
+var skillAwareKnifeInventory = PlayerInventory.CreateStartingInventory();
+skillAwareKnifeInventory[0] = ItemIds.StoneKnife;
+var skillAwareWorkers = new[]
+{
+    hungryVillager with
+    {
+        Id = "skilled-fisher",
+        Hunger = 80,
+        FishingExperience = 500
+    },
+    hungryVillager with
+    {
+        Id = "skilled-woodworker",
+        Hunger = 80,
+        Inventory = skillAwareAxeInventory,
+        WoodcuttingExperience = 500
+    },
+    hungryVillager with
+    {
+        Id = "skilled-crafter",
+        Hunger = 80,
+        Inventory = skillAwareKnifeInventory,
+        CraftingExperience = 500
+    }
+};
+var resourceForecast = VillagerWorkPlanner.Forecast(skillAwareWorkers);
+var skillAwareRoles = VillagerWorkCoordinator.AssignRoles(skillAwareWorkers);
+Require(
+    resourceForecast is
+        { LivingPeople: 3, Food: 1, FoodDeficit: 5, WoodDeficit: 12 } &&
+    skillAwareRoles["skilled-fisher"] == VillagerWorkRole.Food &&
+    skillAwareRoles["skilled-woodworker"] == VillagerWorkRole.Wood &&
+    skillAwareRoles["skilled-crafter"] == VillagerWorkRole.Crafting,
+    "future work plans must combine demonstrated skills, best tools, and remaining group resource deficits");
 var foodSupplyInventory = PlayerInventory.CreateStartingInventory();
 foodSupplyInventory[0] = ItemIds.PlantFibres;
 foodSupplyInventory[1] = ItemIds.PlantFibres;
@@ -733,7 +775,10 @@ Require(
         ObserveScenarioService.DesertSurplus &&
     observeOptions.ObserveHungerRateMultiplier == 4 &&
     observeOptions.ObserveStartingFoodCount == 3 &&
-    ObserveModePolicy.RequiredVillagerCount == 2 &&
+    ObserveModePolicy.RequiredVillagerCount(
+        ObserveScenarioService.DesertSurplus) == 2 &&
+    ObserveModePolicy.RequiredVillagerCount(
+        ObserveScenarioService.IslandResourceTrio) == 3 &&
     !ObserveModePolicy.ObserverParticipatesInSimulation,
     "Observe CLI configuration must request exactly two villagers and exclude the hidden observer");
 var acceleratedHunger = VillagerSimulation.CatchUp(
@@ -846,6 +891,23 @@ var threatPlan = VillagerRequestApprovalService.PlanAfterRefusal(
     threateningRequester, requestOwner);
 var drasticPlan = VillagerRequestApprovalService.PlanAfterRefusal(
     drasticRequester, requestOwner);
+var armedOwner = requestOwner with
+{
+    Inventory =
+    [
+        ItemIds.IronKnife,
+        .. PlayerInventory.CreateStartingInventory()[1..]
+    ]
+};
+var weaponAwareRequester = VillagerCapabilityMemory.Observe(
+    drasticRequester with { Honesty = .8f },
+    armedOwner.Id,
+    armedOwner.Name,
+    VillagerCapabilityMemory.VisibleTools(armedOwner.Inventory),
+    distance: 1,
+    gameSeconds: 790);
+var armedOwnerPlan = VillagerRequestApprovalService.PlanAfterRefusal(
+    weaponAwareRequester, armedOwner);
 Require(
     !refusedFood.Approved &&
     refusedFood.Reason == "protected_reserve" &&
@@ -857,6 +919,14 @@ Require(
     threatPlan.Strategy == VillagerRefusalStrategy.Threaten &&
     drasticPlan.Strategy == VillagerRefusalStrategy.TakeByForce,
     "food requests must require owner approval and refusal must branch by urgency, personality, and fair alternatives");
+Require(
+    armedOwnerPlan.Strategy == VillagerRefusalStrategy.Threaten &&
+    armedOwnerPlan.Strategy != VillagerRefusalStrategy.TakeByForce &&
+    VillagerWeaponAwareness.BestKnownKnife(
+        weaponAwareRequester, armedOwner.Id)?.Id == ItemIds.IronKnife &&
+    VillagerWeaponAwareness.KnownKnifePower(
+        weaponAwareRequester, armedOwner.Id) == 3,
+    "NPCs must avoid reckless force when their own memory identifies an armed food owner");
 var refusalStates = VillagerRequestApprovalService.ApplyRefusal(
     drasticRequester, requestOwner, drasticPlan, gameSeconds: 800);
 Require(
@@ -895,12 +965,35 @@ var surrenderConflict = VillagerConflictService.DecideResponse(
     drasticRequester with { Health = 20 },
     threateningRequester,
     wasAttacked: true);
+var armedAggressor = drasticRequester with
+{
+    Id = "armed-aggressor",
+    Name = "Armed aggressor",
+    Inventory =
+    [
+        ItemIds.IronKnife,
+        .. PlayerInventory.CreateStartingInventory()[1..]
+    ]
+};
+var weaponAwareDefender = VillagerCapabilityMemory.Observe(
+    threateningRequester with { Health = 30, Boldness = .8f },
+    armedAggressor.Id,
+    armedAggressor.Name,
+    VillagerCapabilityMemory.VisibleTools(armedAggressor.Inventory),
+    distance: 1,
+    gameSeconds: 800);
+var armedConflict = VillagerConflictService.DecideResponse(
+    weaponAwareDefender,
+    armedAggressor,
+    wasAttacked: true);
 Require(
     frightenedConflict.Intent == VillagerConflictIntent.Flee &&
     socialConflict.Intent == VillagerConflictIntent.CallForHelp &&
     defensiveConflict.Intent == VillagerConflictIntent.Defend &&
     retaliatingConflict.Intent == VillagerConflictIntent.Retaliate &&
-    surrenderConflict.Intent == VillagerConflictIntent.Surrender,
+    surrenderConflict.Intent == VillagerConflictIntent.Surrender &&
+    armedConflict.Intent == VillagerConflictIntent.Surrender &&
+    armedConflict.Thought.Contains("iron knife"),
     "NPC conflict responses must account for health, boldness, allies, and prior relationship pressure");
 var persistedConflict = VillagerConflictService.ApplyDecision(
     threateningRequester,
@@ -976,6 +1069,36 @@ Require(
     knifeConflictVillagers[1].Hunger == 8 &&
     knifeConflictVillagers[1].Boldness == .82f,
     "desert knife conflict scenarios must fix scarcity and personality pressure regardless of generic food options");
+var islandResourceTrio = ObserveScenarioService.Configure(
+    ObserveScenarioService.IslandResourceTrio,
+    2187,
+    villagerSpawnA);
+var islandTrioPositions = islandResourceTrio
+    .Select(value => new Vector2(value.PositionX, value.PositionY))
+    .ToArray();
+var islandTrioRoles = VillagerWorkCoordinator.AssignRoles(islandResourceTrio);
+Require(
+    ObserveScenarioService.IsSupported(
+        ObserveScenarioService.IslandResourceTrio) &&
+    islandResourceTrio.Count == 3 &&
+    VillagerSimulation.CountFood(islandResourceTrio[0].Inventory) == 2 &&
+    islandResourceTrio[1].Inventory.Count(value =>
+        value == ItemIds.StoneAxe) == 1 &&
+    islandResourceTrio[2].Inventory.Count(value =>
+        value == ItemIds.StoneKnife) == 1 &&
+    islandTrioRoles[islandResourceTrio[1].Id] == VillagerWorkRole.Wood &&
+    islandTrioRoles[islandResourceTrio[2].Id] == VillagerWorkRole.Crafting &&
+    islandTrioPositions.All(position =>
+        WorldLevelNavigation.IsWalkable(
+            2187,
+            (int)MathF.Floor(position.X),
+            (int)MathF.Floor(position.Y),
+            (int)WorldLevel.Overworld)) &&
+    islandTrioPositions.SelectMany((position, index) =>
+        islandTrioPositions.Skip(index + 1).Select(other =>
+            Vector2.Distance(position, other))).All(distance =>
+                distance is >= 1 and <= 1.5f),
+    "island resource trio scenarios must place three nearby survivors on land with exactly two fish, one axe, and one knife");
 var observeFocus = ObserveModePolicy.Focus(
     [
         villagerSpawnA[0] with { PositionX = 10, PositionY = 20 },
