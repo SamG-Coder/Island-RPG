@@ -579,7 +579,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 "VMFAR_TN", "VFFAR_TN",
                 "VMMIN_TN", "VFMIN_TN",
                 "VMFOR_TN", "VFFOR_TN",
-                "VMFIS_TN", "VFFIS_TN", "MOVEX_NN", "SHIPF5SF"
+                "VMFIS_TN", "VFFIS_TN", "MOVEX_NN", "SHIPF5SF",
+                "COGXX_A0", "SHIP_3BF"
             })
                 names.Add(name);
         }
@@ -722,6 +723,7 @@ internal sealed partial class GameHostWindow : GameWindow
                         if (_mode == PreviewMode.Game)
                         {
                             PrepareEntityAnimations();
+                            PrepareCinematicShip();
                             BeginMenuPreview();
                             CompleteLoading(ScreenState.MainMenu);
                             return;
@@ -1274,10 +1276,13 @@ internal sealed partial class GameHostWindow : GameWindow
                 pending.Spawn.X,
                 pending.Spawn.Y,
                 DateTime.UtcNow));
-        EnterWorld(world, pending.Player);
+        EnterWorld(world, pending.Player, playOpeningCinematic: true);
     }
 
-    private void EnterWorld(WorldProfile world, PlayerProfile? player = null)
+    private void EnterWorld(
+        WorldProfile world,
+        PlayerProfile? player = null,
+        bool playOpeningCinematic = false)
     {
         CancelWorldLevelWork(clearMinimap: true);
         player ??= _selectedPlayer;
@@ -1339,6 +1344,8 @@ internal sealed partial class GameHostWindow : GameWindow
         StreamWorld();
         BlurTextBoxes();
         _screen = ScreenState.WorldPreview;
+        if (playOpeningCinematic)
+            StartOpeningCinematic();
     }
 
     private void ReturnToMainMenu()
@@ -1582,6 +1589,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private void UpdateGame(float elapsed)
     {
         if (_player is null) return;
+        if (UpdateCinematic(elapsed)) return;
         if (_playerDefeated)
         {
             UpdateGameSimulation(Math.Clamp(elapsed, 0, .25f));
@@ -2688,6 +2696,14 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static Vector2 FindPlayableSpawn(long seed)
     {
+        for (var radius = 0; radius <= 320; radius++)
+        for (var y = -radius; y <= radius; y++)
+        for (var x = -radius; x <= radius; x++)
+        {
+            if (Math.Max(Math.Abs(x), Math.Abs(y)) != radius) continue;
+            if (InfiniteWorldGenerator.BiomeAt(seed, x, y) == Biome.Beach)
+                return new Vector2(x + .5f, y + .5f);
+        }
         for (var radius = 0; radius <= 160; radius++)
         for (var y = -radius; y <= radius; y++)
         for (var x = -radius; x <= radius; x++)
@@ -3178,6 +3194,11 @@ internal sealed partial class GameHostWindow : GameWindow
         else RenderLoading();
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         PresentScene();
+        if (CinematicActive)
+        {
+            GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
+            RenderCinematic();
+        }
         if (_screen is ScreenState.LoadingAssets or
             ScreenState.PreparingGpu or ScreenState.LoadingComplete)
         {
@@ -3190,7 +3211,8 @@ internal sealed partial class GameHostWindow : GameWindow
             RenderFrontend();
         }
         else if (_screen == ScreenState.WorldPreview &&
-            _mode == PreviewMode.Game && !_atlasOpen)
+            _mode == PreviewMode.Game && !_atlasOpen &&
+            !CinematicActive)
         {
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
             if (_modalScreen.BlursBackground) BlurComposedFrame();
@@ -8196,6 +8218,8 @@ internal sealed partial class GameHostWindow : GameWindow
             GL.DeleteTexture(texture);
         foreach (var texture in _fishingRaftTextures)
             GL.DeleteTexture(texture);
+        if (_cinematicShipTexture != 0)
+            GL.DeleteTexture(_cinematicShipTexture);
         foreach (var texture in _fishingBoatComposites.Values
                      .SelectMany(value => value.Textures))
             GL.DeleteTexture(texture);
@@ -8283,6 +8307,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_cliffBatchVbo != 0) GL.DeleteBuffer(_cliffBatchVbo);
         if (_cliffTexture != 0) GL.DeleteTexture(_cliffTexture);
         if (_terrainProgram != 0) GL.DeleteProgram(_terrainProgram);
+        if (_cinematicOceanProgram != 0)
+            GL.DeleteProgram(_cinematicOceanProgram);
         if (_cliffProgram != 0) GL.DeleteProgram(_cliffProgram);
         GL.DeleteVertexArray(_vao);
         if (_pauseBlurProgram != 0) GL.DeleteProgram(_pauseBlurProgram);

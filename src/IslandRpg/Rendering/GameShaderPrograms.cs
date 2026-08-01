@@ -4,6 +4,66 @@ namespace IslandRpg.Rendering;
 
 internal static class GameShaderPrograms
 {
+    public static int CreateCinematicOceanProgram()
+    {
+        const string vertex = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uvIn; out vec2 uv; void main(){uv=uvIn;gl_Position=vec4(p,0,1);}";
+        const string fragment = """
+            #version 330 core
+            in vec2 uv;
+            out vec4 color;
+            uniform sampler2DArray terrain;
+            uniform sampler2DArray waterNormals;
+            uniform float time;
+            uniform float lightning;
+            void main() {
+                vec2 flowA = vec2(time * 0.025, time * 0.008);
+                vec2 flowB = vec2(-time * 0.014, time * 0.019);
+                vec2 n1 = texture(waterNormals,
+                    vec3(uv * vec2(8.0, 5.0) + flowA, 0.0)).xy * 2.0 - 1.0;
+                vec2 n2 = texture(waterNormals,
+                    vec3(uv * vec2(5.0, 8.0) + flowB, 1.0)).xy * 2.0 - 1.0;
+                vec2 waves = n1 * 0.65 + n2 * 0.35;
+                float swell = sin((uv.x * 19.0 + uv.y * 7.0) - time * 2.2) * 0.5 + 0.5;
+                vec2 sampleUv = uv * vec2(7.0, 4.5) + waves * 0.045;
+                vec3 ageWater = texture(terrain, vec3(sampleUv, 0.0)).rgb;
+                float crest = smoothstep(0.64, 0.95,
+                    length(waves) * 0.7 + swell * 0.38);
+                vec3 night = ageWater * vec3(0.22, 0.29, 0.42);
+                night += vec3(0.08, 0.16, 0.22) * crest;
+                night += vec3(0.55, 0.66, 0.78) * lightning *
+                    (0.35 + crest * 0.65);
+                color = vec4(night, 1.0);
+            }
+            """;
+        return CreateProgram(vertex, fragment);
+    }
+
+    private static int CreateProgram(string vertex, string fragment)
+    {
+        static int Compile(ShaderType type, string source)
+        {
+            var shader = GL.CreateShader(type);
+            GL.ShaderSource(shader, source);
+            GL.CompileShader(shader);
+            GL.GetShader(shader, ShaderParameter.CompileStatus, out var ok);
+            if (ok == 0)
+                throw new InvalidOperationException(GL.GetShaderInfoLog(shader));
+            return shader;
+        }
+        var vs = Compile(ShaderType.VertexShader, vertex);
+        var fs = Compile(ShaderType.FragmentShader, fragment);
+        var program = GL.CreateProgram();
+        GL.AttachShader(program, vs);
+        GL.AttachShader(program, fs);
+        GL.LinkProgram(program);
+        GL.GetProgram(program, GetProgramParameterName.LinkStatus, out var linked);
+        GL.DeleteShader(vs);
+        GL.DeleteShader(fs);
+        if (linked == 0)
+            throw new InvalidOperationException(GL.GetProgramInfoLog(program));
+        return program;
+    }
+
     public static int CreateDemoProgram()
     {
         const string vertex = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uv; out vec2 tex; void main(){tex=uv;gl_Position=vec4(p,0,1);}";

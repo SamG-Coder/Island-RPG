@@ -22,6 +22,7 @@ internal sealed partial class GameHostWindow
             .Select(index => $"localLightIntensity[{index}]").ToArray();
 
     private float SceneDarkness() =>
+        CinematicDarknessOverride() ??
         WorldLighting.Darkness(
             WorldTime.At(_worldGameSeconds).Daylight,
             _activeWorldLevel);
@@ -48,6 +49,13 @@ internal sealed partial class GameHostWindow
         UploadUnlimitedZoomFog(active);
 
         var count = 0;
+        var lightning = CinematicLightningIntensity();
+        if (active && lightning > .01f)
+            AddLight(
+                new(ReferenceWidth * .5f, ReferenceHeight * .5f),
+                new(1.2f, 1.2f),
+                new(.72f, .84f, 1f),
+                lightning);
         if (active && _levelUpFireworks.Active)
         {
             var radius = 92f * _zoom;

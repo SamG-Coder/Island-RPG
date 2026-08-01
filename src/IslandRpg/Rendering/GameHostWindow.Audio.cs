@@ -120,6 +120,13 @@ internal sealed partial class GameHostWindow
         _soundEffects.Play(variants[index].Path);
     }
 
+    private void PlayGeneratedSound(string fileName)
+    {
+        var path = Path.Combine(
+            AppContext.BaseDirectory, "Resources", "Audio", fileName);
+        if (File.Exists(path)) _soundEffects?.Play(path);
+    }
+
     private void ApplyMusicSettings()
     {
         var settings = _saves.LoadSettings();

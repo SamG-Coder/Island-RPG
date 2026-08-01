@@ -70,5 +70,6 @@
     <Content Include="Resources\Images\Combat\training-dummy-source.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\TestAssets\**\*" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Audio\aoe-sound-cues.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Audio\thunder.wav" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

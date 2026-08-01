@@ -50,6 +50,26 @@ if (args.Contains(
 }
 
 var worldCheckAssertions = 0;
+var cinematicDirector = new CinematicSceneDirector(
+    10,
+    [new(2, 8, SceneCameraTarget.Player, Vector2.Zero, 1.4f, .8f)],
+    [new(1, "thunder"), new(3, "impact")]);
+cinematicDirector.Start();
+cinematicDirector.Advance(1.5);
+var firstCinematicCue = cinematicDirector.TryDequeueCue(out var firstCue) &&
+                         firstCue == "thunder";
+var noRepeatedCinematicCue =
+    !cinematicDirector.TryDequeueCue(out _);
+cinematicDirector.Advance(2);
+var secondCinematicCue = cinematicDirector.TryDequeueCue(out var secondCue) &&
+                          secondCue == "impact";
+var cinematicShot = cinematicDirector.CurrentShot();
+Require(
+    firstCinematicCue && noRepeatedCinematicCue && secondCinematicCue &&
+    cinematicShot is { Target: SceneCameraTarget.Player } &&
+    cinematicDirector.CurrentZoom(cinematicShot.Value) < 1.4f &&
+    cinematicDirector.CurrentZoom(cinematicShot.Value) > .8f,
+    "cinematic directors must emit ordered cues once and interpolate reusable camera shots");
 var settlementFourSource = VillagerSimulation.CreateInitial(
     2187, Vector2.Zero, population: 4);
 var settlementFourConfigured = ObserveScenarioService.Configure(
