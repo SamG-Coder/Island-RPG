@@ -580,7 +580,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 "VMMIN_TN", "VFMIN_TN",
                 "VMFOR_TN", "VFFOR_TN",
                 "VMFIS_TN", "VFFIS_TN", "MOVEX_NN", "SHIPF5SF",
-                "COGX_1H", "SHIP_3BF"
+                "COGX_1H", "SHIP_3BF", "COGXX_DN"
             })
                 names.Add(name);
         }
@@ -5582,7 +5582,12 @@ internal sealed partial class GameHostWindow : GameWindow
         float grayscaleAmount = 0,
         float drawOpacity = 1,
         int teamColor = 0,
-        Vector3? spriteOutline = null)
+        Vector3? spriteOutline = null,
+        float sceneDarkness = 0,
+        Vector2? localLightUv = null,
+        Vector2? localLightRadius = null,
+        Vector3? localLightColor = null,
+        float localLightIntensity = 0)
     {
         _fontRenderer?.Flush();
         _uiColorBatch.Flush();
@@ -5593,8 +5598,27 @@ internal sealed partial class GameHostWindow : GameWindow
         var top = -(rectangle.Y - viewportHeight * .5f) * 2 / viewportHeight;
         var bottom = -(rectangle.Y + rectangle.W - viewportHeight * .5f) * 2 / viewportHeight;
         GL.UseProgram(_program);
+        var useSceneLighting = sceneDarkness > 0;
         GL.Uniform1(
-            _shaderUniforms.Get(_program, "sceneLighting"), 0);
+            _shaderUniforms.Get(_program, "sceneLighting"),
+            useSceneLighting ? 1 : 0);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "sceneDarkness"), sceneDarkness);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "sceneUnderground"), 0);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "localLightCount"),
+            localLightUv is null || localLightIntensity <= 0 ? 0 : 1);
+        if (localLightUv is { } lightUv)
+        {
+            GL.Uniform2(_shaderUniforms.Get(_program, "localLightUv[0]"), lightUv);
+            GL.Uniform2(_shaderUniforms.Get(_program, "localLightRadius[0]"),
+                localLightRadius ?? new Vector2(.25f));
+            GL.Uniform3(_shaderUniforms.Get(_program, "localLightColor[0]"),
+                localLightColor ?? Vector3.One);
+            GL.Uniform1(_shaderUniforms.Get(_program, "localLightIntensity[0]"),
+                localLightIntensity);
+        }
         GL.Uniform1(
             _shaderUniforms.Get(_program, "sceneFogAmount"), 0f);
         GL.Uniform1(_shaderUniforms.Get(_program, "image"), 0);
@@ -5639,6 +5663,8 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.Uniform1(_shaderUniforms.Get(_program, "recolorPlayer"), 0);
         GL.Uniform1(_shaderUniforms.Get(_program, "opacity"), 1f);
         GL.Uniform1(_shaderUniforms.Get(_program, "spriteOutline"), 0);
+        GL.Uniform1(_shaderUniforms.Get(_program, "sceneLighting"), 0);
+        GL.Uniform1(_shaderUniforms.Get(_program, "localLightCount"), 0);
     }
 
     private void RenderAtlas()
@@ -8220,6 +8246,8 @@ internal sealed partial class GameHostWindow : GameWindow
             GL.DeleteTexture(texture);
         if (_cinematicShipTexture != 0)
             GL.DeleteTexture(_cinematicShipTexture);
+        foreach (var texture in _cinematicSinkingTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _fishingBoatComposites.Values
                      .SelectMany(value => value.Textures))
             GL.DeleteTexture(texture);

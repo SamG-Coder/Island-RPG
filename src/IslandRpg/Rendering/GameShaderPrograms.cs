@@ -15,6 +15,7 @@ internal static class GameShaderPrograms
             uniform sampler2DArray waterNormals;
             uniform float time;
             uniform float lightning;
+            uniform vec2 cameraOffset;
             void main() {
                 vec2 flowA = vec2(time * 0.016, time * 0.005);
                 vec2 flowB = vec2(-time * 0.009, time * 0.012);
@@ -22,20 +23,25 @@ internal static class GameShaderPrograms
                     vec3(uv * vec2(8.0, 5.0) + flowA, 0.0)).xy * 2.0 - 1.0;
                 vec2 n2 = texture(waterNormals,
                     vec3(uv * vec2(5.0, 8.0) + flowB, 1.0)).xy * 2.0 - 1.0;
-                vec2 waves = n1 * 0.65 + n2 * 0.35;
+                vec2 waves = n1 * 0.82 + n2 * 0.58;
                 float swell = sin((uv.x * 19.0 + uv.y * 7.0) - time * 1.35) * 0.5 + 0.5;
-                vec2 sampleUv = uv * vec2(7.0, 4.5) + waves * 0.045;
+                float crossSwell = sin((uv.x * -11.0 + uv.y * 17.0) - time * 1.08) * 0.5 + 0.5;
+                vec2 sampleUv = (uv + cameraOffset) * vec2(7.0, 4.5) + waves * 0.075;
                 vec3 ageWater = texture(terrain, vec3(sampleUv, 0.0)).rgb;
-                float crest = smoothstep(0.64, 0.95,
-                    length(waves) * 0.7 + swell * 0.38);
-                vec3 night = ageWater * vec3(0.22, 0.29, 0.42);
-                night += vec3(0.08, 0.16, 0.22) * crest;
+                float wavePeak = length(waves) * 0.62 + swell * 0.38 + crossSwell * 0.22;
+                float crest = smoothstep(0.68, 0.94, wavePeak);
+                float crestBreakup = smoothstep(0.67, 0.88,
+                    fract(uv.x * 37.0 + uv.y * 23.0 - time * .7));
+                float whitecap = smoothstep(0.88, 1.08, wavePeak) * crestBreakup;
+                vec3 night = ageWater * vec3(0.075, 0.10, 0.15);
+                night += vec3(0.025, 0.055, 0.075) * crest;
+                night = mix(night, vec3(0.31, 0.39, 0.43), whitecap * .22);
                 night += vec3(0.55, 0.66, 0.78) * lightning *
                     (0.35 + crest * 0.65);
                 float rainCell = fract((uv.x * 1.7 + uv.y) * 86.0 - time * 1.9);
-                float rainBand = step(0.965, rainCell) *
-                    step(fract(uv.x * 173.0 + time * 0.37), 0.42);
-                night += vec3(0.18, 0.24, 0.31) * rainBand * 0.24;
+                float rainBand = step(0.925, rainCell) *
+                    step(fract(uv.x * 173.0 + time * 0.37), 0.58);
+                night += vec3(0.10, 0.14, 0.19) * rainBand * 0.18;
                 color = vec4(night, 1.0);
             }
             """;

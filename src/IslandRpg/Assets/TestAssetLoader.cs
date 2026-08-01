@@ -168,7 +168,8 @@ internal static class TestAssetLoader
         name.EndsWith("_SN", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("SHIPF5SF", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("COGX_1H", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("SHIP_3BF", StringComparison.OrdinalIgnoreCase);
+        name.Equals("SHIP_3BF", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("COGXX_DN", StringComparison.OrdinalIgnoreCase);
 
     private static SpriteFrame DebugGraphic(string name)
     {
