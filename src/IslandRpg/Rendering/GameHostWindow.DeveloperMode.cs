@@ -16,6 +16,13 @@ internal sealed partial class GameHostWindow
         var text = message.Trim();
         if (!text.StartsWith('/'))
         {
+            if (IsObserveWorld)
+            {
+                CommandMessage(
+                    "Observe mode accepts commands only. Type /help.",
+                    warning: true);
+                return;
+            }
             if (TryQueuePlayerConversationTurn(message))
                 return;
             ShowOverheadSpeech(message);
@@ -55,11 +62,16 @@ internal sealed partial class GameHostWindow
                 break;
             case "/where":
                 if (_player is not null)
+                {
+                    var position = IsObserveWorld
+                        ? ObservationFocusPosition()
+                        : _player.Position;
                     CommandMessage(
-                        $"Position {_player.Position.X:0.##}, " +
-                        $"{_player.Position.Y:0.##}; " +
+                        $"Position {position.X:0.##}, " +
+                        $"{position.Y:0.##}; " +
                         WorldLevelMapPresentation.LevelName(
                             _activeWorldLevel) + ".");
+                }
                 break;
             case "/clear":
                 _chatUi.ClearMessages();

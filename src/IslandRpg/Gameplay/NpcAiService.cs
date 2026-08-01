@@ -16,6 +16,11 @@ internal static class NpcAiModelDefaults
     public const string Previous = "qwen3:4b";
 }
 
+internal static class OllamaRequestPolicy
+{
+    public const string KeepAlive = "30m";
+}
+
 internal enum NpcAiAvailability : byte
 {
     Disabled,
@@ -126,6 +131,8 @@ internal sealed record NpcAiDialogueContext(
 
 internal sealed class NpcAiService : IDisposable
 {
+    internal static readonly TimeSpan AvailabilityProbeTimeout =
+        TimeSpan.FromSeconds(60);
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
     private readonly HttpClient _http;
@@ -151,7 +158,9 @@ internal sealed class NpcAiService : IDisposable
                 "The AI URL is invalid.");
         using var timeout = CancellationTokenSource
             .CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(20));
+        // Large local models can need tens of seconds for their first GPU/CPU
+        // load even though subsequent replies are fast.
+        timeout.CancelAfter(AvailabilityProbeTimeout);
         try
         {
             using var tagsRequest = Request(
@@ -184,7 +193,7 @@ internal sealed class NpcAiService : IDisposable
                 prompt = "Reply with exactly READY.",
                 stream = false,
                 think = false,
-                keep_alive = "5m",
+                keep_alive = OllamaRequestPolicy.KeepAlive,
                 options = new
                 {
                     temperature = 0,
@@ -309,7 +318,7 @@ internal sealed class NpcAiService : IDisposable
             prompt,
             stream = false,
             think = false,
-            keep_alive = "5m",
+            keep_alive = OllamaRequestPolicy.KeepAlive,
             format = InterpretationSchema,
             options = new
             {
@@ -386,7 +395,7 @@ internal sealed class NpcAiService : IDisposable
             }, JsonOptions),
             stream = false,
             think = false,
-            keep_alive = "5m",
+            keep_alive = OllamaRequestPolicy.KeepAlive,
             format = DialogueSchema,
             options = new
             {
@@ -504,7 +513,7 @@ internal sealed class NpcAiService : IDisposable
                 JsonOptions),
             stream = false,
             think = false,
-            keep_alive = "5m",
+            keep_alive = OllamaRequestPolicy.KeepAlive,
             format = DialogueSchema,
             options = new
             {
@@ -574,7 +583,7 @@ internal sealed class NpcAiService : IDisposable
             }, JsonOptions),
             stream = false,
             think = false,
-            keep_alive = "5m",
+            keep_alive = OllamaRequestPolicy.KeepAlive,
             format = PersonaSchema,
             options = new
             {

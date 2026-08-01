@@ -777,7 +777,7 @@ internal sealed partial class GameHostWindow
         VillagerState villager,
         VillagerSimulationTier tier)
     {
-        if (_observeMode is not null ||
+        if (IsObserveWorld ||
             _activePlayer is null || _player is null ||
             villager.Boldness < .58f ||
             villager.Memories?.Any(memory =>

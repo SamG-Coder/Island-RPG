@@ -152,6 +152,7 @@ internal sealed partial class GameHostWindow
             }
             previous = VillagerSimulation.CompleteReflection(
                 previous, _worldGameSeconds);
+            previous = CompleteVillagerActionAnimation(previous);
             if (_activePlayer is not null &&
                 previous.FollowingActorId == _activePlayer.Id &&
                 (previous.Activity != VillagerActivity.Blocked ||
@@ -398,7 +399,7 @@ internal sealed partial class GameHostWindow
         if (ConversationFloorBusy)
             return false;
         _socialActorObservations.Clear();
-        if (_observeMode is null)
+        if (!IsObserveWorld)
             _socialActorObservations.Add(new(
                 _activePlayer.Id,
                 VillagerSimulation.PerceivedName(
@@ -1129,6 +1130,20 @@ internal sealed partial class GameHostWindow
             DrawVillagerSpeechBubble(
                 scene, sprite, bubble.Text);
         }
+    }
+
+    private VillagerState CompleteVillagerActionAnimation(
+        VillagerState villager)
+    {
+        if (!_entityAnimations.TryGetValue(
+                (villager.Gender, villager.Action), out var animation) ||
+            !EntityActionLifecycle.HasCompletedAnimation(
+                villager.Action,
+                villager.ActionTime,
+                animation.Textures.Length,
+                animation.SecondsPerFrame))
+            return villager;
+        return VillagerSimulation.CompleteAction(villager);
     }
 
     private void DrawVillagerSpeechBubble(

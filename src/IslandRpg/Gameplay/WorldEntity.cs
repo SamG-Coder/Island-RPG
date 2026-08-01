@@ -32,6 +32,23 @@ internal enum EntityAction
     Die
 }
 
+internal static class EntityActionLifecycle
+{
+    public static bool CompletesAfterAnimation(EntityAction action) =>
+        action is EntityAction.Attack or EntityAction.Work or
+            EntityAction.Gather or EntityAction.Dig or
+            EntityAction.Mine or EntityAction.Fish;
+
+    public static bool HasCompletedAnimation(
+        EntityAction action,
+        double actionTime,
+        int frameCount,
+        float secondsPerFrame) =>
+        CompletesAfterAnimation(action) &&
+        frameCount > 0 && secondsPerFrame > 0 &&
+        actionTime >= frameCount * secondsPerFrame;
+}
+
 internal readonly record struct DirectionalFrame(int Index, bool Mirror);
 
 internal sealed class WorldEntity

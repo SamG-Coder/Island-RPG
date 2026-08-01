@@ -291,7 +291,8 @@ internal static class VillagerSimulation
                 Health: AdventureService.BaseMaximumHealth,
                 Hunger: SurvivalService.MaximumHunger,
                 Inventory: inventory,
-                NextDecisionGameSeconds: gameSeconds,
+                NextDecisionGameSeconds: ScheduleNextDecision(
+                    id, gameSeconds, NearbyDecisionSeconds),
                 LastSimulatedGameSeconds: gameSeconds,
                 Sociability: Unit(Hash(worldSeed, index, 31)),
                 Honesty: Unit(Hash(worldSeed, index, 47)),
@@ -1423,8 +1424,8 @@ internal static class VillagerSimulation
             Activity = activity,
             ActivityUntilGameSeconds = 0,
             ConversationPartnerId = null,
-            NextDecisionGameSeconds =
-                gameSeconds + DecisionInterval(tier),
+            NextDecisionGameSeconds = ScheduleNextDecision(
+                state.Id, gameSeconds, DecisionInterval(tier)),
             LastSimulatedGameSeconds = gameSeconds
         };
     }
@@ -1556,6 +1557,38 @@ internal static class VillagerSimulation
             FacingX = facing.X,
             FacingY = facing.Y
         };
+    }
+
+    public static VillagerState CompleteAction(VillagerState state)
+    {
+        return state with
+        {
+            Action = EntityAction.Idle,
+            ActionTime = 0,
+            Activity = state.Activity is
+                VillagerActivity.Conversing or
+                VillagerActivity.Reflecting or
+                VillagerActivity.Following
+                ? state.Activity
+                : VillagerActivity.Idle,
+            TargetX = null,
+            TargetY = null
+        };
+    }
+
+    public static double ScheduleNextDecision(
+        string actorId,
+        double gameSeconds,
+        double baseDelay)
+    {
+        uint hash = 2166136261;
+        foreach (var character in actorId)
+        {
+            hash ^= character;
+            hash *= 16777619;
+        }
+        var cadence = .82 + (hash % 1000) / 1000.0 * .36;
+        return gameSeconds + Math.Max(1, baseDelay * cadence);
     }
 
     public static VillagerState BeginConversation(

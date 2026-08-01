@@ -1015,9 +1015,9 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         else if (_newWorldAiToggle.Bounds.Contains(pointer))
         {
-            if (!_npcAiState.Ready)
+            if (!_saves.LoadSettings().EffectiveAi.Enabled)
                 _frontendError =
-                    "AI NPCs require an enabled, responding AI model.";
+                    "Enable AI in Settings before adding AI survivors.";
             else
             {
                 _newWorldAiToggle.ToggleAt(pointer);
@@ -1030,9 +1030,9 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         else if (NewWorldAiCountBounds().Contains(pointer))
         {
-            if (!_npcAiState.Ready)
+            if (!_saves.LoadSettings().EffectiveAi.Enabled)
                 _frontendError =
-                    "AI NPCs require an enabled, responding AI model.";
+                    "Enable AI in Settings before adding AI survivors.";
             else
             {
                 _newWorldAiCountDropdown.Toggle();
@@ -1156,7 +1156,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 return;
             }
             _worldList.ClearDeleteApproval();
-            if (world.AiNpcsEnabled && !_npcAiState.Ready)
+            if (world.AiNpcsEnabled &&
+                !_saves.LoadSettings().EffectiveAi.Enabled)
             {
                 _frontendError =
                     $"Cannot load AI world: {_npcAiState.Message}";
@@ -1193,8 +1194,8 @@ internal sealed partial class GameHostWindow : GameWindow
         _worldSeed = seed;
         var spawn = FindPlayableSpawn();
         var player = _selectedPlayer;
-        var aiReady = _npcAiState.Ready;
-        var aiEnabled = aiReady &&
+        var aiConfigured = _saves.LoadSettings().EffectiveAi.Enabled;
+        var aiEnabled = aiConfigured &&
             _newWorldAiToggle.IsChecked &&
             _newWorldAiNpcCount > 0;
         if (aiEnabled)
@@ -1806,34 +1807,37 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         _worldGameSeconds = WorldTime.Advance(
             _worldGameSeconds, elapsed);
+        var wading = false;
         if (!IsObserveWorld)
-            UpdateSurvival(elapsed);
-        UpdateExpiredCampfires();
-        var currentTerrain = SamplePlayerTerrain(
-            _player.Position.X, _player.Position.Y);
-        var nextTerrain = SamplePlayerTerrain(
-            _player.Target.X, _player.Target.Y);
-        var playerBiome = currentTerrain.Biome;
-        var wading = playerBiome is Biome.ShallowWater or
-            Biome.RiverWater or Biome.MangroveShallows;
-        _player.TerrainSpeedMultiplier =
-            ActorMovementService.TerrainSpeedMultiplier(
-                wading,
-                currentTerrain.Height,
-                nextTerrain.Height);
-        if (_fishingBoatBoarded && _fishingBoat is not null)
         {
-            _fishingBoat.Update(elapsed);
-            _fishingBoatAnimationTime += elapsed;
-            UpdateFishingBoatAction(elapsed);
-            _player.AdvanceAction(elapsed);
+            UpdateSurvival(elapsed);
+            var currentTerrain = SamplePlayerTerrain(
+                _player.Position.X, _player.Position.Y);
+            var nextTerrain = SamplePlayerTerrain(
+                _player.Target.X, _player.Target.Y);
+            var playerBiome = currentTerrain.Biome;
+            wading = playerBiome is Biome.ShallowWater or
+                Biome.RiverWater or Biome.MangroveShallows;
+            _player.TerrainSpeedMultiplier =
+                ActorMovementService.TerrainSpeedMultiplier(
+                    wading,
+                    currentTerrain.Height,
+                    nextTerrain.Height);
+            if (_fishingBoatBoarded && _fishingBoat is not null)
+            {
+                _fishingBoat.Update(elapsed);
+                _fishingBoatAnimationTime += elapsed;
+                UpdateFishingBoatAction(elapsed);
+                _player.AdvanceAction(elapsed);
+            }
+            else
+                _player.Update(elapsed);
+            _worldActions.CompleteQueuedAction();
+            _worldActions.Update();
+            UpdateLevelUpFireworks(elapsed);
+            UpdateWaterRipples(wading);
         }
-        else
-            _player.Update(elapsed);
-        _worldActions.CompleteQueuedAction();
-        _worldActions.Update();
-        UpdateLevelUpFireworks(elapsed);
-        UpdateWaterRipples(wading);
+        UpdateExpiredCampfires();
         _activeWorldChunkBuffer.Clear();
         foreach (var gpu in _worldChunks.Values)
         {
@@ -2975,7 +2979,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void ApplyZoomCamera(float oldZoom)
     {
-        if (_mode == PreviewMode.Game &&
+        if (_mode == PreviewMode.Game && !IsObserveWorld &&
             _screen == ScreenState.WorldPreview &&
             _player is not null)
         {
@@ -3492,7 +3496,7 @@ internal sealed partial class GameHostWindow : GameWindow
             DrawTextField(controls[index]);
         }
         DrawMenuButton(RandomSeedButtonBounds(), "Random");
-        var aiReady = _npcAiState.Ready;
+        var aiReady = _saves.LoadSettings().EffectiveAi.Enabled;
         LayoutNewWorldAiControls();
         RenderNewWorldAiControls(aiReady);
         if (_newWorldAiToggle.IsChecked)

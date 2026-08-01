@@ -285,7 +285,7 @@ internal static class NpcAiModelScore
                     prompt = "In two short sentences, describe a survivor making a safe camp with medieval tools.",
                     stream = false,
                     think = false,
-                    keep_alive = "5m",
+                    keep_alive = OllamaRequestPolicy.KeepAlive,
                     options = new { temperature = .2, num_predict = 96 }
                 });
             if (!response.IsSuccessStatusCode) return 0;

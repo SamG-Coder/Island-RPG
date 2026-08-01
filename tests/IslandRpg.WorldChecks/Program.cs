@@ -87,11 +87,38 @@ Require(advancedVillagers[0].Name == "Elara" &&
         advancedVillagers[0].Inventory.Contains(ItemIds.StoneAxe) &&
         advancedVillagers[1].Inventory.Contains(ItemIds.StoneKnife),
     "initial NPC creation must apply advanced names and starting inventories");
+Require(EntityActionLifecycle.HasCompletedAnimation(
+        EntityAction.Gather, 1, 5, .2f),
+    "NPCs and players must share action-animation completion semantics");
+var completedGatherAnimation = VillagerSimulation.CompleteAction(
+    advancedVillagers[0] with
+    {
+        Action = EntityAction.Gather,
+        ActionTime = 1,
+        Activity = VillagerActivity.SeekingResource,
+        TargetX = 4,
+        TargetY = 5
+    });
+Require(completedGatherAnimation.Action == EntityAction.Idle &&
+        completedGatherAnimation.ActionTime == 0 &&
+        completedGatherAnimation.Activity == VillagerActivity.Idle &&
+        completedGatherAnimation.TargetX is null &&
+        completedGatherAnimation.TargetY is null,
+    "completed NPC work animations must explicitly return to idle");
+Require(VillagerSimulation.ScheduleNextDecision(
+            advancedVillagers[0].Id, 1000, 60) !=
+        VillagerSimulation.ScheduleNextDecision(
+            advancedVillagers[1].Id, 1000, 60),
+    "NPC decision cadence must be deterministically staggered per actor");
 Require(
     defaultAi.Enabled &&
     defaultAi.BaseUrl == "http://localhost:11434" &&
     defaultAi.Model == "qwen3.6:35b-a3b",
     "AI settings must default to the contract-tested local Qwen model while remaining runtime-gated");
+Require(NpcAiService.AvailabilityProbeTimeout >= TimeSpan.FromSeconds(45),
+    "AI availability checks must allow large local models to cold-load");
+Require(OllamaRequestPolicy.KeepAlive == "30m",
+    "all Ollama requests must share the 30-minute residency policy");
 await NpcAiScenarioChecks.RunAsync();
 using (var disabledAi = new NpcAiService(
            new HttpClient(new StubHttpHandler(_ =>
