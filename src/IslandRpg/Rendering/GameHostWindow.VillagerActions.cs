@@ -6,6 +6,39 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
+    private bool BeginNpcControlledAction(
+        int index,
+        VillagerState villager,
+        NpcBrainIntent intent,
+        Func<NpcActionResult> interaction,
+        double recoveryGameSeconds,
+        string? reservationKey = null)
+    {
+        if (!_npcController.TryBegin(
+                villager.Id,
+                intent,
+                interaction,
+                reservationKey is null
+                    ? null
+                    : () => _villagerWork.ReleaseTarget(
+                        reservationKey, villager.Id)))
+            return false;
+        _villagers[index] = villager with
+        {
+            Action = intent.Action,
+            ActionTime = 0,
+            TargetX = null,
+            TargetY = null,
+            NextDecisionGameSeconds = _worldGameSeconds + recoveryGameSeconds,
+            LastSimulatedGameSeconds = _worldGameSeconds
+        };
+        _villagersDirty = true;
+        return true;
+    }
+
+    private int VillagerIndex(string actorId) =>
+        _villagers.FindIndex(value => value.Id == actorId);
+
     private bool TryExecuteVillagerCapabilityAction(
         int index,
         VillagerState villager,
@@ -108,38 +141,54 @@ internal sealed partial class GameHostWindow
                 index, villager, tier, target, VillagerNeed.Explore);
             return true;
         }
-        var treeIndex = best.Value.Gpu.Chunk.TreeInstances.FindIndex(
-            tree => tree.Id == best.Value.Tree.Id);
-        if (treeIndex < 0) return false;
-        var gathered = ActorActionService.Gather(
-            villager.Inventory, ItemIds.Sticks, 1);
-        if (!gathered.Succeeded) return false;
-        best.Value.Gpu.Chunk.TreeInstances[treeIndex] =
-            best.Value.Tree with
+        var actionGpu = best.Value.Gpu;
+        var treeId = best.Value.Tree.Id;
+        return BeginNpcControlledAction(
+            index,
+            villager,
+            new("gather_sticks", EntityAction.Gather, target,
+                treeId.ToString()),
+            () =>
             {
-                SticksRemaining = best.Value.Tree.SticksRemaining - 1
-            };
-        _villagers[index] = VillagerCommitmentService.RecordAcquiredItem(
-            villager with
-            {
-                Inventory = gathered.Inventory,
-                Action = EntityAction.Gather,
-                ActionTime = 0,
-                NextDecisionGameSeconds = _worldGameSeconds +
-                    VillagerSimulation.GatherPauseSeconds,
-                LastSimulatedGameSeconds = _worldGameSeconds
+                var actorIndex = VillagerIndex(villager.Id);
+                var treeIndex = actionGpu.Chunk.TreeInstances.FindIndex(
+                    tree => tree.Id == treeId &&
+                            tree.State == TreeLifecycleState.Standing &&
+                            tree.SticksRemaining > 0);
+                if (actorIndex < 0 || treeIndex < 0)
+                {
+                    _villagerWork.ReleaseTarget(reservationKey, villager.Id);
+                    return new(new("gather_sticks", EntityAction.Gather,
+                        target, treeId.ToString()), false,
+                        "target_unavailable");
+                }
+                var actor = _villagers[actorIndex];
+                var gathered = ActorActionService.Gather(
+                    actor.Inventory, ItemIds.Sticks, 1);
+                if (!gathered.Succeeded)
+                {
+                    _villagerWork.ReleaseTarget(reservationKey, villager.Id);
+                    return new(new("gather_sticks", EntityAction.Gather,
+                        target, treeId.ToString()), false,
+                        "inventory_full");
+                }
+                var tree = actionGpu.Chunk.TreeInstances[treeIndex];
+                actionGpu.Chunk.TreeInstances[treeIndex] = tree with
+                {
+                    SticksRemaining = tree.SticksRemaining - 1
+                };
+                _villagers[actorIndex] =
+                    VillagerCommitmentService.RecordAcquiredItem(
+                        actor with { Inventory = gathered.Inventory },
+                        ItemIds.Sticks);
+                QueueChunkSave(actionGpu.Chunk);
+                _villagerWork.ReleaseTarget(reservationKey, villager.Id);
+                _villagersDirty = true;
+                return new(new("gather_sticks", EntityAction.Gather,
+                    target, treeId.ToString()), true);
             },
-            ItemIds.Sticks);
-        QueueChunkSave(best.Value.Gpu.Chunk);
-        _villagerWork.ReleaseTarget(reservationKey, villager.Id);
-        ObserveLog("world_action_succeeded", villager.Id, new
-        {
-            Action = "gather_sticks",
-            ItemId = ItemIds.Sticks,
-            Quantity = 1
-        });
-        _villagersDirty = true;
-        return true;
+            VillagerSimulation.GatherPauseSeconds,
+            reservationKey);
     }
 
     private bool TryVillagerEat(
@@ -237,41 +286,58 @@ internal sealed partial class GameHostWindow
                 : ItemIds.WildBerries
             : ItemIds.PlantFibres;
         var amount = berries ? 2 : 1;
-        var gathered = ActorActionService.Gather(
-            villager.Inventory, itemId, amount);
-        if (!gathered.Succeeded) return false;
-        var farming = berries
-            ? FarmingSkill.AwardExperience(
-                villager.FarmingExperience, 18 * amount).Experience
-            : villager.FarmingExperience;
-        _villagers[index] = VillagerCommitmentService.RecordAcquiredItem(
-            villager with
+        var actionName = berries ? "gather_berries" : "gather_fibre";
+        var actionGpu = best.Value.Gpu;
+        var vegetationKey = best.Value.Key;
+        var intent = new NpcBrainIntent(
+            actionName, EntityAction.Gather, target, vegetationKey);
+        return BeginNpcControlledAction(
+            index,
+            villager,
+            intent,
+            () =>
             {
-                Inventory = gathered.Inventory,
-                FarmingExperience = farming,
-                Need = berries ? VillagerNeed.Food : VillagerNeed.Explore,
-                Action = EntityAction.Gather,
-                ActionTime = 0,
-                NextDecisionGameSeconds = _worldGameSeconds +
-                    VillagerSimulation.GatherPauseSeconds,
-                LastSimulatedGameSeconds = _worldGameSeconds
+                var actorIndex = VillagerIndex(villager.Id);
+                if (actorIndex < 0 ||
+                    !VegetationReady(actionGpu.Chunk, vegetationKey))
+                {
+                    _villagerWork.ReleaseTarget(reservationKey, villager.Id);
+                    return new(intent, false, "target_unavailable");
+                }
+                var actor = _villagers[actorIndex];
+                var gathered = ActorActionService.Gather(
+                    actor.Inventory, itemId, amount);
+                if (!gathered.Succeeded)
+                {
+                    _villagerWork.ReleaseTarget(reservationKey, villager.Id);
+                    return new(intent, false, "inventory_full");
+                }
+                var farming = berries
+                    ? FarmingSkill.AwardExperience(
+                        actor.FarmingExperience, 18 * amount).Experience
+                    : actor.FarmingExperience;
+                _villagers[actorIndex] =
+                    VillagerCommitmentService.RecordAcquiredItem(
+                        actor with
+                        {
+                            Inventory = gathered.Inventory,
+                            FarmingExperience = farming,
+                            Need = berries
+                                ? VillagerNeed.Food
+                                : VillagerNeed.Explore
+                        },
+                        itemId,
+                        amount);
+                SetVegetationCooldown(
+                    actionGpu.Chunk, vegetationKey,
+                    berries ? 12 * 60 : 5 * 60);
+                QueueChunkSave(actionGpu.Chunk);
+                _villagerWork.ReleaseTarget(reservationKey, villager.Id);
+                _villagersDirty = true;
+                return new(intent, true);
             },
-            itemId,
-            amount);
-        SetVegetationCooldown(
-            best.Value.Gpu.Chunk,
-            best.Value.Key,
-            berries ? 12 * 60 : 5 * 60);
-        QueueChunkSave(best.Value.Gpu.Chunk);
-        _villagerWork.ReleaseTarget(reservationKey, villager.Id);
-        ObserveLog("world_action_succeeded", villager.Id, new
-        {
-            Action = berries ? "gather_berries" : "gather_fibre",
-            ItemId = itemId,
-            Quantity = amount
-        });
-        _villagersDirty = true;
-        return true;
+            VillagerSimulation.GatherPauseSeconds,
+            reservationKey);
     }
 
     private bool TryVillagerCraft(int index, VillagerState villager)
@@ -386,40 +452,54 @@ internal sealed partial class GameHostWindow
                 index, villager, tier, fishTarget, VillagerNeed.Food);
             return true;
         }
-        var catchProfile = FishingSkill.Profile(best.Value.Fish.Species);
-        var gathered = ActorActionService.Gather(
-            villager.Inventory, catchProfile.ItemId, 1);
-        if (!gathered.Succeeded) return false;
-        var award = FishingSkill.AwardExperience(
-            villager.FishingExperience, best.Value.Fish.Species);
-        var remainingFish = best.Value.Gpu.Chunk.FishRemaining.TryGetValue(
-            best.Value.Fish.StableKey, out var current)
-            ? current
-            : catchProfile.SchoolSize;
-        best.Value.Gpu.Chunk.FishRemaining[
-            best.Value.Fish.StableKey] = remainingFish - 1;
-        _villagers[index] = VillagerCommitmentService.RecordAcquiredItem(
-            villager with
+        var actionGpu = best.Value.Gpu;
+        var fishKey = best.Value.Fish.StableKey;
+        var species = best.Value.Fish.Species;
+        var intent = new NpcBrainIntent(
+            "fish", EntityAction.Fish, fishTarget, fishKey);
+        return BeginNpcControlledAction(
+            index,
+            villager,
+            intent,
+            () =>
             {
-                Inventory = gathered.Inventory,
-                FishingExperience = award.Experience,
-                Action = EntityAction.Fish,
-                ActionTime = 0,
-                NextDecisionGameSeconds = _worldGameSeconds +
-                    VillagerSimulation.GatherPauseSeconds,
-                LastSimulatedGameSeconds = _worldGameSeconds
+                var actorIndex = VillagerIndex(villager.Id);
+                var profile = FishingSkill.Profile(species);
+                var remaining = actionGpu.Chunk.FishRemaining.TryGetValue(
+                    fishKey, out var current)
+                    ? current
+                    : profile.SchoolSize;
+                if (actorIndex < 0 || remaining <= 0)
+                {
+                    _villagerWork.ReleaseTarget(reservationKey, villager.Id);
+                    return new(intent, false, "target_unavailable");
+                }
+                var actor = _villagers[actorIndex];
+                var gathered = ActorActionService.Gather(
+                    actor.Inventory, profile.ItemId, 1);
+                if (!gathered.Succeeded)
+                {
+                    _villagerWork.ReleaseTarget(reservationKey, villager.Id);
+                    return new(intent, false, "inventory_full");
+                }
+                var award = FishingSkill.AwardExperience(
+                    actor.FishingExperience, species);
+                actionGpu.Chunk.FishRemaining[fishKey] = remaining - 1;
+                _villagers[actorIndex] =
+                    VillagerCommitmentService.RecordAcquiredItem(
+                        actor with
+                        {
+                            Inventory = gathered.Inventory,
+                            FishingExperience = award.Experience
+                        },
+                        profile.ItemId);
+                QueueChunkSave(actionGpu.Chunk);
+                _villagerWork.ReleaseTarget(reservationKey, villager.Id);
+                _villagersDirty = true;
+                return new(intent, true);
             },
-            catchProfile.ItemId);
-        QueueChunkSave(best.Value.Gpu.Chunk);
-        _villagerWork.ReleaseTarget(reservationKey, villager.Id);
-        ObserveLog("world_action_succeeded", villager.Id, new
-        {
-            Action = "fish",
-            catchProfile.ItemId,
-            Species = best.Value.Fish.Species.ToString()
-        });
-        _villagersDirty = true;
-        return true;
+            VillagerSimulation.GatherPauseSeconds,
+            reservationKey);
     }
 
     private bool TryVillagerCutTree(
@@ -469,53 +549,61 @@ internal sealed partial class GameHostWindow
                 index, villager, tier, target, VillagerNeed.Safe);
             return true;
         }
-        var treeIndex = best.Value.Gpu.Chunk.TreeInstances.FindIndex(
-            value => value.Id == best.Value.Tree.Id);
-        if (treeIndex < 0) return false;
         var damage = Math.Max(1, axe.WoodcuttingPower);
-        var health = Math.Max(0, best.Value.Tree.Health - damage);
-        var felled = health == 0;
-        best.Value.Gpu.Chunk.TreeInstances[treeIndex] =
-            best.Value.Tree with
+        var actionGpu = best.Value.Gpu;
+        var treeId = best.Value.Tree.Id;
+        var intent = new NpcBrainIntent(
+            "cut_tree", EntityAction.Work, target, treeId.ToString());
+        return BeginNpcControlledAction(
+            index, villager, intent,
+            () =>
             {
-                Health = health,
-                State = felled
-                    ? TreeLifecycleState.Stump
-                    : TreeLifecycleState.Standing
-            };
-        var inventory = villager.Inventory;
-        if (felled)
-            inventory = ActorActionService.Gather(
-                inventory, ItemIds.Logs, 1).Inventory;
-        var xp = SkillService.AwardExperience(
-            villager.WoodcuttingExperience,
-            damage + (felled ? Math.Max(10, best.Value.Tree.MaxHealth / 5) : 0));
-        var updatedVillager = villager with
-        {
-            Inventory = inventory,
-            WoodcuttingExperience = xp.Experience,
-            Action = EntityAction.Work,
-            ActionTime = 0,
-            NextDecisionGameSeconds = _worldGameSeconds +
-                VillagerSimulation.NearbyDecisionSeconds,
-            LastSimulatedGameSeconds = _worldGameSeconds
-        };
-        _villagers[index] = felled
-            ? VillagerCommitmentService.RecordAcquiredItem(
-                updatedVillager, ItemIds.Logs)
-            : updatedVillager;
-        QueueChunkSave(best.Value.Gpu.Chunk);
-        if (felled)
-            _villagerWork.ReleaseTarget(reservationKey, villager.Id);
-        ObserveLog("world_action_succeeded", villager.Id, new
-        {
-            Action = "cut_tree",
-            Damage = damage,
-            RemainingHealth = health,
-            Felled = felled
-        });
-        _villagersDirty = true;
-        return true;
+                var actorIndex = VillagerIndex(villager.Id);
+                var treeIndex = actionGpu.Chunk.TreeInstances.FindIndex(value =>
+                    value.Id == treeId &&
+                    value.State == TreeLifecycleState.Standing);
+                if (actorIndex < 0 || treeIndex < 0)
+                {
+                    _villagerWork.ReleaseTarget(reservationKey, villager.Id);
+                    return new(intent, false, "target_unavailable");
+                }
+                var actor = _villagers[actorIndex];
+                var tree = actionGpu.Chunk.TreeInstances[treeIndex];
+                var health = Math.Max(0, tree.Health - damage);
+                var felled = health == 0;
+                actionGpu.Chunk.TreeInstances[treeIndex] = tree with
+                {
+                    Health = health,
+                    State = felled
+                        ? TreeLifecycleState.Stump
+                        : TreeLifecycleState.Standing
+                };
+                var inventory = actor.Inventory;
+                if (felled)
+                    inventory = ActorActionService.Gather(
+                        inventory, ItemIds.Logs, 1).Inventory;
+                var xp = SkillService.AwardExperience(
+                    actor.WoodcuttingExperience,
+                    damage + (felled
+                        ? Math.Max(10, tree.MaxHealth / 5)
+                        : 0));
+                var updated = actor with
+                {
+                    Inventory = inventory,
+                    WoodcuttingExperience = xp.Experience
+                };
+                _villagers[actorIndex] = felled
+                    ? VillagerCommitmentService.RecordAcquiredItem(
+                        updated, ItemIds.Logs)
+                    : updated;
+                QueueChunkSave(actionGpu.Chunk);
+                if (felled)
+                    _villagerWork.ReleaseTarget(reservationKey, villager.Id);
+                _villagersDirty = true;
+                return new(intent, true);
+            },
+            VillagerSimulation.NearbyDecisionSeconds,
+            reservationKey);
     }
 
     private bool TryVillagerMine(
@@ -566,47 +654,61 @@ internal sealed partial class GameHostWindow
                 index, villager, tier, target, VillagerNeed.Explore);
             return true;
         }
-        var state = best.Value.Gpu.Chunk.MiningStates.FirstOrDefault(value =>
-            value.StableKey == best.Value.Cached.StableKey);
-        var health = state?.Health ?? best.Value.Definition.MaximumHealth;
         var damage = Math.Max(1, pickaxe.MiningPower);
-        health = Math.Max(0, health - damage);
-        best.Value.Gpu.Chunk.MiningStates.RemoveAll(value =>
-            value.StableKey == best.Value.Cached.StableKey);
-        best.Value.Gpu.Chunk.MiningStates.Add(new(
-            best.Value.Cached.StableKey,
-            health,
-            best.Value.Definition.MaximumHealth));
-        var inventory = villager.Inventory;
-        if (health == 0 && best.Value.Definition.RewardItemId is { } reward)
-            inventory = ActorActionService.Gather(
-                inventory, reward, 1).Inventory;
-        var xp = SkillService.AwardExperience(
-            villager.MiningExperience,
-            damage + (health == 0
-                ? best.Value.Definition.CompletionExperience
-                : 0));
-        var updatedVillager = villager with
-        {
-            Inventory = inventory,
-            MiningExperience = xp.Experience,
-            Action = EntityAction.Mine,
-            ActionTime = 0,
-            NextDecisionGameSeconds = _worldGameSeconds +
-                VillagerSimulation.NearbyDecisionSeconds,
-            LastSimulatedGameSeconds = _worldGameSeconds
-        };
-        _villagers[index] =
-            health == 0 &&
-            best.Value.Definition.RewardItemId is { } acquiredReward
-                ? VillagerCommitmentService.RecordAcquiredItem(
-                    updatedVillager, acquiredReward)
-                : updatedVillager;
-        QueueChunkSave(best.Value.Gpu.Chunk);
-        if (health == 0)
-            _villagerWork.ReleaseTarget(reservationKey, villager.Id);
-        _villagersDirty = true;
-        return true;
+        var actionGpu = best.Value.Gpu;
+        var nodeKey = best.Value.Cached.StableKey;
+        var nodeDefinition = best.Value.Definition;
+        var intent = new NpcBrainIntent(
+            "mine", EntityAction.Mine, target, nodeKey);
+        return BeginNpcControlledAction(
+            index, villager, intent,
+            () =>
+            {
+                var actorIndex = VillagerIndex(villager.Id);
+                var nodeExists = actionGpu.VegetationRenderItems.Any(value =>
+                    value.StableKey == nodeKey && value.VegetationIndex >= 0);
+                if (actorIndex < 0 || !nodeExists)
+                {
+                    _villagerWork.ReleaseTarget(reservationKey, villager.Id);
+                    return new(intent, false, "target_unavailable");
+                }
+                var actor = _villagers[actorIndex];
+                var state = actionGpu.Chunk.MiningStates.FirstOrDefault(value =>
+                    value.StableKey == nodeKey);
+                var health = Math.Max(0,
+                    (state?.Health ?? nodeDefinition.MaximumHealth) - damage);
+                actionGpu.Chunk.MiningStates.RemoveAll(value =>
+                    value.StableKey == nodeKey);
+                actionGpu.Chunk.MiningStates.Add(new(
+                    nodeKey, health, nodeDefinition.MaximumHealth));
+                var inventory = actor.Inventory;
+                if (health == 0 && nodeDefinition.RewardItemId is { } reward)
+                    inventory = ActorActionService.Gather(
+                        inventory, reward, 1).Inventory;
+                var xp = SkillService.AwardExperience(
+                    actor.MiningExperience,
+                    damage + (health == 0
+                        ? nodeDefinition.CompletionExperience
+                        : 0));
+                var updated = actor with
+                {
+                    Inventory = inventory,
+                    MiningExperience = xp.Experience
+                };
+                _villagers[actorIndex] =
+                    health == 0 &&
+                    nodeDefinition.RewardItemId is { } acquiredReward
+                        ? VillagerCommitmentService.RecordAcquiredItem(
+                            updated, acquiredReward)
+                        : updated;
+                QueueChunkSave(actionGpu.Chunk);
+                if (health == 0)
+                    _villagerWork.ReleaseTarget(reservationKey, villager.Id);
+                _villagersDirty = true;
+                return new(intent, true);
+            },
+            VillagerSimulation.NearbyDecisionSeconds,
+            reservationKey);
     }
 
     private bool TryVillagerPlaceOrTendCampfire(

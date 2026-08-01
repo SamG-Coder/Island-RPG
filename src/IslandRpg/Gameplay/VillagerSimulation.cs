@@ -245,8 +245,8 @@ internal static class VillagerSimulation
     public const float FollowResumeDistance = 2.4f;
     public const float FollowRetargetDistance = .6f;
     public const double GameSecondsPerRealSecond = 60;
-    public const double MinimumReflectionRealSeconds = 2.5;
-    public const double MaximumReflectionRealSeconds = 6;
+    public const double MinimumReflectionRealSeconds = .35;
+    public const double MaximumReflectionRealSeconds = 1.2;
 
     private static readonly string[] Names = ["Mira", "Tomas", "Rowan"];
 
@@ -1639,6 +1639,21 @@ internal static class VillagerSimulation
             NextDecisionGameSeconds = until
         };
     }
+
+    public static VillagerState ResumeAfterConversation(
+        VillagerState state,
+        double gameSeconds) =>
+        state with
+        {
+            Activity = VillagerActivity.Idle,
+            ActivityUntilGameSeconds = 0,
+            ConversationPartnerId = null,
+            Action = EntityAction.Idle,
+            ActionTime = 0,
+            TargetX = null,
+            TargetY = null,
+            NextDecisionGameSeconds = gameSeconds + 1
+        };
 
     public static VillagerState CompleteReflection(
         VillagerState state,

@@ -90,6 +90,58 @@ Require(advancedVillagers[0].Name == "Elara" &&
 Require(EntityActionLifecycle.HasCompletedAnimation(
         EntityAction.Gather, 1, 5, .2f),
     "NPCs and players must share action-animation completion semantics");
+var npcController = new NpcController();
+var impactCount = 0;
+var gatherIntent = new NpcBrainIntent(
+    "gather_fibre", EntityAction.Gather, new Vector2(2, 3), "shrub:1");
+Require(npcController.TryBegin(
+        "npc-controller-check",
+        gatherIntent,
+        () =>
+        {
+            impactCount++;
+            return new(gatherIntent, true);
+        }),
+    "NPC controller must accept a brain intent when the actor is free");
+Require(!npcController.TryBegin(
+        "npc-controller-check",
+        gatherIntent,
+        () => new(gatherIntent, true)),
+    "NPC controller must not replace an action already being performed");
+npcController.Advance("npc-controller-check", EntityAction.Gather, .54, 1);
+Require(impactCount == 0 &&
+        npcController.Phase("npc-controller-check") == NpcActionPhase.Acting,
+    "NPC world interaction must wait for the action impact frame");
+npcController.Advance("npc-controller-check", EntityAction.Gather, .55, 1);
+Require(impactCount == 1 &&
+        npcController.Phase("npc-controller-check") == NpcActionPhase.Recovering,
+    "NPC world interaction must run exactly once at the impact frame");
+npcController.Advance("npc-controller-check", EntityAction.Gather, .9, 1);
+Require(impactCount == 1,
+    "NPC world interaction must not repeat during animation recovery");
+npcController.Advance("npc-controller-check", EntityAction.Gather, 1, 1);
+Require(!npcController.IsBusy("npc-controller-check") &&
+        npcController.TryDequeueResult(out var controlledActorId,
+            out var controlledResult) &&
+        controlledActorId == "npc-controller-check" &&
+        controlledResult.Succeeded,
+    "NPC controller must return the interaction result to the brain queue");
+var interruptedController = new NpcController();
+var cancellationCount = 0;
+Require(interruptedController.TryBegin(
+        "interrupted-npc",
+        gatherIntent,
+        () => new(gatherIntent, true),
+        () => cancellationCount++),
+    "NPC controller must accept cancellable world interactions");
+interruptedController.Advance(
+    "interrupted-npc", EntityAction.Idle, 0, 1);
+Require(!interruptedController.IsBusy("interrupted-npc") &&
+        cancellationCount == 1 &&
+        interruptedController.TryDequeueResult(
+            out _, out var interruptedResult) &&
+        interruptedResult.Reason == "interrupted",
+    "interrupted NPC actions must release their controller and reservation");
 var completedGatherAnimation = VillagerSimulation.CompleteAction(
     advancedVillagers[0] with
     {

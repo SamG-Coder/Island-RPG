@@ -14,6 +14,7 @@ internal sealed partial class GameHostWindow
         _villagerWorldObjects = [];
     private readonly HashSet<Guid> _villagerReservedObjects = [];
     private readonly VillagerWorkCoordinator _villagerWork = new();
+    private readonly NpcController _npcController = new();
     private double _nextVillagerRoleAssignment;
     private readonly List<SocialActorObservation>
         _socialActorObservations = [];
@@ -31,10 +32,12 @@ internal sealed partial class GameHostWindow
     {
         _villagers.Clear();
         _villagerSpeechBubbles.Clear();
+        _observedVillagerId = null;
         _queuedPlayerConversationTurns.Clear();
         _conversationFloorSpeakerId = null;
         _conversationFloorUntil = 0;
         _villagerWork.Clear();
+        _npcController.Clear();
         _nextVillagerRoleAssignment = 0;
         if (_activeWorld is null) return;
         if (!_activeWorld.AiNpcsEnabled ||
@@ -123,6 +126,7 @@ internal sealed partial class GameHostWindow
             var previous = _villagers[index];
             if (previous.Health <= 0)
             {
+                _npcController.Cancel(previous.Id);
                 _villagerWork.ReleaseActor(previous.Id);
                 if (previous.Action != EntityAction.Die)
                 {
@@ -144,14 +148,14 @@ internal sealed partial class GameHostWindow
                 continue;
             }
             if (previous.Activity == VillagerActivity.Conversing &&
-                _worldGameSeconds >=
-                previous.ActivityUntilGameSeconds)
+                ConversationHasFinished(previous))
             {
                 previous = VillagerSimulation.CompleteConversation(
                     previous, _worldGameSeconds);
             }
             previous = VillagerSimulation.CompleteReflection(
                 previous, _worldGameSeconds);
+            previous = AdvanceNpcController(previous);
             previous = CompleteVillagerActionAnimation(previous);
             if (_activePlayer is not null &&
                 previous.FollowingActorId == _activePlayer.Id &&
@@ -298,6 +302,8 @@ internal sealed partial class GameHostWindow
             if (villager.Activity is
                 VillagerActivity.Conversing or
                 VillagerActivity.Reflecting)
+                continue;
+            if (_npcController.IsBusy(villager.Id))
                 continue;
             if (villager.WorldLevel != _activeWorldLevel ||
                 _worldGameSeconds < villager.NextDecisionGameSeconds)
@@ -1020,11 +1026,15 @@ internal sealed partial class GameHostWindow
 
     private static double ConversationLineSeconds(string message) =>
         Math.Clamp(
-            2.5 + message.Split(
+            1.5 + message.Split(
                 ' ',
-                StringSplitOptions.RemoveEmptyEntries).Length * .22,
-            4,
-            8);
+                StringSplitOptions.RemoveEmptyEntries).Length * .16,
+            2,
+            5);
+
+    private bool ConversationHasFinished(VillagerState villager) =>
+        _worldGameSeconds >= villager.ActivityUntilGameSeconds ||
+        (_npcAiDialogueTask is null && !ConversationFloorBusy);
 
     private void TakeConversationFloor(
         string speakerId,
@@ -1144,6 +1154,36 @@ internal sealed partial class GameHostWindow
                 animation.SecondsPerFrame))
             return villager;
         return VillagerSimulation.CompleteAction(villager);
+    }
+
+    private VillagerState AdvanceNpcController(VillagerState villager)
+    {
+        if (!_entityAnimations.TryGetValue(
+                (villager.Gender, villager.Action), out var animation))
+            return villager;
+        _npcController.Advance(
+            villager.Id,
+            villager.Action,
+            villager.ActionTime,
+            animation.Textures.Length * animation.SecondsPerFrame);
+        while (_npcController.TryDequeueResult(
+                   out var actorId, out var result))
+        {
+            ObserveLog(
+                result.Succeeded
+                    ? "npc_action_impact"
+                    : "npc_action_failed",
+                actorId,
+                new
+                {
+                    Action = result.Intent.Name,
+                    Target = result.Intent.TargetKey,
+                    result.Reason
+                });
+        }
+        var refreshedIndex = _villagers.FindIndex(value =>
+            value.Id == villager.Id);
+        return refreshedIndex >= 0 ? _villagers[refreshedIndex] : villager;
     }
 
     private void DrawVillagerSpeechBubble(

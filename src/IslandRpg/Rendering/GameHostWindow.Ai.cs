@@ -8,6 +8,7 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
+    private const double AiDialogueListeningPoseSeconds = 2.5;
     private readonly TextBoxControlState _aiUrlTextBox =
         new() { MaximumLength = 160 };
     private readonly TextBoxControlState _aiModelTextBox =
@@ -394,6 +395,17 @@ internal sealed partial class GameHostWindow
                 ConversationLineSeconds(line));
         ShowVillagerSpeech(
             speakerIndex, line, listenerPosition);
+        if (!replyPending)
+        {
+            _villagers[speakerIndex] =
+                VillagerSimulation.ResumeAfterConversation(
+                    _villagers[speakerIndex], _worldGameSeconds);
+            if (listenerIndex >= 0)
+                _villagers[listenerIndex] =
+                    VillagerSimulation.ResumeAfterConversation(
+                        _villagers[listenerIndex], _worldGameSeconds);
+            _villagersDirty = true;
+        }
         if (replyPending && listenerIndex >= 0)
         {
             var replyingVillager = _villagers[listenerIndex];
@@ -449,17 +461,17 @@ internal sealed partial class GameHostWindow
         HoldVillagerConversation(
             currentSpeakerIndex,
             currentListenerPosition,
-            double.PositiveInfinity);
+            AiDialogueListeningPoseSeconds);
         var currentListenerIndex = _villagers.FindIndex(value =>
             value.Id == listenerId);
         if (currentListenerIndex >= 0)
             HoldVillagerConversation(
                 currentListenerIndex,
                 new(speaker.PositionX, speaker.PositionY),
-                double.PositiveInfinity);
+                AiDialogueListeningPoseSeconds);
         TakeConversationFloor(
             speaker.Id,
-            double.PositiveInfinity);
+            AiDialogueListeningPoseSeconds);
         var context = new NpcAiDialogueContext(
                 speaker.Name,
                 listenerName,

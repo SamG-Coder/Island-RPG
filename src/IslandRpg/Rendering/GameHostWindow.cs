@@ -815,6 +815,7 @@ internal sealed partial class GameHostWindow : GameWindow
                              IsPointerOverObserveUi(MouseState.Position);
         if (MouseState.IsButtonDown(MouseButton.Left) && !pointerBlocked)
         {
+            if (_dragging) _observedVillagerId = null;
             if (_dragging) _camera += mouse - _lastMouse;
             _lastMouse = mouse;
             _dragging = true;
@@ -828,7 +829,12 @@ internal sealed partial class GameHostWindow : GameWindow
         if (KeyboardState.IsKeyDown(Keys.W) || KeyboardState.IsKeyDown(Keys.Up)) direction.Y += 1;
         if (KeyboardState.IsKeyDown(Keys.S) || KeyboardState.IsKeyDown(Keys.Down)) direction.Y -= 1;
         if (direction.LengthSquared > 0)
+        {
+            _observedVillagerId = null;
             _camera += Vector2.Normalize(direction) * 720f * elapsed;
+        }
+        else if (IsObserveWorld && _observedVillagerId is not null)
+            SnapCameraToObservedVillager();
     }
 
     private void BeginMenuPreview()
