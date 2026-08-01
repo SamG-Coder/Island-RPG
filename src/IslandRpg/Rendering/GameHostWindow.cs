@@ -27,6 +27,8 @@ internal readonly record struct UiSpriteLight(
 // dedicated file and class. Only minimal wiring and lifecycle calls belong here.
 internal sealed partial class GameHostWindow : GameWindow
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        long, Vector2> ShorelineSpawnCache = new();
     private const int ReferenceWidth = 1280;
     private const int ReferenceHeight = 720;
     private const string ReleaseVersion = "v0.2.0";
@@ -2700,28 +2702,76 @@ internal sealed partial class GameHostWindow : GameWindow
     private Vector2 FindPlayableSpawn() =>
         FindPlayableSpawn(_worldSeed);
 
-    private static Vector2 FindPlayableSpawn(long seed)
+    internal static Vector2 FindPlayableSpawn(long seed)
+        => ShorelineSpawnCache.GetOrAdd(seed, FindNearestShorelineSpawn);
+
+    private static Vector2 FindNearestShorelineSpawn(long seed)
     {
-        for (var radius = 0; radius <= 320; radius++)
-        for (var y = -radius; y <= radius; y++)
-        for (var x = -radius; x <= radius; x++)
+        const int coarseStep = 16;
+        const int maximumSearchRadius = 4096;
+        var maximumCoarseRadius = maximumSearchRadius / coarseStep;
+        for (var coarseRadius = 0;
+             coarseRadius <= maximumCoarseRadius; coarseRadius++)
+        for (var coarseY = -coarseRadius;
+             coarseY <= coarseRadius; coarseY++)
+        for (var coarseX = -coarseRadius;
+             coarseX <= coarseRadius; coarseX++)
         {
-            if (Math.Max(Math.Abs(x), Math.Abs(y)) != radius) continue;
-            if (InfiniteWorldGenerator.BiomeAt(seed, x, y) == Biome.Beach)
-                return new Vector2(x + .5f, y + .5f);
-        }
-        for (var radius = 0; radius <= 160; radius++)
-        for (var y = -radius; y <= radius; y++)
-        for (var x = -radius; x <= radius; x++)
-        {
-            if (Math.Max(Math.Abs(x), Math.Abs(y)) != radius) continue;
-            var biome = InfiniteWorldGenerator.BiomeAt(seed, x, y);
-            if (biome is Biome.DeepWater or Biome.ShallowWater or
-                Biome.RiverWater or Biome.MangroveShallows)
+            if (Math.Max(Math.Abs(coarseX), Math.Abs(coarseY)) !=
+                coarseRadius)
                 continue;
-            return new Vector2(x + .5f, y + .5f);
+            var x = coarseX * coarseStep;
+            var y = coarseY * coarseStep;
+            // Coast elevation changes smoothly at macro scale. Only refine
+            // coarse samples near sea level instead of classifying every tile.
+            var elevation = InfiniteWorldGenerator.BaseElevationAt(seed, x, y);
+            if (elevation is < .55f or > 1.9f) continue;
+            if (TryFindShorelineNear(seed, x, y, coarseStep + 3,
+                    out var spawn))
+                return spawn;
         }
-        throw new InvalidOperationException("No playable land was found near the world origin.");
+        throw new InvalidOperationException(
+            $"No shoreline island was found within {maximumSearchRadius} " +
+            $"tiles for seed {seed}.");
+    }
+
+    private static bool TryFindShorelineNear(
+        long seed, int centerX, int centerY, int searchRadius,
+        out Vector2 spawn)
+    {
+        for (var radius = 0; radius <= searchRadius; radius++)
+        for (var offsetY = -radius; offsetY <= radius; offsetY++)
+        for (var offsetX = -radius; offsetX <= radius; offsetX++)
+        {
+            if (Math.Max(Math.Abs(offsetX), Math.Abs(offsetY)) != radius)
+                continue;
+            var x = centerX + offsetX;
+            var y = centerY + offsetY;
+            if (!IsShorelineSpawn(seed, x, y)) continue;
+            spawn = new(x + .5f, y + .5f);
+            return true;
+        }
+        spawn = default;
+        return false;
+    }
+
+    internal static bool IsShorelineSpawn(long seed, int x, int y)
+    {
+        if (InfiniteWorldGenerator.BiomeAt(seed, x, y) != Biome.Beach)
+            return false;
+        const int visibleShoreRadius = 3;
+        for (var offsetY = -visibleShoreRadius;
+             offsetY <= visibleShoreRadius; offsetY++)
+        for (var offsetX = -visibleShoreRadius;
+             offsetX <= visibleShoreRadius; offsetX++)
+        {
+            if (offsetX == 0 && offsetY == 0) continue;
+            var nearby = InfiniteWorldGenerator.BiomeAt(
+                seed, x + offsetX, y + offsetY);
+            if (nearby is Biome.DeepWater or Biome.ShallowWater)
+                return true;
+        }
+        return false;
     }
 
     private void StartAtlasAtCamera()

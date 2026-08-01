@@ -3845,6 +3845,9 @@ Require(GameHostWindow.SeedTreeType(ItemIds.OakSeeds) == "FOAK_NN" &&
     "each seed must map to its matching tree graphic");
 var morning = WorldTime.At(8 * 60 * 60);
 var newGameTime = WorldTime.At(WorldTime.NewGameStartGameSeconds);
+var shorelineSpawn = GameHostWindow.FindPlayableSpawn(2187);
+var shorelineTileX = (int)MathF.Floor(shorelineSpawn.X);
+var shorelineTileY = (int)MathF.Floor(shorelineSpawn.Y);
 var midnight = WorldTime.At(0);
 var nextDay = WorldTime.At(24 * 60 * 60);
 Require(newGameTime.Day == 1 && newGameTime.Hour == 3 &&
@@ -3853,6 +3856,12 @@ Require(newGameTime.Day == 1 && newGameTime.Hour == 3 &&
         midnight.Daylight < morning.Daylight &&
         nextDay.Day == 2 && nextDay.Hour == 0,
     "world time must track day number, clock time, and daylight");
+Require(
+    InfiniteWorldGenerator.BiomeAt(
+        2187, shorelineTileX, shorelineTileY) == Biome.Beach &&
+    GameHostWindow.IsShorelineSpawn(
+        2187, shorelineTileX, shorelineTileY),
+    "new-game seed resolution must preserve the seed and select a beach beside its nearest island shore");
 Require(WorldTime.Advance(0, WorldTime.RealSecondsPerGameDay) ==
         24 * 60 * 60,
     "one full game day must take 24 real minutes");
