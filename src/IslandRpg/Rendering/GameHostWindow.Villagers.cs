@@ -871,6 +871,15 @@ internal sealed partial class GameHostWindow
                         item.ItemId)));
             }
         }
+        var beforeLocationObservation = villager;
+        villager = VillagerLocationMemoryService.ObserveWorldObjects(
+            villager,
+            CollectionsMarshal.AsSpan(_villagerWorldObjects),
+            _worldGameSeconds);
+        villager = ReconcileVillagerLocationMemory(villager);
+        _villagers[villagerIndex] = villager;
+        if (!ReferenceEquals(beforeLocationObservation, villager))
+            _villagersDirty = true;
         var action = VillagerSimulation.SelectWorldAction(
             villager,
             CollectionsMarshal.AsSpan(_villagerWorldObjects),
@@ -1069,6 +1078,88 @@ internal sealed partial class GameHostWindow
         QueueChunkSave(targetGpu.Chunk);
         _villagersDirty = true;
         return true;
+    }
+
+    private VillagerState ReconcileVillagerLocationMemory(
+        VillagerState villager)
+    {
+        if (villager.LocationMemories is not { Count: > 0 })
+            return villager;
+        var current = new Vector2(villager.PositionX, villager.PositionY);
+        var updated = villager;
+        foreach (var memory in villager.LocationMemories.ToArray())
+        {
+            if (memory.WorldLevel != villager.WorldLevel ||
+                memory.Type == VillagerLocationType.Danger ||
+                Vector2.DistanceSquared(
+                    current,
+                    new(memory.PositionX, memory.PositionY)) >
+                VillagerLocationMemoryService.MatchRadius *
+                VillagerLocationMemoryService.MatchRadius)
+                continue;
+            var rememberedPosition = new Vector2(
+                memory.PositionX, memory.PositionY);
+            var valid = memory.Type switch
+            {
+                VillagerLocationType.FoodSource =>
+                    _villagerWorldObjects.Any(item =>
+                        VillagerLocationMemoryService.LocationTypeForItem(
+                            item.ItemId) == VillagerLocationType.FoodSource &&
+                        Vector2.DistanceSquared(
+                            item.Position, rememberedPosition) <=
+                        VillagerLocationMemoryService.MatchRadius *
+                        VillagerLocationMemoryService.MatchRadius),
+                VillagerLocationType.Storage =>
+                    _villagerWorldObjects.Any(item =>
+                        item.IsStorage &&
+                        Vector2.DistanceSquared(
+                            item.Position, rememberedPosition) <=
+                        VillagerLocationMemoryService.MatchRadius *
+                        VillagerLocationMemoryService.MatchRadius),
+                VillagerLocationType.WoodSource =>
+                    _worldChunks.Values.Any(gpu =>
+                        IsActiveSimulationChunk(gpu) &&
+                        gpu.Chunk.TreeInstances.Any(tree =>
+                            tree.State == TreeLifecycleState.Standing &&
+                            Vector2.DistanceSquared(
+                                new(tree.X + .5f, tree.Y + .5f),
+                                rememberedPosition) <=
+                            VillagerLocationMemoryService.MatchRadius *
+                            VillagerLocationMemoryService.MatchRadius)),
+                VillagerLocationType.FishingSpot =>
+                    _worldChunks.Values.Any(gpu =>
+                        IsActiveSimulationChunk(gpu) &&
+                        gpu.Chunk.Fish.Any(fish =>
+                        {
+                            var profile = FishingSkill.Profile(fish.Species);
+                            var remaining = gpu.Chunk.FishRemaining.TryGetValue(
+                                fish.StableKey, out var count)
+                                ? count
+                                : profile.SchoolSize;
+                            return remaining > 0 &&
+                                   Vector2.DistanceSquared(
+                                       new(fish.X, fish.Y),
+                                       rememberedPosition) <=
+                                   VillagerLocationMemoryService.MatchRadius *
+                                   VillagerLocationMemoryService.MatchRadius;
+                        })),
+                _ => false
+            };
+            updated = valid
+                ? VillagerLocationMemoryService.Remember(
+                    updated,
+                    memory.Type,
+                    rememberedPosition,
+                    memory.WorldLevel,
+                    _worldGameSeconds)
+                : VillagerLocationMemoryService.ObserveEmpty(
+                    updated,
+                    memory.Type,
+                    rememberedPosition,
+                    memory.WorldLevel,
+                    _worldGameSeconds);
+        }
+        return updated;
     }
 
     private void SaveVillagers()

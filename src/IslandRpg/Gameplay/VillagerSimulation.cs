@@ -169,7 +169,8 @@ internal sealed record VillagerState(
     IReadOnlyList<VillagerFailedTarget>? FailedTargets = null,
     IReadOnlyList<Guid>? ObservedOwnershipIncidentIds = null,
     float Energy = VillagerFatigueService.MaximumEnergy,
-    double? LastEnergyGameSeconds = null);
+    double? LastEnergyGameSeconds = null,
+    IReadOnlyList<VillagerLocationMemory>? LocationMemories = null);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,
@@ -504,6 +505,9 @@ internal static class VillagerSimulation
                     continue;
                 var distanceSquared = Vector2.DistanceSquared(
                     position, candidate.Position);
+                if (!VillagerLocationMemoryService.CanVisit(
+                        state, candidate.Position, gameSeconds))
+                    continue;
                 if (distanceSquared >= bestScore) continue;
                 bestScore = distanceSquared;
                 best = candidate;
@@ -522,7 +526,17 @@ internal static class VillagerSimulation
                         StepToward(position, best.Position));
         }
         if (PlayerInventory.IsFull(state.Inventory))
-            return default;
+        {
+            var storage = VillagerLocationMemoryService.SelectUsefulLocation(
+                state, gameSeconds, storageOnly: true);
+            return storage is null
+                ? default
+                : new(
+                    VillagerWorldActionKind.ApproachStorage,
+                    Target: StepToward(
+                        position,
+                        new(storage.PositionX, storage.PositionY)));
+        }
 
         bestScore = ResourceSearchRadius * ResourceSearchRadius;
         found = false;
@@ -542,6 +556,9 @@ internal static class VillagerSimulation
                 continue;
             var distanceSquared = Vector2.DistanceSquared(
                 position, candidate.Position);
+            if (!VillagerLocationMemoryService.CanVisit(
+                    state, candidate.Position, gameSeconds))
+                continue;
             if (distanceSquared >
                 ResourceSearchRadius * ResourceSearchRadius)
                 continue;
@@ -557,7 +574,20 @@ internal static class VillagerSimulation
             best = candidate;
             found = true;
         }
-        if (!found) return default;
+        if (!found)
+        {
+            var remembered =
+                VillagerLocationMemoryService.SelectUsefulLocation(
+                    state, gameSeconds);
+            if (remembered is null) return default;
+            return new(
+                remembered.Type == VillagerLocationType.Storage
+                    ? VillagerWorldActionKind.ApproachStorage
+                    : VillagerWorldActionKind.ApproachItem,
+                Target: StepToward(
+                    position,
+                    new(remembered.PositionX, remembered.PositionY)));
+        }
         var inRange = Vector2.DistanceSquared(
             position, best.Position) <=
             InteractionRange * InteractionRange;
@@ -1157,7 +1187,7 @@ internal static class VillagerSimulation
         if (memories.Count > MaximumMemories)
             memories.RemoveRange(
                 0, memories.Count - MaximumMemories);
-        return villager with
+        var attacked = villager with
         {
             Health = Math.Max(0, villager.Health - damage),
             Relationships = relationships,
@@ -1172,6 +1202,13 @@ internal static class VillagerSimulation
             TargetY = null,
             NextDecisionGameSeconds = gameSeconds
         };
+        return VillagerLocationMemoryService.Remember(
+            attacked,
+            VillagerLocationType.Danger,
+            new(villager.PositionX, villager.PositionY),
+            villager.WorldLevel,
+            gameSeconds,
+            confidence: 1);
     }
 
     public static VillagerState RecordWitnessedAttack(

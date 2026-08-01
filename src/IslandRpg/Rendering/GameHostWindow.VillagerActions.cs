@@ -121,6 +121,10 @@ internal sealed partial class GameHostWindow
             {
                 if (tree.State != TreeLifecycleState.Standing ||
                     tree.SticksRemaining <= 0 ||
+                    !VillagerLocationMemoryService.CanVisit(
+                        villager,
+                        new(tree.X + .5f, tree.Y + .5f),
+                        _worldGameSeconds) ||
                     !_villagerWork.IsAvailable(
                         TreeReservationKey(tree.Id),
                         villager.Id, _worldGameSeconds))
@@ -133,6 +137,14 @@ internal sealed partial class GameHostWindow
             }
         }
         if (best is null) return false;
+        villager = VillagerLocationMemoryService.Remember(
+            villager,
+            VillagerLocationType.WoodSource,
+            new(best.Value.Tree.X + .5f, best.Value.Tree.Y + .5f),
+            villager.WorldLevel,
+            _worldGameSeconds);
+        _villagers[index] = villager;
+        _villagersDirty = true;
         var reservationKey = TreeReservationKey(best.Value.Tree.Id);
         if (!_villagerWork.TryReserve(
                 reservationKey, villager.Id, _worldGameSeconds))
@@ -429,6 +441,10 @@ internal sealed partial class GameHostWindow
                     ? count
                     : profile.SchoolSize;
                 if (remaining <= 0 ||
+                    !VillagerLocationMemoryService.CanVisit(
+                        villager,
+                        new(fish.X, fish.Y),
+                        _worldGameSeconds) ||
                     !FishingSkill.CanCatch(
                         fish.Species,
                         FishingSkill.LevelForExperience(
@@ -446,6 +462,14 @@ internal sealed partial class GameHostWindow
             }
         }
         if (best is null) return false;
+        villager = VillagerLocationMemoryService.Remember(
+            villager,
+            VillagerLocationType.FishingSpot,
+            new(best.Value.Fish.X, best.Value.Fish.Y),
+            villager.WorldLevel,
+            _worldGameSeconds);
+        _villagers[index] = villager;
+        _villagersDirty = true;
         var reservationKey = ResourceReservationKey(
             "fish", best.Value.Fish.StableKey);
         if (!_villagerWork.TryReserve(
@@ -531,6 +555,10 @@ internal sealed partial class GameHostWindow
             foreach (var tree in gpu.Chunk.TreeInstances)
             {
                 if (tree.State != TreeLifecycleState.Standing ||
+                    !VillagerLocationMemoryService.CanVisit(
+                        villager,
+                        new(tree.X + .5f, tree.Y + .5f),
+                        _worldGameSeconds) ||
                     !_villagerWork.IsAvailable(
                         TreeReservationKey(tree.Id),
                         villager.Id, _worldGameSeconds))
@@ -543,6 +571,14 @@ internal sealed partial class GameHostWindow
             }
         }
         if (best is null) return false;
+        villager = VillagerLocationMemoryService.Remember(
+            villager,
+            VillagerLocationType.WoodSource,
+            new(best.Value.Tree.X + .5f, best.Value.Tree.Y + .5f),
+            villager.WorldLevel,
+            _worldGameSeconds);
+        _villagers[index] = villager;
+        _villagersDirty = true;
         var reservationKey = TreeReservationKey(best.Value.Tree.Id);
         if (!_villagerWork.TryReserve(
                 reservationKey, villager.Id, _worldGameSeconds))

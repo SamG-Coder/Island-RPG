@@ -203,6 +203,94 @@ Require(VillagerFatigueService.MovementEffectiveness(25) <
         VillagerFatigueService.AdjustedWorkDuration(10, 25) >
             VillagerFatigueService.AdjustedWorkDuration(10, 100),
     "low energy must reduce movement speed and work effectiveness");
+var locationMemoryVillager = VillagerLocationMemoryService.Remember(
+    advancedVillagers[0] with
+    {
+        Hunger = 80,
+        Need = VillagerNeed.Idle,
+        PositionX = 0,
+        PositionY = 0
+    },
+    VillagerLocationType.FoodSource,
+    new(10, 2),
+    worldLevel: 0,
+    gameSeconds: 100);
+var discoveredFoodLocation = locationMemoryVillager.LocationMemories!.Single();
+Require(discoveredFoodLocation.Type == VillagerLocationType.FoodSource &&
+        discoveredFoodLocation.PositionX == 10 &&
+        discoveredFoodLocation.PositionY == 2 &&
+        discoveredFoodLocation.WorldLevel == 0 &&
+        discoveredFoodLocation.Confidence ==
+            VillagerLocationMemoryService.DiscoveryConfidence &&
+        discoveredFoodLocation.LastObservedGameSeconds == 100,
+    "villagers must remember personally discovered resource locations with position, level, confidence, and observation time");
+var rememberedFoodAction = VillagerSimulation.SelectWorldAction(
+    locationMemoryVillager,
+    [],
+    gameSeconds: 110);
+Require(rememberedFoodAction.Kind ==
+            VillagerWorldActionKind.ApproachItem &&
+        rememberedFoodAction.ObjectId is null &&
+        rememberedFoodAction.Target is { X: > 0 },
+    "villagers must approach a remembered useful location when no nearby target is visible");
+var dangerousFoodLocation = VillagerLocationMemoryService.Remember(
+    locationMemoryVillager,
+    VillagerLocationType.Danger,
+    new(10, 2),
+    worldLevel: 0,
+    gameSeconds: 105,
+    confidence: 1);
+Require(VillagerSimulation.SelectWorldAction(
+            dangerousFoodLocation, [], 110).Kind ==
+        VillagerWorldActionKind.None,
+    "villagers must avoid remembered useful locations inside a known danger area");
+var urgentDangerAction = VillagerSimulation.SelectWorldAction(
+    dangerousFoodLocation with { Hunger = 30 },
+    [],
+    gameSeconds: 110);
+Require(urgentDangerAction.Kind == VillagerWorldActionKind.ApproachItem,
+    "urgent hunger must override remembered danger avoidance");
+var decayedLocationConfidence =
+    VillagerLocationMemoryService.ConfidenceAt(
+        discoveredFoodLocation,
+        100 + 24 * 60 * 60);
+Require(decayedLocationConfidence < discoveredFoodLocation.Confidence &&
+        decayedLocationConfidence > 0,
+    "resource location confidence must decay with elapsed game time");
+var emptyLocationVillager = VillagerLocationMemoryService.ObserveEmpty(
+    locationMemoryVillager,
+    VillagerLocationType.FoodSource,
+    new(10, 2),
+    worldLevel: 0,
+    gameSeconds: 200);
+Require(emptyLocationVillager.LocationMemories!.Single().Confidence <
+            discoveredFoodLocation.Confidence - .4f,
+    "reaching a remembered resource location and finding nothing must significantly reduce confidence");
+var refreshedLocationVillager = VillagerLocationMemoryService.Remember(
+    emptyLocationVillager,
+    VillagerLocationType.FoodSource,
+    new(10, 2),
+    worldLevel: 0,
+    gameSeconds: 250);
+Require(refreshedLocationVillager.LocationMemories!.Single() is
+        {
+            Confidence: >= VillagerLocationMemoryService.DiscoveryConfidence,
+            LastObservedGameSeconds: 250
+        },
+    "rediscovering a valid resource location must refresh confidence and observation time");
+var boundedLocationVillager = advancedVillagers[0];
+for (var locationIndex = 0;
+     locationIndex < VillagerLocationMemoryService.MaximumMemories + 12;
+     locationIndex++)
+    boundedLocationVillager = VillagerLocationMemoryService.Remember(
+        boundedLocationVillager,
+        VillagerLocationType.WoodSource,
+        new(locationIndex * 3, 0),
+        worldLevel: 0,
+        gameSeconds: locationIndex);
+Require(boundedLocationVillager.LocationMemories?.Count ==
+            VillagerLocationMemoryService.MaximumMemories,
+    "per-villager location memory must remain bounded for save size");
 var deadVillager = advancedVillagers[0] with
 {
     Health = 0,
@@ -6240,6 +6328,16 @@ try
             FollowingActorId = player.Id,
             Energy = 37.5f,
             LastEnergyGameSeconds = 812,
+            LocationMemories =
+            [
+                new(
+                    14,
+                    9,
+                    0,
+                    VillagerLocationType.Storage,
+                    .8f,
+                    810)
+            ],
             LastDeliberation = new(
                 "Helping build shelter benefits both of us.",
                 "accept",
@@ -6275,6 +6373,15 @@ try
         loadedVillagers[0].FollowingActorId == player.Id &&
         loadedVillagers[0].Energy == 37.5f &&
         loadedVillagers[0].LastEnergyGameSeconds == 812 &&
+        loadedVillagers[0].LocationMemories?.Single() is
+        {
+            PositionX: 14,
+            PositionY: 9,
+            WorldLevel: 0,
+            Type: VillagerLocationType.Storage,
+            Confidence: .8f,
+            LastObservedGameSeconds: 810
+        } &&
         loadedVillagers[0].LastDeliberation is
         {
             Decision: "accept",
