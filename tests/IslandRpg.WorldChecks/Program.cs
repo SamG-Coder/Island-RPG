@@ -49,6 +49,7 @@ if (args.Contains(
     return;
 }
 
+var worldCheckAssertions = 0;
 Require(
     new GameSettings().UnlimitedZoom,
     "unlimited zoom must be enabled by default");
@@ -778,6 +779,16 @@ Require(
     workCoordinator.IsAvailable("fish:two", "rowan", 999) &&
     workCoordinator.Count == 0,
     "abandoned target reservations must expire without accumulating state");
+foreach (var actorState in new[] { "dead", "idle", "abandoned", "role-changed" })
+{
+    var target = $"reservation:{actorState}";
+    Require(workCoordinator.TryReserve(target, actorState, 200),
+        $"{actorState} villager must be able to reserve a work target");
+    workCoordinator.ReleaseActor(actorState);
+    Require(workCoordinator.IsAvailable(target, "other", 200) &&
+            workCoordinator.Count == 0,
+        $"{actorState} villager must immediately release its work reservation");
+}
 var woodInventory = PlayerInventory.CreateStartingInventory();
 woodInventory[0] = ItemIds.StoneAxe;
 var roleAssignments = VillagerWorkCoordinator.AssignRoles([
@@ -804,12 +815,37 @@ var duoRoles = VillagerWorkCoordinator.AssignRoles([
     hungryVillager with { Id = "duo-food", Hunger = 80 },
     hungryVillager with { Id = "duo-builder", Hunger = 75 }
 ]);
+var soloExplorerRoles = VillagerWorkCoordinator.AssignRoles([
+    hungryVillager with
+    {
+        Id = "solo-explorer",
+        Hunger = 80,
+        MiningExperience = 10_000
+    }
+]);
+var craftingDuoRoles = VillagerWorkCoordinator.AssignRoles([
+    hungryVillager with
+    {
+        Id = "crafting-food",
+        Hunger = 80,
+        FishingExperience = 10_000
+    },
+    hungryVillager with
+    {
+        Id = "crafting-specialist",
+        Hunger = 75,
+        CraftingExperience = 10_000
+    }
+]);
 Require(soloRoles["solo-builder"] is
             VillagerWorkRole.Crafting or VillagerWorkRole.Exploration &&
+        soloExplorerRoles["solo-explorer"] == VillagerWorkRole.Exploration &&
         duoRoles.Values.Contains(VillagerWorkRole.Food) &&
         duoRoles.Values.Any(value => value is
             VillagerWorkRole.Crafting or VillagerWorkRole.Exploration) &&
-        !duoRoles.Values.Contains(VillagerWorkRole.Wood),
+        !duoRoles.Values.Contains(VillagerWorkRole.Wood) &&
+        craftingDuoRoles["crafting-specialist"] ==
+            VillagerWorkRole.Crafting,
     "one- and two-person groups must retain a technology progression role instead of locking every survivor into food and wood");
 var stableRoles = VillagerWorkCoordinator.AssignRoles([
     hungryVillager with
@@ -1803,6 +1839,13 @@ Require(
         gameSeconds: 110).Intent ==
         VillagerSocialIntent.None,
     "introductions must become persistent knowledge and enforce a quiet social cooldown");
+Require(
+    curiousVillager.NextSocialGameSeconds - 100 ==
+        VillagerSimulation.SocialRealCooldown(
+            curiousVillager,
+            introduction.Intent) *
+        VillagerSimulation.GameSecondsPerRealSecond,
+    "social cooldowns must convert exactly once from real seconds to game seconds");
 var originQuestion = VillagerSimulation.SelectSocialGoal(
     curiousVillager,
     new[] { stranger },
@@ -2072,6 +2115,35 @@ var emptyDeliveryPromisee = villagerSpawnA[1];
 Require(emptyDeliveryPromisor.Promises!.Single().Progress == 0 &&
         !emptyDeliveryPromisee.Inventory.Contains(ItemIds.Sticks),
     "promise delivery must not progress when the promised item is absent");
+var fullDeliveryPromisor = VillagerCommitmentService.AddPromise(
+    villagerSpawnA[0] with
+    {
+        Inventory = new string?[28]
+        {
+            ItemIds.Sticks,
+            null, null, null, null, null, null,
+            null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null
+        }
+    },
+    favorAcceptance.Promise!);
+var fullDeliveryPromisee = villagerSpawnA[1] with
+{
+    Inventory = Enumerable.Repeat<string?>(ItemIds.Logs, 28).ToArray()
+};
+(fullDeliveryPromisor, fullDeliveryPromisee) =
+    VillagerCommitmentService.CompleteDelivery(
+        fullDeliveryPromisor,
+        fullDeliveryPromisee,
+        favorAcceptance.Promise!.Id,
+        407);
+Require(fullDeliveryPromisor.Promises!.Single().Progress == 0 &&
+        fullDeliveryPromisor.Inventory.Count(value =>
+            value == ItemIds.Sticks) == 1 &&
+        fullDeliveryPromisee.Inventory.All(value => value == ItemIds.Logs) &&
+        fullDeliveryPromisee.Relationships is null,
+    "promise delivery must remain atomic when the promisee inventory has no space");
 (favorPromisor, favorPromisee) =
     VillagerCommitmentService.CompleteDelivery(
         favorPromisor,
@@ -6167,10 +6239,12 @@ finally
 
 Console.WriteLine(
     $"World checks passed: {macroBiomes.Count} macro biomes, deterministic generation, seams, " +
-    $"persistence, and 64-slot region storage ({regionBytes:N0} bytes for the test region).");
+    $"persistence, and 64-slot region storage ({regionBytes:N0} bytes for the test region). " +
+    $"Assertions passed: {worldCheckAssertions:N0}.");
 
-static void Require(bool condition, string message)
+void Require(bool condition, string message)
 {
+    worldCheckAssertions++;
     if (!condition) throw new InvalidOperationException(message);
 }
 
