@@ -20,6 +20,8 @@ internal static class ChatCommandRegistry
         new("/where", "/where", "Show position and world layer."),
         new("/clear", "/clear", "Clear the local chat log."),
         new("/seed", "/seed", "Show the current world seed."),
+        new("/codex", "/codex <message>",
+            "Send a message to the connected Codex control pipe."),
         new("/imahacker", "/imahacker", "Enable developer mode."),
         new("/respawn", "/respawn", "Restore and return to spawn.", true),
         new("/heal", "/heal", "Restore maximum health.", true),

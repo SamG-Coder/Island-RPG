@@ -79,6 +79,29 @@ internal sealed partial class GameHostWindow
             case "/seed":
                 CommandMessage($"World seed: {_worldSeed}.");
                 break;
+            case "/codex":
+                if (args.Length == 0)
+                {
+                    Usage(command.Definition);
+                    break;
+                }
+                if (_gameControlPipe is null)
+                {
+                    CommandMessage(
+                        "No Codex control pipe is active.", warning: true);
+                    break;
+                }
+                var codexMessage = string.Join(' ', args);
+                _gameControlPipe.Publish(new
+                {
+                    eventType = "player_message",
+                    text = codexMessage,
+                    gameSeconds = _worldGameSeconds
+                });
+                _chatUi.AddMessage(
+                    $"To Codex: {codexMessage}",
+                    ChatMessageStyle.Debug);
+                break;
             case "/imahacker":
                 EnableDeveloperModeFromCommand();
                 break;

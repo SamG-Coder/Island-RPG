@@ -71,6 +71,38 @@ Require(
     chatLayout.DisplayLines.Single().Text == "one two three four" &&
     chatLayout.DisplayLines.Single().Style == ChatMessageStyle.Debug,
     "large chat layout must preserve unwrapped debug messages and their style");
+Require(
+    ChatCommandRegistry.TryParse(
+        "/codex inspect the western shore", out var codexCommand) &&
+    codexCommand.Definition.Name == "/codex" &&
+    codexCommand.Arguments.SequenceEqual(
+        ["inspect", "the", "western", "shore"]),
+    "the player must be able to publish free-form messages through /codex");
+var screenshotCheckPath = Path.Combine(
+    Path.GetTempPath(), $"island-rpg-shot-{Guid.NewGuid():N}.png");
+try
+{
+    PngScreenshotWriter.Write(
+        screenshotCheckPath,
+        [
+            255, 0, 0, 255, 0, 255, 0, 255,
+            0, 0, 255, 255, 255, 255, 255, 255
+        ],
+        2, 2, flipVertically: true);
+    using var screenshotStream = File.OpenRead(screenshotCheckPath);
+    var screenshotImage = ImageResult.FromStream(
+        screenshotStream, ColorComponents.RedGreenBlueAlpha);
+    Require(
+        screenshotImage.Width == 2 && screenshotImage.Height == 2 &&
+        screenshotImage.Data[0] == 0 &&
+        screenshotImage.Data[1] == 0 &&
+        screenshotImage.Data[2] == 255,
+        "control-pipe screenshots must be valid vertically corrected PNG files");
+}
+finally
+{
+    File.Delete(screenshotCheckPath);
+}
 var observeSummaryDirectory = Path.Combine(
     Path.GetTempPath(), "IslandRpg.WorldChecks", Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(observeSummaryDirectory);
