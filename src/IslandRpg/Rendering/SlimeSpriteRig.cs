@@ -29,6 +29,7 @@ internal sealed class SlimeSpriteRig
     public const int CellSize = 128;
     public const float WorldScale = .22f;
     public const int FrameCount = Columns * Rows;
+    public const double DeathAnimationSeconds = Columns * .24;
     private const int GroundPadding = 8;
 
     private readonly SpriteFrame[] _front;
@@ -124,6 +125,19 @@ internal sealed class SlimeSpriteRig
 
     internal static bool FacesAwayFromCamera(Vector2 mapFacing) =>
         mapFacing.X + mapFacing.Y < -.05f;
+
+    internal static Vector2 StableTravelFacing(
+        Vector2 position, Vector2 destination, Vector2 fallback)
+    {
+        var travel = destination - position;
+        if (travel.LengthSquared >= .001f) return travel.Normalized();
+        return fallback.LengthSquared >= .001f
+            ? fallback.Normalized()
+            : Vector2.UnitY;
+    }
+
+    internal static bool DeathAnimationComplete(double actionSeconds) =>
+        actionSeconds >= DeathAnimationSeconds;
 
     private static SpriteFrame[] LoadSheet(string path)
     {

@@ -65,6 +65,9 @@ internal sealed partial class GameHostWindow
     {
         if (_mode != PreviewMode.Game || _player is null ||
             _activeWorld is null) return;
+        _enemies.RemoveAll(enemy =>
+            !enemy.Alive && SlimeSpriteRig.DeathAnimationComplete(
+                _clock - enemy.VisualActionStartedAt));
         if (_clock >= _nextEnemySpawnerProbe)
         {
             EnsureEnemySpawnerNear(_player.Position);
@@ -406,6 +409,7 @@ internal sealed partial class GameHostWindow
         Vector2 spawnerPosition,
         IReadOnlyList<EnemyActorPresence> actors)
     {
+        if (!enemy.Alive) return enemy;
         if (IsSlimeHabitat(enemy.Kind, enemy.Position, enemy.WorldLevel))
             return enemy;
         var random = new Random(HashCode.Combine(_worldSeed, enemy.Id));
@@ -548,16 +552,27 @@ internal sealed partial class GameHostWindow
 
     private ActorVisual? GetEnemyVisual(EnemyState enemy)
     {
-        if (_slimeRig is null || !enemy.Alive ||
+        if (_slimeRig is null ||
             enemy.WorldLevel != _activeWorldLevel) return null;
-        var facing = enemy.Path is { } path && enemy.PathIndex < path.Count
-            ? path[enemy.PathIndex] - enemy.Position
-            : enemy.Destination - enemy.Position;
-        if (facing.LengthSquared < .001f) facing = Vector2.UnitY;
+        var deathAge = _clock - enemy.VisualActionStartedAt;
+        if (!enemy.Alive &&
+            SlimeSpriteRig.DeathAnimationComplete(deathAge)) return null;
+        // Grid paths alternate map-axis steps to describe a single visual
+        // diagonal. Looking at the next step made the slime swap sheets every
+        // waypoint, so orient it toward the stable routed goal instead.
+        var facing = SlimeSpriteRig.StableTravelFacing(
+            enemy.Position,
+            enemy.Path is not null && enemy.RoutedDestination is { } routed
+                ? routed
+                : enemy.Destination,
+            enemy.Destination - enemy.Position);
         var attackAge = _clock - enemy.VisualActionStartedAt;
-        var activeAttack = enemy.VisualAction == EntityAction.Attack &&
+        var activeAttack = enemy.Alive &&
+                           enemy.VisualAction == EntityAction.Attack &&
                            attackAge >= 0 && attackAge < 1.12;
-        var action = activeAttack
+        var action = !enemy.Alive
+            ? EntityAction.Die
+            : activeAttack
             ? EntityAction.Attack
             : enemy.Behavior switch
         {
@@ -567,7 +582,9 @@ internal sealed partial class GameHostWindow
         };
         var pose = SlimeSpriteRig.Resolve(
             action, facing,
-            activeAttack
+            !enemy.Alive
+                ? deathAge
+                : activeAttack
                 ? attackAge
                 : _clock + Math.Abs(enemy.Id.GetHashCode() % 100) * .013);
         var frame = _slimeRig.Frame(pose);
@@ -589,7 +606,8 @@ internal sealed partial class GameHostWindow
             .28f,
             SlimeSpriteRig.WorldScale,
             Opacity: .88f,
-            SoftShadow: true);
+            SoftShadow: true,
+            PixelArtFilter: true);
     }
 
     private static Vector3 SlimeTint(EnemyKind kind) => kind switch

@@ -8711,12 +8711,25 @@ var slimeAttackEnd = SlimeSpriteRig.Resolve(
     EntityAction.Attack, Vector2.UnitX, 10);
 var slimeSpawnEnd = SlimeSpriteRig.Resolve(
     SlimeAnimationState.Spawn, Vector2.UnitY, 10);
+var stableSlimeUpFacing = SlimeSpriteRig.StableTravelFacing(
+    Vector2.Zero, new(-8, -8), Vector2.UnitY);
+var stableSlimeDownFacing = SlimeSpriteRig.StableTravelFacing(
+    Vector2.Zero, new(8, 8), -Vector2.UnitY);
+var stableSlimeFallback = SlimeSpriteRig.StableTravelFacing(
+    Vector2.One, Vector2.One, -Vector2.UnitX);
 Require(
     slimeRig.Frame(slimeFront).Width == SlimeSpriteRig.CellSize &&
     !slimeFront.UsesBackSheet &&
     slimeBack.UsesBackSheet && slimeBack.FrameIndex == 1 &&
     slimeUpLeft.UsesBackSheet && slimeUpRight.UsesBackSheet &&
     !slimeDownLeft.UsesBackSheet && !slimeDownRight.UsesBackSheet &&
+    SlimeSpriteRig.FacesAwayFromCamera(stableSlimeUpFacing) &&
+    !SlimeSpriteRig.FacesAwayFromCamera(stableSlimeDownFacing) &&
+    stableSlimeFallback == -Vector2.UnitX &&
+    SlimePixelArtFilter.VirtualGrid == 48 &&
+    SlimePixelArtFilter.QuantizeShade(.51f) == .5f &&
+    SlimePixelArtFilter.QuantizeShade(-1) == 0 &&
+    SlimePixelArtFilter.QuantizeShade(2) == 1 &&
     slimeAttackEnd.Completed && slimeAttackEnd.FrameIndex == 7 &&
     slimeSpawnEnd.Completed && slimeSpawnEnd.FrameIndex == 7 &&
     SlimeSpriteRig.SourceState(SlimeAnimationState.Move) ==
@@ -8811,6 +8824,16 @@ var damagedSlime = EnemyCombatService.ApplyHit(
     passiveSlime, 3, "player");
 var ignoredEnemyDamage = EnemyCombatService.ApplyHit(
     passiveSlime, 0, "player");
+var killedSlime = EnemyCombatService.ApplyHit(
+    passiveSlime, passiveSlime.Health, "player", 12.5);
+var deathFrame = SlimeSpriteRig.Resolve(
+    killedSlime.VisualAction, Vector2.UnitY, .25);
+var retainedDeadWave = EnemySpawnerService.Update(
+    firstWave.Spawner,
+    [killedSlime],
+    [new("player", Vector2.Zero, 0, true, 20, true)],
+    10,
+    2187);
 var nearbyActor = new EnemyActorPresence(
     "player", passiveSlime.Position + Vector2.UnitX, 0, true, 10, true);
 var passiveUpdate = EnemySpawnerService.UpdateController(
@@ -8867,6 +8890,18 @@ Require(
     damagedSlime.Health == passiveSlime.Health - 3 &&
     damagedSlime.ProvokedById == "player" &&
     ignoredEnemyDamage == passiveSlime &&
+    !killedSlime.Alive &&
+    killedSlime.Behavior == EnemyBehavior.Dead &&
+    killedSlime.VisualAction == EntityAction.Die &&
+    killedSlime.VisualActionStartedAt == 12.5 &&
+    killedSlime.Path is null && killedSlime.TargetId is null &&
+    deathFrame.State == SlimeAnimationState.Die &&
+    retainedDeadWave.StartedRecovery &&
+    retainedDeadWave.Enemies.Contains(killedSlime) &&
+    !SlimeSpriteRig.DeathAnimationComplete(
+        SlimeSpriteRig.DeathAnimationSeconds - .01) &&
+    SlimeSpriteRig.DeathAnimationComplete(
+        SlimeSpriteRig.DeathAnimationSeconds) &&
     passiveUpdate.TargetId is null &&
     provokedUpdate.TargetId == "player" &&
     provokedUpdate.Behavior == EnemyBehavior.Idle &&

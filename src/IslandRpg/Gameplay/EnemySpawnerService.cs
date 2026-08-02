@@ -95,10 +95,11 @@ internal static class EnemySpawnerService
             Vector2.DistanceSquared(actor.Position, spawner.Position) <=
             ActivationRadius * ActivationRadius).ToArray();
         var active = activeActors.Length > 0;
-        var living = enemies.Where(enemy =>
-            enemy.SpawnerId == spawner.Id && enemy.Alive).ToList();
+        var retained = enemies.Where(enemy =>
+            enemy.SpawnerId == spawner.Id).ToList();
+        var living = retained.Where(enemy => enemy.Alive).ToList();
         if (!active)
-            return new(spawner, living, false, false, false);
+            return new(spawner, retained, false, false, false);
 
         var startedRecovery = false;
         if (spawner.WaveStarted && living.Count == 0 &&
@@ -113,7 +114,7 @@ internal static class EnemySpawnerService
             var count = AdaptiveCount(spawner.MaximumAlive, activeActors);
             var power = AdaptivePower(activeActors);
             for (var index = 0; index < count; index++)
-                living.Add(Spawn(
+                retained.Add(Spawn(
                     spawner, index, power, worldSeed, activeActors));
             spawner = spawner with
             {
@@ -121,9 +122,9 @@ internal static class EnemySpawnerService
                 WaveStarted = true,
                 RecoveryUntil = 0
             };
-            return new(spawner, living, true, false, true);
+            return new(spawner, retained, true, false, true);
         }
-        return new(spawner, living, true, startedRecovery, false);
+        return new(spawner, retained, true, startedRecovery, false);
     }
 
     public static EnemyState UpdateController(

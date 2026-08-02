@@ -347,7 +347,8 @@ internal sealed partial class GameHostWindow
             return;
         }
         ApplyPlayerCombatExperience(interaction.Experience);
-        enemy = EnemyCombatService.ApplyHit(enemy, roll.Damage, "player");
+        enemy = EnemyCombatService.ApplyHit(
+            enemy, roll.Damage, "player", _clock);
         _enemies[index] = enemy;
         ShowEntityImpact(EnemyFeedbackKey(enemy.Id), roll.Damage, true);
         _chatUi.AddMessage(

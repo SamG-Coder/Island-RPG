@@ -88,7 +88,8 @@ internal sealed partial class GameHostWindow : GameWindow
         float TintAmount = 0,
         float RenderScale = 1,
         float Opacity = 1,
-        bool SoftShadow = false);
+        bool SoftShadow = false,
+        bool PixelArtFilter = false);
     private sealed record FishingBoatVisual(
         SpriteFrame Frame, int Texture, Vector2 World, bool Mirror);
     private sealed record FishingBoatComposite(
@@ -6283,6 +6284,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 renderScale: actor.RenderScale,
                 opacity: actor.Opacity,
                 preserveDarkTint: actor.TintAmount > 0,
+                pixelArtFilter: actor.PixelArtFilter,
                 outlineColor: new Vector3(1f, .72f, .12f));
         }
     }
@@ -8085,7 +8087,8 @@ internal sealed partial class GameHostWindow : GameWindow
         float renderScale = 1,
         bool preserveDarkTint = false,
         int teamColor = 0,
-        Vector3? outlineColor = null)
+        Vector3? outlineColor = null,
+        bool pixelArtFilter = false)
     {
         var width = ReferenceWidth;
         var height = ReferenceHeight;
@@ -8126,6 +8129,13 @@ internal sealed partial class GameHostWindow : GameWindow
             preserveDarkTint ? 1 : 0);
         GL.Uniform2(GL.GetUniformLocation(_program, "texelSize"),
             1f / frame.Width, 1f / frame.Height);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "pixelArtFilter"),
+            pixelArtFilter && !outlineOnly ? 1 : 0);
+        GL.Uniform2(
+            _shaderUniforms.Get(_program, "pixelArtGrid"),
+            SlimePixelArtFilter.VirtualGrid,
+            SlimePixelArtFilter.VirtualGrid);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, texture);
         SetPlayerRecolor(outlineOnly ? 0 : teamColor);
@@ -8140,6 +8150,8 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), 0f);
         GL.Uniform1(GL.GetUniformLocation(_program, "preserveDarkTint"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "recolorPlayer"), 0);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "pixelArtFilter"), 0);
     }
 
     private void DrawTerrain(TerrainTile tile, int texture, Vector2 world)

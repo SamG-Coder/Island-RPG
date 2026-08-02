@@ -484,6 +484,7 @@ internal static class GameShaderPrograms
             "uniform vec3 outlineColor;" +
             "uniform int preserveDarkTint;" +
             "uniform int spriteOutline;uniform vec3 spriteOutlineColor;" +
+            "uniform int pixelArtFilter;uniform vec2 pixelArtGrid;" +
             "uniform int sceneLighting;uniform float sceneDarkness;" +
             "uniform float sceneFogAmount;uniform vec2 sceneFogCenter;" +
             "uniform vec2 sceneFogRadius;" +
@@ -491,7 +492,17 @@ internal static class GameShaderPrograms
             "uniform vec2 localLightUv[16];uniform vec2 localLightRadius[16];" +
             "uniform vec3 localLightColor[16];uniform float localLightIntensity[16];" +
             "uniform float waterlineUv;uniform vec2 texelSize;" +
-            "void main(){vec4 source=texture(image,uv);" +
+            "vec4 spriteSample(vec2 at){" +
+            "if(pixelArtFilter==0)return texture(image,at);" +
+            "vec2 cell=(floor(at*pixelArtGrid)+vec2(0.5))/pixelArtGrid;" +
+            "vec2 tap=vec2(0.24)/pixelArtGrid;" +
+            "vec4 a=texture(image,cell+vec2(-tap.x,-tap.y));" +
+            "vec4 b=texture(image,cell+vec2(tap.x,-tap.y));" +
+            "vec4 d=texture(image,cell+vec2(-tap.x,tap.y));" +
+            "vec4 e=texture(image,cell+tap);float coverage=a.a+b.a+d.a+e.a;" +
+            "vec3 rgb=(a.rgb*a.a+b.rgb*b.a+d.rgb*d.a+e.rgb*e.a)/max(coverage,0.001);" +
+            "return vec4(rgb,smoothstep(0.18,0.72,coverage*0.25));}" +
+            "void main(){vec4 source=spriteSample(uv);" +
             "if(outlineOnly==1){float around=0.0;" +
             "around=max(around,texture(image,uv+vec2(texelSize.x,0)).a);" +
             "around=max(around,texture(image,uv-vec2(texelSize.x,0)).a);" +
@@ -530,6 +541,10 @@ internal static class GameShaderPrograms
             "vec3 colorized=clamp(colorTint*(shade/targetPeak),0.0,1.0);" +
             "c.rgb=mix(vec3(shade),colorized,tintAmount);" +
             "}else{c.rgb=mix(c.rgb,colorTint,tintAmount);}" +
+            "if(pixelArtFilter==1&&c.a>0.01){" +
+            "float peak=max(c.r,max(c.g,c.b));" +
+            "float band=floor(peak*6.0+0.5)/6.0;" +
+            "c.rgb*=band/max(peak,0.001);}" +
             "if(sceneLighting==1){" +
             "float night=sceneDarkness*sceneDarkness;" +
             "vec3 ambient=sceneUnderground==1?vec3(0.16):" +
