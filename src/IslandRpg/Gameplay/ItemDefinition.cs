@@ -36,7 +36,8 @@ internal enum ItemTag : long
     FishingNetUpgradeSprite = 1 << 29,
     Weapon = 1 << 30,
     PersonalGoalSprite = 1L << 31,
-    CropSprite = 1L << 32
+    CropSprite = 1L << 32,
+    SlimeLootSprite = 1L << 33
 }
 
 internal sealed record ItemDefinition(
@@ -176,6 +177,10 @@ internal static class ItemIds
     public const string ShallowHole = "shallow_hole";
     public const string TrainingDummy = "training_dummy";
     public const string LootBag = "loot_bag";
+    public const string SlimeGel = "slime_gel";
+    public const string SlimeCore = "slime_core";
+    public const string SaltCrystals = "salt_crystals";
+    public const string MedicinalHerbs = "medicinal_herbs";
 }
 
 internal static class ItemCatalog
@@ -326,6 +331,22 @@ internal static class ItemCatalog
                 ItemIds.SmallRocks, "small rocks", "Pebbles",
                 "A handful of small rocks and pebbles.", 3,
                 Tags: ItemTag.NaturalMaterial),
+            [ItemIds.SlimeGel] = new(
+                ItemIds.SlimeGel, "slime gel", "Slime gel",
+                "A cool, elastic residue left behind by a defeated slime.", 0,
+                Tags: ItemTag.NaturalMaterial | ItemTag.SlimeLootSprite),
+            [ItemIds.SlimeCore] = new(
+                ItemIds.SlimeCore, "slime core", "Slime core",
+                "A rare condensed core that once animated a slime.", 1,
+                Tags: ItemTag.NaturalMaterial | ItemTag.SlimeLootSprite),
+            [ItemIds.SaltCrystals] = new(
+                ItemIds.SaltCrystals, "salt crystals", "Salt",
+                "Coarse mineral salt crystallised inside a coastal slime.", 2,
+                Tags: ItemTag.NaturalMaterial | ItemTag.SlimeLootSprite),
+            [ItemIds.MedicinalHerbs] = new(
+                ItemIds.MedicinalHerbs, "medicinal herbs", "Herbs",
+                "A fragrant bundle of herbs preserved within a grass slime.", 3,
+                Tags: ItemTag.NaturalMaterial | ItemTag.SlimeLootSprite),
             [ItemIds.TreeSeeds] = new(
                 ItemIds.TreeSeeds, "tree seeds", "Tree seed",
                 "Seeds from a common deciduous tree.", 0,

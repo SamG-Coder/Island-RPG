@@ -17,11 +17,11 @@ internal static class LootBagService
         var random = new Random(HashCode.Combine(
             worldSeed, enemy.Id, enemy.Kind, enemy.PowerLevel));
         var drops = new List<LootStack>(3);
-        Add(drops, PrimaryDrop(enemy.Kind), 1 + random.Next(2));
+        Add(drops, ItemIds.SlimeGel, 1 + random.Next(2));
         if (random.NextDouble() < .38)
-            Add(drops, SecondaryDrop(enemy.Kind), 1);
+            Add(drops, BiomeReagent(enemy.Kind), 1);
         if (random.NextDouble() < .08 + enemy.PowerLevel * .01)
-            Add(drops, RareDrop(enemy.Kind), 1);
+            Add(drops, ItemIds.SlimeCore, 1);
         return drops;
     }
 
@@ -81,32 +81,15 @@ internal static class LootBagService
             loot.Add(new(itemId, quantity));
     }
 
-    private static string PrimaryDrop(EnemyKind kind) => kind switch
+    public static string BiomeReagent(EnemyKind kind) => kind switch
     {
-        EnemyKind.WaterSlime => ItemIds.Seaweed,
-        EnemyKind.GrassSlime => ItemIds.PlantFibres,
-        EnemyKind.SandSlime => ItemIds.Sand,
+        EnemyKind.WaterSlime => ItemIds.SaltCrystals,
+        EnemyKind.GrassSlime => ItemIds.MedicinalHerbs,
+        EnemyKind.SandSlime => ItemIds.SaltCrystals,
         EnemyKind.CaveSlime => ItemIds.Coal,
-        _ => ItemIds.SmallRocks
+        _ => ItemIds.SlimeGel
     };
 
-    private static string SecondaryDrop(EnemyKind kind) => kind switch
-    {
-        EnemyKind.WaterSlime => ItemIds.ClamShell,
-        EnemyKind.GrassSlime => ItemIds.WildBerries,
-        EnemyKind.SandSlime => ItemIds.CactusSeeds,
-        EnemyKind.CaveSlime => ItemIds.TinOre,
-        _ => ItemIds.Sticks
-    };
-
-    private static string RareDrop(EnemyKind kind) => kind switch
-    {
-        EnemyKind.WaterSlime => ItemIds.Pearl,
-        EnemyKind.GrassSlime => ItemIds.TreeSeeds,
-        EnemyKind.SandSlime => ItemIds.SharpenedRock,
-        EnemyKind.CaveSlime => ItemIds.CopperOre,
-        _ => ItemIds.SmallRocks
-    };
 }
 
 internal static class WorldItemContainerService

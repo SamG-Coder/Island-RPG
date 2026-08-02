@@ -8918,6 +8918,18 @@ using (var cropSheetStream = File.OpenRead(cropSheetPath))
         cropSheet.Height == ItemSpriteSheetCatalog.Crops.Height,
         "planted crops must use the converted three-cell world sprite sheet");
 }
+var slimeLootSheetPath = Path.Combine(
+    AppContext.BaseDirectory, "Resources", "Images",
+    ItemSpriteSheetCatalog.SlimeLoot.FileName);
+using (var slimeLootSheetStream = File.OpenRead(slimeLootSheetPath))
+{
+    var slimeLootSheet = ImageResult.FromStream(
+        slimeLootSheetStream, ColorComponents.RedGreenBlueAlpha);
+    Require(
+        slimeLootSheet.Width == ItemSpriteSheetCatalog.SlimeLoot.Width &&
+        slimeLootSheet.Height == ItemSpriteSheetCatalog.SlimeLoot.Height,
+        "unique slime drops must use the converted four-cell item sprite sheet");
+}
 
 var slimeFrontPath = Path.Combine(
     AppContext.BaseDirectory, "Resources", "Images", "Combat",
@@ -9062,6 +9074,31 @@ Require(
     firstLootRoll.All(drop =>
         drop.Quantity > 0 && ItemCatalog.TryGet(drop.ItemId, out _)),
     "enemy loot rolls must be seeded, repeatable, non-empty, and contain only catalogued items");
+var slimeLootIds = new[]
+{
+    ItemIds.SlimeGel,
+    ItemIds.SlimeCore,
+    ItemIds.SaltCrystals,
+    ItemIds.MedicinalHerbs
+};
+Require(
+    slimeLootIds.Select(ItemCatalog.Get).Select(item => item.SpriteCell)
+        .SequenceEqual(new int?[] { 0, 1, 2, 3 }) &&
+    slimeLootIds.All(itemId =>
+    {
+        var item = ItemCatalog.Get(itemId);
+        return item.CanStack && item.HasTag(ItemTag.SlimeLootSprite) &&
+               item.HasTag(ItemTag.NaturalMaterial) &&
+               !string.IsNullOrWhiteSpace(item.Examine);
+    }) &&
+    firstLootRoll.Any(drop => drop.ItemId == ItemIds.SlimeGel) &&
+    LootBagService.BiomeReagent(EnemyKind.WaterSlime) ==
+        ItemIds.SaltCrystals &&
+    LootBagService.BiomeReagent(EnemyKind.SandSlime) ==
+        ItemIds.SaltCrystals &&
+    LootBagService.BiomeReagent(EnemyKind.GrassSlime) ==
+        ItemIds.MedicinalHerbs,
+    "all unique slime drops must be stackable, examinable, sprite-backed, and integrated into their biome loot roles");
 var damagedSlime = EnemyCombatService.ApplyHit(
     passiveSlime, 3, "player");
 var ignoredEnemyDamage = EnemyCombatService.ApplyHit(
