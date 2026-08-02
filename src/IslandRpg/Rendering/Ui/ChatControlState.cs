@@ -27,7 +27,68 @@ internal enum ChatMessageStyle
     Debug
 }
 
-internal sealed record ChatMessage(string Text, ChatMessageStyle Style);
+internal sealed record ChatMessage(
+    string Text, ChatMessageStyle Style, long Sequence);
+
+internal enum ChatHistoryScope
+{
+    All,
+    Last10,
+    Unread
+}
+
+internal sealed record ChatHistoryReadResult(
+    IReadOnlyList<ChatMessage> Messages,
+    long ReadThroughSequence);
+
+internal sealed class ChatHistoryReader
+{
+    private long _readThroughSequence;
+
+    public static bool TryParseScope(
+        string? value, out ChatHistoryScope scope)
+    {
+        switch (value?.Trim().ToLowerInvariant())
+        {
+            case null:
+            case "":
+            case "last10":
+                scope = ChatHistoryScope.Last10;
+                return true;
+            case "all":
+                scope = ChatHistoryScope.All;
+                return true;
+            case "unread":
+            case "not_read":
+            case "notread":
+            case "not read":
+                scope = ChatHistoryScope.Unread;
+                return true;
+            default:
+                scope = default;
+                return false;
+        }
+    }
+
+    public ChatHistoryReadResult Read(
+        IReadOnlyList<ChatMessage> source, ChatHistoryScope scope)
+    {
+        var available = source
+            .Where(message => message.Style != ChatMessageStyle.Debug)
+            .ToArray();
+        IReadOnlyList<ChatMessage> selected = scope switch
+        {
+            ChatHistoryScope.All => available,
+            ChatHistoryScope.Unread => available
+                .Where(message => message.Sequence > _readThroughSequence)
+                .ToArray(),
+            _ => available.TakeLast(10).ToArray()
+        };
+        if (available.Length > 0)
+            _readThroughSequence = available[^1].Sequence;
+        return new(selected, _readThroughSequence);
+    }
+}
 
 internal sealed class ChatChannelControlState : ControlState
 {
@@ -45,6 +106,7 @@ internal sealed class ChatUiControlState
     private const float ControlGap = 4;
     private readonly List<ChatMessage> _messages = [];
     private readonly List<ChatMessage> _displayLines = [];
+    private long _nextMessageSequence;
     private bool _leftWasDown;
     private bool _draggingThumb;
     private float _thumbGrabOffset;
@@ -231,7 +293,8 @@ internal sealed class ChatUiControlState
         string message, ChatMessageStyle style = ChatMessageStyle.Normal)
     {
         var keepAtBottom = IsAtBottom;
-        var chatMessage = new ChatMessage(message, style);
+        var chatMessage = new ChatMessage(
+            message, style, ++_nextMessageSequence);
         _messages.Add(chatMessage);
         var removed = Math.Max(0, _messages.Count - MaximumMessages);
         if (removed > 0)

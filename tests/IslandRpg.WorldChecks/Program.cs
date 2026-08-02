@@ -71,6 +71,31 @@ Require(
     chatLayout.DisplayLines.Single().Text == "one two three four" &&
     chatLayout.DisplayLines.Single().Style == ChatMessageStyle.Debug,
     "large chat layout must preserve unwrapped debug messages and their style");
+var historyChat = new ChatUiControlState();
+for (var index = 0; index < 12; index++)
+    historyChat.AddMessage($"history {index}", ChatMessageStyle.Npc);
+historyChat.AddMessage("Codex: state", ChatMessageStyle.Debug);
+var historyReader = new ChatHistoryReader();
+var recentHistory = historyReader.Read(
+    historyChat.Messages, ChatHistoryScope.Last10);
+var emptyUnreadHistory = historyReader.Read(
+    historyChat.Messages, ChatHistoryScope.Unread);
+historyChat.AddMessage("Codex: nearby", ChatMessageStyle.Debug);
+historyChat.AddMessage("new reply", ChatMessageStyle.Npc);
+var unreadHistory = historyReader.Read(
+    historyChat.Messages, ChatHistoryScope.Unread);
+Require(
+    recentHistory.Messages.Count == 10 &&
+    recentHistory.Messages[0].Text == "history 2" &&
+    recentHistory.Messages.All(message =>
+        message.Style != ChatMessageStyle.Debug) &&
+    emptyUnreadHistory.Messages.Count == 0 &&
+    unreadHistory.Messages.Count == 1 &&
+    unreadHistory.Messages[0].Text == "new reply" &&
+    ChatHistoryReader.TryParseScope(
+        "not read", out var parsedHistoryScope) &&
+    parsedHistoryScope == ChatHistoryScope.Unread,
+    "control chat history must exclude debug lines and maintain an independent unread cursor");
 Require(
     ChatCommandRegistry.TryParse(
         "/codex inspect the western shore", out var codexCommand) &&
