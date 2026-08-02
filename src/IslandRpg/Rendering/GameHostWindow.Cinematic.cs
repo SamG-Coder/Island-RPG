@@ -160,15 +160,25 @@ internal sealed partial class GameHostWindow
             StreamWorld();
         }
         if (!_sceneDirector.Active)
-        {
-            if (!_cinematicMusicRestored)
-                _musicPlayer?.ResumePlaylist();
-            _cinematicMusicRestored = true;
-            SetZoomImmediate(.8f);
-            CenterCinematicCameraOnShore();
-            _sceneDirector = null;
-        }
+            FinishOpeningCinematic();
         return true;
+    }
+
+    private void SkipOpeningCinematic()
+    {
+        if (!CinematicActive) return;
+        FinishOpeningCinematic();
+    }
+
+    private void FinishOpeningCinematic()
+    {
+        if (!_cinematicMusicRestored)
+            _musicPlayer?.ResumePlaylist();
+        _cinematicMusicRestored = true;
+        SetZoomImmediate(.8f);
+        CenterCinematicCameraOnShore();
+        StreamWorld();
+        _sceneDirector = null;
     }
 
     private void RenderCinematic()
@@ -212,6 +222,10 @@ internal sealed partial class GameHostWindow
         var bar = MathF.Round(height * .12f);
         DrawUiColor(new(0, 0, width, bar), new(0, 0, 0, 1));
         DrawUiColor(new(0, height - bar, width, bar), new(0, 0, 0, 1));
+        DrawUiText(
+            "ESC TO SKIP",
+            new(18, Math.Max(8, (bar - 16) * .5f)),
+            new(174, 181, 194, 220));
         RenderOpeningCredits(width, height, time, bar);
         var loopFade = CinematicSceneLoopFade(
             time, width,

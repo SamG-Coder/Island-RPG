@@ -622,7 +622,9 @@ internal sealed partial class GameHostWindow : GameWindow
         _waterTime = (_waterTime + (float)e.Time) % 10000f;
         if (KeyboardState.IsKeyPressed(Keys.Escape))
         {
-            if (_digTargetingSlot >= 0)
+            if (CinematicActive)
+                SkipOpeningCinematic();
+            else if (_digTargetingSlot >= 0)
                 CancelCaveDigTargeting();
             else if (_placeableObjectPlacement.Active)
                 CancelPlaceableObjectPlacement();
