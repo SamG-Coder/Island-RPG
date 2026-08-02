@@ -6,6 +6,7 @@ namespace IslandRpg.Rendering.Ui;
 internal sealed class CraftingWindowState
 {
     private const double DoubleClickSeconds = .40;
+    private const int RecipeColumns = 4;
     private bool _leftWasDown;
     private string? _lastClickedRecipeId;
     private long _lastRecipeClick;
@@ -15,12 +16,17 @@ internal sealed class CraftingWindowState
         CraftingCategory.All;
     public CraftingRecipe? SelectedRecipe { get; private set; }
     public string? StationItemId { get; private set; }
+    public int ScrollRow { get; private set; }
 
     public void Open(string? stationItemId = null)
     {
         Visible = true;
         StationItemId = stationItemId;
-        SelectedRecipe = VisibleRecipes().FirstOrDefault();
+        Category = CraftingCategory.All;
+        SelectedRecipe = null;
+        ScrollRow = 0;
+        _lastClickedRecipeId = null;
+        _lastRecipeClick = 0;
     }
 
     public void Close()
@@ -33,6 +39,36 @@ internal sealed class CraftingWindowState
         StationItemId is null
             ? CraftingSkill.RecipesFor(Category)
             : CraftingSkill.RecipesFor(Category, StationItemId);
+
+    public int VisibleRecipeCount(Vector4 window)
+    {
+        var recipes = VisibleRecipes();
+        var start = Math.Min(recipes.Count, ScrollRow * RecipeColumns);
+        return Math.Min(
+            recipes.Count - start,
+            VisibleRecipeRows(window) * RecipeColumns);
+    }
+
+    public CraftingRecipe VisibleRecipeAt(Vector4 window, int index)
+    {
+        if ((uint)index >= (uint)VisibleRecipeCount(window))
+            throw new ArgumentOutOfRangeException(nameof(index));
+        return VisibleRecipes()[ScrollRow * RecipeColumns + index];
+    }
+
+    public bool Scroll(Vector4 viewport, Vector2 pointer, float wheelOffset)
+    {
+        if (!Visible || wheelOffset == 0) return false;
+        var window = WindowBounds(viewport);
+        if (!RecipeListBounds(window).Contains(pointer)) return false;
+        var recipes = VisibleRecipes();
+        var totalRows = (recipes.Count + RecipeColumns - 1) / RecipeColumns;
+        ScrollRow = Math.Clamp(
+            ScrollRow - Math.Sign(wheelOffset),
+            0,
+            Math.Max(0, totalRows - VisibleRecipeRows(window)));
+        return true;
+    }
 
     public CraftingRecipe? UpdatePointer(
         Vector4 viewport, Vector2 pointer, bool leftDown)
@@ -58,16 +94,18 @@ internal sealed class CraftingWindowState
                     if (!CategoryBounds(window, index).Contains(pointer))
                         continue;
                     Category = categories[index];
-                    SelectedRecipe = VisibleRecipes().FirstOrDefault();
+                    SelectedRecipe = null;
+                    ScrollRow = 0;
                     break;
                 }
-                var recipes = VisibleRecipes();
-                for (var index = 0; index < recipes.Count; index++)
+                var recipeCount = VisibleRecipeCount(window);
+                for (var index = 0; index < recipeCount; index++)
                     if (RecipeBounds(window, index).Contains(pointer))
                     {
-                        SelectedRecipe = recipes[index];
-                        if (IsDoubleClick(recipes[index]))
-                            activatedRecipe = recipes[index];
+                        var recipe = VisibleRecipeAt(window, index);
+                        SelectedRecipe = recipe;
+                        if (IsDoubleClick(recipe))
+                            activatedRecipe = recipe;
                         break;
                     }
             }
@@ -119,6 +157,12 @@ internal sealed class CraftingWindowState
             window.X + 132 + index % 4 * 58,
             window.Y + 58 + index / 4 * 58,
             50, 50);
+
+    public static Vector4 RecipeListBounds(Vector4 window) =>
+        new(window.X + 126, window.Y + 52, 240, window.W - 66);
+
+    private static int VisibleRecipeRows(Vector4 window) =>
+        Math.Max(1, (int)((RecipeListBounds(window).W - 6) / 58));
 
     public static Vector4 DetailsBounds(Vector4 window) =>
         new(

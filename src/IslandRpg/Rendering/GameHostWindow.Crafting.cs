@@ -57,6 +57,7 @@ internal sealed partial class GameHostWindow
         _craftingWindow.Close();
         _nearbyCraftingStations.Clear();
         _modalScreen.Close(ModalScreenKind.Crafting);
+        ConsumeWorldPointerInput();
         if (_defaultNativeCursor is not null)
             Cursor = _defaultNativeCursor;
     }
@@ -283,10 +284,10 @@ internal sealed partial class GameHostWindow
         var inventory = _activePlayer?.Inventory ?? [];
         var level = CraftingSkill.LevelForExperience(
             _activePlayer?.CraftingExperience ?? 0);
-        var recipes = _craftingWindow.VisibleRecipes();
-        for (var index = 0; index < recipes.Count; index++)
+        var recipeCount = _craftingWindow.VisibleRecipeCount(window);
+        for (var index = 0; index < recipeCount; index++)
         {
-            var recipe = recipes[index];
+            var recipe = _craftingWindow.VisibleRecipeAt(window, index);
             var bounds = CraftingWindowState.RecipeBounds(window, index);
             var selected = recipe == _craftingWindow.SelectedRecipe;
             var availability = CraftingSkill.Availability(

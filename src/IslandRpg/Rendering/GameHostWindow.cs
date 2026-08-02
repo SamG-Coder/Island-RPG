@@ -2021,6 +2021,19 @@ internal sealed partial class GameHostWindow : GameWindow
         _modalScreen.CapturesAllInput ||
         _minimapUi.HitTest(mouse);
 
+    /// <summary>
+    /// Synchronizes world input latches when a modal consumes a pointer click.
+    /// This prevents the same physical press from becoming a world action after
+    /// the modal disappears later in the frame.
+    /// </summary>
+    private void ConsumeWorldPointerInput()
+    {
+        _gameLeftWasDown =
+            MouseState.IsButtonDown(MouseButton.Left);
+        _gameRightWasDown =
+            MouseState.IsButtonDown(MouseButton.Right);
+    }
+
     private PathResult FindActionPath(
         int requestId,
         int worldLevel,
@@ -3106,6 +3119,12 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             _skillGuideWindow.Scroll(
                 MouseState.Position, e.OffsetY);
+            return;
+        }
+        if (_mode == PreviewMode.Game && _craftingWindowOpen)
+        {
+            _craftingWindow.Scroll(
+                SceneClientBounds(), MouseState.Position, e.OffsetY);
             return;
         }
         if (_mode == PreviewMode.Game &&
@@ -6593,21 +6612,8 @@ internal sealed partial class GameHostWindow : GameWindow
     }
 
     private int WorldStreamLoadRadius()
-    {
-        const int standardRadius = 5;
-        if (!_zoomScaledLoadingToggle.IsChecked)
-            return standardRadius;
-
-        // Radius 5 gives extreme zoom a wider terrain buffer. The optional
-        // diagnostic mode can still expand it in inverse proportion to zoom;
-        // radius 32 is the memory-safety ceiling.
-        const int maximumDeveloperRadius = 32;
-        var zoom = Math.Max(_zoom, .001f);
-        return Math.Clamp(
-            (int)MathF.Ceiling(.9f / zoom),
-            standardRadius,
-            maximumDeveloperRadius);
-    }
+        => ZoomScaledWorldLoadingPolicy.Radius(
+            _zoomScaledLoadingToggle.IsChecked, _zoom);
 
     private void PrepareWorldTerrain()
     {
@@ -7815,7 +7821,8 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         if (_mode != PreviewMode.Game || _player is null)
             return true;
-        const int renderRadius = 5;
+        var renderRadius = ZoomScaledWorldLoadingPolicy.Radius(
+            _zoomScaledLoadingToggle.IsChecked, _zoom);
         var focus = ObservationFocusPosition();
         var playerChunkX = FloorDiv(
             (int)MathF.Floor(focus.X), WorldChunk.Size);

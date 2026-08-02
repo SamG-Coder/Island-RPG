@@ -74,6 +74,7 @@ internal sealed partial class GameHostWindow
             _modalScreen.Open(ModalScreenKind.Pause);
         else
             _modalScreen.Close(ModalScreenKind.ItemContainer);
+        ConsumeWorldPointerInput();
     }
 
     private void OpenDeveloperItemBank() =>

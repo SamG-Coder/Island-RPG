@@ -24,6 +24,7 @@ internal sealed partial class GameHostWindow
     {
         _skillGuideWindow.Close();
         _modalScreen.Close(ModalScreenKind.SkillGuide);
+        ConsumeWorldPointerInput();
         if (_defaultNativeCursor is not null)
             Cursor = _defaultNativeCursor;
     }

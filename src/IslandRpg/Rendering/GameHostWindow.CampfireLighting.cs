@@ -190,11 +190,12 @@ internal sealed partial class GameHostWindow
 
     private void UploadUnlimitedZoomFog(bool active)
     {
-        var fogAmount = active &&
-                        _unlimitedZoomToggle.IsChecked &&
-                        _player is not null
-            ? Math.Clamp((.22f - _zoom) / .04f, 0, 1)
-            : 0;
+        var fogAmount = UnlimitedZoomFogPolicy.Amount(
+            active,
+            _unlimitedZoomToggle.IsChecked,
+            _zoomScaledLoadingToggle.IsChecked,
+            _player is not null,
+            _zoom);
         GL.Uniform1(
             _shaderUniforms.Get(_program, "sceneFogAmount"),
             fogAmount);
@@ -218,4 +219,17 @@ internal sealed partial class GameHostWindow
             radiusX / ReferenceWidth,
             radiusY / ReferenceHeight);
     }
+}
+
+internal static class UnlimitedZoomFogPolicy
+{
+    public static float Amount(
+        bool sceneActive,
+        bool unlimitedZoom,
+        bool zoomScaledLoading,
+        bool hasPlayer,
+        float zoom) =>
+        sceneActive && unlimitedZoom && !zoomScaledLoading && hasPlayer
+            ? Math.Clamp((.22f - zoom) / .04f, 0, 1)
+            : 0;
 }

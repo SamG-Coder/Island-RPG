@@ -33,6 +33,7 @@ internal sealed partial class GameHostWindow
 
     private void CloseQuestWindow()
     {
+        ConsumeWorldPointerInput();
         if (_modalScreen.Active == ModalScreenKind.QuestComplete)
         {
             _modalScreen.Close(ModalScreenKind.QuestComplete);

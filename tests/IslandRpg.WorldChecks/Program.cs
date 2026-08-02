@@ -5400,9 +5400,9 @@ stationCraftingWindow.Open(ItemIds.Bloomery);
 Require(
     stationCraftingWindow.VisibleRecipes().SequenceEqual(
         bloomeryRecipes) &&
-    stationCraftingWindow.SelectedRecipe ==
-        bloomeryRecipes.FirstOrDefault(),
-    "opening a crafting station must select from only that station's recipes");
+    stationCraftingWindow.SelectedRecipe is null &&
+    stationCraftingWindow.ScrollRow == 0,
+    "opening a crafting station must show only that station's recipes with no implicit selection or stale scroll state");
 stationCraftingWindow.Close();
 var bronzeSickle = ItemCatalog.Get(ItemIds.BronzeSickle);
 Require(
@@ -5923,10 +5923,43 @@ Require(
     "world pointer mapping must remain invariant across fullscreen, DPI scaling, and letterboxing");
 var craftingWindowBounds =
     CraftingWindowState.WindowBounds(new(0, 0, 1280, 720));
+Require(
+    UnlimitedZoomFogPolicy.Amount(
+        true, true, false, true, .16f) > 0 &&
+    UnlimitedZoomFogPolicy.Amount(
+        true, true, true, true, .16f) == 0 &&
+    UnlimitedZoomFogPolicy.Amount(
+        true, true, false, true, .22f) == 0,
+    "zoom-scaled world loading must disable only the extreme-zoom edge fog while normal unlimited zoom retains it");
+Require(
+    ZoomScaledWorldLoadingPolicy.Radius(false, .05f) == 5 &&
+    ZoomScaledWorldLoadingPolicy.Radius(true, .1f) == 9 &&
+    ZoomScaledWorldLoadingPolicy.Radius(true, .001f) == 32,
+    "zoom-scaled loading and rendering must share the expanded radius with a bounded developer-mode ceiling");
 var craftingButton =
     CraftingWindowState.CraftButtonBounds(craftingWindowBounds);
 var craftingClose =
     CraftingWindowState.CloseBounds(craftingWindowBounds);
+var scrollingCraftingWindow = new CraftingWindowState();
+scrollingCraftingWindow.Open();
+var recipeListBounds =
+    CraftingWindowState.RecipeListBounds(craftingWindowBounds);
+var visibleCraftingRecipesBefore =
+    scrollingCraftingWindow.VisibleRecipeCount(craftingWindowBounds);
+var firstCraftingRecipeBefore = visibleCraftingRecipesBefore > 0
+    ? scrollingCraftingWindow.VisibleRecipeAt(craftingWindowBounds, 0)
+    : null;
+var craftingScrollHandled = scrollingCraftingWindow.Scroll(
+    new(0, 0, 1280, 720),
+    new(recipeListBounds.X + 10, recipeListBounds.Y + 10),
+    -1);
+Require(
+    craftingScrollHandled &&
+    (CraftingSkill.Recipes.Count <= visibleCraftingRecipesBefore ||
+     scrollingCraftingWindow.ScrollRow == 1 &&
+     scrollingCraftingWindow.VisibleRecipeAt(craftingWindowBounds, 0) !=
+     firstCraftingRecipeBefore),
+    "the crafting recipe grid must own bounded mouse-wheel scrolling and advance its visible recipe page when content overflows");
 Require(
     craftingButton.X + craftingButton.Z <= craftingClose.X,
     "the reusable crafting action and close buttons must not overlap");
