@@ -4,6 +4,25 @@ namespace IslandRpg.Rendering;
 
 internal static class GameShaderPrograms
 {
+    public static int CreateSoftShadowProgram()
+    {
+        const string vertex = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uvIn; out vec2 uv; void main(){uv=uvIn;gl_Position=vec4(p,0,1);}";
+        const string fragment = """
+            #version 330 core
+            in vec2 uv;
+            out vec4 color;
+            uniform float opacity;
+            void main() {
+                vec2 centered = (uv - vec2(.5)) * 2.0;
+                float distanceSquared = dot(centered, centered);
+                if (distanceSquared >= 1.0) discard;
+                float alpha = pow(1.0 - distanceSquared, 1.7) * opacity;
+                color = vec4(.055, .060, .052, alpha);
+            }
+            """;
+        return CreateProgram(vertex, fragment);
+    }
+
     public static int CreateCinematicLightningProgram()
     {
         const string vertex = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uvIn; out vec2 uv; void main(){uv=uvIn;gl_Position=vec4(p,0,1);}";

@@ -5263,12 +5263,24 @@ Require(GameHostWindow.SeedTreeType(ItemIds.OakSeeds) == "FOAK_NN" &&
     "each seed must map to its matching tree graphic");
 var morning = WorldTime.At(8 * 60 * 60);
 var newGameTime = WorldTime.At(WorldTime.NewGameStartGameSeconds);
-var shorelineSpawn = GameHostWindow.FindPlayableSpawn(2187);
-var shorelineTileX = (int)MathF.Floor(shorelineSpawn.X);
-var shorelineTileY = (int)MathF.Floor(shorelineSpawn.Y);
+var normalSpawn = GameHostWindow.FindPlayableSpawn(2187);
+var normalSpawnTileX = (int)MathF.Floor(normalSpawn.X);
+var normalSpawnTileY = (int)MathF.Floor(normalSpawn.Y);
+var cinematicBeachTile = (
+    from y in Enumerable.Range(-80, 161)
+    from x in Enumerable.Range(-80, 161)
+    where InfiniteWorldGenerator.BiomeAt(2187, x, y) == Biome.Beach
+    select new Vector2(x + .5f, y + .5f)).First();
+var nonBeachLandTile = (
+    from y in Enumerable.Range(-80, 161)
+    from x in Enumerable.Range(-80, 161)
+    let biome = InfiniteWorldGenerator.BiomeAt(2187, x, y)
+    where biome is not (Biome.Beach or Biome.DeepWater or
+        Biome.ShallowWater or Biome.RiverWater or Biome.MangroveShallows)
+    select new Vector2(x + .5f, y + .5f)).First();
 using var cancelledSpawnSearch = new CancellationTokenSource();
 cancelledSpawnSearch.Cancel();
-var shorelineCancellationObserved = false;
+var spawnCancellationObserved = false;
 try
 {
     GameHostWindow.FindPlayableSpawn(
@@ -5276,7 +5288,7 @@ try
 }
 catch (OperationCanceledException)
 {
-    shorelineCancellationObserved = true;
+    spawnCancellationObserved = true;
 }
 var midnight = WorldTime.At(0);
 var nextDay = WorldTime.At(24 * 60 * 60);
@@ -5288,11 +5300,19 @@ Require(newGameTime.Day == 1 && newGameTime.Hour == 3 &&
     "world time must track day number, clock time, and daylight");
 Require(
     InfiniteWorldGenerator.BiomeAt(
-        2187, shorelineTileX, shorelineTileY) == Biome.Beach &&
-    GameHostWindow.IsShorelineSpawn(
-        2187, shorelineTileX, shorelineTileY) &&
-    shorelineCancellationObserved,
-    "parallel new-game shoreline resolution must preserve the seed, select a beach, and honor cancellation");
+        2187, normalSpawnTileX, normalSpawnTileY) is not (
+            Biome.DeepWater or Biome.ShallowWater or
+            Biome.RiverWater or Biome.MangroveShallows) &&
+    Math.Max(Math.Abs(normalSpawnTileX), Math.Abs(normalSpawnTileY)) <= 160 &&
+    GameHostWindow.ShouldPlayOpeningCinematic(2187, normalSpawn) ==
+        (InfiniteWorldGenerator.BiomeAt(
+            2187, normalSpawnTileX, normalSpawnTileY) == Biome.Beach) &&
+    GameHostWindow.ShouldPlayOpeningCinematic(
+        2187, cinematicBeachTile) &&
+    !GameHostWindow.ShouldPlayOpeningCinematic(
+        2187, nonBeachLandTile) &&
+    spawnCancellationObserved,
+    "new games must select the normal nearest land start, gate the intro on an actual beach, and honor cancellation");
 Require(WorldTime.Advance(0, WorldTime.RealSecondsPerGameDay) ==
         24 * 60 * 60,
     "one full game day must take 24 real minutes");
@@ -8757,7 +8777,6 @@ var damagedSlime = EnemyCombatService.ApplyHit(
     passiveSlime, 3, "player");
 var ignoredEnemyDamage = EnemyCombatService.ApplyHit(
     passiveSlime, 0, "player");
-var softShadow = SoftShadowSprite.Create();
 var nearbyActor = new EnemyActorPresence(
     "player", passiveSlime.Position + Vector2.UnitX, 0, true, 10, true);
 var passiveUpdate = EnemySpawnerService.UpdateController(
@@ -8814,9 +8833,6 @@ Require(
     damagedSlime.Health == passiveSlime.Health - 3 &&
     damagedSlime.ProvokedById == "player" &&
     ignoredEnemyDamage == passiveSlime &&
-    softShadow.Rgba.Where((value, index) => index % 4 == 3)
-        .Any(value => value > 0) &&
-    softShadow.Rgba.Where((value, index) => index % 4 == 3).Max() < 128 &&
     passiveUpdate.TargetId is null &&
     provokedUpdate.TargetId == "player" &&
     provokedUpdate.Behavior == EnemyBehavior.Idle &&

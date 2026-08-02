@@ -2,6 +2,7 @@ using IslandRpg.Assets;
 using IslandRpg.Gameplay;
 using IslandRpg.Rendering.Ui;
 using IslandRpg.World;
+using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 
 namespace IslandRpg.Rendering;
@@ -11,8 +12,7 @@ internal sealed partial class GameHostWindow
     private readonly List<EnemySpawnerState> _enemySpawners = [];
     private readonly List<EnemyState> _enemies = [];
     private SlimeSpriteRig? _slimeRig;
-    private SpriteFrame? _softActorShadowFrame;
-    private int _softActorShadowTexture;
+    private int _softActorShadowProgram;
     private Guid? _enemyContextTargetId;
     private Vector2 _enemyContextWalkTarget;
     private readonly int[] _slimeFrontTextures =
@@ -35,8 +35,8 @@ internal sealed partial class GameHostWindow
         _slimeRig = SlimeSpriteRig.Load(
             Path.Combine(directory, "slime-sprites.png"),
             Path.Combine(directory, "slime-sprites-back.png"));
-        _softActorShadowFrame = SoftShadowSprite.Create();
-        _softActorShadowTexture = Upload(_softActorShadowFrame);
+        _softActorShadowProgram =
+            GameShaderPrograms.CreateSoftShadowProgram();
         foreach (var state in Enum.GetValues<SlimeAnimationState>())
         for (var frame = 0; frame < SlimeSpriteRig.Columns; frame++)
         {
@@ -217,6 +217,33 @@ internal sealed partial class GameHostWindow
         EnemyKind.CaveSlime => "Cave slime",
         _ => "Slime"
     };
+
+    private void DrawSoftActorShadow(Vector2 world, float renderScale)
+    {
+        if (_softActorShadowProgram == 0) return;
+        var screen = SpriteAnchor(world);
+        var scale = SpritePixelScale() * renderScale;
+        var halfWidth = 46f * scale;
+        var halfHeight = 12f * scale;
+        var centerY = screen.Y - 1.5f * scale;
+        var left = (screen.X - halfWidth - ReferenceWidth * .5f) *
+                   2 / ReferenceWidth;
+        var right = (screen.X + halfWidth - ReferenceWidth * .5f) *
+                    2 / ReferenceWidth;
+        var top = -(centerY - halfHeight - ReferenceHeight * .5f) *
+                  2 / ReferenceHeight;
+        var bottom = -(centerY + halfHeight - ReferenceHeight * .5f) *
+                     2 / ReferenceHeight;
+        GL.UseProgram(_softActorShadowProgram);
+        GL.Uniform1(
+            _shaderUniforms.Get(_softActorShadowProgram, "opacity"), .42f);
+        Draw([
+            left, top, 0, 0,
+            left, bottom, 0, 1,
+            right, bottom, 1, 1,
+            right, top, 1, 0
+        ]);
+    }
 
     private EnemyState AdvanceEnemyPath(EnemyState enemy, float elapsed)
     {

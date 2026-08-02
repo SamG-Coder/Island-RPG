@@ -28,7 +28,7 @@ internal readonly record struct UiSpriteLight(
 internal sealed partial class GameHostWindow : GameWindow
 {
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
-        long, Vector2> ShorelineSpawnCache = new();
+        long, Vector2> PlayableSpawnCache = new();
     private const int ReferenceWidth = 1280;
     private const int ReferenceHeight = 720;
     private const string ReleaseVersion = "v0.2.0";
@@ -1311,7 +1311,11 @@ internal sealed partial class GameHostWindow : GameWindow
                 pending.Spawn.X,
                 pending.Spawn.Y,
                 DateTime.UtcNow));
-        EnterWorld(world, pending.Player, playOpeningCinematic: true);
+        EnterWorld(
+            world,
+            pending.Player,
+            playOpeningCinematic: ShouldPlayOpeningCinematic(
+                pending.Seed, pending.Spawn));
     }
 
     private void EnterWorld(
@@ -2797,98 +2801,43 @@ internal sealed partial class GameHostWindow : GameWindow
         long seed, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (ShorelineSpawnCache.TryGetValue(seed, out var cached))
+        if (PlayableSpawnCache.TryGetValue(seed, out var cached))
             return cached;
-        var resolved = FindNearestShorelineSpawn(seed, cancellationToken);
+        var resolved = FindNearestPlayableLand(seed, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        return ShorelineSpawnCache.GetOrAdd(seed, resolved);
+        return PlayableSpawnCache.GetOrAdd(seed, resolved);
     }
 
-    private static Vector2 FindNearestShorelineSpawn(
+    private static Vector2 FindNearestPlayableLand(
         long seed, CancellationToken cancellationToken)
     {
-        const int coarseStep = 16;
-        const int maximumSearchRadius = 4096;
-        var maximumCoarseRadius = maximumSearchRadius / coarseStep;
-        for (var coarseRadius = 0;
-             coarseRadius <= maximumCoarseRadius; coarseRadius++)
+        const int maximumSearchRadius = 160;
+        for (var radius = 0; radius <= maximumSearchRadius; radius++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var perimeter = CoarsePerimeter(coarseRadius);
-            var bestIndex = int.MaxValue;
-            var bestSpawn = Vector2.Zero;
-            var gate = new object();
-            Parallel.For(
-                0, perimeter.Length,
-                new ParallelOptions
-                {
-                    CancellationToken = cancellationToken,
-                    MaxDegreeOfParallelism = Math.Max(
-                        1, Environment.ProcessorCount - 1)
-                },
-                index =>
-                {
-                    if (index >= Volatile.Read(ref bestIndex)) return;
-                    var point = perimeter[index];
-                    var x = point.X * coarseStep;
-                    var y = point.Y * coarseStep;
-                    var elevation = InfiniteWorldGenerator.BaseElevationAt(
-                        seed, x, y);
-                    if (elevation is < .55f or > 1.9f) return;
-                    if (!TryFindShorelineNear(
-                            seed, x, y, coarseStep + 3,
-                            cancellationToken, out var spawn))
-                        return;
-                    lock (gate)
-                        if (index < bestIndex)
-                        {
-                            bestIndex = index;
-                            bestSpawn = spawn;
-                        }
-                });
-            if (bestIndex != int.MaxValue) return bestSpawn;
+            for (var y = -radius; y <= radius; y++)
+            for (var x = -radius; x <= radius; x++)
+            {
+                if (Math.Max(Math.Abs(x), Math.Abs(y)) != radius)
+                    continue;
+                var biome = InfiniteWorldGenerator.BiomeAt(seed, x, y);
+                if (biome is Biome.DeepWater or Biome.ShallowWater or
+                    Biome.RiverWater or Biome.MangroveShallows)
+                    continue;
+                return new(x + .5f, y + .5f);
+            }
         }
         throw new InvalidOperationException(
-            $"No shoreline island was found within {maximumSearchRadius} " +
-            $"tiles for seed {seed}.");
+            $"No playable land was found within {maximumSearchRadius} " +
+            $"tiles of the world origin for seed {seed}.");
     }
 
-    private static bool TryFindShorelineNear(
-        long seed, int centerX, int centerY, int searchRadius,
-        CancellationToken cancellationToken, out Vector2 spawn)
-    {
-        for (var radius = 0; radius <= searchRadius; radius++)
-        {
-        cancellationToken.ThrowIfCancellationRequested();
-        for (var offsetY = -radius; offsetY <= radius; offsetY++)
-        for (var offsetX = -radius; offsetX <= radius; offsetX++)
-        {
-            if (Math.Max(Math.Abs(offsetX), Math.Abs(offsetY)) != radius)
-                continue;
-            var x = centerX + offsetX;
-            var y = centerY + offsetY;
-            if (!IsShorelineSpawn(seed, x, y)) continue;
-            spawn = new(x + .5f, y + .5f);
-            return true;
-        }
-        }
-        spawn = default;
-        return false;
-    }
-
-    private static Vector2i[] CoarsePerimeter(int radius)
-    {
-        if (radius <= 0) return [Vector2i.Zero];
-        var result = new Vector2i[radius * 8];
-        var index = 0;
-        for (var y = -radius; y <= radius; y++)
-        for (var x = -radius; x <= radius; x++)
-        {
-            if (Math.Max(Math.Abs(x), Math.Abs(y)) != radius) continue;
-            result[index++] = new(x, y);
-        }
-        return result;
-    }
+    internal static bool ShouldPlayOpeningCinematic(
+        long seed, Vector2 spawn) =>
+        InfiniteWorldGenerator.BiomeAt(
+            seed,
+            (int)MathF.Floor(spawn.X),
+            (int)MathF.Floor(spawn.Y)) == Biome.Beach;
 
     internal static bool IsShorelineSpawn(long seed, int x, int y)
     {
@@ -6314,15 +6263,8 @@ internal sealed partial class GameHostWindow : GameWindow
 
         void DrawActor(ActorVisual actor, bool outlineOnly = false)
         {
-            if (actor.SoftShadow && !outlineOnly &&
-                _softActorShadowFrame is not null &&
-                _softActorShadowTexture != 0)
-                DrawSprite(
-                    _softActorShadowFrame,
-                    _softActorShadowTexture,
-                    actor.World,
-                    opacity: .42f,
-                    renderScale: actor.RenderScale);
+            if (actor.SoftShadow && !outlineOnly)
+                DrawSoftActorShadow(actor.World, actor.RenderScale);
             DrawSprite(
                 actor.Frame,
                 actor.Texture,
@@ -8499,8 +8441,6 @@ internal sealed partial class GameHostWindow : GameWindow
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _slimeBackTextures)
             if (texture != 0) GL.DeleteTexture(texture);
-        if (_softActorShadowTexture != 0)
-            GL.DeleteTexture(_softActorShadowTexture);
         if (_moveMarkerAnimation is not null)
         foreach (var texture in _moveMarkerAnimation.Textures)
             GL.DeleteTexture(texture);
@@ -8600,6 +8540,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_cliffBatchVbo != 0) GL.DeleteBuffer(_cliffBatchVbo);
         if (_cliffTexture != 0) GL.DeleteTexture(_cliffTexture);
         if (_terrainProgram != 0) GL.DeleteProgram(_terrainProgram);
+        if (_softActorShadowProgram != 0)
+            GL.DeleteProgram(_softActorShadowProgram);
         if (_cinematicOceanProgram != 0)
             GL.DeleteProgram(_cinematicOceanProgram);
         if (_cinematicLightningProgram != 0)
