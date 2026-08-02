@@ -144,28 +144,8 @@ internal sealed partial class GameHostWindow
     }
 
     private bool HasNearbyLitCampfire(WorldGroundObject pot)
-    {
-        var rangeSquared =
-            StewCookingService.CampfireRange *
-            StewCookingService.CampfireRange;
-        foreach (var gpu in _worldChunks.Values)
-        {
-            if (!IsActiveWorldChunk(gpu)) continue;
-            var objects = gpu.Chunk.GroundObjects;
-            for (var index = 0; index < objects.Count; index++)
-            {
-                var candidate = objects[index];
-                if (CampfireService.State(
-                        candidate, _worldGameSeconds) !=
-                    CampfireState.Lit)
-                    continue;
-                var offset = new Vector2(
-                    candidate.X - pot.X,
-                    candidate.Y - pot.Y);
-                if (offset.LengthSquared <= rangeSquared)
-                    return true;
-            }
-        }
-        return false;
-    }
+        => IsNearLitCampfire(
+            new(pot.X, pot.Y),
+            _activeWorldLevel,
+            StewCookingService.CampfireRange);
 }

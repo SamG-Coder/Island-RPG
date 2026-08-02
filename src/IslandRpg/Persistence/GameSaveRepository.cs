@@ -46,7 +46,8 @@ internal sealed record PlayerProfile(
     int StrengthExperience = 0,
     int DefenceExperience = 0,
     MeleeCombatStance CombatStance = MeleeCombatStance.Accurate,
-    IReadOnlyList<QuestProgress>? Quests = null);
+    IReadOnlyList<QuestProgress>? Quests = null,
+    float HealthRegenerationRemainder = 0);
 
 internal sealed record WorldPlayerState(
     string PlayerId,

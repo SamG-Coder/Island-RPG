@@ -1567,13 +1567,54 @@ var wellFedVillagerMinute = VillagerSimulation.CatchUp(
     wellFedStart.LastSimulatedGameSeconds +
     VillagerSimulation.GameSecondsPerRealSecond * 60);
 var wellFedPlayerMinute = SurvivalService.Advance(70, 120, 80, 60);
+var wellFedPlayerRegeneration =
+    EntityHealthRegenerationService.Advance(
+        wellFedPlayerMinute.Health,
+        AdventureService.BaseMaximumHealth,
+        60);
 Require(
     MathF.Abs(wellFedVillagerMinute.Hunger -
               wellFedPlayerMinute.Hunger) < .001f &&
-    wellFedVillagerMinute.Health == wellFedPlayerMinute.Health &&
+    wellFedVillagerMinute.Health == wellFedPlayerRegeneration.Health &&
     MathF.Abs(wellFedVillagerMinute.WellFedSeconds -
               wellFedPlayerMinute.WellFedSeconds) < .001f,
     "villager well-fed duration and hunger protection must match the player exactly");
+var halfRecovery = EntityHealthRegenerationService.Advance(
+    50, 100, 6);
+var accumulatedRecovery = EntityHealthRegenerationService.Advance(
+    halfRecovery.Health, 100, 6, remainder: halfRecovery.Remainder);
+var fireRecovery = EntityHealthRegenerationService.Advance(
+    50,
+    100,
+    .6f,
+    EntityHealthRegenerationService.LitCampfireHumanMultiplier);
+var deadRecovery = EntityHealthRegenerationService.Advance(
+    0,
+    100,
+    120,
+    EntityHealthRegenerationService.LitCampfireHumanMultiplier,
+    .5f);
+var fireRecoveredVillager = VillagerSimulation.CatchUp(
+    villagerSpawnA[0] with
+    {
+        Health = 50,
+        LastSimulatedGameSeconds = 0
+    },
+    VillagerSimulation.GameSecondsPerRealSecond * .6,
+    healthRegenerationMultiplier:
+        EntityHealthRegenerationService.LitCampfireHumanMultiplier);
+Require(
+    EntityHealthRegenerationService.BaseHealthPerSecond ==
+        SurvivalService.BaseHungerLossPerSecond &&
+    halfRecovery.Health == 50 &&
+    MathF.Abs(halfRecovery.Remainder - .5f) < .001f &&
+    accumulatedRecovery.Health == 51 &&
+    MathF.Abs(accumulatedRecovery.Remainder) < .001f &&
+    fireRecovery.Health == 51 &&
+    fireRecoveredVillager.Health == 51 &&
+    deadRecovery.Health == 0 &&
+    MathF.Abs(deadRecovery.Remainder - .5f) < .001f,
+    "all living entities must share fractional health regeneration while humans recover twenty times faster by lit fires");
 var starvingStart = villagerSpawnA[0] with
 {
     Hunger = 0,

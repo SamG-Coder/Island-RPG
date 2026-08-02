@@ -68,6 +68,24 @@ internal sealed partial class GameHostWindow
         _enemies.RemoveAll(enemy =>
             !enemy.Alive && SlimeSpriteRig.DeathAnimationComplete(
                 _clock - enemy.VisualActionStartedAt));
+        for (var index = 0; index < _enemies.Count; index++)
+        {
+            var enemy = _enemies[index];
+            var regeneration = EntityHealthRegenerationService.Advance(
+                enemy.Health,
+                enemy.MaximumHealth,
+                elapsed,
+                remainder: enemy.HealthRegenerationRemainder);
+            if (regeneration.Health == enemy.Health &&
+                regeneration.Remainder ==
+                enemy.HealthRegenerationRemainder)
+                continue;
+            _enemies[index] = enemy with
+            {
+                Health = regeneration.Health,
+                HealthRegenerationRemainder = regeneration.Remainder
+            };
+        }
         if (_clock >= _nextEnemySpawnerProbe)
         {
             EnsureEnemySpawnerNear(_player.Position);

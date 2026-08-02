@@ -189,7 +189,8 @@ internal sealed record VillagerState(
     float? PersonalCampY = null,
     int? PersonalCampWorldLevel = null,
     bool IndependentByChoice = false,
-    IReadOnlyList<VillagerPromisePlanStep>? ActionPlan = null);
+    IReadOnlyList<VillagerPromisePlanStep>? ActionPlan = null,
+    float HealthRegenerationRemainder = 0);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,
@@ -459,7 +460,8 @@ internal static class VillagerSimulation
     public static VillagerState CatchUp(
         VillagerState state,
         double gameSeconds,
-        float hungerLossMultiplier = 1)
+        float hungerLossMultiplier = 1,
+        float healthRegenerationMultiplier = 1)
     {
         if (state.SurvivalTimeScaleVersion < 1)
         {
@@ -496,13 +498,20 @@ internal static class VillagerSimulation
                 (float)(chunk / GameSecondsPerRealSecond),
                 hungerLossMultiplier,
                 simulated.StarvationDamageRemainder);
+            var regeneration = EntityHealthRegenerationService.Advance(
+                survival.Health,
+                AdventureService.BaseMaximumHealth,
+                (float)(chunk / GameSecondsPerRealSecond),
+                healthRegenerationMultiplier,
+                simulated.HealthRegenerationRemainder);
             simulated = simulated with
             {
                 Hunger = survival.Hunger,
-                Health = survival.Health,
+                Health = regeneration.Health,
                 WellFedSeconds = survival.WellFedSeconds,
                 StarvationDamageRemainder =
                     survival.StarvationDamageRemainder,
+                HealthRegenerationRemainder = regeneration.Remainder,
                 LastSimulatedGameSeconds =
                     simulated.LastSimulatedGameSeconds + chunk
             };

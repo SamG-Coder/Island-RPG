@@ -77,6 +77,16 @@ internal sealed partial class GameHostWindow
             elapsed,
             starvationDamageRemainder:
                 _starvationDamageRemainder);
+        var regeneration = EntityHealthRegenerationService.Advance(
+            update.Health,
+            maximumHealth,
+            elapsed,
+            _player is not null && IsHumanNearLitCampfire(
+                _player.Position, _activeWorldLevel)
+                ? EntityHealthRegenerationService.LitCampfireHumanMultiplier
+                : 1,
+            _activePlayer.HealthRegenerationRemainder);
+        update = update with { Health = regeneration.Health };
         if (_godMode && update.Health < _activePlayer.Health)
             update = update with
             {
@@ -89,7 +99,8 @@ internal sealed partial class GameHostWindow
         {
             Hunger = update.Hunger,
             WellFedSeconds = update.WellFedSeconds,
-            Health = update.Health
+            Health = update.Health,
+            HealthRegenerationRemainder = regeneration.Remainder
         };
         if (update.Health <= 0)
             HandlePlayerDefeat("You succumb to starvation.");

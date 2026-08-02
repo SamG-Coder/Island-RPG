@@ -40,7 +40,8 @@ internal sealed record EnemyState(
     double NextPathAt = 0,
     EntityAction VisualAction = EntityAction.Idle,
     double VisualActionStartedAt = 0,
-    double AggroReadyAt = 0)
+    double AggroReadyAt = 0,
+    float HealthRegenerationRemainder = 0)
 {
     public bool Alive => Health > 0;
 }

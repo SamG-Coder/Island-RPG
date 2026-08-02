@@ -223,8 +223,17 @@ internal sealed partial class GameHostWindow
         for (var index = 0; index < _villagers.Count; index++)
         {
             var previous = _villagers[index];
-            var energized = VillagerFatigueService.Advance(
-                previous, _worldGameSeconds);
+            var recoveryPosition = new Vector2(
+                previous.PositionX, previous.PositionY);
+            var energized = VillagerSimulation.CatchUp(
+                previous,
+                _worldGameSeconds,
+                _observeMode?.HungerRateMultiplier ?? 1,
+                IsHumanNearLitCampfire(
+                    recoveryPosition, previous.WorldLevel)
+                    ? EntityHealthRegenerationService
+                        .LitCampfireHumanMultiplier
+                    : 1);
             if (!ReferenceEquals(previous, energized))
             {
                 previous = energized;

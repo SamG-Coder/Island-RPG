@@ -9,6 +9,52 @@ internal sealed partial class GameHostWindow
 {
     private double _nextCampfireExpiryCheckAt;
     private Guid? _activeCampfireFuelPickupId;
+    private readonly List<(Vector2 Position, int WorldLevel)>
+        _litCampfireRecoverySources = [];
+    private double _litCampfireRecoveryCacheAt = double.NaN;
+    private string? _litCampfireRecoveryWorldId;
+
+    private bool IsHumanNearLitCampfire(
+        Vector2 position, int worldLevel) => IsNearLitCampfire(
+            position,
+            worldLevel,
+            EntityHealthRegenerationService.LitCampfireRange);
+
+    private bool IsNearLitCampfire(
+        Vector2 position, int worldLevel, float range)
+    {
+        RefreshLitCampfireRecoverySources();
+        var rangeSquared = Math.Max(0, range) * Math.Max(0, range);
+        foreach (var source in _litCampfireRecoverySources)
+            if (source.WorldLevel == worldLevel &&
+                Vector2.DistanceSquared(position, source.Position) <=
+                rangeSquared)
+                return true;
+        return false;
+    }
+
+    private void RefreshLitCampfireRecoverySources()
+    {
+        if (_litCampfireRecoveryCacheAt == _worldGameSeconds &&
+            _litCampfireRecoveryWorldId == _activeWorld?.Id)
+            return;
+        _litCampfireRecoveryCacheAt = _worldGameSeconds;
+        _litCampfireRecoveryWorldId = _activeWorld?.Id;
+        _litCampfireRecoverySources.Clear();
+        foreach (var gpu in _worldChunks.Values)
+        {
+            if (!IsActiveWorldChunk(gpu)) continue;
+            foreach (var candidate in gpu.Chunk.GroundObjects)
+            {
+                if (CampfireService.State(
+                        candidate, _worldGameSeconds) != CampfireState.Lit)
+                    continue;
+                _litCampfireRecoverySources.Add((
+                    new(candidate.X, candidate.Y),
+                    gpu.Chunk.Coordinate.Level));
+            }
+        }
+    }
 
     private bool TryAddCampfireFuel(
         Guid campfireId, int inventorySlot, string fuelItemId)
