@@ -12,8 +12,13 @@ internal sealed record NpcAiSettings(
 
 internal static class NpcAiModelDefaults
 {
-    public const string Current = "qwen3.6:35b-a3b";
-    public const string Previous = "qwen3:4b";
+    public const string Current = "Gemma4:12B";
+    public const string Previous = "qwen3.6:35b-a3b";
+    public const string Legacy = "qwen3:4b";
+
+    public static bool IsRetiredDefault(string model) =>
+        string.Equals(model, Previous, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(model, Legacy, StringComparison.OrdinalIgnoreCase);
 }
 
 internal static class OllamaRequestPolicy

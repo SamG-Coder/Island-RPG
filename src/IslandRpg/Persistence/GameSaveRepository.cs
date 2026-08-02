@@ -99,7 +99,7 @@ internal sealed record GameSettings(
         get
         {
             var settings = Ai ?? new();
-            return settings.Model == NpcAiModelDefaults.Previous
+            return NpcAiModelDefaults.IsRetiredDefault(settings.Model)
                 ? settings with { Model = NpcAiModelDefaults.Current }
                 : settings;
         }

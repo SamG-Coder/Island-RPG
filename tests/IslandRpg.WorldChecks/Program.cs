@@ -978,8 +978,16 @@ Require(VillagerSimulation.ScheduleNextDecision(
 Require(
     defaultAi.Enabled &&
     defaultAi.BaseUrl == "http://localhost:11434" &&
-    defaultAi.Model == "qwen3.6:35b-a3b",
-    "AI settings must default to the contract-tested local Qwen model while remaining runtime-gated");
+    defaultAi.Model == "Gemma4:12B" &&
+    (new GameSettings(Ai: defaultAi with
+    {
+        Model = "qwen3.6:35b-a3b"
+    })).EffectiveAi.Model == "Gemma4:12B" &&
+    (new GameSettings(Ai: defaultAi with
+    {
+        Model = "custom-local-model"
+    })).EffectiveAi.Model == "custom-local-model",
+    "AI settings must default and migrate retired defaults to Gemma4:12B without replacing explicit custom model overrides");
 Require(NpcAiService.AvailabilityProbeTimeout >= TimeSpan.FromSeconds(45),
     "AI availability checks must allow large local models to cold-load");
 Require(OllamaRequestPolicy.KeepAlive == "30m",
@@ -1013,7 +1021,7 @@ using (var readyAi = new NpcAiService(
                request.RequestUri?.AbsolutePath == "/api/tags"
                    ? StubHttpHandler.Json(
                        """
-                       {"models":[{"name":"qwen3.6:35b-a3b","model":"qwen3.6:35b-a3b"}]}
+                       {"models":[{"name":"Gemma4:12B","model":"Gemma4:12B"}]}
                        """)
                    : StubHttpHandler.Json(
                        """{"response":"READY","done":true}""")))))
