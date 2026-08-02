@@ -53,7 +53,8 @@ internal sealed record ItemDefinition(
     int DiggingPower = 0,
     int FishingPower = 0,
     int HammerPower = 0,
-    int KnifePower = 0)
+    int KnifePower = 0,
+    bool CanStack = false)
 {
     public bool HasTag(ItemTag tag) => (Tags & tag) == tag;
 }
@@ -662,6 +663,24 @@ internal static class ItemCatalog
                 "A completed hole with a visible bottom.",
                 8, Droppable: false, Tags: ItemTag.StoneToolSprite)
         };
+
+    static ItemCatalog()
+    {
+        foreach (var (id, item) in Items.ToArray())
+            if (IsNaturallyStackable(item))
+                Items[id] = item with { CanStack = true };
+    }
+
+    private static bool IsNaturallyStackable(ItemDefinition item) =>
+        item.HasTag(ItemTag.NaturalMaterial) ||
+        item.HasTag(ItemTag.WoodcuttingMaterial) ||
+        item.HasTag(ItemTag.MiningMaterial) ||
+        item.HasTag(ItemTag.Mineral) ||
+        item.HasTag(ItemTag.Seed) ||
+        item.HasTag(ItemTag.Fish) ||
+        item.HasTag(ItemTag.Berry) ||
+        item.HasTag(ItemTag.CookedFood) ||
+        item.HasTag(ItemTag.BurntFood);
 
     private static ItemDefinition Coastal(
         string id, string name, string caption, string examine, int cell) =>

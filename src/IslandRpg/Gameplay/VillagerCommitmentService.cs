@@ -214,7 +214,7 @@ internal static class VillagerCommitmentService
                  {
                      ". i will ", ". i'll ", "; i will ",
                      ", i will ", " while i will ", " while i'll ",
-                     " and i will ", " and i'll "
+                     " while i ", " and i will ", " and i'll "
                  })
         {
             var candidate = request.IndexOf(

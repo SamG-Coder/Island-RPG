@@ -32,17 +32,13 @@ internal sealed record ItemContainerSaveState(
 
 internal sealed class ItemContainerState
 {
-    private readonly string?[] _items;
-    private readonly int[] _quantities;
-    private readonly string?[] _ownerIds;
+    private readonly InventoryContainer _inventory;
     private readonly bool[] _spacers;
 
     public ItemContainerState(ItemContainerDefinition definition)
     {
         Definition = definition;
-        _items = new string?[definition.Capacity];
-        _quantities = new int[definition.Capacity];
-        _ownerIds = new string?[definition.Capacity];
+        _inventory = new(definition.Capacity);
         _spacers = new bool[definition.Capacity];
     }
 
@@ -63,96 +59,51 @@ internal sealed class ItemContainerState
                 saved.Quantities[slot] <= 0 ||
                 !ItemCatalog.TryGet(itemId, out _))
                 continue;
-            _items[slot] = itemId;
-            _quantities[slot] = definition.AllowStacking
-                ? saved.Quantities[slot]
-                : 1;
-            if (saved.OwnerIds is { } owners &&
-                slot < owners.Length)
-                _ownerIds[slot] = owners[slot];
+            var ownerId = saved.OwnerIds is { } owners &&
+                          slot < owners.Length
+                ? owners[slot]
+                : null;
+            _inventory.TrySetSlot(
+                slot,
+                itemId,
+                definition.AllowStacking ? saved.Quantities[slot] : 1,
+                ownerId,
+                definition.AllowStacking);
         }
     }
 
     public ItemContainerDefinition Definition { get; }
-    public string?[] Items => _items;
-    public int[] Quantities => _quantities;
-    public string?[] OwnerIds => _ownerIds;
+    public string?[] Items => _inventory.ItemIds();
+    public int[] Quantities => _inventory.Quantities();
+    public string?[] OwnerIds => _inventory.OwnerIds();
     public bool IsSpacer(int slot) =>
         (uint)slot < (uint)_spacers.Length && _spacers[slot];
 
     public ItemContainerSaveState Save() =>
         new(
             Definition.Id,
-            (string?[])_items.Clone(),
-            (int[])_quantities.Clone(),
-            (string?[])_ownerIds.Clone());
+            _inventory.ItemIds(),
+            _inventory.Quantities(),
+            _inventory.OwnerIds());
 
     public bool TryAdd(
         string itemId,
         int quantity = 1,
         string? ownerId = null)
     {
-        if (quantity <= 0) return true;
-        if (Definition.AllowStacking)
-        {
-            var existing = -1;
-            for (var slot = 0; slot < _items.Length; slot++)
-                if (string.Equals(
-                        _items[slot], itemId,
-                        StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(
-                        _ownerIds[slot], ownerId,
-                        StringComparison.Ordinal))
-                {
-                    existing = slot;
-                    break;
-                }
-            if (existing >= 0)
-            {
-                _quantities[existing] =
-                    checked(_quantities[existing] + quantity);
-                return true;
-            }
-        }
-
-        if (Definition.AllowStacking)
-        {
-            var empty = FindEmptySlot();
-            if (empty < 0) return false;
-            _items[empty] = itemId;
-            _quantities[empty] = quantity;
-            _ownerIds[empty] = ownerId;
-            return true;
-        }
-
-        var available = Enumerable.Range(0, _items.Length)
-            .Count(index => _items[index] is null && !_spacers[index]);
-        if (available < quantity) return false;
-        for (var remaining = quantity; remaining > 0; remaining--)
-        {
-            var empty = FindEmptySlot();
-            _items[empty] = itemId;
-            _quantities[empty] = 1;
-            _ownerIds[empty] = ownerId;
-        }
-        return true;
+        return _inventory.TryAdd(
+            itemId, quantity, ownerId,
+            Definition.AllowStacking, SlotAvailable);
     }
 
     public bool TryTake(int slot, int quantity, out string? itemId)
     {
-        itemId = null;
-        if ((uint)slot >= (uint)_items.Length ||
-            quantity <= 0 ||
-            _items[slot] is not { } value ||
-            _quantities[slot] < quantity)
-            return false;
-        itemId = value;
-        _quantities[slot] -= quantity;
-        if (_quantities[slot] == 0)
+        if (!_inventory.TryTake(slot, quantity, out var taken))
         {
-            _items[slot] = null;
-            _ownerIds[slot] = null;
+            itemId = null;
+            return false;
         }
+        itemId = taken.ItemId;
         return true;
     }
 
@@ -195,8 +146,8 @@ internal sealed class ItemContainerState
     public void AddSpacerRow()
     {
         var occupied = -1;
-        for (var index = _items.Length - 1; index >= 0; index--)
-            if (_items[index] is not null || _spacers[index])
+        for (var index = Definition.Capacity - 1; index >= 0; index--)
+            if (_inventory[index] is not null || _spacers[index])
             {
                 occupied = index;
                 break;
@@ -268,16 +219,10 @@ internal sealed class ItemContainerState
             if (groupIndex > 0)
                 container.AddSpacerRow();
             foreach (var item in grouped[groupIndex])
-                container.TryAdd(item.Id, 100);
+                container.TryAdd(item.Id, item.CanStack ? 100 : 1);
         }
         return container;
     }
 
-    private int FindEmptySlot()
-    {
-        for (var index = 0; index < _items.Length; index++)
-            if (_items[index] is null && !_spacers[index])
-                return index;
-        return -1;
-    }
+    private bool SlotAvailable(int slot) => !_spacers[slot];
 }

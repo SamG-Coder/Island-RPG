@@ -1,0 +1,138 @@
+namespace IslandRpg.Gameplay;
+
+internal sealed record InventoryStack(
+    string ItemId,
+    int Quantity,
+    string? OwnerId = null);
+
+/// <summary>
+/// Shared slot-and-stack storage used by carried inventories and world
+/// containers. Item definitions decide whether identical items may share a
+/// slot; the container only supplies capacity and optional ownership.
+/// </summary>
+internal sealed class InventoryContainer
+{
+    private readonly InventoryStack?[] _slots;
+
+    public InventoryContainer(int capacity)
+    {
+        if (capacity <= 0)
+            throw new ArgumentOutOfRangeException(nameof(capacity));
+        _slots = new InventoryStack?[capacity];
+    }
+
+    public int Capacity => _slots.Length;
+    public int UsedSlots => _slots.Count(value => value is not null);
+    public InventoryStack? this[int slot] =>
+        (uint)slot < (uint)_slots.Length ? _slots[slot] : null;
+
+    public bool TryAdd(
+        string itemId,
+        int quantity = 1,
+        string? ownerId = null,
+        bool allowStacking = true,
+        Predicate<int>? slotAvailable = null)
+    {
+        if (quantity <= 0) return true;
+        if (!ItemCatalog.TryGet(itemId, out var definition)) return false;
+        var stackable = allowStacking && definition.CanStack;
+        if (stackable)
+        {
+            var existing = Array.FindIndex(_slots, value =>
+                value is not null &&
+                value.ItemId.Equals(
+                    itemId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(
+                    value.OwnerId, ownerId, StringComparison.Ordinal));
+            if (existing >= 0)
+            {
+                var stack = _slots[existing]!;
+                _slots[existing] = stack with
+                {
+                    Quantity = checked(stack.Quantity + quantity)
+                };
+                return true;
+            }
+        }
+
+        var requiredSlots = stackable ? 1 : quantity;
+        var empty = EmptySlots(slotAvailable).Take(requiredSlots).ToArray();
+        if (empty.Length != requiredSlots) return false;
+        if (stackable)
+        {
+            _slots[empty[0]] = new(itemId, quantity, ownerId);
+            return true;
+        }
+        foreach (var slot in empty)
+            _slots[slot] = new(itemId, 1, ownerId);
+        return true;
+    }
+
+    public bool TryTake(
+        int slot,
+        int quantity,
+        out InventoryStack taken)
+    {
+        taken = null!;
+        if ((uint)slot >= (uint)_slots.Length || quantity <= 0 ||
+            _slots[slot] is not { } value || value.Quantity < quantity)
+            return false;
+        taken = value with { Quantity = quantity };
+        var remaining = value.Quantity - quantity;
+        _slots[slot] = remaining == 0
+            ? null
+            : value with { Quantity = remaining };
+        return true;
+    }
+
+    public bool TrySetSlot(
+        int slot,
+        string itemId,
+        int quantity = 1,
+        string? ownerId = null,
+        bool allowStacking = true)
+    {
+        if ((uint)slot >= (uint)_slots.Length || _slots[slot] is not null ||
+            quantity <= 0 || !ItemCatalog.TryGet(itemId, out var definition) ||
+            quantity > 1 && !(allowStacking && definition.CanStack))
+            return false;
+        _slots[slot] = new(itemId, quantity, ownerId);
+        return true;
+    }
+
+    public bool CanAdd(
+        string itemId,
+        int quantity = 1,
+        string? ownerId = null,
+        bool allowStacking = true,
+        Predicate<int>? slotAvailable = null)
+    {
+        if (quantity <= 0) return true;
+        if (!ItemCatalog.TryGet(itemId, out var definition)) return false;
+        if (allowStacking && definition.CanStack &&
+            _slots.Any(value => value is not null &&
+                value.ItemId.Equals(
+                    itemId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(
+                    value.OwnerId, ownerId, StringComparison.Ordinal)))
+            return true;
+        var required = allowStacking && definition.CanStack ? 1 : quantity;
+        return EmptySlots(slotAvailable).Take(required).Count() == required;
+    }
+
+    public string?[] ItemIds() =>
+        _slots.Select(value => value?.ItemId).ToArray();
+
+    public int[] Quantities() =>
+        _slots.Select(value => value?.Quantity ?? 0).ToArray();
+
+    public string?[] OwnerIds() =>
+        _slots.Select(value => value?.OwnerId).ToArray();
+
+    private IEnumerable<int> EmptySlots(Predicate<int>? available)
+    {
+        for (var slot = 0; slot < _slots.Length; slot++)
+            if (_slots[slot] is null && (available?.Invoke(slot) ?? true))
+                yield return slot;
+    }
+}

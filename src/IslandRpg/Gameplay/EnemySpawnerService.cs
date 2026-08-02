@@ -67,7 +67,9 @@ internal static class EnemySpawnerService
     public const float LeashRadius = 8f;
     public const float CaveAggroRadius = 5f;
     public const float AttackRange = 1.25f;
-    public const double RecoverySeconds = 45;
+    public const double RecoveryRealSeconds = 45;
+    public const double RecoveryGameSeconds =
+        RecoveryRealSeconds * VillagerSimulation.GameSecondsPerRealSecond;
 
     public static bool Supports(EnemyKind kind, Biome biome, int level) =>
         kind switch
@@ -106,7 +108,10 @@ internal static class EnemySpawnerService
         if (spawner.WaveStarted && living.Count == 0 &&
             spawner.RecoveryUntil <= 0)
         {
-            spawner = spawner with { RecoveryUntil = now + RecoverySeconds };
+            spawner = spawner with
+            {
+                RecoveryUntil = now + RecoveryGameSeconds
+            };
             startedRecovery = true;
         }
         if (living.Count == 0 && now >= spawner.RecoveryUntil &&

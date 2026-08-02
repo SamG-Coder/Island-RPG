@@ -144,6 +144,31 @@ internal sealed partial class GameHostWindow
                         _player?.Stop();
                         request.Complete(ControlSnapshot("player_stopped"));
                         break;
+                    case "combat_style":
+                        if (_activePlayer is null)
+                        {
+                            request.Complete(Error("world_not_loaded"));
+                            break;
+                        }
+                        var styleText = root.TryGetProperty(
+                            "style", out var styleElement)
+                            ? styleElement.GetString()
+                            : null;
+                        if (!ControlCombatCommands.TryParseStance(
+                                styleText, out var stance))
+                        {
+                            request.Complete(Error("invalid_combat_style"));
+                            break;
+                        }
+                        _activePlayer = _activePlayer with
+                        {
+                            CombatStance = stance,
+                            UpdatedUtc = DateTime.UtcNow
+                        };
+                        _saves.SavePlayer(_activePlayer);
+                        request.Complete(ControlSnapshot(
+                            "combat_style_changed"));
+                        break;
                     case "act":
                         if (!TryQueueControlAction(root, out var actionError))
                         {
@@ -218,6 +243,12 @@ internal sealed partial class GameHostWindow
                                 new { command = "skip_cinematic" },
                                 new
                                 {
+                                    command = "combat_style",
+                                    arguments =
+                                        "style: accurate|aggressive|defensive"
+                                },
+                                new
+                                {
                                     command = "continue",
                                     description =
                                         "Dismiss the quest-complete popup"
@@ -262,7 +293,8 @@ internal sealed partial class GameHostWindow
                                         "install_cave_rope", "enter_cave",
                                         "take_cave_rope", "fill_hole",
                                         "fish", "cook", "mine",
-                                        "attack_villager", "give_item"
+                                        "attack_villager", "attack_enemy",
+                                        "give_item"
                                     }
                                 },
                                 new { command = "stop_player" },
@@ -1169,12 +1201,12 @@ internal sealed partial class GameHostWindow
                     "actor", out var enemyElement)
                     ? enemyElement.GetString()
                     : null;
-                var enemy = _enemies.FirstOrDefault(value =>
-                    value.Alive && value.WorldLevel == _activeWorldLevel &&
-                    (string.IsNullOrWhiteSpace(requestedEnemy) ||
-                     value.Id.ToString("N").Equals(
-                         requestedEnemy,
-                         StringComparison.OrdinalIgnoreCase)));
+                var enemy = ControlTargetSelection.Enemy(
+                    _enemies.Where(value =>
+                        value.Alive &&
+                        value.WorldLevel == _activeWorldLevel),
+                    requestedEnemy,
+                    _player?.Position);
                 if (enemy is null)
                 {
                     error = "enemy_not_found";
@@ -1401,10 +1433,36 @@ internal sealed partial class GameHostWindow
                 developerMap = _developerMap.IsOpen,
                 blockers = ControlUiBlockers()
             },
+            actionQueue = new
+            {
+                pathPending = _pendingPathTask is not null,
+                queuedAction = _queuedAction?.Type.ToString(),
+                playerAction = _player?.Action.ToString(),
+                moving = _player?.Action == EntityAction.Move,
+                combatTarget = _combatEnemyId is { } enemyTarget
+                    ? $"enemy:{enemyTarget:N}"
+                    : _combatVillagerId is { } villagerTarget
+                        ? $"villager:{villagerTarget}"
+                        : _combatTargetId is { } objectTarget
+                            ? $"object:{objectTarget:N}"
+                            : null,
+                readyForAction = _pendingPathTask is null &&
+                    _queuedAction is null &&
+                    _player?.Action is null or EntityAction.Idle
+            },
             player = _activePlayer is null ? null : new
             {
                 _activePlayer.Id,
                 _activePlayer.Name,
+                _activePlayer.Health,
+                maximumHealth = AdventureService.MaximumHealth(
+                    _activePlayer.AdventureExperience),
+                _activePlayer.Hunger,
+                combatStyle = _activePlayer.CombatStance.ToString(),
+                _activePlayer.AttackExperience,
+                _activePlayer.StrengthExperience,
+                _activePlayer.DefenceExperience,
+                combatEnemyId = _combatEnemyId,
                 position = _player is null ? null : new
                 {
                     _player.Position.X,
@@ -1413,6 +1471,41 @@ internal sealed partial class GameHostWindow
                 inventory = _activePlayer.Inventory?
                     .Where(value => value is not null)
             },
+            enemies = _enemies
+                .Where(enemy => enemy.WorldLevel == _activeWorldLevel)
+                .Select(enemy => new
+                {
+                    enemy.Id,
+                    kind = enemy.Kind.ToString(),
+                    enemy.Health,
+                    enemy.MaximumHealth,
+                    enemy.PowerLevel,
+                    alive = enemy.Alive,
+                    behavior = enemy.Behavior.ToString(),
+                    enemy.TargetId,
+                    position = new
+                    {
+                        enemy.Position.X,
+                        enemy.Position.Y
+                    }
+                }),
+            enemySpawners = _enemySpawners
+                .Where(spawner =>
+                    spawner.WorldLevel == _activeWorldLevel)
+                .Select(spawner => new
+                {
+                    spawner.Id,
+                    spawner.Wave,
+                    spawner.MaximumAlive,
+                    spawner.RecoveryUntil,
+                    living = _enemies.Count(enemy =>
+                        enemy.SpawnerId == spawner.Id && enemy.Alive),
+                    position = new
+                    {
+                        spawner.Position.X,
+                        spawner.Position.Y
+                    }
+                }),
             villagers = _villagers.Select(villager => new
             {
                 villager.Id,
@@ -1480,6 +1573,31 @@ internal static class ControlTargetSelection
                 Vector2.DistanceSquared(value.Position, origin))
             .FirstOrDefault().Item;
     }
+
+    public static EnemyState? Enemy(
+        IEnumerable<EnemyState> candidates,
+        string? actor,
+        Vector2? origin)
+    {
+        if (!string.IsNullOrWhiteSpace(actor))
+        {
+            if (!Guid.TryParse(actor, out var id)) return null;
+            return candidates.FirstOrDefault(value => value.Id == id);
+        }
+        return origin is { } position
+            ? candidates.OrderBy(value => Vector2.DistanceSquared(
+                    value.Position, position))
+                .FirstOrDefault()
+            : candidates.FirstOrDefault();
+    }
+}
+
+internal static class ControlCombatCommands
+{
+    public static bool TryParseStance(
+        string? value, out MeleeCombatStance stance) =>
+        Enum.TryParse(value, true, out stance) &&
+        Enum.IsDefined(stance);
 }
 
 internal readonly record struct ControlVegetationTarget(

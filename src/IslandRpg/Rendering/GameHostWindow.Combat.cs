@@ -294,7 +294,8 @@ internal sealed partial class GameHostWindow
         if (Vector2.Distance(_player.Position, target) >
             MeleeCombatService.AttackRange + .22f)
         {
-            if (MeleeCombatService.ShouldRepathMovingTarget(
+            if (MeleeCombatService.ShouldRequestMovingTargetPath(
+                    _pendingPathTask is not null,
                     _clock, _enemyCombatRepathAt,
                     _enemyCombatPathTarget, target))
             {

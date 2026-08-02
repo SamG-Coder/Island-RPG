@@ -273,6 +273,7 @@ internal static class VillagerSimulation
         2 * GameSecondsPerRealSecond;
     public const double SocialCooldownRealSeconds = 120;
     public const double IntroductionCooldownRealSeconds = 45;
+    public const double IntroductionRetryRealSeconds = 5 * 60;
     public const double RelationshipCheckInSeconds = 6 * 60 * 60;
     public const float SocialRange = 8;
     public const float FollowStopDistance = 1.8f;
@@ -738,7 +739,11 @@ internal static class VillagerSimulation
             var needsIntroduction =
                 known?.Stage is null or
                     AcquaintanceStage.Unknown or
-                    AcquaintanceStage.Seen;
+                    AcquaintanceStage.Seen &&
+                (known is null || known.ConversationCount == 0 ||
+                 gameSeconds - known.LastConversationGameSeconds >=
+                 IntroductionRetryRealSeconds *
+                 GameSecondsPerRealSecond);
             var needsOrigin =
                 known?.Stage == AcquaintanceStage.Introduced;
             var needsSurvival =
@@ -960,19 +965,49 @@ internal static class VillagerSimulation
         string? statedName,
         double gameSeconds) =>
         string.IsNullOrWhiteSpace(statedName)
-            ? state with
-            {
-                NextSocialGameSeconds = gameSeconds +
-                    SocialRealCooldown(
-                        state, VillagerSocialIntent.Introduce) *
-                    GameSecondsPerRealSecond
-            }
+            ? RecordUnansweredIntroduction(
+                state, characterId, gameSeconds)
             : RecordConversation(
                 state,
                 characterId,
                 statedName,
                 VillagerSocialIntent.Introduce,
                 gameSeconds);
+
+    private static VillagerState RecordUnansweredIntroduction(
+        VillagerState state,
+        string characterId,
+        double gameSeconds)
+    {
+        var people = state.KnownPeople?.ToList() ?? [];
+        var index = people.FindIndex(value =>
+            value.CharacterId.Equals(
+                characterId, StringComparison.Ordinal));
+        var existing = index >= 0
+            ? people[index]
+            : new VillagerKnownPerson(
+                characterId,
+                AcquaintanceStage.Seen,
+                null,
+                0);
+        var updated = existing with
+        {
+            Stage = existing.Stage < AcquaintanceStage.Seen
+                ? AcquaintanceStage.Seen
+                : existing.Stage,
+            LastConversationGameSeconds = gameSeconds,
+            ConversationCount = existing.ConversationCount + 1
+        };
+        if (index >= 0) people[index] = updated;
+        else people.Add(updated);
+        return state with
+        {
+            KnownPeople = people,
+            NextSocialGameSeconds = gameSeconds +
+                IntroductionRetryRealSeconds *
+                GameSecondsPerRealSecond
+        };
+    }
 
     public static VillagerState RecordConversation(
         VillagerState state,
@@ -1092,7 +1127,7 @@ internal static class VillagerSimulation
     {
         text = text.Trim();
         if (text.Length == 0) return state;
-        if (text.Length > 160) text = text[..160];
+        if (text.Length > 256) text = text[..256];
         var history = state.ConversationHistory?.ToList() ?? [];
         history.Add(new(
             speakerId,

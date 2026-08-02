@@ -9,6 +9,8 @@ internal static class PlayerInventory
         return new string?[Capacity];
     }
 
+    public static InventoryContainer CreateContainer() => new(Capacity);
+
     public static string?[] Normalize(string?[]? items)
     {
         var normalized = new string?[Capacity];

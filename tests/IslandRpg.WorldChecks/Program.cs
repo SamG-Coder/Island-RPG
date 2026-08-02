@@ -3533,9 +3533,31 @@ var unansweredIntroduction =
         curiousVillager, stranger.Id, null, 100);
 Require(
     VillagerSimulation.KnownPerson(
-        unansweredIntroduction, stranger.Id) is null &&
-    unansweredIntroduction.NextSocialGameSeconds > 100,
-    "asking a stranger's name must apply a cooldown without inventing their answer");
+        unansweredIntroduction, stranger.Id) is
+        {
+            Stage: AcquaintanceStage.Seen,
+            StatedName: null,
+            ConversationCount: 1
+        } &&
+    unansweredIntroduction.NextSocialGameSeconds ==
+        100 + VillagerSimulation.IntroductionRetryRealSeconds *
+        VillagerSimulation.GameSecondsPerRealSecond &&
+    VillagerSimulation.SelectSocialGoal(
+        unansweredIntroduction,
+        new[] { stranger },
+        gameSeconds: unansweredIntroduction.NextSocialGameSeconds - 1)
+        .Intent == VillagerSocialIntent.None,
+    "an unanswered introduction must remember the attempt without inventing a name or repeatedly asking before the retry window");
+var longPipeDialogue = new string('x', 220);
+Require(
+    VillagerSimulation.RecordDialogueTurn(
+            curiousVillager,
+            "player",
+            "Rook",
+            longPipeDialogue,
+            101)
+        .ConversationHistory?.Last().Text == longPipeDialogue,
+    "conversation memory must retain the full 256-character chat input rather than truncating valid pipe dialogue at 160 characters");
 curiousVillager = VillagerSimulation.RecordConversation(
     curiousVillager,
     stranger.Id,
@@ -3852,6 +3874,21 @@ Require(
     rendezvousProposalItem == ItemIds.LargeRock &&
     rendezvousProposalQuantity == 3,
     "an accepted combined gather-and-rendezvous request must preserve the collection commitment when the model prioritizes meet");
+const string observedInformalResponsibilityRequest =
+    "Linnet, please gather three more large rocks while I find fibre and " +
+    "sticks. Meet me here when you are done. Do you agree?";
+Require(
+    VillagerCommitmentService.TryResolveAiItemProposal(
+        observedInformalResponsibilityRequest,
+        "gather",
+        ItemIds.LargeRock,
+        3,
+        out _,
+        out var informalProposalItem,
+        out var informalProposalQuantity) &&
+    informalProposalItem == ItemIds.LargeRock &&
+    informalProposalQuantity == 3,
+    "an NPC task followed by 'while I' player work must not bind the player's item to the NPC promise");
 var distantFibre = new WorldVegetationRenderItem(
     0, 2, 2, new(2.5f, 2.5f), "fibre-distant", "plant", null,
     CanGatherFibre: true, CanGatherBerries: false);
@@ -3873,6 +3910,36 @@ Require(
     ControlTargetSelection.Vegetation(
         pipeVegetation, false, null, new(50, 50), true) is null,
     "control-pipe vegetation targeting must prefer the requested coordinates, preserve exact-key selection, and reject unrelated distant plants");
+Require(
+    ControlCombatCommands.TryParseStance(
+        "accurate", out var accuratePipeStance) &&
+    accuratePipeStance == MeleeCombatStance.Accurate &&
+    ControlCombatCommands.TryParseStance(
+        "AGGRESSIVE", out var aggressivePipeStance) &&
+    aggressivePipeStance == MeleeCombatStance.Aggressive &&
+    ControlCombatCommands.TryParseStance(
+        "defensive", out var defensivePipeStance) &&
+    defensivePipeStance == MeleeCombatStance.Defensive &&
+    !ControlCombatCommands.TryParseStance("magic", out _),
+    "control-pipe combat styles must accept every melee stance and reject unsupported styles");
+var pipeEnemyNear = new EnemyState(
+    Guid.NewGuid(), Guid.NewGuid(), EnemyKind.GrassSlime,
+    new(3, 3), new(3, 3), new(3, 3), 0, 1, 20, 20);
+var pipeEnemyFar = new EnemyState(
+    Guid.NewGuid(), Guid.NewGuid(), EnemyKind.GrassSlime,
+    new(30, 30), new(30, 30), new(30, 30), 0, 1, 20, 20);
+Require(
+    ControlTargetSelection.Enemy(
+        [pipeEnemyFar, pipeEnemyNear], null, Vector2.Zero) == pipeEnemyNear &&
+    ControlTargetSelection.Enemy(
+        [pipeEnemyNear, pipeEnemyFar], pipeEnemyFar.Id.ToString(),
+        Vector2.Zero) == pipeEnemyFar &&
+    ControlTargetSelection.Enemy(
+        [pipeEnemyNear], pipeEnemyNear.Id.ToString("N"),
+        Vector2.Zero) == pipeEnemyNear &&
+    ControlTargetSelection.Enemy(
+        [pipeEnemyNear], "not-an-id", Vector2.Zero) is null,
+    "control-pipe enemy targeting must accept serialized and compact IDs, default to the nearest enemy, and reject malformed IDs");
 var acceptance = VillagerCommitmentService.TryAccept(
     villagerSpawnA[0],
     "requester",
@@ -4490,6 +4557,12 @@ Require(
             4 + MeleeCombatService.MovingTargetRepathDistance + .01f,
             4)),
     "moving combat targets must repath on a bounded timer or meaningful displacement");
+Require(
+    !MeleeCombatService.ShouldRequestMovingTargetPath(
+        true, 10, 0, Vector2.Zero, Vector2.One) &&
+    MeleeCombatService.ShouldRequestMovingTargetPath(
+        false, 10, 0, Vector2.Zero, Vector2.One),
+    "moving-target combat must not continuously cancel an unfinished path calculation");
 var conversationState = VillagerSimulation.BeginConversation(
     movementState,
     "player",
@@ -6308,6 +6381,33 @@ Require(
     stackingContainer.TryAdd(ItemIds.Logs) &&
     stackingContainer.Quantities[0] == 100,
     "stacking containers must merge equal item IDs and retain their quantity");
+var playerBagContainer = PlayerInventory.CreateContainer();
+Require(
+    PlayerInventory.Capacity == 28 &&
+    ItemCatalog.Get(ItemIds.Logs).CanStack &&
+    !ItemCatalog.Get(ItemIds.StoneAxe).CanStack &&
+    playerBagContainer.TryAdd(ItemIds.Logs, 50) &&
+    playerBagContainer.UsedSlots == 1 &&
+    playerBagContainer[0] is
+    {
+        ItemId: ItemIds.Logs,
+        Quantity: 50
+    } &&
+    playerBagContainer.TryAdd(ItemIds.StoneAxe, 2) &&
+    playerBagContainer.UsedSlots == 3 &&
+    playerBagContainer[1]?.Quantity == 1 &&
+    playerBagContainer[2]?.Quantity == 1,
+    "the reusable 28-slot player container must stack definition-approved resources while tools consume individual slots");
+var atomicBag = new InventoryContainer(2);
+Require(
+    !atomicBag.TryAdd(ItemIds.StoneAxe, 3) &&
+    atomicBag.UsedSlots == 0 &&
+    atomicBag.TryAdd(ItemIds.StoneAxe, 2) &&
+    !atomicBag.CanAdd(ItemIds.StoneAxe) &&
+    atomicBag.TryTake(0, 1, out var takenAxe) &&
+    takenAxe.ItemId == ItemIds.StoneAxe &&
+    atomicBag.UsedSlots == 1,
+    "inventory-container additions must be atomic and removals must preserve slot accounting");
 var restoredStackingContainer = new ItemContainerState(
     stackingContainer.Definition,
     stackingContainer.Save());
@@ -6447,7 +6547,8 @@ Require(
     ItemCatalog.All.All(item =>
     {
         var slot = Array.IndexOf(allItemsContainer.Items, item.Id);
-        return slot >= 0 && allItemsContainer.Quantities[slot] == 100;
+        return slot >= 0 && allItemsContainer.Quantities[slot] ==
+            (item.CanStack ? 100 : 1);
     }) &&
     Enumerable.Range(
             0,
@@ -6456,7 +6557,7 @@ Require(
         .Any(start => Enumerable.Range(
                 start, allItemsContainer.Definition.ColumnCount)
             .All(allItemsContainer.IsSpacer)),
-    "the developer item bank must contain every catalog item at quantity 100 with category spacing");
+    "the developer item bank must contain one tool or placeable and 100 of every stackable catalog item with category spacing");
 var itemBankWindow = ItemContainerWindowState.WindowBounds(
     new(0, 0, 1280, 720), allItemsContainer.Definition);
 var itemBankPanel = ItemContainerWindowState.ContainerBounds(
@@ -8915,15 +9016,18 @@ var enemyRecovery = EnemySpawnerService.Update(
 var waiting = EnemySpawnerService.Update(
     enemyRecovery.Spawner, [],
     [new("player", Vector2.Zero, 0, true, 20, true)],
-    10 + EnemySpawnerService.RecoverySeconds - .01, 2187);
+    10 + EnemySpawnerService.RecoveryGameSeconds - .01, 2187);
 var nextWave = EnemySpawnerService.Update(
     waiting.Spawner, [],
     [new("player", Vector2.Zero, 0, true, 20, true)],
-    10 + EnemySpawnerService.RecoverySeconds, 2187);
+    10 + EnemySpawnerService.RecoveryGameSeconds, 2187);
 Require(
     enemyRecovery.StartedRecovery && !enemyRecovery.SpawnedWave &&
     waiting.Enemies.Count == 0 && nextWave.SpawnedWave &&
-    nextWave.Spawner.Wave == 2,
+    nextWave.Spawner.Wave == 2 &&
+    EnemySpawnerService.RecoveryGameSeconds ==
+        EnemySpawnerService.RecoveryRealSeconds *
+        VillagerSimulation.GameSecondsPerRealSecond,
     "a cleared enemy wave must remain empty through recovery before adapting the next wave");
 var passiveSlime = firstWave.Enemies[0];
 var damagedSlime = EnemyCombatService.ApplyHit(

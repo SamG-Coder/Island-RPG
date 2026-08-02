@@ -34,6 +34,15 @@ internal static class MeleeCombatService
             previousTarget, currentTarget) >
         MovingTargetRepathDistance * MovingTargetRepathDistance;
 
+    public static bool ShouldRequestMovingTargetPath(
+        bool pathPending,
+        double clock,
+        double nextRepathAt,
+        in Vector2 previousTarget,
+        in Vector2 currentTarget) =>
+        !pathPending && ShouldRepathMovingTarget(
+            clock, nextRepathAt, previousTarget, currentTarget);
+
     public static float InteractionRange(Vector2 direction)
     {
         if (direction.LengthSquared < .0001f)
