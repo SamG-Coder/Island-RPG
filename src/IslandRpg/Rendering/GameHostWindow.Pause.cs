@@ -159,6 +159,8 @@ internal sealed partial class GameHostWindow
         _settingsMenu.LayoutContent(panel);
         if (_settingsMenu.SelectedTab != SettingsTab.Display)
             _resolutionDropdown.Close();
+        if (_settingsMenu.SelectedTab != SettingsTab.Game)
+            _chatSizeDropdown.Close();
         switch (_settingsMenu.SelectedTab)
         {
             case SettingsTab.Display:
@@ -197,6 +199,12 @@ internal sealed partial class GameHostWindow
                     _settingsMenu.OptionBounds(1),
                     "Unlimited zoom out: " +
                     (gameSettings.UnlimitedZoom ? "On" : "Off"));
+                LayoutChatSizeDropdown(panel);
+                RenderChatSizeDropdownField(gameSettings);
+                DrawMenuButton(
+                    _settingsMenu.OptionBounds(3),
+                    "Wrap chat text: " +
+                    (gameSettings.WrapChatText ? "On" : "Off"));
                 break;
             case SettingsTab.Sound:
                 var soundSettings = _saves.LoadSettings();
@@ -225,6 +233,33 @@ internal sealed partial class GameHostWindow
         RenderListScrollbar(_settingsMenu.ContentList);
         if (_settingsMenu.SelectedTab == SettingsTab.Display)
             RenderResolutionDropdownMenu();
+        if (_settingsMenu.SelectedTab == SettingsTab.Game)
+            RenderChatSizeDropdownMenu();
+    }
+
+    private void RenderChatSizeDropdownField(
+        IslandRpg.Persistence.GameSettings settings)
+    {
+        var bounds = _chatSizeDropdown.Bounds;
+        DrawMenuButton(bounds, $"Chat size: {settings.ChatSize}");
+        DrawUiText(
+            _chatSizeDropdown.IsOpen ? "▲" : "▼",
+            new(bounds.X + bounds.Z - 22, bounds.Y + 12),
+            new(206, 192, 151, 255));
+    }
+
+    private void RenderChatSizeDropdownMenu()
+    {
+        if (!_chatSizeDropdown.IsOpen) return;
+        var menu = _chatSizeDropdown.MenuBounds;
+        DrawUiColor(menu, new(.030f, .027f, .021f, .995f));
+        DrawPanelOutline(menu, 2, new(.48f, .37f, .16f, 1));
+        for (var row = 0; row < _chatSizeDropdown.VisibleCount; row++)
+        {
+            var index = _chatSizeDropdown.FirstVisibleIndex + row;
+            var bounds = _chatSizeDropdown.OptionBounds(row);
+            DrawMenuButton(bounds, _chatSizeDropdown.Options[index].Label);
+        }
     }
 
     private void RenderVolumeSlider(

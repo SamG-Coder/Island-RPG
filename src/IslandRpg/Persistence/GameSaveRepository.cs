@@ -78,6 +78,13 @@ internal enum DisplayVSyncMode
     Off
 }
 
+internal enum ChatDisplaySize
+{
+    Small,
+    Medium,
+    Large
+}
+
 internal sealed record GameSettings(
     float UiScale = 1,
     float MasterVolume = 1,
@@ -92,6 +99,8 @@ internal sealed record GameSettings(
     float EffectsVolume = .85f,
     bool UseTestAssets = false,
     bool UnlimitedZoom = true,
+    ChatDisplaySize ChatSize = ChatDisplaySize.Small,
+    bool WrapChatText = true,
     NpcAiSettings? Ai = null)
 {
     public NpcAiSettings EffectiveAi

@@ -30,7 +30,10 @@ internal sealed class SettingsMenuState
     private static readonly string[] DisplayItems =
         ["fullscreen", "resolution", "vsync", "frame-limit", "metrics"];
     private static readonly string[] GameItems =
-        ["occluded-player-outline", "unlimited-zoom"];
+    [
+        "occluded-player-outline", "unlimited-zoom",
+        "chat-size", "chat-wrap"
+    ];
     private static readonly string[] SoundItems =
         ["music-enabled", "music-volume", "effects-volume"];
     private static readonly string[] AiItems =

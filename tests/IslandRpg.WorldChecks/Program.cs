@@ -51,6 +51,26 @@ if (args.Contains(
 }
 
 var worldCheckAssertions = 0;
+var wrappedChat = ChatTextLayout.Wrap(
+    "one two three four", 9, text => text.Length);
+var chatLayout = new ChatUiControlState();
+chatLayout.Configure(
+    ChatDisplaySize.Medium, true, 16, text => text.Length);
+chatLayout.Layout(new(0, 0, 700, 500));
+chatLayout.AddMessage(
+    "one two three four", ChatMessageStyle.Debug);
+Require(
+    wrappedChat.SequenceEqual(["one two", "three", "four"]) &&
+    chatLayout.VisibleRows == 12 &&
+    chatLayout.DisplayLines.Count == 1,
+    "chat layout must expose medium row capacity and reusable word wrapping");
+chatLayout.Configure(
+    ChatDisplaySize.Large, false, 16, text => text.Length);
+Require(
+    chatLayout.VisibleRows == 16 &&
+    chatLayout.DisplayLines.Single().Text == "one two three four" &&
+    chatLayout.DisplayLines.Single().Style == ChatMessageStyle.Debug,
+    "large chat layout must preserve unwrapped debug messages and their style");
 var observeSummaryDirectory = Path.Combine(
     Path.GetTempPath(), "IslandRpg.WorldChecks", Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(observeSummaryDirectory);

@@ -1,4 +1,5 @@
 using IslandRpg.Rendering.Ui;
+using IslandRpg.Persistence;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
@@ -67,6 +68,11 @@ internal sealed partial class GameHostWindow
         _performanceMetricsEnabled = settings.PerformanceMetrics;
         _occludedPlayerOutlineEnabled =
             settings.OccludedPlayerOutline;
+        _chatUi.Configure(
+            settings.ChatSize,
+            settings.WrapChatText,
+            _chatLineHeight,
+            MeasureUiText);
         if (settings.Fullscreen)
         {
             var resolution = ResolveFullscreenResolution(settings);
@@ -196,6 +202,27 @@ internal sealed partial class GameHostWindow
     {
         _settingsMenu.LayoutContent(panel);
         var settings = _saves.LoadSettings();
+        LayoutChatSizeDropdown(panel);
+        if (_chatSizeDropdown.TrySelect(pointer, out var selectedSize) &&
+            Enum.TryParse<ChatDisplaySize>(
+                selectedSize.Id, true, out var chatSize))
+        {
+            settings = settings with { ChatSize = chatSize };
+            _saves.SaveSettings(settings);
+            ApplyDisplaySettings(settings);
+            return true;
+        }
+        if (_settingsMenu.ContentList.VisibleIndices.Contains(2) &&
+            _settingsMenu.OptionBounds(2).Contains(pointer))
+        {
+            _chatSizeDropdown.Toggle();
+            return true;
+        }
+        if (_chatSizeDropdown.IsOpen)
+        {
+            _chatSizeDropdown.Close();
+            return true;
+        }
         if (_settingsMenu.ContentList.VisibleIndices.Contains(0) &&
             _settingsMenu.OptionBounds(0).Contains(pointer))
         {
@@ -216,10 +243,37 @@ internal sealed partial class GameHostWindow
             if (!settings.UnlimitedZoom)
                 _targetZoom = Math.Clamp(_targetZoom, .45f, 1.75f);
         }
+        else if (_settingsMenu.ContentList.VisibleIndices.Contains(3) &&
+                 _settingsMenu.OptionBounds(3).Contains(pointer))
+        {
+            settings = settings with
+            {
+                WrapChatText = !settings.WrapChatText
+            };
+        }
         else
             return false;
         _saves.SaveSettings(settings);
         ApplyDisplaySettings(settings);
         return true;
+    }
+
+    internal void LayoutChatSizeDropdown(Vector4 panel) =>
+        _chatSizeDropdown.Layout(
+            _settingsMenu.OptionBounds(2),
+            Enum.GetValues<ChatDisplaySize>()
+                .Select(size => new DropdownOption(
+                    size.ToString(), size.ToString()))
+                .ToArray(),
+            SettingsMenuState.ContentBounds(panel));
+
+    internal bool ScrollChatSizeDropdown(
+        Vector4 panel, Vector2 pointer, float offset)
+    {
+        if (_settingsMenu.SelectedTab != SettingsTab.Game ||
+            !_chatSizeDropdown.IsOpen)
+            return false;
+        LayoutChatSizeDropdown(panel);
+        return _chatSizeDropdown.Scroll(pointer, offset);
     }
 }

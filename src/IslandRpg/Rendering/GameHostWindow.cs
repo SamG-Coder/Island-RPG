@@ -421,6 +421,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly RepeatedActionMonologue _repeatedActions = new();
     private readonly SettingsMenuState _settingsMenu = new();
     private readonly DropdownControlState _resolutionDropdown = new();
+    private readonly DropdownControlState _chatSizeDropdown = new();
     private readonly DeveloperSettingsController _developerSettings = new();
     private readonly DeveloperMapWindow _developerMap = new();
     private readonly SkillGuideWindowState _skillGuideWindow = new();
@@ -3084,6 +3085,11 @@ internal sealed partial class GameHostWindow : GameWindow
                         MouseState.Position,
                         e.OffsetY))
                     return;
+                if (ScrollChatSizeDropdown(
+                        SettingsPanel(),
+                        MouseState.Position,
+                        e.OffsetY))
+                    return;
                 _settingsMenu.LayoutContent(SettingsPanel());
                 _settingsMenu.ContentList.Scroll(
                     MouseState.Position, e.OffsetY);
@@ -3111,6 +3117,11 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_pauseMenu.Page == PausePage.Settings)
             {
                 if (ScrollResolutionDropdown(
+                        PauseSubmenuPanel(),
+                        MouseState.Position,
+                        e.OffsetY))
+                    return;
+                if (ScrollChatSizeDropdown(
                         PauseSubmenuPanel(),
                         MouseState.Position,
                         e.OffsetY))
@@ -5570,9 +5581,9 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             var textLeft = _chatUi.LogPanel.Bounds.X + 9;
             var textTop = _chatUi.LogPanel.Bounds.Y + 6;
-            var visible = _chatUi.Messages
+            var visible = _chatUi.DisplayLines
                 .Skip(_chatUi.FirstVisibleLine)
-                .Take(8);
+                .Take(_chatUi.VisibleRows);
             var row = 0;
             foreach (var message in visible)
             {
@@ -5588,6 +5599,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     ChatMessageStyle.Warning => new FSColor(236, 145, 112, 255),
                     ChatMessageStyle.Player => new FSColor(128, 211, 255, 255),
                     ChatMessageStyle.Npc => new FSColor(238, 220, 157, 255),
+                    ChatMessageStyle.Debug => new FSColor(155, 158, 161, 255),
                     _ => new FSColor(218, 207, 166, 255)
                 };
                 DrawUiText(
@@ -7080,6 +7092,12 @@ internal sealed partial class GameHostWindow : GameWindow
         _quantityFont = _fontSystem.GetFont(11);
         _chatLineHeight = MathF.Ceiling(
             Math.Max(16, _chatFont.MeasureString("Ag").Y));
+        var chatSettings = _saves.LoadSettings();
+        _chatUi.Configure(
+            chatSettings.ChatSize,
+            chatSettings.WrapChatText,
+            _chatLineHeight,
+            MeasureUiText);
     }
 
     private void LoadHorizontalItemSheet(

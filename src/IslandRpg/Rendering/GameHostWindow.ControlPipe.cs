@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO.Pipes;
 using System.Text.Json;
+using IslandRpg.Rendering.Ui;
 using OpenTK.Mathematics;
 
 namespace IslandRpg.Rendering;
@@ -19,6 +20,7 @@ internal sealed partial class GameHostWindow
                 using var document = JsonDocument.Parse(request.Json);
                 var root = document.RootElement;
                 var command = root.GetProperty("command").GetString();
+                LogControlPipeCommand(command, root);
                 switch (command)
                 {
                     case "load_latest":
@@ -77,6 +79,18 @@ internal sealed partial class GameHostWindow
                 request.Complete(Error(exception.Message));
             }
         }
+    }
+
+    private void LogControlPipeCommand(
+        string? command, JsonElement root)
+    {
+        var detail = command == "chat" &&
+                     root.TryGetProperty("text", out var text)
+            ? $" \"{text.GetString()}\""
+            : "";
+        _chatUi.AddMessage(
+            $"Codex: {command ?? "unknown"}{detail}",
+            ChatMessageStyle.Debug);
     }
 
     private string ControlSnapshot(string eventType) =>
