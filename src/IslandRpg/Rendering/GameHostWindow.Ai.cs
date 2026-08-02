@@ -24,6 +24,12 @@ internal sealed partial class GameHostWindow
     private Task<NpcAiInterpretation?>? _npcAiSpeechTask;
     private int _npcAiSpeechVillagerIndex = -1;
     private string? _npcAiSpeechFallback;
+    private PendingVillagerRequest? _pendingVillagerRequest;
+    private sealed record PendingVillagerRequest(
+        string VillagerId,
+        string PlayerId,
+        string ItemId,
+        int Quantity);
     private PendingVillagerGift? _pendingVillagerGift;
     private sealed record PendingVillagerGift(
         string VillagerId,
@@ -284,7 +290,8 @@ internal sealed partial class GameHostWindow
             _npcAiCheckTask = null;
         }
         CompleteNpcAiDialogue();
-        if (_npcAiSpeechTask is { IsFaulted: true })
+        if (_npcAiSpeechTask is { IsCompleted: true,
+                                  IsCompletedSuccessfully: false })
         {
             var failedIndex = _npcAiSpeechVillagerIndex;
             _npcAiState = new(
@@ -297,6 +304,7 @@ internal sealed partial class GameHostWindow
                            NpcAiSpeechFallback;
             _npcAiSpeechFallback = null;
             _pendingVillagerGift = null;
+            _pendingVillagerRequest = null;
             if ((uint)failedIndex < (uint)_villagers.Count)
                 ShowVillagerSpeech(
                     failedIndex,
@@ -324,6 +332,7 @@ internal sealed partial class GameHostWindow
                 "AI response was invalid; used a safe reply and will retry.",
                 DateTime.UtcNow);
             _pendingVillagerGift = null;
+            _pendingVillagerRequest = null;
             if ((uint)index < (uint)_villagers.Count)
                 ShowVillagerSpeech(
                     index,
@@ -347,7 +356,10 @@ internal sealed partial class GameHostWindow
                 index, gift, interpretation, speechFallback);
             return;
         }
-        ApplyNpcAiInterpretation(index, interpretation, speechFallback);
+        var request = _pendingVillagerRequest;
+        _pendingVillagerRequest = null;
+        ApplyNpcAiInterpretation(
+            index, interpretation, speechFallback, request);
     }
 
     private void CompleteNpcAiDialogue()
@@ -777,6 +789,16 @@ internal sealed partial class GameHostWindow
         _npcAiSpeechVillagerIndex = villagerIndex;
         _npcAiSpeechFallback =
             FallbackNpcReply(listener, message);
+        _pendingVillagerRequest =
+            VillagerCommitmentService.TryParseGatherRequest(
+                message, out var requestedItem,
+                out var requestedQuantity)
+                ? new(
+                    listener.Id,
+                    _activePlayer.Id,
+                    requestedItem,
+                    requestedQuantity)
+                : null;
         _npcAiSpeechTask = _npcAi.InterpretAsync(
             ActiveNpcAiSettings(),
             context);
@@ -789,7 +811,8 @@ internal sealed partial class GameHostWindow
     private void ApplyNpcAiInterpretation(
         int villagerIndex,
         NpcAiInterpretation interpretation,
-        string speechFallback)
+        string speechFallback,
+        PendingVillagerRequest? pendingRequest = null)
     {
         var villager = _villagers[villagerIndex];
         villager = villager with
@@ -808,6 +831,31 @@ internal sealed partial class GameHostWindow
         var permitsAction =
             interpretation.Decision is not
                 ("refuse" or "clarify");
+        var acceptedPendingRequest = false;
+        if (pendingRequest is not null &&
+            string.Equals(
+                pendingRequest.VillagerId, villager.Id,
+                StringComparison.Ordinal) &&
+            permitsAction &&
+            VillagerCommitmentService.IsAffirmativeResponse(
+                interpretation.Decision,
+                interpretation.Action,
+                interpretation.Reply))
+        {
+            var acceptance = VillagerCommitmentService.TryAccept(
+                villager,
+                pendingRequest.PlayerId,
+                VillagerPromiseKind.GatherItem,
+                pendingRequest.ItemId,
+                pendingRequest.Quantity,
+                _worldGameSeconds);
+            if (acceptance.Accepted && acceptance.Promise is { } promise)
+            {
+                villager = VillagerCommitmentService.AddPromise(
+                    villager, promise);
+                acceptedPendingRequest = true;
+            }
+        }
         if (permitsAction && _activePlayer is not null)
         {
             villager = interpretation.Action switch
@@ -985,6 +1033,7 @@ internal sealed partial class GameHostWindow
                         villager, promise);
         }
         if (permitsAction &&
+            !acceptedPendingRequest &&
             !interpretation.FreeformThought &&
             interpretation.Action is
                 "gather" or "give" &&

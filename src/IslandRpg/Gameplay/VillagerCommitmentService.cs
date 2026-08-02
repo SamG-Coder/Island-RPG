@@ -188,6 +188,29 @@ internal static class VillagerCommitmentService
         return true;
     }
 
+    public static bool IsAffirmativeResponse(
+        string decision,
+        string action,
+        string reply)
+    {
+        if (decision.Equals("refuse", StringComparison.OrdinalIgnoreCase) ||
+            decision.Equals("clarify", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (decision.Equals("accept", StringComparison.OrdinalIgnoreCase) ||
+            action.Equals("gather", StringComparison.OrdinalIgnoreCase) ||
+            action.Equals("give", StringComparison.OrdinalIgnoreCase) ||
+            action.StartsWith("gather_", StringComparison.OrdinalIgnoreCase))
+            return true;
+        var normalized = reply.Trim().ToLowerInvariant();
+        return normalized.StartsWith("yes") ||
+               normalized.StartsWith("all right") ||
+               normalized.StartsWith("alright") ||
+               normalized.StartsWith("okay") ||
+               normalized.StartsWith("i'll") ||
+               normalized.StartsWith("i will") ||
+               normalized.StartsWith("agreed");
+    }
+
     public static VillagerState AddPromise(
         VillagerState state,
         VillagerPromise promise)

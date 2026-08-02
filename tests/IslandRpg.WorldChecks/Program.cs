@@ -3512,6 +3512,14 @@ Require(
     promisedItem == ItemIds.Logs &&
     promisedQuantity == 3,
     "natural chat requests must resolve to validated item commitments");
+Require(
+    VillagerCommitmentService.IsAffirmativeResponse(
+        "accept", "none", "I can do that.") &&
+    VillagerCommitmentService.IsAffirmativeResponse(
+        "", "none", "All right, I'll find them.") &&
+    !VillagerCommitmentService.IsAffirmativeResponse(
+        "refuse", "none", "No, I need food first."),
+    "natural AI agreement must activate parsed work even when its structured action is missing, while refusals must not");
 var acceptance = VillagerCommitmentService.TryAccept(
     villagerSpawnA[0],
     "requester",
