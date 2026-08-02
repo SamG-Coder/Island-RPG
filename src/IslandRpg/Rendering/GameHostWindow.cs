@@ -434,6 +434,10 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly ContextMenuControlState _inventoryContext = new();
     private readonly ContextMenuControlState _treeContext = new();
     private readonly ContextMenuControlState _groundObjectContext = new();
+    private readonly ContextMenuControlState _villagerContext = new();
+    private IReadOnlyList<VillagerInteractionOption> _villagerContextOptions = [];
+    private string? _villagerContextTargetId;
+    private Vector2 _villagerContextWalkTarget;
     private IslandTree? _treeContextTarget;
     private Vector2 _treeContextWalkTarget;
     private WorldGroundObject? _groundObjectContextTarget;
@@ -492,6 +496,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _treeContext.Selected += HandleTreeContextSelection;
         _groundObjectContext.Selected +=
             HandleGroundObjectContextSelection;
+        _villagerContext.Selected += HandleVillagerContextSelection;
         _chatUi.Submitted += HandleChatSubmission;
         _chatUi.MessageAdded += ObserveChatMessage;
         _gameUi.CraftingButton.Clicked += () =>
@@ -1664,17 +1669,20 @@ internal sealed partial class GameHostWindow : GameWindow
             if (TryGetVillagerUnderMouse(
                     SceneMousePosition(), out var contextVillager))
             {
-                var inventory = _activePlayer?.Inventory ?? [];
-                if ((uint)_activeInventorySlot <
-                        (uint)inventory.Length &&
-                    inventory[_activeInventorySlot] is { } activeItem)
-                    _worldActions.QueueVillagerGift(
-                        contextVillager,
-                        _activeInventorySlot,
-                        activeItem);
-                else
-                    _worldActions.QueueVillagerAttack(
-                        contextVillager);
+                _villagerContextTargetId = contextVillager.Id;
+                _villagerContextWalkTarget = target;
+                _villagerContextOptions = VillagerInteractionMenu.Build(
+                    _activePlayer?.Inventory, _activeInventorySlot);
+                _inventoryContext.Close();
+                _treeContext.Close();
+                _groundObjectContext.Close();
+                _fishContext.Close();
+                _vegetationContext.Close();
+                _miningContext.Close();
+                _villagerContext.Open(
+                    MouseState.Position,
+                    _villagerContextOptions.Select(value => value.Label).ToArray(),
+                    SceneClientBounds(), 178);
             }
             else if (TryGetGroundObjectUnderMouse(
                     SceneMousePosition(), out var contextObject, out _))
@@ -1961,6 +1969,9 @@ internal sealed partial class GameHostWindow : GameWindow
         _groundObjectContext.UpdatePointer(
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
+        _villagerContext.UpdatePointer(
+            MouseState.Position,
+            MouseState.IsButtonDown(MouseButton.Left));
         _fishContext.UpdatePointer(
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
@@ -2002,6 +2013,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _inventoryContext.HitTest(mouse) ||
         _treeContext.HitTest(mouse) ||
         _groundObjectContext.HitTest(mouse) ||
+        _villagerContext.HitTest(mouse) ||
         _fishContext.HitTest(mouse) ||
         _vegetationContext.HitTest(mouse) ||
         _miningContext.HitTest(mouse) ||
@@ -4434,6 +4446,14 @@ internal sealed partial class GameHostWindow : GameWindow
             _inventoryContext.Items.Count == 3 ? 1 : -1);
         RenderContextMenu(_treeContext);
         RenderContextMenu(_groundObjectContext);
+        RenderContextMenu(
+            _villagerContext,
+            _villagerContextOptions
+                .Select((value, index) => (value, index))
+                .Where(value => value.value.Kind == VillagerInteractionKind.Attack)
+                .Select(value => value.index)
+                .DefaultIfEmpty(-1)
+                .First());
         RenderContextMenu(_fishContext);
         RenderContextMenu(_vegetationContext);
         RenderContextMenu(_miningContext);
@@ -5104,6 +5124,43 @@ internal sealed partial class GameHostWindow : GameWindow
             caption,
             CenteredTextPosition(caption, bounds),
             new FSColor(229, 218, 177, 255));
+    }
+
+    private void HandleVillagerContextSelection(int optionIndex)
+    {
+        if ((uint)optionIndex >= (uint)_villagerContextOptions.Count)
+            return;
+        var targetId = _villagerContextTargetId;
+        _villagerContextTargetId = null;
+        if (targetId is null) return;
+        var option = _villagerContextOptions[optionIndex];
+        if (option.Kind == VillagerInteractionKind.WalkHere)
+        {
+            QueueWalk(_villagerContextWalkTarget);
+            return;
+        }
+        var villager = _villagers.FirstOrDefault(value =>
+            value.Id == targetId && value.Health > 0 &&
+            value.WorldLevel == _activeWorldLevel);
+        if (villager is null) return;
+        switch (option.Kind)
+        {
+            case VillagerInteractionKind.Attack:
+                _worldActions.QueueVillagerAttack(villager);
+                break;
+            case VillagerInteractionKind.Give
+                when option.ItemId is { } itemId:
+                _worldActions.QueueVillagerGift(
+                    villager, option.InventorySlot, itemId);
+                break;
+            case VillagerInteractionKind.Examine:
+                _chatUi.AddMessage(
+                    $"{villager.Name} — Health {villager.Health}, " +
+                    $"Hunger {villager.Hunger:0}, Energy {villager.Energy:0}. " +
+                    $"{villager.Persona?.PriorTrade ?? "Their former trade is unknown."}",
+                    ChatMessageStyle.Normal);
+                break;
+        }
     }
 
     private static Vector4 CenteredIconBounds(Vector4 bounds) =>

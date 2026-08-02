@@ -93,6 +93,8 @@ internal static class VillagerLocationMemoryService
         for (var index = 0; index < objects.Length; index++)
         {
             ref readonly var item = ref objects[index];
+            if (SettlementGroupService.IsSharedSupply(item.GroupOwnerId))
+                continue;
             if (Vector2.DistanceSquared(
                     new(state.PositionX, state.PositionY),
                     item.Position) >

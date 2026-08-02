@@ -36,8 +36,10 @@ internal static class VillagerSettlementProjectService
         string? leaderId = null,
         double gameSeconds = 0)
     {
-        var living = villagers.Where(value => value.Health > 0).ToArray();
-        if (living.Length < 2) return null;
+        var living = villagers.Where(value =>
+            value.Health > 0 && !value.IndependentByChoice).ToArray();
+        if (!IndependentSurvivorPolicy.CanFormSettlement(living.Length))
+            return null;
         var available = living
             .Where(VillagerWorkCoordinator.IsAvailableForWork)
             .ToArray();

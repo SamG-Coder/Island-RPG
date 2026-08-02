@@ -9,6 +9,22 @@ internal static class VillagerCraftPlanner
         ItemIds.SmallRocks
     ];
 
+    private static readonly string[] IndependentPriorities =
+    [
+        ItemIds.StoneKnife,
+        ItemIds.StoneAxe,
+        ItemIds.Campfire,
+        ItemIds.Rope,
+        ItemIds.GatheringBasket,
+        ItemIds.PrimitiveFishingNet,
+        ItemIds.StonePickaxe,
+        ItemIds.StoneShovel,
+        ItemIds.StoneSickle,
+        ItemIds.PortableTorch,
+        ItemIds.Workbench,
+        ItemIds.StorageChest
+    ];
+
     private static readonly IReadOnlyDictionary<
         VillagerWorkRole, string[]> RolePriorities =
         new Dictionary<VillagerWorkRole, string[]>
@@ -62,7 +78,9 @@ internal static class VillagerCraftPlanner
 
     public static IEnumerable<string> PriorityFor(VillagerWorkRole role) =>
         Foundation.Concat(
-            RolePriorities.TryGetValue(role, out var roleItems)
+            role == VillagerWorkRole.Unassigned
+                ? IndependentPriorities
+                : RolePriorities.TryGetValue(role, out var roleItems)
                 ? roleItems
                 : []);
 

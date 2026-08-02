@@ -16,6 +16,8 @@ internal static class VillagerResourcePriority
         if (VillagerSettlementProjectService.NeedsItem(villager, itemId))
             return 90;
         if (MatchesActiveGoal(villager, item)) return 80;
+        if (VillagerWorkCapability.NeedsTool(villager, itemId))
+            return 75;
         if (VillagerWorkSupplyPlanner.NeedsItem(villager, itemId))
             return 60;
         if (SurvivalService.TryFoodEffect(itemId, out _))

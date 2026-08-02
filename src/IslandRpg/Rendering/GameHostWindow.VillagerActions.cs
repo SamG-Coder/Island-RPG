@@ -884,7 +884,8 @@ internal sealed partial class GameHostWindow
             goal.Status == CommitmentStatus.Active &&
             goal.ItemId == ItemIds.Logs) == true;
         if (!needsLogs &&
-            villager.WorkRole != VillagerWorkRole.Wood &&
+            !VillagerWorkCapability.CanPerform(
+                villager, VillagerWorkRole.Wood) &&
             !RequestedVillagerAction(villager, "cut_tree", "gather"))
             return false;
         var position = new Vector2(villager.PositionX, villager.PositionY);
@@ -1025,7 +1026,8 @@ internal sealed partial class GameHostWindow
         VillagerSimulationTier tier)
     {
         if (!RequestedVillagerAction(villager, "mine") &&
-            villager.WorkRole != VillagerWorkRole.Exploration)
+            !VillagerWorkCapability.CanPerform(
+                villager, VillagerWorkRole.Exploration))
             return false;
         var pickaxe = PlayerInventory.BestPickaxe(villager.Inventory);
         if (pickaxe is null || PlayerInventory.IsFull(villager.Inventory))
@@ -1240,6 +1242,20 @@ internal sealed partial class GameHostWindow
         if (slot < 0 || villager.Inventory[slot] is not { } itemId)
             return false;
         if (itemId == ItemIds.TrainingDummy) return false;
+        if (IndependentSurvivorPolicy.PersonalCamp(villager) is
+                { } personalCamp &&
+            Vector2.DistanceSquared(
+                new(villager.PositionX, villager.PositionY), personalCamp) >
+            2.5f * 2.5f)
+        {
+            MoveVillagerForCapability(
+                index,
+                villager,
+                VillagerSimulationTier.Nearby,
+                personalCamp,
+                VillagerNeed.Safe);
+            return true;
+        }
         if (!TryGetDropTerrain(
                 (int)MathF.Floor(villager.PositionX),
                 (int)MathF.Floor(villager.PositionY),

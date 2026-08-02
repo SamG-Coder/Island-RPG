@@ -13,7 +13,11 @@ internal sealed record SettlementGroupState(
     int WorldLevel,
     double FormedGameSeconds,
     float CacheRadius = SettlementGroupService.DefaultCacheRadius,
-    IReadOnlyList<SettlementLocationReport>? SharedLocations = null)
+    IReadOnlyList<SettlementLocationReport>? SharedLocations = null,
+    SettlementOpeningStage OpeningStage = SettlementOpeningStage.CacheReady,
+    IReadOnlyList<SettlementScoutAssignment>? ScoutAssignments = null,
+    IReadOnlyList<SettlementScoutReport>? ScoutReports = null,
+    IReadOnlyList<SettlementCampResponse>? CampResponses = null)
 {
     [JsonIgnore]
     public Vector2 Camp => new(CampX, CampY);
@@ -27,6 +31,47 @@ internal sealed record SettlementLocationReport(
     float Confidence,
     double LastObservedGameSeconds,
     string ReporterId);
+
+internal enum SettlementOpeningStage : byte
+{
+    Reconnaissance,
+    ComparingCamps,
+    MovingToCamp,
+    CacheReady
+}
+
+internal sealed record SettlementScoutAssignment(
+    string ScoutId,
+    float TargetX,
+    float TargetY,
+    int Sector,
+    bool Reached = false,
+    bool Reported = false);
+
+internal sealed record SettlementScoutReport(
+    string ScoutId,
+    float PositionX,
+    float PositionY,
+    bool Water,
+    bool Food,
+    bool Wood,
+    bool Stone,
+    bool Danger,
+    bool DefensibleGround,
+    float CampScore,
+    double GameSeconds);
+
+internal enum SettlementCampResponseKind : byte
+{
+    Agree,
+    Object,
+    Leave
+}
+
+internal sealed record SettlementCampResponse(
+    string VillagerId,
+    SettlementCampResponseKind Response,
+    string Reason);
 
 internal static class SettlementGroupService
 {
@@ -46,7 +91,8 @@ internal static class SettlementGroupService
             camp.X,
             camp.Y,
             worldLevel,
-            gameSeconds);
+            gameSeconds,
+            OpeningStage: SettlementOpeningStage.Reconnaissance);
 
     public static bool IsMember(
         SettlementGroupState? group, string actorId) =>
@@ -71,6 +117,9 @@ internal static class SettlementGroupService
         Vector2.DistanceSquared(
             new(item.X, item.Y), group.Camp) <=
         group.CacheRadius * group.CacheRadius;
+
+    public static bool IsSharedSupply(string? groupOwnerId) =>
+        !string.IsNullOrWhiteSpace(groupOwnerId);
 
     public static WorldGroundObject ClaimForGroup(
         WorldGroundObject item, SettlementGroupState group) =>

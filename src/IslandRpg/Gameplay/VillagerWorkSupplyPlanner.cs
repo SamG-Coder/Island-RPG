@@ -28,6 +28,9 @@ internal static class VillagerWorkSupplyPlanner
             VillagerWorkRole.Crafting
                 when !HasTag(villager.Inventory, ItemTag.Knife) =>
                 count < 1,
+            VillagerWorkRole.Unassigned
+                when VillagerWorkCapability.IsAllRounder(villager) =>
+                count < (HasTag(villager.Inventory, ItemTag.Knife) ? 3 : 1),
             _ => false
         };
     }
@@ -44,6 +47,11 @@ internal static class VillagerWorkSupplyPlanner
                 HasTag(villager.Inventory, ItemTag.Knife) &&
                 !HasTag(villager.Inventory, ItemTag.Hammer),
             VillagerWorkRole.Exploration =>
+                PlayerInventory.BestPickaxe(villager.Inventory) is null,
+            VillagerWorkRole.Unassigned
+                when VillagerWorkCapability.IsAllRounder(villager) =>
+                PlayerInventory.BestAxe(villager.Inventory) is null ||
+                PlayerInventory.BestKnife(villager.Inventory) is null ||
                 PlayerInventory.BestPickaxe(villager.Inventory) is null,
             _ => false
         };
@@ -63,6 +71,12 @@ internal static class VillagerWorkSupplyPlanner
                 PlayerInventory.BestKnife(villager.Inventory) is null ||
                 PlayerInventory.BestHammer(villager.Inventory) is null,
             VillagerWorkRole.Exploration =>
+                PlayerInventory.BestPickaxe(villager.Inventory) is null,
+            VillagerWorkRole.Unassigned
+                when VillagerWorkCapability.IsAllRounder(villager) =>
+                PlayerInventory.BestAxe(villager.Inventory) is null ||
+                PlayerInventory.BestKnife(villager.Inventory) is null ||
+                PlayerInventory.BestHammer(villager.Inventory) is null ||
                 PlayerInventory.BestPickaxe(villager.Inventory) is null,
             _ => false
         };

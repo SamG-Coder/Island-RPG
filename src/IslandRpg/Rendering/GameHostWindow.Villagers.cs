@@ -123,6 +123,22 @@ internal sealed partial class GameHostWindow
             _villagersDirty = true;
         }
         if (_settlementGroup is { } loadedGroup)
+        {
+            var livingPopulation = _villagers.Count(value => value.Health > 0);
+            if (!IndependentSurvivorPolicy.CanFormSettlement(livingPopulation))
+            {
+                _settlementGroup = null;
+                _saves.DeleteSettlementGroup(_activeWorld.Id);
+                for (var index = 0; index < _villagers.Count; index++)
+                    _villagers[index] = _villagers[index] with
+                    {
+                        SettlementGroupId = null,
+                        RecognizedLeaderId = null,
+                        ProjectAssignment = null,
+                        WorkRole = VillagerWorkRole.Unassigned
+                    };
+            }
+            else
             for (var index = 0; index < _villagers.Count; index++)
                 if (loadedGroup.MemberIds.Contains(
                         _villagers[index].Id,
@@ -131,6 +147,7 @@ internal sealed partial class GameHostWindow
                     {
                         SettlementGroupId = loadedGroup.Id
                     };
+        }
         _villagersNextSaveAt = _worldGameSeconds + 30;
     }
 
@@ -143,7 +160,10 @@ internal sealed partial class GameHostWindow
         TryCallLeadershipChallenge();
         var councilActive = !openingIncidentActive &&
             UpdateSettlementLeadership();
+        var settlementOpeningActive = !openingIncidentActive &&
+            !councilActive && UpdateSettlementOpening();
         if (!openingIncidentActive && !councilActive &&
+            !settlementOpeningActive &&
             _worldGameSeconds >= _nextVillagerRoleAssignment)
         {
             var forecast = VillagerWorkPlanner.Forecast(_villagers);
@@ -190,7 +210,8 @@ internal sealed partial class GameHostWindow
             }
             _nextVillagerRoleAssignment = _worldGameSeconds + 30 * 60;
         }
-        if (!openingIncidentActive && !councilActive)
+        if (!openingIncidentActive && !councilActive &&
+            !settlementOpeningActive)
         {
             UpdateSettlementProjectAssignments();
             TryPromptStalledProject();
@@ -428,6 +449,9 @@ internal sealed partial class GameHostWindow
             if (openingIncidentActive &&
                 !VillagerIntentPriorityService.HasUrgentOverride(villager))
                 continue;
+            if (settlementOpeningActive &&
+                !VillagerIntentPriorityService.HasUrgentOverride(villager))
+                continue;
             if (villager.Activity is
                 VillagerActivity.Conversing or
                 VillagerActivity.Reflecting)
@@ -455,6 +479,7 @@ internal sealed partial class GameHostWindow
                 villager.Name,
                 villager.Hunger,
                 _worldGameSeconds);
+            villager = ConsiderIndependentCamp(villager);
             if (!ReferenceEquals(beforeNeedObservation, villager))
             {
                 _villagers[index] = villager;
@@ -734,8 +759,14 @@ internal sealed partial class GameHostWindow
 
     private bool UpdateSettlementLeadership()
     {
-        var living = _villagers.Where(value => value.Health > 0).ToArray();
-        if (living.Length < 2) return false;
+        var living = _villagers.Where(value =>
+                value.Health > 0 && !value.IndependentByChoice &&
+                (_settlementGroup is null ||
+                 _settlementGroup.MemberIds.Contains(
+                     value.Id, StringComparer.Ordinal)))
+            .ToArray();
+        if (!IndependentSurvivorPolicy.CanFormSettlement(living.Length))
+            return false;
         var recognized = living.Select(value => value.RecognizedLeaderId)
             .FirstOrDefault(id => id is not null &&
                 living.Any(candidate => candidate.Id == id));
@@ -762,7 +793,9 @@ internal sealed partial class GameHostWindow
             for (var index = 0; index < _villagers.Count; index++)
             {
                 var villager = _villagers[index];
-                if (villager.Health <= 0) continue;
+                if (villager.Health <= 0 ||
+                    !living.Any(value => value.Id == villager.Id))
+                    continue;
                 var offset = VillagerGroupConversationService.CircleOffset(
                     villager.Id, index, _villagers.Count);
                 var desired = _settlementCouncilPoint +
@@ -931,38 +964,56 @@ internal sealed partial class GameHostWindow
             _villagers[index] = updated[index];
         var leader = _villagers.First(value =>
             value.Id == resultToApply.LeaderId);
+        var previousGroup = _settlementGroup;
+        var departures = IndependentSurvivorPolicy.LeadershipDepartures(
+            living, resultToApply);
+        foreach (var departureId in departures)
+            ApplyLeadershipDeparture(departureId, leader.Id);
         var livingIds = _villagers
-            .Where(value => value.Health > 0)
+            .Where(value => value.Health > 0 &&
+                            !value.IndependentByChoice)
             .Select(value => value.Id)
             .ToArray();
-        _settlementGroup = _settlementGroup is null
-            ? SettlementGroupService.Form(
-                _activeWorld!.Id,
-                leader.Id,
-                livingIds,
-                _settlementCouncilPoint,
-                leader.WorldLevel,
-                _worldGameSeconds)
-            : _settlementGroup with
-            {
-                LeaderId = leader.Id,
-                MemberIds = livingIds
-            };
-        for (var index = 0; index < _villagers.Count; index++)
-            if (_villagers[index].Health > 0)
+        if (IndependentSurvivorPolicy.CanFormSettlement(livingIds.Length))
+        {
+            _settlementGroup = previousGroup is null
+                ? SettlementGroupService.Form(
+                    _activeWorld!.Id,
+                    leader.Id,
+                    livingIds,
+                    _settlementCouncilPoint,
+                    leader.WorldLevel,
+                    _worldGameSeconds)
+                : previousGroup with
+                {
+                    LeaderId = leader.Id,
+                    MemberIds = livingIds
+                };
+            for (var index = 0; index < _villagers.Count; index++)
                 _villagers[index] = _villagers[index] with
                 {
-                    SettlementGroupId = _settlementGroup.Id
+                    SettlementGroupId = livingIds.Contains(
+                        _villagers[index].Id, StringComparer.Ordinal)
+                        ? _settlementGroup.Id
+                        : null
                 };
-        _saves.SaveSettlementGroup(_activeWorld!.Id, _settlementGroup);
+            _saves.SaveSettlementGroup(_activeWorld!.Id, _settlementGroup);
+        }
+        else
+            DissolveSettlementAfterSchism(
+                previousGroup,
+                departures.FirstOrDefault() ?? leader.Id);
         ObserveLog("settlement_council", leader.Id, new
         {
             resultToApply.Contested,
             TimedOut = _settlementCouncilTimedOut,
             Votes = resultToApply.Votes,
             Worksite = new { X = leader.PositionX, Y = leader.PositionY },
-            GroupId = _settlementGroup.Id,
-            Camp = new { X = _settlementGroup.CampX, Y = _settlementGroup.CampY }
+            GroupId = _settlementGroup?.Id,
+            Camp = _settlementGroup is null
+                ? null
+                : new { X = _settlementGroup.CampX, Y = _settlementGroup.CampY },
+            Departures = departures
         });
         _settlementCouncilResult = null;
         _settlementCouncilLines.Clear();
@@ -1852,6 +1903,22 @@ internal sealed partial class GameHostWindow
             villager, group, _worldGameSeconds);
     }
 
+    private VillagerState ConsiderIndependentCamp(VillagerState villager)
+    {
+        var result = IndependentSurvivorPolicy.ConsiderPersonalCamp(
+            villager,
+            _villagers.Count(value => value.Health > 0),
+            _worldGameSeconds);
+        if (ReferenceEquals(result, villager)) return villager;
+        ObserveLog("independent_camp_selected", villager.Id, new
+        {
+            X = result.PersonalCampX,
+            Y = result.PersonalCampY,
+            result.PersonalCampWorldLevel
+        });
+        return result;
+    }
+
     private VillagerState ReconcileVillagerLocationMemory(
         VillagerState villager)
     {
@@ -2432,74 +2499,115 @@ internal sealed partial class GameHostWindow
                 villager, inventorySlot, itemId);
             return;
         }
-        if (!TryGetDropTerrain(
-                (int)MathF.Floor(target.X),
-                (int)MathF.Floor(target.Y),
-                out var gpu,
-                out var reason))
-        {
-            ReportBlockedAction("villager-gift-blocked", reason);
-            return;
-        }
-        if (!PlayerInventory.TryRemove(
-                _activePlayer.Inventory,
-                inventorySlot,
-                out var inventory))
-            return;
-
-        var itemInstanceId = Guid.NewGuid();
-        gpu.Chunk.GroundObjects.Add(new(
-            itemInstanceId,
-            itemId,
-            target.X,
-            target.Y,
-            OwnerId: villager.Id));
-        _activePlayer = _activePlayer with
-        {
-            Inventory = inventory,
-            UpdatedUtc = DateTime.UtcNow
-        };
-        if (_activeInventorySlot == inventorySlot)
-            _activeInventorySlot = -1;
         var itemName = ItemCatalog.Get(itemId).Name;
-        var playerAddress = VillagerSimulation.PerceivedName(
-            villager, _activePlayer.Id, "stranger");
-        villager = VillagerSimulation.RecordGift(
-            villager,
-            _activePlayer.Id,
-            playerAddress,
-            itemInstanceId,
-            itemId,
-            _worldGameSeconds);
         var giftSpeech =
             $"{villager.Name}, this {itemName} is for you.";
-        villager = VillagerSimulation.RecordDialogueTurn(
-            villager,
-            _activePlayer.Id,
-            playerAddress,
-            giftSpeech,
-            _worldGameSeconds);
-        villager = VillagerSimulation.RecordDialogueTurn(
-            villager,
-            villager.Id,
-            villager.Name,
-            $"Thank you, {playerAddress}.",
-            _worldGameSeconds + 1);
-        _villagers[villagerIndex] = villager;
-        _villagersDirty = true;
-        _saves.SavePlayer(_activePlayer);
-        QueueChunkSave(gpu.Chunk);
+        var decisionPrompt =
+            $"I offer you this {itemName} as a gift. Do you accept it?";
+        if (_pendingVillagerGift is not null ||
+            !TryBeginNpcAiSpeech(villagerIndex, decisionPrompt))
+        {
+            ReportBlockedAction(
+                "villager-gift-blocked",
+                "The survivor cannot consider the offer while the AI model is unavailable or busy.");
+            return;
+        }
+        _pendingVillagerGift = new(
+            villager.Id, _activePlayer.Id, inventorySlot, itemId);
+        _chatUi.AddMessage(
+            $"{_activePlayer.Name}: {giftSpeech}",
+            ChatMessageStyle.Player);
+        ShowOverheadSpeech(giftSpeech);
+        _player.Stop();
+    }
 
-        var message =
-            $"{_activePlayer.Name}: {giftSpeech}";
-        _chatUi.AddMessage(message, ChatMessageStyle.Player);
-        ShowOverheadSpeech(
-            $"{villager.Name}, this {itemName} is for you.");
+    private void ResolveVillagerGiftOffer(
+        int villagerIndex,
+        PendingVillagerGift gift,
+        NpcAiInterpretation interpretation,
+        string fallback)
+    {
+        if (_activePlayer is null || _player is null ||
+            _activePlayer.Id != gift.PlayerId ||
+            (uint)villagerIndex >= (uint)_villagers.Count)
+            return;
+        if (!string.Equals(
+                interpretation.Decision, "accept",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            ApplyNpcAiInterpretation(
+                villagerIndex, interpretation,
+                "No, I won't take it.");
+            return;
+        }
+
+        var villager = _villagers[villagerIndex];
+        var reply = string.IsNullOrWhiteSpace(interpretation.Reply)
+            ? fallback
+            : interpretation.Reply;
+        var intent = new NpcBrainIntent(
+            "receive_gift", EntityAction.Gather,
+            new(villager.PositionX, villager.PositionY), gift.ItemId);
+        if (BeginNpcControlledAction(
+                villagerIndex, villager, intent,
+                () => CompleteAcceptedVillagerGift(gift, reply),
+                VillagerSimulation.GatherPauseSeconds))
+            return;
         ShowVillagerSpeech(
             villagerIndex,
-            $"Thank you, {playerAddress}.",
+            "I cannot take that just now.",
             _player.Position);
-        _player.Stop();
+    }
+
+    private NpcActionResult CompleteAcceptedVillagerGift(
+        PendingVillagerGift gift,
+        string reply)
+    {
+        var intent = new NpcBrainIntent(
+            "receive_gift", EntityAction.Gather, null, gift.ItemId);
+        if (_activePlayer is null || _player is null ||
+            _activePlayer.Id != gift.PlayerId ||
+            !InventoryContainsAt(gift.PlayerInventorySlot, gift.ItemId))
+            return new(intent, false, "offer_unavailable");
+        var villagerIndex = VillagerIndex(gift.VillagerId);
+        if (villagerIndex < 0) return new(intent, false, "actor_unavailable");
+        var villager = _villagers[villagerIndex];
+        if (villager.Health <= 0 ||
+            Vector2.DistanceSquared(
+                _player.Position,
+                new(villager.PositionX, villager.PositionY)) >
+            MathF.Pow(VillagerSimulation.InteractionRange + .3f, 2) ||
+            !VillagerGiftTransferService.TryTransfer(
+                _activePlayer.Inventory,
+                gift.PlayerInventorySlot,
+                gift.ItemId,
+                villager.Inventory,
+                out var playerInventory,
+                out var receiverInventory))
+            return new(intent, false, "transfer_failed");
+
+        var itemInstanceId = Guid.NewGuid();
+        var giverName = VillagerSimulation.PerceivedName(
+            villager, _activePlayer.Id, "stranger");
+        villager = VillagerSimulation.RecordGift(
+            villager with { Inventory = receiverInventory },
+            _activePlayer.Id, giverName, itemInstanceId,
+            gift.ItemId, _worldGameSeconds);
+        villager = VillagerSimulation.RecordDialogueTurn(
+            villager, villager.Id, villager.Name,
+            reply, _worldGameSeconds);
+        _villagers[villagerIndex] = villager;
+        _activePlayer = _activePlayer with
+        {
+            Inventory = playerInventory,
+            UpdatedUtc = DateTime.UtcNow
+        };
+        if (_activeInventorySlot == gift.PlayerInventorySlot)
+            _activeInventorySlot = -1;
+        _villagersDirty = true;
+        _saves.SavePlayer(_activePlayer);
+        ShowVillagerSpeech(villagerIndex, reply, _player.Position);
+        return new(intent, true);
     }
 
     private static int ItemValue(string itemId)

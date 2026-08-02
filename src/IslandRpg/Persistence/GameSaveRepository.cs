@@ -271,6 +271,13 @@ internal sealed class GameSaveRepository
             Path.Combine(WorldsRoot, worldId, "settlement-group.json"),
             group);
 
+    public void DeleteSettlementGroup(string worldId)
+    {
+        var path = Path.Combine(
+            WorldsRoot, worldId, "settlement-group.json");
+        if (File.Exists(path)) File.Delete(path);
+    }
+
     public IReadOnlyList<PlayerDeathMarker> LoadPlayerDeaths(
         string worldId,
         string playerId) =>

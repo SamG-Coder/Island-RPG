@@ -34,6 +34,8 @@ internal static class VillagerStatusService
             VillagerWorkRole.Wood => "Looking for the next wood task.",
             VillagerWorkRole.Crafting => "Looking for the next crafting task.",
             VillagerWorkRole.Exploration => "Looking for the next exploration task.",
+            _ when villager.SettlementGroupId is null =>
+                "Balancing food, exploration, crafting and personal goals.",
             _ => $"Considering the need to " +
                  $"{villager.Need.ToString().ToLowerInvariant()}."
         };

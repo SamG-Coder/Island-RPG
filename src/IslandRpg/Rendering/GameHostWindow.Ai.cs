@@ -24,6 +24,12 @@ internal sealed partial class GameHostWindow
     private Task<NpcAiInterpretation?>? _npcAiSpeechTask;
     private int _npcAiSpeechVillagerIndex = -1;
     private string? _npcAiSpeechFallback;
+    private PendingVillagerGift? _pendingVillagerGift;
+    private sealed record PendingVillagerGift(
+        string VillagerId,
+        string PlayerId,
+        int PlayerInventorySlot,
+        string ItemId);
     private const string NpcAiSpeechFallback =
         "Sorry, I didn't understand that. Could you say it another way?";
     private Task<string?>? _npcAiDialogueTask;
@@ -290,6 +296,7 @@ internal sealed partial class GameHostWindow
             var fallback = _npcAiSpeechFallback ??
                            NpcAiSpeechFallback;
             _npcAiSpeechFallback = null;
+            _pendingVillagerGift = null;
             if ((uint)failedIndex < (uint)_villagers.Count)
                 ShowVillagerSpeech(
                     failedIndex,
@@ -316,6 +323,7 @@ internal sealed partial class GameHostWindow
                 NpcAiAvailability.Ready,
                 "AI response was invalid; used a safe reply and will retry.",
                 DateTime.UtcNow);
+            _pendingVillagerGift = null;
             if ((uint)index < (uint)_villagers.Count)
                 ShowVillagerSpeech(
                     index,
@@ -329,8 +337,17 @@ internal sealed partial class GameHostWindow
         if (
             (uint)index >= (uint)_villagers.Count)
             return;
-        ApplyNpcAiInterpretation(
-            index, interpretation, speechFallback);
+        if (_pendingVillagerGift is { } gift &&
+            string.Equals(
+                gift.VillagerId, _villagers[index].Id,
+                StringComparison.Ordinal))
+        {
+            _pendingVillagerGift = null;
+            ResolveVillagerGiftOffer(
+                index, gift, interpretation, speechFallback);
+            return;
+        }
+        ApplyNpcAiInterpretation(index, interpretation, speechFallback);
     }
 
     private void CompleteNpcAiDialogue()

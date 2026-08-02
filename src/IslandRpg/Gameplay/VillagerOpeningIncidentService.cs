@@ -34,6 +34,8 @@ internal static class VillagerOpeningIncidentService
         Abandonment
     }
 
+    private readonly record struct RescuePair(string VictimId, string HelperId);
+
     public static IReadOnlyList<VillagerState> Apply(
         IReadOnlyList<VillagerState> villagers,
         long worldRunSeed,
@@ -46,6 +48,8 @@ internal static class VillagerOpeningIncidentService
         var maximum = Math.Max(minimum, result.Length / 2);
         var incidentCount = random.Next(minimum, maximum + 1);
         var injuryCreated = false;
+        var rescuedVictims = new HashSet<string>(StringComparer.Ordinal);
+        var protectedHelpers = new HashSet<string>(StringComparer.Ordinal);
 
         for (var incidentIndex = 0;
              incidentIndex < incidentCount;
@@ -55,17 +59,40 @@ internal static class VillagerOpeningIncidentService
                 incidentIndex == incidentCount - 1;
             var kind = SelectIncident(random, result.Length,
                 mustCreateInjury);
-            injuryCreated |= kind switch
+            if (kind == IncidentKind.Rescue)
             {
-                IncidentKind.Rescue => ApplyRescue(
-                    result, random, worldRunSeed, gameSeconds, incidentIndex),
-                IncidentKind.ScavengeDispute => ApplyDispute(
-                    result, random, worldRunSeed, gameSeconds, incidentIndex),
-                IncidentKind.SharedLoss => ApplySharedLoss(
-                    result, random, worldRunSeed, gameSeconds, incidentIndex),
-                _ => ApplyAbandonment(
-                    result, random, worldRunSeed, gameSeconds, incidentIndex)
-            };
+                var rescue = ApplyRescue(
+                    result, random, worldRunSeed, gameSeconds, incidentIndex,
+                    protectedHelpers: protectedHelpers);
+                rescuedVictims.Add(rescue.VictimId);
+                protectedHelpers.Add(rescue.HelperId);
+                injuryCreated = true;
+            }
+            else
+                injuryCreated |= kind switch
+                {
+                    IncidentKind.ScavengeDispute => ApplyDispute(
+                        result, random, worldRunSeed, gameSeconds, incidentIndex),
+                    IncidentKind.SharedLoss => ApplySharedLoss(
+                        result, random, worldRunSeed, gameSeconds, incidentIndex),
+                    _ => ApplyAbandonment(
+                        result, random, worldRunSeed, gameSeconds, incidentIndex,
+                        protectedHelpers)
+                };
+        }
+        var rescueIndex = incidentCount;
+        for (var index = 0; index < result.Length; index++)
+        {
+            if (result[index].Health >= villagers[index].Health ||
+                rescuedVictims.Contains(result[index].Id))
+                continue;
+            var rescue = ApplyRescue(
+                result, random, worldRunSeed, gameSeconds,
+                rescueIndex++, forcedInjured: index,
+                applyInjury: false,
+                protectedHelpers: protectedHelpers);
+            rescuedVictims.Add(rescue.VictimId);
+            protectedHelpers.Add(rescue.HelperId);
         }
         return result;
     }
@@ -127,13 +154,20 @@ internal static class VillagerOpeningIncidentService
         };
     }
 
-    private static bool ApplyRescue(
+    private static RescuePair ApplyRescue(
         VillagerState[] villagers, Random random, long seed,
-        double gameSeconds, int incidentIndex)
+        double gameSeconds, int incidentIndex,
+        int? forcedInjured = null,
+        bool applyInjury = true,
+        IReadOnlySet<string>? protectedHelpers = null)
     {
-        var injured = random.Next(villagers.Length);
+        var injured = forcedInjured ?? PickWeighted(
+            villagers, random, -1,
+            _ => 1,
+            value => protectedHelpers?.Contains(value.Id) != true);
         var helper = PickWeighted(villagers, random, injured,
-            value => 1 + Altruism(value) * 3 + Strength(value) * 2);
+            value => 1 + Altruism(value) * 3 + Strength(value) * 2,
+            value => value.Health >= AdventureService.BaseMaximumHealth);
         var eventId = IncidentId(seed, incidentIndex, IncidentKind.Rescue,
             villagers[injured].Id, villagers[helper].Id);
         var affinity = random.Next(20, 36);
@@ -144,12 +178,15 @@ internal static class VillagerOpeningIncidentService
             1 => "freed me from beneath a broken spar",
             _ => "carried me above the rising tide"
         };
-        villagers[injured] = AddMemory(
-            villagers[injured] with
+        var injuredState = applyInjury
+            ? villagers[injured] with
             {
                 Health = Math.Min(villagers[injured].Health,
                     random.Next(58, 82))
-            }, new(eventId, "wreck_rescue", villagers[helper].Id, null,
+            }
+            : villagers[injured];
+        villagers[injured] = AddMemory(
+            injuredState, new(eventId, "wreck_rescue", villagers[helper].Id, null,
                 1, gameSeconds, affinity,
                 $"{villagers[helper].Name} {context} when I was hurt."));
         villagers[helper] = AddMemory(villagers[helper],
@@ -159,7 +196,7 @@ internal static class VillagerOpeningIncidentService
         villagers[injured] = AdjustRelationship(villagers[injured],
             villagers[helper].Id, trust, affinity, respect: trust / 2,
             gratitude: affinity);
-        return true;
+        return new(villagers[injured].Id, villagers[helper].Id);
     }
 
     private static bool ApplyDispute(
@@ -230,12 +267,14 @@ internal static class VillagerOpeningIncidentService
 
     private static bool ApplyAbandonment(
         VillagerState[] villagers, Random random, long seed,
-        double gameSeconds, int incidentIndex)
+        double gameSeconds, int incidentIndex,
+        IReadOnlySet<string>? protectedHelpers = null)
     {
         var panicked = PickWeighted(villagers, random, -1,
             value => 1 + (1 - value.Boldness) * 3);
         var abandoned = PickWeighted(villagers, random, panicked,
-            value => 1 + value.Boldness);
+            value => 1 + value.Boldness,
+            value => protectedHelpers?.Contains(value.Id) != true);
         var eventId = IncidentId(seed, incidentIndex,
             IncidentKind.Abandonment,
             villagers[abandoned].Id, villagers[panicked].Id);
@@ -259,16 +298,23 @@ internal static class VillagerOpeningIncidentService
 
     private static int PickWeighted(
         IReadOnlyList<VillagerState> villagers, Random random,
-        int excludedIndex, Func<VillagerState, float> weight)
+        int excludedIndex, Func<VillagerState, float> weight,
+        Func<VillagerState, bool>? eligible = null)
     {
         var total = 0f;
         for (var index = 0; index < villagers.Count; index++)
-            if (index != excludedIndex)
+            if (index != excludedIndex &&
+                (eligible is null || eligible(villagers[index])))
                 total += Math.Max(.01f, weight(villagers[index]));
+        if (total <= 0 && eligible is not null)
+            return PickWeighted(
+                villagers, random, excludedIndex, weight);
         var roll = random.NextSingle() * total;
         for (var index = 0; index < villagers.Count; index++)
         {
-            if (index == excludedIndex) continue;
+            if (index == excludedIndex ||
+                eligible is not null && !eligible(villagers[index]))
+                continue;
             roll -= Math.Max(.01f, weight(villagers[index]));
             if (roll <= 0) return index;
         }

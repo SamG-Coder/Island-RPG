@@ -6,7 +6,12 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
-    private enum OpeningPlaybackPhase : byte { Approaching, Performing }
+    private enum OpeningPlaybackPhase : byte
+    {
+        Approaching,
+        CheckingVictim,
+        Performing
+    }
 
     private sealed record OpeningPlayback(
         Guid EventId,
@@ -57,6 +62,9 @@ internal sealed partial class GameHostWindow
                 PositionY = scattered.Y,
                 Health = outcome.Health,
                 Action = injured ? EntityAction.Hurt : EntityAction.Idle,
+                ActionTime = injured
+                    ? OpeningHurtProneTime(arrival.Gender)
+                    : 0,
                 Activity = injured
                     ? VillagerActivity.Resting
                     : VillagerActivity.Idle,
@@ -65,6 +73,7 @@ internal sealed partial class GameHostWindow
                     VillagerSimulation.GameSecondsPerRealSecond
             });
         }
+        StartOpeningPanic(center);
 
         foreach (var group in outcomes.SelectMany(value =>
                      value.Memories ?? [])
@@ -92,10 +101,6 @@ internal sealed partial class GameHostWindow
                 actorMemory.Summary ?? "There was confusion by the wreck.",
                 target, cargoId));
         }
-        foreach (var playback in _openingIncidentQueue)
-            if (playback.Kind == "wreck_rescue")
-                StageOpeningRescuer(
-                    playback.ActorId, playback.OtherId);
         _openingIncidentDeadline = _clock +
             VillagerOpeningIncidentService.IncidentRealSeconds;
         _nextOpeningShoreDamageAt = _clock + 2;
@@ -134,16 +139,43 @@ internal sealed partial class GameHostWindow
             if (!OpeningParticipantsArrived(
                     playback, actorIndex, otherIndex))
                 return true;
+            if (playback.Kind == "wreck_rescue")
+            {
+                BeginOpeningVictimCheck(playback, actorIndex, otherIndex);
+                return true;
+            }
             BeginOpeningPerformance(playback, actorIndex, otherIndex);
             return true;
         }
 
-        if (_clock - playback.PhaseStartedAt < 3.5 ||
+        if (playback.Phase == OpeningPlaybackPhase.CheckingVictim)
+        {
+            SetOpeningPose(otherIndex, EntityAction.Hurt);
+            if (_npcAiDialogueTask is not null ||
+                _clock - playback.PhaseStartedAt < 1.25)
+                return true;
+            BeginOpeningPerformance(playback, actorIndex, otherIndex);
+            return true;
+        }
+
+        var performanceSeconds = playback.Kind == "wreck_rescue" ? 2.0 : 3.5;
+        if (_clock - playback.PhaseStartedAt < performanceSeconds ||
             _npcAiDialogueTask is not null)
         {
             if (playback.Kind is "wreck_rescue" or "wreck_abandonment")
                 SetOpeningPose(otherIndex, EntityAction.Hurt);
             return true;
+        }
+        if (playback.Kind == "wreck_rescue")
+        {
+            SetOpeningPose(otherIndex, EntityAction.Idle);
+            ObserveLog("opening_incident_performed", playback.ActorId, new
+            {
+                playback.EventId,
+                playback.Kind,
+                playback.OtherId,
+                CargoId = playback.VisibleCargoId
+            });
         }
         FinishOpeningIncident(true, "performed");
         return _openingIncidentQueue.Count > 0;
@@ -205,12 +237,13 @@ internal sealed partial class GameHostWindow
     {
         playback.Phase = OpeningPlaybackPhase.Performing;
         playback.PhaseStartedAt = _clock;
-        SpeakVillagerDialogue(
-            _villagers[actorIndex], _villagers[otherIndex].Id,
-            _villagers[otherIndex].Name,
-            VillagerSocialIntent.AskSurvival,
-            playback.Fallback,
-            allowNpcReply: false);
+        if (playback.Kind != "wreck_rescue")
+            SpeakVillagerDialogue(
+                _villagers[actorIndex], _villagers[otherIndex].Id,
+                _villagers[otherIndex].Name,
+                VillagerSocialIntent.AskSurvival,
+                playback.Fallback,
+                allowNpcReply: false);
         SetOpeningPose(actorIndex, playback.Kind switch
         {
             "wreck_dispute" or "wreck_rescue" => EntityAction.Gather,
@@ -222,12 +255,37 @@ internal sealed partial class GameHostWindow
             "wreck_dispute" => EntityAction.Gather,
             _ => EntityAction.Idle
         });
-        ObserveLog("opening_incident_performed", playback.ActorId, new
+        ObserveLog(
+            playback.Kind == "wreck_rescue"
+                ? "opening_rescue_help_started"
+                : "opening_incident_performed",
+            playback.ActorId, new
+            {
+                playback.EventId,
+                playback.Kind,
+                playback.OtherId,
+                CargoId = playback.VisibleCargoId
+            });
+    }
+
+    private void BeginOpeningVictimCheck(
+        OpeningPlayback playback, int actorIndex, int otherIndex)
+    {
+        playback.Phase = OpeningPlaybackPhase.CheckingVictim;
+        playback.PhaseStartedAt = _clock;
+        SetOpeningPose(actorIndex, EntityAction.Idle);
+        SetOpeningPose(otherIndex, EntityAction.Hurt);
+        var victimName = _villagers[otherIndex].Name;
+        SpeakVillagerDialogue(
+            _villagers[actorIndex], _villagers[otherIndex].Id,
+            victimName,
+            VillagerSocialIntent.AskSurvival,
+            $"{victimName}, can you hear me? Where are you hurt?",
+            allowNpcReply: false);
+        ObserveLog("opening_rescue_check", playback.ActorId, new
         {
             playback.EventId,
-            playback.Kind,
-            playback.OtherId,
-            CargoId = playback.VisibleCargoId
+            VictimId = playback.OtherId
         });
     }
 
@@ -287,11 +345,14 @@ internal sealed partial class GameHostWindow
     private void MoveOpeningActor(int index, Vector2 desired)
     {
         var villager = _villagers[index];
-        if (villager.Action == EntityAction.Move &&
-            villager.TargetX is not null) return;
         var target = WorldLevelNavigation.ReachableWalkableTarget(
             _worldSeed, new(villager.PositionX, villager.PositionY),
             desired, villager.WorldLevel, maximumRadius: 3);
+        if (villager.Action == EntityAction.Move &&
+            villager.TargetX is { } targetX &&
+            villager.TargetY is { } targetY &&
+            Vector2.DistanceSquared(new(targetX, targetY), target) < .25f)
+            return;
         _villagers[index] = VillagerSimulation.ApplyDecision(
             villager, new(VillagerNeed.Safe, target),
             VillagerSimulationTier.Nearby, _worldGameSeconds) with
@@ -300,6 +361,45 @@ internal sealed partial class GameHostWindow
                 VillagerOpeningIncidentService.IncidentRealSeconds *
                 VillagerSimulation.GameSecondsPerRealSecond
         };
+    }
+
+    private void StartOpeningPanic(Vector2 center)
+    {
+        for (var index = 0; index < _villagers.Count; index++)
+        {
+            var villager = _villagers[index];
+            if (villager.Health <= 0 || villager.Action == EntityAction.Hurt)
+                continue;
+            var position = new Vector2(villager.PositionX, villager.PositionY);
+            var offset = VillagerGroupConversationService.CircleOffset(
+                villager.Id, index + 3, _villagers.Count + 3);
+            var desired = position + new Vector2(offset.X, offset.Y) * .65f;
+            var target = WorldLevelNavigation.ReachableWalkableTarget(
+                _worldSeed, position, desired, villager.WorldLevel,
+                maximumRadius: 3);
+            _villagers[index] = VillagerSimulation.ApplyDecision(
+                villager,
+                new(VillagerNeed.Safe, target),
+                VillagerSimulationTier.Nearby,
+                _worldGameSeconds) with
+            {
+                NextDecisionGameSeconds = _worldGameSeconds +
+                    VillagerOpeningIncidentService.IncidentRealSeconds *
+                    VillagerSimulation.GameSecondsPerRealSecond
+            };
+        }
+    }
+
+    private double OpeningHurtProneTime(EntityGender gender)
+    {
+        const int storedVillagerAngles = 5;
+        if (!_entityAnimations.TryGetValue(
+                (gender, EntityAction.Hurt), out var animation))
+            return 1;
+        var framesPerAngle = Math.Max(
+            1,
+            animation.Graphic.Sprite.Frames.Count / storedVillagerAngles);
+        return Math.Max(0, framesPerAngle - 1) * animation.SecondsPerFrame;
     }
 
     private void SetOpeningPose(int index, EntityAction action)
@@ -400,35 +500,4 @@ internal sealed partial class GameHostWindow
             _ => 3
         };
 
-    private void StageOpeningRescuer(string helperId, string injuredId)
-    {
-        var helperIndex = _villagers.FindIndex(value => value.Id == helperId);
-        var injuredIndex = _villagers.FindIndex(value => value.Id == injuredId);
-        if (helperIndex < 0 || injuredIndex < 0) return;
-        var helper = _villagers[helperIndex];
-        var injured = _villagers[injuredIndex];
-        var injuredPosition = new Vector2(
-            injured.PositionX, injured.PositionY);
-        var direction = new Vector2(
-            helper.PositionX - injured.PositionX,
-            helper.PositionY - injured.PositionY);
-        direction = direction.LengthSquared > .01f
-            ? Vector2.Normalize(direction)
-            : Vector2.UnitX;
-        var staged = WorldLevelNavigation.ReachableWalkableTarget(
-            _worldSeed,
-            injuredPosition,
-            injuredPosition + direction * 3.5f,
-            injured.WorldLevel,
-            maximumRadius: 3);
-        _villagers[helperIndex] = helper with
-        {
-            PositionX = staged.X,
-            PositionY = staged.Y,
-            Action = EntityAction.Idle,
-            Activity = VillagerActivity.Idle,
-            TargetX = null,
-            TargetY = null
-        };
-    }
 }

@@ -111,13 +111,20 @@ internal sealed class VillagerWorkCoordinator
                      !IsAvailableForWork(value)))
             roles[unavailable.Id] = VillagerWorkRole.Unassigned;
         if (living.Length == 0) return roles;
-        var forecast = VillagerWorkPlanner.Forecast(allLiving);
-
-        if (living.Length == 1)
+        if (IndependentSurvivorPolicy.IsIndependentPopulation(
+                allLiving.Length))
         {
-            roles[living[0].Id] = DevelopmentRole(living[0], forecast);
+            foreach (var survivor in living)
+                roles[survivor.Id] = VillagerWorkRole.Unassigned;
             return roles;
         }
+        foreach (var independent in living.Where(value =>
+                     value.IndependentByChoice))
+            roles[independent.Id] = VillagerWorkRole.Unassigned;
+        living = living.Where(value => !value.IndependentByChoice).ToArray();
+        if (living.Length == 0) return roles;
+        var forecast = VillagerWorkPlanner.Forecast(
+            allLiving.Where(value => !value.IndependentByChoice).ToArray());
         var foodCandidates = living
             .Where(value => value.Health > 20 && value.Hunger > 15)
             .DefaultIfEmpty(living
@@ -139,12 +146,6 @@ internal sealed class VillagerWorkCoordinator
             .ToArray();
         if (remaining.Length > 0)
         {
-            if (living.Length == 2)
-            {
-                roles[remaining[0].Id] =
-                    DevelopmentRole(remaining[0], forecast);
-                return roles;
-            }
             var woodSlots = living.Length < 4
                 ? 1
                 : Math.Clamp(
@@ -204,19 +205,6 @@ internal sealed class VillagerWorkCoordinator
                 VillagerWorkPlanner.Suitability(value, role, forecast) +
                 (value.WorkRole == role ? FoodRoleHungerHysteresis : 0))
             .ThenBy(value => value.Id, StringComparer.Ordinal);
-
-    private static VillagerWorkRole DevelopmentRole(
-        VillagerState villager,
-        VillagerResourceForecast forecast)
-    {
-        var crafting = VillagerWorkPlanner.Suitability(
-            villager, VillagerWorkRole.Crafting, forecast);
-        var exploration = VillagerWorkPlanner.Suitability(
-            villager, VillagerWorkRole.Exploration, forecast);
-        return crafting >= exploration
-            ? VillagerWorkRole.Crafting
-            : VillagerWorkRole.Exploration;
-    }
 
     private void Remove(VillagerTargetReservation reservation)
     {

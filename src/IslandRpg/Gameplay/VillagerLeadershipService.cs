@@ -23,8 +23,10 @@ internal static class VillagerLeadershipService
     public static VillagerLeadershipResult? HoldCouncil(
         IReadOnlyList<VillagerState> villagers)
     {
-        var living = villagers.Where(value => value.Health > 0).ToArray();
-        if (living.Length < 2) return null;
+        var living = villagers.Where(value =>
+            value.Health > 0 && !value.IndependentByChoice).ToArray();
+        if (!IndependentSurvivorPolicy.CanFormSettlement(living.Length))
+            return null;
         var votes = new VillagerLeadershipVote[living.Length];
         for (var voterIndex = 0; voterIndex < living.Length; voterIndex++)
         {

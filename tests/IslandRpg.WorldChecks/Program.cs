@@ -202,6 +202,13 @@ var incidentIds = openingIncidentVillagers.SelectMany(value =>
     .Where(value => value.Kind.StartsWith(
         "wreck_", StringComparison.Ordinal))
     .Select(value => value.EventId).Distinct().ToArray();
+var rescueHelperIds = openingIncidentVillagers
+    .Where(value => value.Memories?.Any(memory =>
+        memory.Kind == "wreck_rescue" &&
+        memory.Summary?.StartsWith("I ", StringComparison.Ordinal) == true) ==
+        true)
+    .Select(value => value.Id)
+    .ToHashSet(StringComparer.Ordinal);
 var exposedInjury = VillagerOpeningIncidentService.ApplyShoreExposure(
     settlementTenSource[0] with
     {
@@ -217,7 +224,14 @@ var safeInjury = VillagerOpeningIncidentService.ApplyShoreExposure(
 Require(
     openingInjured.Length >= 1 &&
     openingInjured.All(value => value.Health > 0) &&
-    incidentIds.Length is >= 3 and <= 5 &&
+    openingInjured.All(value => value.Memories?.Any(memory =>
+        memory.Kind == "wreck_rescue" &&
+        memory.Summary?.StartsWith("I ", StringComparison.Ordinal) != true) ==
+        true) &&
+    rescueHelperIds.Count > 0 &&
+    openingIncidentVillagers.Where(value => rescueHelperIds.Contains(value.Id))
+        .All(value => value.Health == AdventureService.BaseMaximumHealth) &&
+    incidentIds.Length is >= 3 and <= 10 &&
     IncidentSignature(openingIncidentVillagers) ==
         IncidentSignature(repeatedOpeningIncident) &&
     IncidentSignature(openingIncidentVillagers) !=
@@ -237,7 +251,7 @@ Require(
     safeInjury.Health == 20 &&
     openingIncidentVillagers.Any(value =>
         value.Relationships?.Count > 0),
-    "seeded opening incidents must vary by run while deterministically causing bounded nonlethal injuries and social history");
+    "seeded opening incidents must vary by run while every collapsed survivor receives a deterministic rescue and social history");
 var priorityVillager = settlementTenSource[0] with
 {
     ProjectAssignment = new(
@@ -277,6 +291,14 @@ var leadershipCouncil = VillagerLeadershipService.HoldCouncil(
     settlementTenSource)!;
 var repeatedLeadershipCouncil = VillagerLeadershipService.HoldCouncil(
     settlementTenSource)!;
+Require(
+    VillagerLeadershipService.HoldCouncil(
+        settlementTenSource.Take(1).ToArray()) is null &&
+    VillagerLeadershipService.HoldCouncil(
+        settlementTenSource.Take(2).ToArray()) is null &&
+    VillagerLeadershipService.HoldCouncil(
+        settlementTenSource.Take(3).ToArray()) is not null,
+    "formal councils and settlement groups must require at least three living survivors");
 var councilVillagers = VillagerLeadershipService.ApplyCouncil(
     settlementTenSource, leadershipCouncil, 28_800);
 var releasedCouncilVillagers = VillagerLeadershipService.ApplyCouncil(
@@ -1800,16 +1822,113 @@ var craftingDuoRoles = VillagerWorkCoordinator.AssignRoles([
         CraftingExperience = 10_000
     }
 ]);
-Require(soloRoles["solo-builder"] is
-            VillagerWorkRole.Crafting or VillagerWorkRole.Exploration &&
-        soloExplorerRoles["solo-explorer"] == VillagerWorkRole.Exploration &&
-        duoRoles.Values.Contains(VillagerWorkRole.Food) &&
-        duoRoles.Values.Any(value => value is
-            VillagerWorkRole.Crafting or VillagerWorkRole.Exploration) &&
-        !duoRoles.Values.Contains(VillagerWorkRole.Wood) &&
-        craftingDuoRoles["crafting-specialist"] ==
-            VillagerWorkRole.Crafting,
-    "one- and two-person groups must retain a technology progression role instead of locking every survivor into food and wood");
+Require(soloRoles.Values.All(value =>
+            value == VillagerWorkRole.Unassigned) &&
+        soloExplorerRoles.Values.All(value =>
+            value == VillagerWorkRole.Unassigned) &&
+        duoRoles.Values.All(value =>
+            value == VillagerWorkRole.Unassigned) &&
+        craftingDuoRoles.Values.All(value =>
+            value == VillagerWorkRole.Unassigned) &&
+        VillagerCraftPlanner.PriorityFor(VillagerWorkRole.Unassigned)
+            .Contains(ItemIds.Campfire) &&
+        VillagerCraftPlanner.PriorityFor(VillagerWorkRole.Unassigned)
+            .Contains(ItemIds.StoneAxe) &&
+        VillagerCraftPlanner.PriorityFor(VillagerWorkRole.Unassigned)
+            .Contains(ItemIds.StonePickaxe),
+    "one and two survivors must remain independent all-rounders with survival, crafting and exploration progression");
+var independentPair = VillagerSimulation.CreateInitial(
+    8442, Vector2.Zero, population: 2, gameSeconds: 100);
+var independentRelationship = independentPair[0].Relationships!.Single();
+var independentIntroduction = VillagerSimulation.SelectSocialGoal(
+    independentPair[0] with { NextSocialGameSeconds = 0 },
+    [
+        new(
+            independentPair[1].Id,
+            VillagerSimulation.PerceivedName(
+                independentPair[0], independentPair[1].Id),
+            new(independentPair[1].PositionX, independentPair[1].PositionY),
+            independentPair[1].WorldLevel,
+            independentPair[1].Hunger,
+            VillagerSimulation.CountFood(independentPair[1].Inventory))
+    ],
+    gameSeconds: 101);
+var independentCamper = independentPair[0] with
+{
+    PositionX = 0,
+    PositionY = 0,
+    LocationMemories =
+    [
+        new(8, 0, 0, VillagerLocationType.FoodSource, .9f, 200),
+        new(9, 1, 0, VillagerLocationType.WoodSource, .9f, 200),
+        new(-8, 0, 0, VillagerLocationType.Danger, 1, 200)
+    ]
+};
+independentCamper = IndependentSurvivorPolicy.ConsiderPersonalCamp(
+    independentCamper,
+    livingPopulation: 2,
+    gameSeconds: 100 +
+        IndependentSurvivorPolicy.CampDecisionDelayGameSeconds);
+Require(
+    independentRelationship.CharacterId == independentPair[1].Id &&
+    independentRelationship.State.Trust < 0 &&
+    independentPair[0].KnownPeople is
+        [{ Stage: AcquaintanceStage.Seen }] &&
+    independentIntroduction.Intent == VillagerSocialIntent.Introduce &&
+    IndependentSurvivorPolicy.PersonalCamp(independentCamper) is { X: > 0 } &&
+    VillagerSettlementProjectService.Plan(
+        independentPair,
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)) is null &&
+    !IndependentSurvivorPolicy.CanFormSettlement(2) &&
+    IndependentSurvivorPolicy.CanFormSettlement(3),
+    "independent pairs must begin wary, talk directly, choose personal camps from observed survival resources, and avoid settlement projects");
+var schismLeader = independentPair[0] with
+{
+    Id = "schism-leader",
+    Boldness = .4f,
+    Sociability = .6f
+};
+var schismSupporter = independentPair[1] with
+{
+    Id = "schism-supporter"
+};
+string? schismCandidateId = null;
+IReadOnlySet<string>? schismDepartures = null;
+for (var attempt = 0; attempt < 256 && schismCandidateId is null; attempt++)
+{
+    var candidateId = $"schism-candidate-{attempt}";
+    var candidate = independentPair[1] with
+    {
+        Id = candidateId,
+        Boldness = 1,
+        Sociability = 0,
+        Relationships =
+        [
+            new(schismLeader.Id, new(Trust: -60))
+        ]
+    };
+    var result = new VillagerLeadershipResult(
+        schismLeader.Id,
+        [
+            new(schismLeader.Id, schismLeader.Id, 10),
+            new(schismSupporter.Id, schismLeader.Id, 8),
+            new(candidate.Id, candidate.Id, 9)
+        ],
+        Contested: true);
+    var departures = IndependentSurvivorPolicy.LeadershipDepartures(
+        [schismLeader, schismSupporter, candidate], result);
+    if (departures.Count == 0) continue;
+    schismCandidateId = candidateId;
+    schismDepartures = departures;
+}
+Require(
+    schismDepartures is { Count: 1 } &&
+    schismDepartures.Contains(schismCandidateId!) &&
+    3 - schismDepartures.Count == 2 &&
+    IndependentSurvivorPolicy.IsIndependent(
+        schismSupporter with { IndependentByChoice = true },
+        livingPopulation: 10),
+    "a rejected leadership result may collapse a three-person settlement and solo-by-choice survivors must remain independent in larger populations");
 var stableRoles = VillagerWorkCoordinator.AssignRoles([
     hungryVillager with
     {
@@ -1839,12 +1958,11 @@ var urgentRoleChange = VillagerWorkCoordinator.AssignRoles([
     }
 ]);
 Require(
-    stableRoles["food-incumbent"] == VillagerWorkRole.Food &&
-    stableRoles["wood-incumbent"] is
-        VillagerWorkRole.Crafting or VillagerWorkRole.Exploration &&
-    urgentRoleChange["food-incumbent"] == VillagerWorkRole.Food &&
-    urgentRoleChange["wood-incumbent"] != VillagerWorkRole.Food,
-    "two-person work roles must retain food coverage while assigning the other survivor to technology progression instead of permanent wood duty");
+    stableRoles.Values.All(value =>
+        value == VillagerWorkRole.Unassigned) &&
+    urgentRoleChange.Values.All(value =>
+        value == VillagerWorkRole.Unassigned),
+    "two-person survivors must not retain stale specialist roles when entering independent all-rounder mode");
 var skillAwareAxeInventory = PlayerInventory.CreateStartingInventory();
 skillAwareAxeInventory[0] = ItemIds.StoneAxe;
 var skillAwareKnifeInventory = PlayerInventory.CreateStartingInventory();
@@ -2127,6 +2245,127 @@ Require(
         groupCacheItem.OwnerId,
         groupCacheItem.GroupOwnerId),
     "ground-cache ownership must grant group members access without making settlement items public");
+var ignoredCacheAction = VillagerSimulation.SelectWorldAction(
+    groupMember,
+    [
+        new(
+            groupCacheItem.Id,
+            groupCacheItem.ItemId,
+            new(groupCacheItem.X, groupCacheItem.Y),
+            groupCacheItem.OwnerId,
+            IsStorage: false,
+            groupCacheItem.GroupOwnerId)
+    ]);
+Require(
+    ignoredCacheAction == default,
+    "normal gathering must not pick group-owned project supplies back out of the shared ground cache");
+var reconGroup = settlementGroup with
+{
+    MemberIds =
+    [
+        "group-leader", "group-builder", "group-scout",
+        "group-scout-2", "group-worker-1", "group-worker-2"
+    ]
+};
+var openingGroup = SettlementOpeningService.AssignScouts(
+    reconGroup,
+    [
+        groupMember with { Id = "group-leader" },
+        groupMember,
+        groupMember with { Id = "group-scout", Boldness = .9f },
+        groupMember with { Id = "group-scout-2", Boldness = .8f },
+        groupMember with { Id = "group-worker-1" },
+        groupMember with { Id = "group-worker-2" }
+    ],
+    target => target);
+Require(
+    openingGroup.OpeningStage == SettlementOpeningStage.Reconnaissance &&
+    openingGroup.ScoutAssignments is { Count: 4 } &&
+    openingGroup.ScoutAssignments.Select(value => value.Sector)
+        .Distinct().Count() == 4 &&
+    Vector2.DistanceSquared(
+        new(openingGroup.ScoutAssignments[0].TargetX,
+            openingGroup.ScoutAssignments[0].TargetY),
+        new(openingGroup.ScoutAssignments[1].TargetX,
+            openingGroup.ScoutAssignments[1].TargetY)) > 20 * 20,
+    "opening coordination must assign capable scouts to distinct outward sectors before projects begin");
+openingGroup = openingGroup with
+{
+    ScoutAssignments = openingGroup.ScoutAssignments!.Take(2).ToArray()
+};
+var promisingReport = new SettlementScoutReport(
+    "group-scout", 34, 12,
+    Water: true, Food: true, Wood: true, Stone: true,
+    Danger: false, DefensibleGround: true,
+    CampScore: 92, GameSeconds: 700);
+openingGroup = SettlementOpeningService.RecordReport(
+    openingGroup, promisingReport);
+openingGroup = SettlementOpeningService.MarkReported(
+    openingGroup, "group-scout");
+openingGroup = SettlementOpeningService.RecordReport(
+    openingGroup,
+    promisingReport with
+    {
+        ScoutId = "group-scout-2",
+        PositionX = -12,
+        CampScore = 40
+    });
+openingGroup = SettlementOpeningService.MarkReported(
+    openingGroup, "group-scout-2");
+Require(
+    openingGroup.OpeningStage == SettlementOpeningStage.ComparingCamps &&
+    SettlementOpeningService.BestCamp(openingGroup) == promisingReport,
+    "a returned scout report must advance the group to candidate-camp comparison");
+openingGroup = openingGroup with
+{
+    MemberIds = ["group-leader", "group-builder", "group-scout"]
+};
+var decidedOpeningGroup = SettlementOpeningService.DecideCamp(
+    openingGroup,
+    [
+        groupMember with { Id = "group-leader" },
+        groupMember,
+        groupMember with { Id = "group-scout" }
+    ]);
+Require(
+    decidedOpeningGroup.OpeningStage == SettlementOpeningStage.MovingToCamp &&
+    decidedOpeningGroup.CampX == promisingReport.PositionX &&
+    decidedOpeningGroup.CampY == promisingReport.PositionY &&
+    decidedOpeningGroup.CampResponses?.All(value =>
+        value.Response == SettlementCampResponseKind.Agree) == true &&
+    SettlementOpeningService.CompleteMove(decidedOpeningGroup).OpeningStage ==
+        SettlementOpeningStage.CacheReady,
+    "the group must respond to the selected camp, migrate, then establish its shared cache");
+var dangerousOpening = openingGroup with
+{
+    ScoutReports =
+    [
+        promisingReport with
+        {
+            Danger = true,
+            Water = false,
+            CampScore = 5
+        }
+    ]
+};
+var dissenter = groupMember with
+{
+    Boldness = .9f,
+    Relationships =
+    [
+        new("group-leader", new(Trust: -60))
+    ]
+};
+var dividedGroup = SettlementOpeningService.DecideCamp(
+    dangerousOpening,
+    [groupMember with { Id = "group-leader" }, dissenter,
+        groupMember with { Id = "group-scout" }]);
+Require(
+    dividedGroup.CampResponses?.Any(value =>
+        value.VillagerId == dissenter.Id &&
+        value.Response == SettlementCampResponseKind.Leave) == true &&
+    !dividedGroup.MemberIds.Contains(dissenter.Id, StringComparer.Ordinal),
+    "strong distrust and a dangerous camp must allow a bold member to leave the initial group");
 var cacheFibres = Enumerable.Range(0, 3)
     .Select(index => SettlementGroupService.ClaimForGroup(
         new(
@@ -3157,6 +3396,73 @@ var explorationResourceVillager = villagerSpawnA[0] with
     WorkRole = VillagerWorkRole.Exploration,
     Inventory = PlayerInventory.CreateStartingInventory()
 };
+var loneAllRounder = explorationResourceVillager with
+{
+    WorkRole = VillagerWorkRole.Unassigned,
+    SettlementGroupId = null,
+    Inventory = new string?[PlayerInventory.Capacity]
+};
+var giftGiverInventory = new string?[PlayerInventory.Capacity];
+giftGiverInventory[3] = ItemIds.StoneAxe;
+var giftReceiverInventory = new string?[PlayerInventory.Capacity];
+Require(
+    VillagerGiftTransferService.TryTransfer(
+        giftGiverInventory, 3, ItemIds.StoneAxe,
+        giftReceiverInventory,
+        out var giftGiverAfter, out var giftReceiverAfter) &&
+    giftGiverAfter[3] is null &&
+    PlayerInventory.Count(giftReceiverAfter, ItemIds.StoneAxe) == 1 &&
+    !VillagerGiftTransferService.TryTransfer(
+        giftGiverInventory, 3, ItemIds.StoneKnife,
+        giftReceiverInventory,
+        out var rejectedGiftGiver, out var rejectedGiftReceiver) &&
+    rejectedGiftGiver[3] == ItemIds.StoneAxe &&
+    PlayerInventory.Count(rejectedGiftReceiver) == 0,
+    "accepted NPC gifts must transfer atomically while stale or mismatched offers leave both inventories unchanged");
+var interactionInventory = new string?[PlayerInventory.Capacity];
+interactionInventory[2] = ItemIds.CookedMinnows;
+interactionInventory[5] = ItemIds.StoneAxe;
+var foodInteractionMenu = VillagerInteractionMenu.Build(
+    interactionInventory, -1);
+var selectedInteractionMenu = VillagerInteractionMenu.Build(
+    interactionInventory, 5);
+var emptyInteractionMenu = VillagerInteractionMenu.Build(
+    new string?[PlayerInventory.Capacity], -1);
+Require(
+    foodInteractionMenu.Select(value => value.Label).SequenceEqual(
+        ["Walk here", "Attack", "Give food", "Examine"]) &&
+    foodInteractionMenu[2].InventorySlot == 2 &&
+    selectedInteractionMenu.Select(value => value.Label).SequenceEqual(
+        ["Walk here", "Attack", "Give stone axe", "Examine"]) &&
+    selectedInteractionMenu[2].InventorySlot == 5 &&
+    emptyInteractionMenu.Select(value => value.Label).SequenceEqual(
+        ["Walk here", "Attack", "Examine"]),
+    "villager right-click options must prioritize the selected gift, otherwise offer food, and omit Give when nothing is available");
+var offeredAxeId = Guid.NewGuid();
+var offeredAxeAction = VillagerSimulation.SelectWorldAction(
+    loneAllRounder,
+    new VillagerWorldObject[]
+    {
+        new(offeredAxeId, ItemIds.StoneAxe, new(.25f, 0), null, false)
+    });
+Require(
+    VillagerWorkCapability.IsAllRounder(loneAllRounder) &&
+    VillagerWorkCapability.CanPerform(
+        loneAllRounder, VillagerWorkRole.Wood) &&
+    VillagerWorkCapability.CanPerform(
+        loneAllRounder, VillagerWorkRole.Exploration) &&
+    VillagerResourcePriority.Score(loneAllRounder, ItemIds.StoneAxe) == 75 &&
+    offeredAxeAction.Kind == VillagerWorldActionKind.TakeItem &&
+    offeredAxeAction.ObjectId == offeredAxeId,
+    "a lone all-rounder must pick up a useful offered axe and be eligible for woodcutting and exploration work");
+var equippedAllRounder = loneAllRounder with
+{
+    Inventory = new string?[PlayerInventory.Capacity]
+};
+equippedAllRounder.Inventory[0] = ItemIds.StoneAxe;
+Require(
+    VillagerResourcePriority.Score(equippedAllRounder, ItemIds.StoneAxe) == 0,
+    "an all-rounder must not loop picking up duplicate tools that do not improve their equipment");
 Require(
     VillagerResourcePriority.Score(
         explorationResourceVillager, ItemIds.ClamShell) == 0 &&

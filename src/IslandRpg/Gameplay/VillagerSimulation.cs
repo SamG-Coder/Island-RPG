@@ -184,7 +184,11 @@ internal sealed record VillagerState(
     string? RecognizedLeaderId = null,
     double NextLeadershipChallengeGameSeconds = 0,
     string? DeathCause = null,
-    string? SettlementGroupId = null);
+    string? SettlementGroupId = null,
+    float? PersonalCampX = null,
+    float? PersonalCampY = null,
+    int? PersonalCampWorldLevel = null,
+    bool IndependentByChoice = false);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,
@@ -352,6 +356,28 @@ internal static class VillagerSimulation
                     id, gameSeconds),
                 SurvivalTimeScaleVersion: 1,
                 LastEnergyGameSeconds: gameSeconds);
+        }
+        if (result.Length == 2)
+        {
+            for (var index = 0; index < result.Length; index++)
+            {
+                var other = result[1 - index];
+                result[index] = result[index] with
+                {
+                    Relationships =
+                    [
+                        new(other.Id, new RelationshipState(Trust: -12))
+                    ],
+                    KnownPeople =
+                    [
+                        new(
+                            other.Id,
+                            AcquaintanceStage.Seen,
+                            null,
+                            gameSeconds)
+                    ]
+                };
+            }
         }
         return result;
     }
@@ -604,6 +630,8 @@ internal static class VillagerSimulation
             if (IsFailedTarget(state, candidate.Id, gameSeconds))
                 continue;
             if (candidate.IsStorage ||
+                SettlementGroupService.IsSharedSupply(
+                    candidate.GroupOwnerId) ||
                 !SettlementGroupService.CanAccess(
                     state, candidate.OwnerId, candidate.GroupOwnerId) ||
                 !ItemCatalog.TryGet(candidate.ItemId, out var item) ||
