@@ -6249,6 +6249,11 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_levelUpFireworks.Active)
         {
             _levelUpFireworks.AddTo(_levelUpParticleAdder);
+        }
+        if (_slimeAttackEffects.Active)
+            _slimeAttackEffects.AddTo(_levelUpParticleAdder);
+        if (atlasVertices.Count > 0)
+        {
             DrawTreeBatch(atlasVertices);
             atlasVertices.Clear();
         }
@@ -7363,6 +7368,8 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         foreach (var sparkle in LevelUpFireworks.Frames())
             Place(sparkle.Key, null, sparkle.Frame);
+        foreach (var particle in SlimeAttackEffects.Frames())
+            Place(particle.Key, null, particle.Frame);
         for (var cell = 0; cell < _naturalItemFrames.Length; cell++)
         {
             if (_naturalItemFrames[cell] is { } itemFrame)

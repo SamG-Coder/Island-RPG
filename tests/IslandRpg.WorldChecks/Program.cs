@@ -8736,6 +8736,40 @@ Require(
             SlimeAnimationState.Move, frame, back: true))),
     "the slime rig must validate both sheets and map direction, looping, attacks and spawning");
 
+var slimeEffectProfiles = Enum.GetValues<EnemyKind>()
+    .Select(SlimeAttackEffectProfile.For)
+    .ToArray();
+var slimeAttackEffects = new SlimeAttackEffects();
+for (var burst = 0; burst < 20; burst++)
+{
+    slimeAttackEffects.Burst(
+        (EnemyKind)(burst % slimeEffectProfiles.Length),
+        Vector2.Zero,
+        Vector2.UnitX * 10,
+        burst);
+}
+var slimeAttackLights = slimeAttackEffects.Lights().ToArray();
+Require(
+    slimeEffectProfiles.Select(profile => profile.LightColor)
+        .Distinct().Count() == slimeEffectProfiles.Length &&
+    SlimeAttackEffects.Frames().Count() ==
+        slimeEffectProfiles.Length * 2 &&
+    slimeAttackEffects.Active &&
+    slimeAttackEffects.ActiveParticleCount <=
+        SlimeAttackEffects.ParticleCapacity &&
+    slimeAttackEffects.ActiveLightCount ==
+        SlimeAttackEffects.LightCapacity &&
+    slimeAttackLights.Length == SlimeAttackEffects.LightCapacity &&
+    slimeAttackLights.All(light =>
+        light.Intensity > 0 && light.RadiusPixels > 0),
+    "slime attacks must use distinct type profiles and bounded particle and light pools");
+slimeAttackEffects.Update(2);
+Require(
+    !slimeAttackEffects.Active &&
+    slimeAttackEffects.ActiveParticleCount == 0 &&
+    slimeAttackEffects.ActiveLightCount == 0,
+    "slime attack particles and their existing-scene lights must expire cleanly");
+
 var grassSpawner = new EnemySpawnerState(
     Guid.NewGuid(), Vector2.Zero, (int)WorldLevel.Overworld,
     Biome.Grassland, [new(EnemyKind.GrassSlime)], MaximumAlive: 8);

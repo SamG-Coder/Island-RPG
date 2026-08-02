@@ -11,6 +11,7 @@ internal sealed partial class GameHostWindow
 {
     private readonly List<EnemySpawnerState> _enemySpawners = [];
     private readonly List<EnemyState> _enemies = [];
+    private readonly SlimeAttackEffects _slimeAttackEffects = new();
     private SlimeSpriteRig? _slimeRig;
     private int _softActorShadowProgram;
     private Guid? _enemyContextTargetId;
@@ -56,6 +57,7 @@ internal sealed partial class GameHostWindow
         _enemyPathTasks.Clear();
         _enemySpawners.Clear();
         _enemies.Clear();
+        _slimeAttackEffects.Clear();
         _nextEnemySpawnerProbe = 0;
     }
 
@@ -100,6 +102,7 @@ internal sealed partial class GameHostWindow
         }
         _enemies.Clear();
         _enemies.AddRange(nextEnemies);
+        _slimeAttackEffects.Update(elapsed);
     }
 
     private EnemyState ResolveEnemyAttack(EnemyState enemy)
@@ -123,6 +126,15 @@ internal sealed partial class GameHostWindow
             VisualAction = EntityAction.Attack,
             VisualActionStartedAt = _clock
         };
+        var sourceWorld = EnemyEffectWorld(enemy.Position) +
+                          new Vector2(0, -7);
+        var targetWorld = GetPlayerVisual()?.World ??
+                          EnemyEffectWorld(_player!.Position);
+        _slimeAttackEffects.Burst(
+            enemy.Kind,
+            sourceWorld,
+            targetWorld + new Vector2(0, -18),
+            HashCode.Combine(enemy.Id, (int)(_clock * 1000)));
         if (interaction.Attack.Hit)
             ApplyPlayerDamage(
                 interaction.Attack.Damage,
@@ -131,6 +143,13 @@ internal sealed partial class GameHostWindow
             ShowEntityImpact(
                 PlayerFeedbackKey(_activePlayer.Id), 0, false);
         return enemy;
+    }
+
+    private Vector2 EnemyEffectWorld(Vector2 position)
+    {
+        var terrain = SamplePlayerTerrain(position.X, position.Y);
+        return IsometricTerrainProjection.Project(
+            position.X, position.Y, terrain.Height);
     }
 
     private void OpenEnemyContext(EnemyState enemy, Vector2 walkTarget)

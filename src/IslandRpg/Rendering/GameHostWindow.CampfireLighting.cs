@@ -39,7 +39,8 @@ internal sealed partial class GameHostWindow
         GL.Uniform1(
             _shaderUniforms.Get(_program, "sceneLighting"),
             active && (underground || darkness > .01f ||
-                       _levelUpFireworks.Active) ? 1 : 0);
+                       _levelUpFireworks.Active ||
+                       _slimeAttackEffects.Active) ? 1 : 0);
         GL.Uniform1(
             _shaderUniforms.Get(_program, "sceneDarkness"),
             darkness);
@@ -66,6 +67,21 @@ internal sealed partial class GameHostWindow
                     radius * .78f / ReferenceHeight),
                 _levelUpFireworks.LightColor,
                 _levelUpFireworks.LightIntensity);
+        }
+        if (active && _slimeAttackEffects.Active)
+        {
+            foreach (var light in _slimeAttackEffects.Lights())
+            {
+                if (count >= MaximumSceneLights) break;
+                var radius = light.RadiusPixels * _zoom;
+                AddLight(
+                    SpriteAnchor(light.World),
+                    new(
+                        radius / ReferenceWidth,
+                        radius * .72f / ReferenceHeight),
+                    light.Color,
+                    light.Intensity);
+            }
         }
         if (active && underground && _player is not null)
         {
