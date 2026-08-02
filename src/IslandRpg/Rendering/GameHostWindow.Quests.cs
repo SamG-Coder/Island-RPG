@@ -97,7 +97,8 @@ internal sealed partial class GameHostWindow
         }
         _lastInventoryQuestId = active.Value.Definition.Id;
         foreach (var questEvent in QuestService.InventoryProgressEvents(
-                     _activePlayer.Quests, inventory))
+                     _activePlayer.Quests, inventory,
+                     _activePlayer.InventoryQuantities))
         {
             RecordQuestEvent(questEvent);
             if (QuestService.ActiveQuest(_activePlayer.Quests)?

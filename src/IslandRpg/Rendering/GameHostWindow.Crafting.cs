@@ -116,6 +116,23 @@ internal sealed partial class GameHostWindow
         AwardCraftingExperience(recipeId);
     }
 
+    private void CompletePlayerCraft(
+        string recipeId, InventoryContainer beforeInventory,
+        InventoryContainer afterInventory)
+    {
+        var recipe = CraftingSkill.Recipes.First(
+            candidate => candidate.Id == recipeId);
+        var added = Math.Max(0,
+            afterInventory.Count(recipe.ResultItemId) -
+            beforeInventory.Count(recipe.ResultItemId));
+        if (added > 0)
+            RecordQuestEvent(new(
+                QuestEventType.CraftItem,
+                recipe.ResultItemId,
+                added));
+        AwardCraftingExperience(recipeId);
+    }
+
     private Vector4 CraftingWindowBounds() =>
         CraftingWindowState.WindowBounds(SceneClientBounds());
 
@@ -147,7 +164,8 @@ internal sealed partial class GameHostWindow
             _activePlayer?.Inventory ?? [],
             _activeInventorySlot,
             _inventoryDraggingSlot,
-            allowDragOutsideToGame: false);
+            allowDragOutsideToGame: false,
+            quantities: _activePlayer?.InventoryQuantities);
         UpdateInventoryInteraction(
             inventoryPanel, pointer, leftDown,
             MouseState.IsButtonDown(MouseButton.Right));
@@ -158,8 +176,9 @@ internal sealed partial class GameHostWindow
         if (_activePlayer is null) return;
         var level = CraftingSkill.LevelForExperience(
             _activePlayer.CraftingExperience);
+        var beforeInventory = ActivePlayerInventory();
         var availability = CraftingSkill.Availability(
-            recipe, level, _activePlayer.Inventory,
+            recipe, level, beforeInventory,
             HasRequiredCraftingStation(recipe));
         if (availability == RecipeAvailability.Locked)
         {
@@ -191,28 +210,18 @@ internal sealed partial class GameHostWindow
                 "You do not have enough inventory space for every crafting step.");
             return;
         }
-        var beforeInventory = _activePlayer.Inventory;
-        var crafted = EntityInteractionService.Craft(
-            beforeInventory,
-            recipe,
-            level,
+        var craftResult = CraftingService.TryCraftDetailed(
+            recipe, level, beforeInventory, out var inventory,
             HasRequiredCraftingStation(recipe));
-        if (crafted.Failure == "inventoryfull")
+        if (craftResult == CraftingService.CraftResult.InventoryFull)
         {
             ReportBlockedAction(
                 $"crafting-inventory-full-{recipe.Id}",
                 "You do not have enough inventory space for every crafting step.");
             return;
         }
-        if (!crafted.Succeeded) return;
-        var inventory = crafted.Inventory;
-
-        _activePlayer = _activePlayer with
-        {
-            Inventory = inventory,
-            UpdatedUtc = DateTime.UtcNow
-        };
-        _saves.SavePlayer(_activePlayer);
+        if (craftResult != CraftingService.CraftResult.Success) return;
+        SaveActivePlayerInventory(inventory);
         _chatUi.AddMessage(
             $"You craft {ItemCatalog.Get(recipe.ResultItemId).Name}.",
             ChatMessageStyle.Action);
@@ -225,7 +234,9 @@ internal sealed partial class GameHostWindow
             recipe,
             CraftingSkill.LevelForExperience(
                 _activePlayer?.CraftingExperience ?? 0),
-            _activePlayer?.Inventory,
+            PlayerInventory.Load(
+                _activePlayer?.Inventory,
+                _activePlayer?.InventoryQuantities),
             HasRequiredCraftingStation(recipe));
 
     private bool HasRequiredCraftingStation(

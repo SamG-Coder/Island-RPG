@@ -1918,7 +1918,7 @@ internal sealed partial class GameHostWindow
             if (!VillagerCommitmentService.TryCompleteDeliveryToInventory(
                     villager,
                     _activePlayer.Id,
-                    PlayerInventory.Normalize(_activePlayer.Inventory),
+                    ActivePlayerInventory(),
                     promise.Id,
                     _worldGameSeconds,
                     out var deliveredVillager,
@@ -1927,7 +1927,8 @@ internal sealed partial class GameHostWindow
             _villagers[index] = deliveredVillager;
             _activePlayer = _activePlayer with
             {
-                Inventory = playerInventory,
+                Inventory = playerInventory.ItemIds(),
+                InventoryQuantities = playerInventory.Quantities(),
                 UpdatedUtc = DateTime.UtcNow
             };
             _saves.SavePlayer(_activePlayer);

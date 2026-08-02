@@ -11,6 +11,38 @@ internal static class PlayerInventory
 
     public static InventoryContainer CreateContainer() => new(Capacity);
 
+    public static InventoryContainer Load(
+        string?[]? items, IReadOnlyList<int>? quantities = null)
+    {
+        var result = CreateContainer();
+        if (items is null) return result;
+        var hasQuantities = quantities is not null;
+        var length = Math.Min(items.Length, Capacity);
+        for (var slot = 0; slot < length; slot++)
+        {
+            if (items[slot] is not { } itemId ||
+                !ItemCatalog.TryGet(itemId, out var definition))
+                continue;
+            var quantity = hasQuantities && slot < quantities!.Count
+                ? Math.Max(1, quantities[slot])
+                : 1;
+            if (!definition.CanStack) quantity = 1;
+            if (definition.CanStack)
+                result.TryAdd(itemId, quantity);
+            else
+                result.TrySetSlot(slot, itemId, quantity);
+        }
+        return result;
+    }
+
+    public static int Count(
+        string?[]? items, IReadOnlyList<int>? quantities) =>
+        Load(items, quantities).ItemCount;
+
+    public static int Count(
+        string?[]? items, IReadOnlyList<int>? quantities, string itemId) =>
+        Load(items, quantities).Count(itemId);
+
     public static string?[] Normalize(string?[]? items)
     {
         var normalized = new string?[Capacity];

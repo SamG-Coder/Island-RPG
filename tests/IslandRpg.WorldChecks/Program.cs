@@ -68,6 +68,53 @@ if (args.Contains(
 }
 
 var worldCheckAssertions = 0;
+var legacyStackInventory = new string?[PlayerInventory.Capacity];
+legacyStackInventory[0] = ItemIds.SlimeGel;
+legacyStackInventory[1] = ItemIds.SlimeGel;
+legacyStackInventory[2] = ItemIds.PlantFibres;
+legacyStackInventory[3] = ItemIds.PlantFibres;
+legacyStackInventory[4] = ItemIds.StoneAxe;
+var migratedStackInventory = PlayerInventory.Load(legacyStackInventory);
+Require(
+    migratedStackInventory.Count(ItemIds.SlimeGel) == 2 &&
+    migratedStackInventory.Count(ItemIds.PlantFibres) == 2 &&
+    migratedStackInventory.ItemCount == 5 &&
+    migratedStackInventory.UsedSlots == 4 &&
+    migratedStackInventory.Quantities().Contains(2),
+    "legacy migration must stack slime drops while keeping ordinary resources in separate slots");
+var roundTrippedStackInventory = PlayerInventory.Load(
+    migratedStackInventory.ItemIds(),
+    migratedStackInventory.Quantities());
+Require(
+    roundTrippedStackInventory.Count(ItemIds.SlimeGel) == 2 &&
+    roundTrippedStackInventory.Count(ItemIds.PlantFibres) == 2 &&
+    roundTrippedStackInventory.Count(ItemIds.StoneAxe) == 1,
+    "player inventory quantity saves must round-trip stack and non-stack counts");
+var craftingStacks = PlayerInventory.CreateContainer();
+craftingStacks.TryAdd(ItemIds.PlantFibres, 5);
+var stackRopeRecipe = CraftingSkill.Recipes.Single(
+    recipe => recipe.Id == "rope");
+var stackedCraftResult = CraftingService.TryCraftDetailed(
+    stackRopeRecipe, 1, craftingStacks, out var craftedStacks);
+Require(
+    stackedCraftResult == CraftingService.CraftResult.Success &&
+    craftedStacks.Count(ItemIds.PlantFibres) == 2 &&
+    craftedStacks.Count(ItemIds.Rope) == 1 &&
+    craftedStacks.ItemCount == 3,
+    "crafting must consume quantities from stacks and conserve the recipe result");
+var playerTransferInventory = PlayerInventory.CreateContainer();
+playerTransferInventory.TryAdd(ItemIds.SlimeGel, 7);
+var stackTransferContainer = new ItemContainerState(
+    new(
+        Guid.NewGuid(), "Stack transfer", 2, 2,
+        AllowStacking: true));
+var transferredStackItems = stackTransferContainer.TransferMatchingFrom(
+    playerTransferInventory, ItemIds.SlimeGel, 5);
+Require(
+    transferredStackItems == 5 &&
+    playerTransferInventory.Count(ItemIds.SlimeGel) == 2 &&
+    stackTransferContainer.Quantities.Sum() == 5,
+    "container transfers must move requested stack quantities without duplication");
 var wrappedChat = ChatTextLayout.Wrap(
     "one two three four", 9, text => text.Length);
 var chatLayout = new ChatUiControlState();
@@ -6377,27 +6424,31 @@ var stackingContainer = new ItemContainerState(
         Guid.NewGuid(), "Test bank", 2, 1,
         AllowStacking: true));
 Require(
-    stackingContainer.TryAdd(ItemIds.Logs, 99) &&
-    stackingContainer.TryAdd(ItemIds.Logs) &&
+    stackingContainer.TryAdd(ItemIds.SlimeGel, 99) &&
+    stackingContainer.TryAdd(ItemIds.SlimeGel) &&
     stackingContainer.Quantities[0] == 100,
     "stacking containers must merge equal item IDs and retain their quantity");
 var playerBagContainer = PlayerInventory.CreateContainer();
 Require(
     PlayerInventory.Capacity == 28 &&
-    ItemCatalog.Get(ItemIds.Logs).CanStack &&
+    ItemCatalog.Get(ItemIds.SlimeGel).CanStack &&
+    !ItemCatalog.Get(ItemIds.Logs).CanStack &&
     !ItemCatalog.Get(ItemIds.StoneAxe).CanStack &&
-    playerBagContainer.TryAdd(ItemIds.Logs, 50) &&
+    playerBagContainer.TryAdd(ItemIds.SlimeGel, 50) &&
     playerBagContainer.UsedSlots == 1 &&
     playerBagContainer[0] is
     {
-        ItemId: ItemIds.Logs,
+        ItemId: ItemIds.SlimeGel,
         Quantity: 50
     } &&
+    playerBagContainer.TryAdd(ItemIds.Logs, 2) &&
     playerBagContainer.TryAdd(ItemIds.StoneAxe, 2) &&
-    playerBagContainer.UsedSlots == 3 &&
+    playerBagContainer.UsedSlots == 5 &&
     playerBagContainer[1]?.Quantity == 1 &&
-    playerBagContainer[2]?.Quantity == 1,
-    "the reusable 28-slot player container must stack definition-approved resources while tools consume individual slots");
+    playerBagContainer[2]?.Quantity == 1 &&
+    playerBagContainer[3]?.Quantity == 1 &&
+    playerBagContainer[4]?.Quantity == 1,
+    "the reusable 28-slot player container must stack only slime drops while ordinary resources and tools consume individual slots");
 var atomicBag = new InventoryContainer(2);
 Require(
     !atomicBag.TryAdd(ItemIds.StoneAxe, 3) &&
@@ -6414,7 +6465,7 @@ var restoredStackingContainer = new ItemContainerState(
 Require(
     restoredStackingContainer.Definition.Id ==
         stackingContainer.Definition.Id &&
-    restoredStackingContainer.Items[0] == ItemIds.Logs &&
+    restoredStackingContainer.Items[0] == ItemIds.SlimeGel &&
     restoredStackingContainer.Quantities[0] == 100,
     "container snapshots must reload quantities against their stable container ID");
 var chestObject = new WorldGroundObject(
@@ -6424,20 +6475,21 @@ Require(
     chestContainer.Definition.Id == chestObject.Id &&
     chestContainer.Definition.Title == "Wooden Chest" &&
     chestContainer.Definition.Capacity == 48 &&
-    chestContainer.TryAdd(ItemIds.OakLogs, 25),
-    "a placed wooden chest must create a 48-slot stacking container");
+    chestContainer.TryAdd(ItemIds.OakLogs, 25) &&
+    chestContainer.Quantities.Count(quantity => quantity == 1) == 25,
+    "a placed wooden chest must create a 48-slot container while ordinary logs remain unstacked");
 var storedChest = StorageContainerService.Save(
     chestObject, chestContainer);
 var reopenedChest = StorageContainerService.Open(storedChest);
 Require(
     reopenedChest.Items[0] == ItemIds.OakLogs &&
-    reopenedChest.Quantities[0] == 25 &&
+    reopenedChest.Quantities.Count(quantity => quantity == 1) == 25 &&
     StorageContainerService.Definition(
         Guid.NewGuid(), ItemIds.StorageBarrel).Capacity == 40,
     "world storage snapshots must reopen by object ID while barrels retain their smaller layout");
 var lootBagObject = LootBagService.Create(
     Guid.NewGuid(), new Vector2(4, 7),
-    [new(ItemIds.PlantFibres, 3), new(ItemIds.WildBerries, 1)]);
+    [new(ItemIds.SlimeGel, 3), new(ItemIds.SaltCrystals, 1)]);
 var lootBagContainer = WorldItemContainerService.Open(lootBagObject);
 var depositProbe = new string?[] { ItemIds.Logs };
 Require(
@@ -6451,9 +6503,9 @@ Require(
     "loot bags must reuse persistent containers while rejecting every deposit path");
 Require(
     lootBagContainer.TryTake(0, 3, out var firstLoot) &&
-    firstLoot == ItemIds.PlantFibres &&
+    firstLoot == ItemIds.SlimeGel &&
     lootBagContainer.TryTake(1, 1, out var secondLoot) &&
-    secondLoot == ItemIds.WildBerries &&
+    secondLoot == ItemIds.SaltCrystals &&
     lootBagContainer.IsEmpty &&
     LootBagService.FadeOpacity(10, 10) == 1 &&
     LootBagService.FadeOpacity(10, 10 + LootBagService.FadeSeconds) == 0 &&
@@ -6549,8 +6601,8 @@ Require(
     "deposit-all must stop safely when a container fills and leave unmoved bag items intact");
 var matchingInventory = new string?[]
 {
-    ItemIds.Logs, ItemIds.Coal, ItemIds.Logs,
-    ItemIds.Logs, ItemIds.Sticks
+    ItemIds.SlimeGel, ItemIds.Coal, ItemIds.SlimeGel,
+    ItemIds.SlimeGel, ItemIds.Sticks
 };
 var quantityContainer = new ItemContainerState(
     new(
@@ -6558,12 +6610,12 @@ var quantityContainer = new ItemContainerState(
         AllowStacking: true));
 Require(
     quantityContainer.TransferMatchingFrom(
-        matchingInventory, ItemIds.Logs, 2) == 2 &&
+        matchingInventory, ItemIds.SlimeGel, 2) == 2 &&
     quantityContainer.Quantities[0] == 2 &&
-    matchingInventory.Count(item => item == ItemIds.Logs) == 1 &&
+    matchingInventory.Count(item => item == ItemIds.SlimeGel) == 1 &&
     quantityContainer.TryTake(
         0, 2, out var withdrawnItemId) &&
-    withdrawnItemId == ItemIds.Logs &&
+    withdrawnItemId == ItemIds.SlimeGel &&
     quantityContainer.Items[0] is null,
     "amount menus must deposit matching bag items and withdraw the requested stack quantity");
 var allItemsContainer = ItemContainerState.CreateAllItemsTest();
@@ -8320,13 +8372,13 @@ try
         StorageContainerService.Open(persistentChest);
     Require(
         persistentChestState.TryAdd(
-            ItemIds.Coal, 100, ownerId: "mira") &&
+            ItemIds.SlimeGel, 100, ownerId: "mira") &&
         persistentChestState.TryAdd(
-            ItemIds.Coal, 2, ownerId: "player") &&
+            ItemIds.SlimeGel, 2, ownerId: "player") &&
         persistentChestState.TryAdd(
             ItemIds.BronzeBar, 4, ownerId: "mira") &&
         persistentChestState.Items.Count(
-            item => item == ItemIds.Coal) == 2,
+            item => item == ItemIds.SlimeGel) == 2,
         "the persistence fixture must populate a storage chest");
     persistentChest = StorageContainerService.Save(
         persistentChest, persistentChestState);
@@ -8350,9 +8402,12 @@ try
             .Any(value =>
                 value.First == 2 &&
                 value.Second == "player") &&
-        reloadedChestState.Quantities[
-            Array.IndexOf(
-                reloadedChestState.Items, ItemIds.BronzeBar)] == 4 &&
+        reloadedChestState.Items.Count(
+            item => item == ItemIds.BronzeBar) == 4 &&
+        reloadedChestState.Quantities
+            .Where((_, slot) =>
+                reloadedChestState.Items[slot] == ItemIds.BronzeBar)
+            .All(quantity => quantity == 1) &&
         reloadedChest.OwnerId == "mira",
         "container contents and placed-object ownership must survive a chunk reload");
     var collectedRock = undergroundWithOpenShaft.GroundObjects.First(
@@ -9146,10 +9201,10 @@ Require(
     poulticeMedicine.TimedHealing > herbMedicine.TimedHealing &&
     saltedFood.HungerRestored > 0 &&
     saltedFood.WellFedSeconds > 220 &&
-    ItemCatalog.Get(ItemIds.HerbalPoultice).CanStack &&
+    !ItemCatalog.Get(ItemIds.HerbalPoultice).CanStack &&
     ItemCatalog.Get(ItemIds.HerbalPoultice).HasTag(ItemTag.Medicine) &&
     ItemCatalog.Get(ItemIds.SaltedFish).HasTag(ItemTag.SlimeCraftedSprite),
-    "medicine and preserved fish must expose their survival effects and stackable sprite-backed item definitions");
+    "medicine and preserved fish must expose their survival effects without becoming stackable slime drops");
 var healingStart = TimedHealingService.Start(poulticeMedicine);
 var healingHalf = TimedHealingService.Advance(
     40, 100, poulticeMedicine.TimedHealingSeconds / 2, healingStart);

@@ -11,6 +11,33 @@ internal static class StewCookingService
         FindIngredientSlot(inventory, IsRawBerry) >= 0;
 
     public static bool TryPrepare(
+        InventoryContainer inventory,
+        out InventoryContainer updated,
+        out string fishItemId,
+        out string berryItemId)
+    {
+        updated = inventory.Clone();
+        fishItemId = updated.ItemIds()
+            .Where(itemId => itemId is not null)
+            .Select(itemId => itemId!)
+            .FirstOrDefault(IsRawFish) ?? "";
+        berryItemId = updated.ItemIds()
+            .Where(itemId => itemId is not null)
+            .Select(itemId => itemId!)
+            .FirstOrDefault(IsRawBerry) ?? "";
+        if (fishItemId.Length == 0 || berryItemId.Length == 0)
+            return false;
+        if (!updated.TryTake(IsRawFish, 1) ||
+            !updated.TryTake(IsRawBerry, 1) ||
+            !updated.TryAdd(ItemIds.FishBerryStew))
+        {
+            updated = inventory.Clone();
+            return false;
+        }
+        return true;
+    }
+
+    public static bool TryPrepare(
         string?[]? inventory,
         out string?[] updated,
         out string fishItemId,

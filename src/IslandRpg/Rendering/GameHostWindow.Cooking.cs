@@ -126,6 +126,7 @@ internal sealed partial class GameHostWindow
             return;
         if (cooking.ReadyAt is null)
         {
+            var inventory = ActivePlayerInventory();
             if (_player is null ||
                 _player.Action != EntityAction.Gather)
             {
@@ -143,10 +144,8 @@ internal sealed partial class GameHostWindow
                     allowActive: true) ||
                 !InventoryContainsAt(
                     cooking.InventorySlot, cooking.RawItemId) ||
-                !PlayerInventory.TryRemove(
-                    _activePlayer.Inventory,
-                    cooking.InventorySlot,
-                    out var inventory))
+                !inventory.TryTake(
+                    cooking.InventorySlot, 1, out _))
             {
                 ReportBlockedAction(
                     "campfire-cooking-interrupted",
@@ -157,12 +156,7 @@ internal sealed partial class GameHostWindow
                 _player.Stop();
                 return;
             }
-            _activePlayer = _activePlayer with
-            {
-                Inventory = inventory,
-                UpdatedUtc = DateTime.UtcNow
-            };
-            _saves.SavePlayer(_activePlayer);
+            SaveActivePlayerInventory(inventory);
             if (_activeInventorySlot == cooking.InventorySlot)
                 _activeInventorySlot = -1;
             _activeCooking = cooking with
@@ -204,17 +198,12 @@ internal sealed partial class GameHostWindow
             Random.Shared.NextSingle());
         var closeEnoughToCollect =
             IsPlayerNearCampfire(campfireLocation.Value.Object);
-        var inventory = PlayerInventory.Normalize(
-            _activePlayer.Inventory);
+        var inventory = ActivePlayerInventory();
         var addedToInventory = false;
         if (closeEnoughToCollect &&
-            PlayerInventory.TryAddAtPreferredSlot(
-                _activePlayer.Inventory,
-                result.ItemId,
-                cooking.InventorySlot,
-                out var updatedInventory))
+            inventory.TryAddAtPreferredSlot(
+                result.ItemId, cooking.InventorySlot))
         {
-            inventory = updatedInventory;
             addedToInventory = true;
         }
         if (!addedToInventory)
@@ -234,7 +223,8 @@ internal sealed partial class GameHostWindow
         AwardAdventureExperience(award.Gained);
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             CookingExperience = award.Experience,
             UpdatedUtc = DateTime.UtcNow
         };
@@ -276,15 +266,14 @@ internal sealed partial class GameHostWindow
             location is not null &&
             IsPlayerNearCampfire(location.Value.Object);
         if (closeEnoughToCollect &&
-            PlayerInventory.TryAddAtPreferredSlot(
-                _activePlayer.Inventory,
-                cooking.RawItemId,
-                cooking.InventorySlot,
-                out var inventory))
+            ActivePlayerInventory() is { } inventory &&
+            inventory.TryAddAtPreferredSlot(
+                cooking.RawItemId, cooking.InventorySlot))
         {
             _activePlayer = _activePlayer with
             {
-                Inventory = inventory,
+                Inventory = inventory.ItemIds(),
+                InventoryQuantities = inventory.Quantities(),
                 UpdatedUtc = DateTime.UtcNow
             };
             _saves.SavePlayer(_activePlayer);

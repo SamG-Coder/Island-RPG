@@ -535,6 +535,59 @@ internal static class VillagerCommitmentService
     public static bool TryCompleteDeliveryToInventory(
         VillagerState promisor,
         string promiseeId,
+        InventoryContainer promiseeInventory,
+        Guid promiseId,
+        double gameSeconds,
+        out VillagerState updatedPromisor,
+        out InventoryContainer updatedPromiseeInventory)
+    {
+        updatedPromisor = promisor;
+        updatedPromiseeInventory = promiseeInventory.Clone();
+        var promises = promisor.Promises?.ToList() ?? [];
+        var promiseIndex = promises.FindIndex(value =>
+            value.Id == promiseId &&
+            value.Status == CommitmentStatus.Active &&
+            value.Kind == VillagerPromiseKind.GiveItem &&
+            value.PromiseeId == promiseeId &&
+            value.ItemId is not null);
+        if (promiseIndex < 0) return false;
+        var promise = promises[promiseIndex];
+        var sourceSlot = Array.FindIndex(promisor.Inventory, value =>
+            value is not null &&
+            VillagerSettlementProjectService.MatchesRequirement(
+                value, promise.ItemId!));
+        if (sourceSlot < 0 ||
+            promisor.Inventory[sourceSlot] is not { } transferredItem ||
+            !updatedPromiseeInventory.TryAdd(transferredItem) ||
+            !PlayerInventory.TryRemove(
+                promisor.Inventory, sourceSlot, out var sourceInventory))
+            return false;
+        var progress = Math.Min(
+            promise.TargetQuantity, promise.Progress + 1);
+        promises[promiseIndex] = promise with
+        {
+            Progress = progress,
+            Status = progress >= promise.TargetQuantity
+                ? CommitmentStatus.Fulfilled
+                : CommitmentStatus.Active
+        };
+        updatedPromisor = AddMemory(
+            VillagerPromisePlanService.CompileActionPlan(promisor with
+            {
+                Inventory = sourceInventory,
+                Promises = promises
+            }),
+            "favor-delivered",
+            promiseeId,
+            gameSeconds,
+            $"Delivered {ItemCatalog.Get(transferredItem).Name} as promised.",
+            progress >= promise.TargetQuantity ? 12 : 5);
+        return true;
+    }
+
+    public static bool TryCompleteDeliveryToInventory(
+        VillagerState promisor,
+        string promiseeId,
         string?[] promiseeInventory,
         Guid promiseId,
         double gameSeconds,

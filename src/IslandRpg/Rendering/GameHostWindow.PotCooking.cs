@@ -91,21 +91,13 @@ internal sealed partial class GameHostWindow
             _player.Stop();
             return;
         }
-        var cookingInventory = PlayerInventory.Normalize(
-            _activePlayer.Inventory);
-        var fishItemId = cookingInventory.FirstOrDefault(itemId =>
-            itemId is not null &&
-            ItemCatalog.Get(itemId).HasTag(ItemTag.Fish) &&
-            CookingSkill.TryProfile(itemId, out _));
-        var berryItemId = cookingInventory.FirstOrDefault(itemId =>
-            itemId is not null &&
-            ItemCatalog.Get(itemId).HasTag(ItemTag.Berry) &&
-            CookingSkill.TryProfile(itemId, out _));
-        var cooked = EntityInteractionService.CookStew(
-            cookingInventory,
-            CookingSkill.LevelForExperience(
-                _activePlayer.CookingExperience));
-        if (!cooked.Succeeded)
+        var cookingInventory = ActivePlayerInventory();
+        if (CookingSkill.LevelForExperience(
+                _activePlayer.CookingExperience) <
+            StewCookingService.RequiredLevel ||
+            !StewCookingService.TryPrepare(
+                cookingInventory, out var inventory,
+                out var fishItemId, out var berryItemId))
         {
             ReportBlockedAction(
                 "stew-ingredients",
@@ -113,15 +105,14 @@ internal sealed partial class GameHostWindow
             _player.Stop();
             return;
         }
-        var inventory = cooked.Inventory;
-
         var award = CookingSkill.AwardExperience(
             _activePlayer.CookingExperience,
             StewCookingService.Experience);
         AwardAdventureExperience(award.Gained);
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             CookingExperience = award.Experience,
             UpdatedUtc = DateTime.UtcNow
         };

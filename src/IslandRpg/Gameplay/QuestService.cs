@@ -182,7 +182,8 @@ internal static class QuestService
     }
 
     public static IReadOnlyList<QuestEvent> InventoryProgressEvents(
-        IReadOnlyList<QuestProgress>? progress, string?[]? inventory)
+        IReadOnlyList<QuestProgress>? progress, string?[]? inventory,
+        IReadOnlyList<int>? quantities = null)
     {
         if (ActiveQuest(progress) is not { } active) return [];
         var result = new List<QuestEvent>();
@@ -192,7 +193,10 @@ internal static class QuestService
                 objective.EventType is not (
                     QuestEventType.GatherItem or QuestEventType.CraftItem))
                 continue;
-            var held = PlayerInventory.Count(inventory, objective.TargetId);
+            var held = quantities is null
+                ? PlayerInventory.Count(inventory, objective.TargetId)
+                : PlayerInventory.Count(
+                    inventory, quantities, objective.TargetId);
             var recorded = active.Progress.ObjectiveCounts?
                 .GetValueOrDefault(objective.Id) ?? 0;
             var missing = Math.Min(objective.Required, held) - recorded;

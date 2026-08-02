@@ -187,9 +187,8 @@ internal sealed partial class GameHostWindow
             _itemContainerWindow.Container is not { } container ||
             !container.Definition.AllowsDeposit)
             return;
-        var inventory = (string?[])(
-            _activePlayer.Inventory ?? []).Clone();
-        var before = PlayerInventory.Count(inventory);
+        var inventory = ActivePlayerInventory();
+        var before = inventory.ItemCount;
         var moved = container.TransferAllFrom(inventory);
         if (moved == 0) return;
         SaveContainerInventory(inventory);
@@ -211,9 +210,8 @@ internal sealed partial class GameHostWindow
             _activePlayer.Inventory![slot] is not { } itemId ||
             !container.TryAdd(itemId))
             return;
-        var inventory = (string?[])(
-            _activePlayer.Inventory ?? []).Clone();
-        inventory[slot] = null;
+        var inventory = ActivePlayerInventory();
+        if (!inventory.TryTake(slot, 1, out _)) return;
         SaveContainerInventory(inventory);
     }
 
@@ -224,8 +222,7 @@ internal sealed partial class GameHostWindow
             _itemContainerWindow.Container is not { } container ||
             !container.Definition.AllowsDeposit)
             return;
-        var inventory = (string?[])(
-            _activePlayer.Inventory ?? []).Clone();
+        var inventory = ActivePlayerInventory();
         var moved = container.TransferMatchingFrom(
             inventory, itemId, maximum);
         if (moved > 0)
@@ -237,22 +234,18 @@ internal sealed partial class GameHostWindow
         if (_activePlayer is null ||
             _itemContainerWindow.Container is not { } container)
             return;
-        var inventory = (string?[])(
-            _activePlayer.Inventory ?? []).Clone();
+        var inventory = ActivePlayerInventory();
         var available = container.Quantities.ElementAtOrDefault(slot);
-        var emptySlots = inventory.Count(item => item is null);
-        var quantity = Math.Min(
-            available,
-            Math.Min(maximum, emptySlots));
-        if (quantity <= 0 ||
-            !container.TryTake(slot, quantity, out var itemId) ||
-            itemId is null)
+        var quantity = Math.Min(available, maximum);
+        var itemId = container.Items.ElementAtOrDefault(slot);
+        if (quantity <= 0 || itemId is null ||
+            !inventory.CanAdd(itemId, quantity) ||
+            !container.TryTake(slot, quantity, out var takenItemId) ||
+            takenItemId is null)
             return;
-        for (var count = 0; count < quantity; count++)
-        {
-            var empty = Array.FindIndex(inventory, item => item is null);
-            inventory[empty] = itemId;
-        }
+        if (!inventory.TryAdd(takenItemId, quantity))
+            throw new InvalidOperationException(
+                "Player inventory changed after withdrawal validation.");
         SaveContainerInventory(inventory);
         if (container.IsEmpty &&
             _openWorldStorageId is { } objectId &&
@@ -264,15 +257,9 @@ internal sealed partial class GameHostWindow
         }
     }
 
-    private void SaveContainerInventory(string?[] inventory)
+    private void SaveContainerInventory(InventoryContainer inventory)
     {
-        _activeInventorySlot = -1;
-        _activePlayer = _activePlayer! with
-        {
-            Inventory = inventory,
-            UpdatedUtc = DateTime.UtcNow
-        };
-        _saves.SavePlayer(_activePlayer);
+        SaveActivePlayerInventory(inventory);
         SaveOpenWorldStorage();
     }
 
@@ -356,7 +343,8 @@ internal sealed partial class GameHostWindow
             RenderInventoryPanel(
                 new InventoryPanelState(
                     bag, _activePlayer?.Inventory ?? [],
-                    title: "Bag"),
+                    title: "Bag",
+                    quantities: _activePlayer?.InventoryQuantities),
                 renderDragPreview: false);
         }
 

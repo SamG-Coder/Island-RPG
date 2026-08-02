@@ -708,21 +708,16 @@ internal static class ItemCatalog
     static ItemCatalog()
     {
         foreach (var (id, item) in Items.ToArray())
-            if (IsNaturallyStackable(item))
+            if (IsSlimeDropStackable(id))
                 Items[id] = item with { CanStack = true };
     }
 
-    private static bool IsNaturallyStackable(ItemDefinition item) =>
-        item.HasTag(ItemTag.NaturalMaterial) ||
-        item.HasTag(ItemTag.WoodcuttingMaterial) ||
-        item.HasTag(ItemTag.MiningMaterial) ||
-        item.HasTag(ItemTag.Mineral) ||
-        item.HasTag(ItemTag.Seed) ||
-        item.HasTag(ItemTag.Fish) ||
-        item.HasTag(ItemTag.Berry) ||
-        item.HasTag(ItemTag.CookedFood) ||
-        item.HasTag(ItemTag.BurntFood) ||
-        item.HasTag(ItemTag.Medicine);
+    private static bool IsSlimeDropStackable(string itemId) =>
+        itemId is
+            ItemIds.SlimeGel or
+            ItemIds.SlimeCore or
+            ItemIds.SaltCrystals or
+            ItemIds.MedicinalHerbs;
 
     private static ItemDefinition Coastal(
         string id, string name, string caption, string examine, int cell) =>

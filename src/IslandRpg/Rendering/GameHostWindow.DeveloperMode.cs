@@ -353,14 +353,12 @@ internal sealed partial class GameHostWindow
             Usage(ChatCommandRegistry.All.First(c => c.Name == "/give"));
             return;
         }
-        var inventory = _activePlayer.Inventory;
-        var added = 0;
-        while (added < amount &&
-               PlayerInventory.TryAdd(inventory, item.Id, out inventory))
-            added++;
+        var inventory = ActivePlayerInventory();
+        var added = inventory.TryAdd(item.Id, amount) ? amount : 0;
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);

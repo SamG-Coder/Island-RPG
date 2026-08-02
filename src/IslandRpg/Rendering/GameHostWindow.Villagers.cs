@@ -2586,13 +2586,14 @@ internal sealed partial class GameHostWindow
                 _player.Position,
                 new(villager.PositionX, villager.PositionY)) >
             MathF.Pow(VillagerSimulation.InteractionRange + .3f, 2) ||
-            !VillagerGiftTransferService.TryTransfer(
-                _activePlayer.Inventory,
-                gift.PlayerInventorySlot,
-                gift.ItemId,
-                villager.Inventory,
-                out var playerInventory,
-                out var receiverInventory))
+            ActivePlayerInventory() is not { } playerInventory ||
+            !PlayerInventory.TryAdd(
+                villager.Inventory, gift.ItemId,
+                out var receiverInventory) ||
+            !playerInventory.TryTake(
+                gift.PlayerInventorySlot, 1, out var transferred) ||
+            !transferred.ItemId.Equals(
+                gift.ItemId, StringComparison.OrdinalIgnoreCase))
             return new(intent, false, "transfer_failed");
 
         var itemInstanceId = Guid.NewGuid();
@@ -2608,7 +2609,8 @@ internal sealed partial class GameHostWindow
         _villagers[villagerIndex] = villager;
         _activePlayer = _activePlayer with
         {
-            Inventory = playerInventory,
+            Inventory = playerInventory.ItemIds(),
+            InventoryQuantities = playerInventory.Quantities(),
             UpdatedUtc = DateTime.UtcNow
         };
         if (_activeInventorySlot == gift.PlayerInventorySlot)

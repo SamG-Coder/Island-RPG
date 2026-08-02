@@ -336,18 +336,21 @@ internal sealed partial class GameHostWindow
     private string ControlInventory()
     {
         if (_activePlayer is null) return Error("world_not_loaded");
-        var inventory = PlayerInventory.Normalize(_activePlayer.Inventory);
+        var inventory = ActivePlayerInventory();
+        var items = inventory.ItemIds();
+        var quantities = inventory.Quantities();
         return JsonSerializer.Serialize(new
         {
             ok = true,
             eventType = "inventory",
             activeSlot = _activeInventorySlot,
-            capacity = inventory.Length,
-            slots = inventory.Select((itemId, slot) => new
+            capacity = inventory.Capacity,
+            slots = items.Select((itemId, slot) => new
             {
                 slot,
                 itemId,
-                name = itemId is null ? null : ItemCatalog.Get(itemId).Name
+                name = itemId is null ? null : ItemCatalog.Get(itemId).Name,
+                quantity = quantities[slot]
             })
         });
     }
@@ -1469,7 +1472,16 @@ internal sealed partial class GameHostWindow
                     _player.Position.Y
                 },
                 inventory = _activePlayer.Inventory?
-                    .Where(value => value is not null)
+                    .Where(value => value is not null),
+                inventoryStacks = _activePlayer.Inventory?
+                    .Select((itemId, slot) => new
+                    {
+                        itemId,
+                        quantity = _activePlayer.InventoryQuantities?
+                            .ElementAtOrDefault(slot) ??
+                            (itemId is null ? 0 : 1)
+                    })
+                    .Where(value => value.itemId is not null)
             },
             enemies = _enemies
                 .Where(enemy => enemy.WorldLevel == _activeWorldLevel)

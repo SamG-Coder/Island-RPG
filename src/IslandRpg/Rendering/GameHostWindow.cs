@@ -634,6 +634,7 @@ internal sealed partial class GameHostWindow : GameWindow
         base.OnUpdateFrame(e);
         UpdateNpcAi();
         ProcessGameControlPipe();
+        NormalizeActivePlayerInventory();
         _clock += e.Time;
         UpdateLootBags();
         if (FinishLoadingTransition())
@@ -1345,15 +1346,22 @@ internal sealed partial class GameHostWindow : GameWindow
         var spawn = FindPlayableSpawn();
         player ??= _saves.CreatePlayer(
             "Adventurer", EntityGender.Male, 2, 0);
-        var normalizedInventory = PlayerInventory.Normalize(player.Inventory);
+        var normalizedContainer = PlayerInventory.Load(
+            player.Inventory, player.InventoryQuantities);
+        var normalizedInventory = normalizedContainer.ItemIds();
+        var normalizedQuantities = normalizedContainer.Quantities();
         var inventoryMigrated =
             player.Inventory is null ||
-            !normalizedInventory.SequenceEqual(player.Inventory);
+            !normalizedInventory.SequenceEqual(player.Inventory) ||
+            player.InventoryQuantities is null ||
+            !normalizedQuantities.SequenceEqual(
+                player.InventoryQuantities);
         if (inventoryMigrated)
         {
             player = player with
             {
                 Inventory = normalizedInventory,
+                InventoryQuantities = normalizedQuantities,
                 UpdatedUtc = DateTime.UtcNow
             };
             _saves.SavePlayer(player);
@@ -2214,7 +2222,9 @@ internal sealed partial class GameHostWindow : GameWindow
             _player.Stop();
             return;
         }
-        if (PlayerInventory.IsFull(_activePlayer?.Inventory))
+        if (_activePlayer is null ||
+            !ActivePlayerInventory().CanAdd(
+                TreeLogItem(source.GraphicName).Id))
         {
             ReportBlockedAction(
                 "chop-inventory-full",
@@ -2319,7 +2329,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 "You find no loose sticks beneath the tree.");
             return;
         }
-        if (PlayerInventory.IsFull(_activePlayer.Inventory))
+        if (!ActivePlayerInventory().CanAdd(ItemIds.Sticks))
         {
             ReportBlockedAction(
                 "gather-inventory-full",
@@ -2365,9 +2375,8 @@ internal sealed partial class GameHostWindow : GameWindow
             if (instance.State != TreeLifecycleState.Standing ||
                 instance.SticksRemaining <= 0)
                 break;
-            if (!PlayerInventory.TryAdd(
-                    _activePlayer?.Inventory, ItemIds.Sticks,
-                    out var inventory))
+            var inventory = ActivePlayerInventory();
+            if (!inventory.TryAdd(ItemIds.Sticks))
             {
                 ReportBlockedAction(
                     "gather-inventory-full",
@@ -2382,17 +2391,16 @@ internal sealed partial class GameHostWindow : GameWindow
             var seedsReceived = 0;
             for (var seed = 0; seed < seedCount; seed++)
             {
-                if (!PlayerInventory.TryAdd(
-                        inventory, seedItemId, out var withSeed))
+                if (!inventory.TryAdd(seedItemId))
                     break;
-                inventory = withSeed;
                 seedsReceived++;
             }
             var firstSeed = seedsReceived > 0 &&
                             !_activePlayer!.HasDiscoveredTreeSeed;
             _activePlayer = _activePlayer! with
             {
-                Inventory = inventory,
+                Inventory = inventory.ItemIds(),
+                InventoryQuantities = inventory.Quantities(),
                 HasDiscoveredTreeSeed =
                     _activePlayer.HasDiscoveredTreeSeed ||
                     seedsReceived > 0,
@@ -2652,8 +2660,8 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         if (_activePlayer is null) return;
         var item = TreeLogItem(treeType);
-        if (!PlayerInventory.TryAdd(
-                _activePlayer.Inventory, item.Id, out var inventory))
+        var inventory = ActivePlayerInventory();
+        if (!inventory.TryAdd(item.Id))
         {
             _chatUi.AddMessage(
                 "Your inventory is full. The logs were left behind.",
@@ -2662,7 +2670,8 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
@@ -4784,24 +4793,19 @@ internal sealed partial class GameHostWindow : GameWindow
             return;
         }
 
-        var inventory = PlayerInventory.Normalize(_activePlayer.Inventory);
-        if ((uint)slot >= (uint)inventory.Length || inventory[slot] != itemId)
+        var inventory = ActivePlayerInventory();
+        if (inventory[slot]?.ItemId != itemId)
             return;
         var (plantX, plantY, targetGpu) = planting.Value;
+        if (!inventory.TryTake(slot, 1, out _)) return;
         if (cropSeed)
         {
-            var planted = EntityInteractionService.Plant(
-                inventory, slot,
-                plantX + .5f, plantY + .5f,
-                _worldGameSeconds, _activePlayer.Id);
-            if (!planted.Succeeded || planted.Object is null) return;
-            inventory = planted.Inventory;
-            targetGpu.Chunk.GroundObjects.Add(planted.Object);
+            targetGpu.Chunk.GroundObjects.Add(CropService.Plant(
+                itemId, plantX + .5f, plantY + .5f,
+                _worldGameSeconds, _activePlayer.Id));
         }
         else
         {
-            if (!PlayerInventory.TryRemove(
-                    inventory, slot, out inventory)) return;
             var frameIndex = WorldTreeCatalog.SelectFrame(
                 _worldSeed, plantX, plantY, treeType!);
             targetGpu.Chunk.Trees =
@@ -4818,7 +4822,8 @@ internal sealed partial class GameHostWindow : GameWindow
         QueueChunkSave(targetGpu.Chunk);
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             UpdatedUtc = DateTime.UtcNow
         };
         AwardFarmingExperience(FarmingSkill.PlantingExperience);

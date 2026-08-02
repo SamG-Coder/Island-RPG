@@ -653,6 +653,22 @@ internal static class CraftingSkill
     }
 
     public static RecipeAvailability Availability(
+        CraftingRecipe recipe, int level, InventoryContainer inventory,
+        bool requiredStationAvailable = true) =>
+        CraftingService.TryCraftDetailed(
+            recipe, level, inventory, out _, requiredStationAvailable) switch
+        {
+            CraftingService.CraftResult.Locked => RecipeAvailability.Locked,
+            CraftingService.CraftResult.MissingResources =>
+                RecipeAvailability.MissingResources,
+            CraftingService.CraftResult.MissingStation =>
+                RecipeAvailability.MissingStation,
+            CraftingService.CraftResult.InventoryFull =>
+                RecipeAvailability.InventoryFull,
+            _ => RecipeAvailability.Ready
+        };
+
+    public static RecipeAvailability Availability(
         CraftingRecipe recipe, int level, string?[]? inventory,
         bool requiredStationAvailable = true)
     {

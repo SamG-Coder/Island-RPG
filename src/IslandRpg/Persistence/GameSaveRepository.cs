@@ -47,7 +47,8 @@ internal sealed record PlayerProfile(
     int DefenceExperience = 0,
     MeleeCombatStance CombatStance = MeleeCombatStance.Accurate,
     IReadOnlyList<QuestProgress>? Quests = null,
-    float HealthRegenerationRemainder = 0);
+    float HealthRegenerationRemainder = 0,
+    int[]? InventoryQuantities = null);
 
 internal sealed record WorldPlayerState(
     string PlayerId,
@@ -206,10 +207,19 @@ internal sealed class GameSaveRepository
             Path.Combine(WorldsRoot, profile.Id, "profile.json"),
             profile with { UpdatedUtc = DateTime.UtcNow });
 
-    public void SavePlayer(PlayerProfile profile) =>
+    public void SavePlayer(PlayerProfile profile)
+    {
+        var inventory = PlayerInventory.Load(
+            profile.Inventory, profile.InventoryQuantities);
         WriteJson(
             Path.Combine(PlayersRoot, profile.Id, "player.json"),
-            profile with { UpdatedUtc = DateTime.UtcNow });
+            profile with
+            {
+                Inventory = inventory.ItemIds(),
+                InventoryQuantities = inventory.Quantities(),
+                UpdatedUtc = DateTime.UtcNow
+            });
+    }
 
     public void DeletePlayer(string playerId)
     {

@@ -14,7 +14,8 @@ internal sealed partial class GameHostWindow
                 _activePlayer?.Inventory ?? [],
                 _activeInventorySlot,
                 _inventoryDraggingSlot,
-                allowDragOutsideToGame: true),
+                allowDragOutsideToGame: true,
+                quantities: _activePlayer?.InventoryQuantities),
             renderDragPreview: true);
     }
 
@@ -215,20 +216,14 @@ internal sealed partial class GameHostWindow
     {
         if (_activePlayer is null || source == target || target < 0)
             return;
-        if (!PlayerInventory.TrySwap(
-                _activePlayer.Inventory, source, target,
-                out var inventory))
+        var inventory = ActivePlayerInventory();
+        if (!inventory.TrySwap(source, target))
             return;
-        _activePlayer = _activePlayer with
-        {
-            Inventory = inventory,
-            UpdatedUtc = DateTime.UtcNow
-        };
         if (_activeInventorySlot == source)
             _activeInventorySlot = target;
         else if (_activeInventorySlot == target)
             _activeInventorySlot = source;
-        _saves.SavePlayer(_activePlayer);
+        SaveActivePlayerInventory(inventory);
     }
 
     private void ActivateInventorySlot(int slot)
@@ -261,35 +256,26 @@ internal sealed partial class GameHostWindow
         if (source is ItemIds.SharpenedRock or ItemIds.PlantFibres &&
             target is ItemIds.SharpenedRock or ItemIds.PlantFibres &&
             CanCraftRecipe("stone-knife") &&
-            PlayerInventory.TryCraftStoneKnife(
-                inventory, _activeInventorySlot, slot,
+            TryCraftInventoryRecipe(
+                "stone-knife", out var beforeKnife,
                 out var craftedKnife))
         {
-            _activePlayer = _activePlayer! with
-            {
-                Inventory = craftedKnife,
-                UpdatedUtc = DateTime.UtcNow
-            };
-            _saves.SavePlayer(_activePlayer);
+            SaveActivePlayerInventory(craftedKnife);
             _chatUi.AddMessage(
                 "You bind the sharp rock with fibre and create a stone knife.",
                 ChatMessageStyle.Action);
-            CompletePlayerCraft("stone-knife", inventory, craftedKnife);
+            CompletePlayerCraft("stone-knife", beforeKnife, craftedKnife);
             _activeInventorySlot = -1;
             return;
         }
         if (source == ItemIds.SmallRocks &&
-            PlayerInventory.TrySharpenStoneTool(
-                inventory, _activeInventorySlot, slot,
+            TrySharpenInventoryTool(
+                _activeInventorySlot, slot,
                 out var sharpenedTool))
         {
-            var toolName = ItemCatalog.Get(sharpenedTool[slot]!).Name;
-            _activePlayer = _activePlayer! with
-            {
-                Inventory = sharpenedTool,
-                UpdatedUtc = DateTime.UtcNow
-            };
-            _saves.SavePlayer(_activePlayer);
+            var toolName = ItemCatalog.Get(
+                sharpenedTool[slot]!.ItemId).Name;
+            SaveActivePlayerInventory(sharpenedTool);
             _chatUi.AddMessage(
                 $"You use the small rocks to sharpen the {toolName}.",
                 ChatMessageStyle.Action);
@@ -299,79 +285,63 @@ internal sealed partial class GameHostWindow
         if (ItemCatalog.Get(source).HasTag(ItemTag.Knife) &&
             ItemCatalog.Get(target).HasTag(ItemTag.Log) &&
             CanCraftRecipe("plank") &&
-            PlayerInventory.TryCarvePlank(
-                inventory, _activeInventorySlot, slot,
+            TryCraftInventoryRecipe(
+                "plank", out var beforePlank,
                 out var carvedPlank))
         {
-            _activePlayer = _activePlayer! with
-            {
-                Inventory = carvedPlank,
-                UpdatedUtc = DateTime.UtcNow
-            };
-            _saves.SavePlayer(_activePlayer);
+            SaveActivePlayerInventory(carvedPlank);
             _chatUi.AddMessage(
                 $"You carve the log into a plank with the " +
                 $"{ItemCatalog.Get(source).Name}.",
                 ChatMessageStyle.Action);
-            CompletePlayerCraft("plank", inventory, carvedPlank);
+            CompletePlayerCraft("plank", beforePlank, carvedPlank);
             _activeInventorySlot = -1;
             return;
         }
         if (source == ItemIds.SharpenedRock &&
             target == ItemIds.Sticks &&
             CanCraftRecipe("stone-axe") &&
-            PlayerInventory.TryCraftStoneAxe(
-                inventory, _activeInventorySlot, slot, out var craftedAxe))
+            TryCraftInventoryRecipe(
+                "stone-axe", out var beforeAxe,
+                out var craftedAxe))
         {
-            _activePlayer = _activePlayer! with
-            {
-                Inventory = craftedAxe,
-                UpdatedUtc = DateTime.UtcNow
-            };
-            _saves.SavePlayer(_activePlayer);
+            SaveActivePlayerInventory(craftedAxe);
             _chatUi.AddMessage(
                 "You fasten the sharp rock to the sticks and create a stone axe.",
                 ChatMessageStyle.Action);
-            CompletePlayerCraft("stone-axe", inventory, craftedAxe);
+            CompletePlayerCraft("stone-axe", beforeAxe, craftedAxe);
             _activeInventorySlot = -1;
             return;
         }
         if (source == ItemIds.MediumRock &&
             target == ItemIds.Sticks &&
             CanCraftRecipe("stone-hammer") &&
-            PlayerInventory.TryCraftStoneHammer(
-                inventory, _activeInventorySlot, slot,
+            TryCraftInventoryRecipe(
+                "stone-hammer", out var beforeHammer,
                 out var craftedHammer))
         {
-            _activePlayer = _activePlayer! with
-            {
-                Inventory = craftedHammer,
-                UpdatedUtc = DateTime.UtcNow
-            };
-            _saves.SavePlayer(_activePlayer);
+            SaveActivePlayerInventory(craftedHammer);
             _chatUi.AddMessage(
                 "You fasten the medium rock to the sticks and create a stone hammer.",
                 ChatMessageStyle.Action);
-            CompletePlayerCraft("stone-hammer", inventory, craftedHammer);
+            CompletePlayerCraft(
+                "stone-hammer", beforeHammer, craftedHammer);
             _activeInventorySlot = -1;
             return;
         }
         if (source == ItemIds.MediumRock &&
             target == ItemIds.MediumRock &&
             CanCraftRecipe("sharpened-rock") &&
-            PlayerInventory.TrySharpenRock(
-                inventory, _activeInventorySlot, slot, out var sharpened))
+            TryCraftInventoryRecipe(
+                "sharpened-rock", out var beforeSharpening,
+                out var sharpened))
         {
-            _activePlayer = _activePlayer! with
-            {
-                Inventory = sharpened,
-                UpdatedUtc = DateTime.UtcNow
-            };
-            _saves.SavePlayer(_activePlayer);
+            SaveActivePlayerInventory(sharpened);
             _chatUi.AddMessage(
                 "You strike the rocks together and create a sharp rock.",
                 ChatMessageStyle.Action);
-            CompletePlayerCraft("sharpened-rock", inventory, sharpened);
+            CompletePlayerCraft(
+                "sharpened-rock", beforeSharpening, sharpened);
             _activeInventorySlot = -1;
             return;
         }
@@ -379,36 +349,37 @@ internal sealed partial class GameHostWindow
              ItemCatalog.Get(source).HasTag(ItemTag.Hammer)) &&
             target is ItemIds.LargeRock or ItemIds.MediumRock)
         {
-            if (!PlayerInventory.TryBreakRock(
-                    inventory, _activeInventorySlot, slot, out var broken))
+            var recipeId = target == ItemIds.LargeRock
+                ? "medium-rock"
+                : "small-rocks";
+            if (!TryCraftInventoryRecipe(
+                    recipeId, out var beforeBreaking,
+                    out var broken))
             {
                 ReportBlockedAction(
                     "break-rock-inventory-full",
                     "You need an empty inventory slot for the broken pieces.");
                 return;
             }
-            var afterUse = broken;
-            var hammerBlunted = source == ItemIds.StoneHammer &&
-                PlayerInventory.TryBluntStoneTool(
-                    broken, ItemIds.StoneHammer,
-                    Random.Shared.NextSingle(), out afterUse);
-            _activePlayer = _activePlayer! with
+            var hammerBlunted = false;
+            if (source == ItemIds.StoneHammer &&
+                Random.Shared.NextSingle() < .01f)
             {
-                Inventory = hammerBlunted ? afterUse : broken,
-                UpdatedUtc = DateTime.UtcNow
-            };
-            _saves.SavePlayer(_activePlayer);
+                var hammerSlot = Array.FindIndex(
+                    broken.ItemIds(), value =>
+                        value == ItemIds.StoneHammer);
+                hammerBlunted = hammerSlot >= 0 &&
+                    broken.TryReplace(
+                        hammerSlot, ItemIds.BluntStoneHammer);
+            }
+            SaveActivePlayerInventory(broken);
             _chatUi.AddMessage(
                 target == ItemIds.LargeRock
                     ? "You split the large rock into two medium rocks."
                     : "You break the medium rock into two handfuls of pebbles.",
                 ChatMessageStyle.Action);
             CompletePlayerCraft(
-                target == ItemIds.LargeRock
-                    ? "medium-rock"
-                    : "small-rocks",
-                inventory,
-                hammerBlunted ? afterUse : broken);
+                recipeId, beforeBreaking, broken);
             if (hammerBlunted)
             {
                 _chatUi.AddMessage(
@@ -424,6 +395,43 @@ internal sealed partial class GameHostWindow
             $"{ItemCatalog.Get(target).Name}, but nothing happens.",
             ChatMessageStyle.Action);
         _activeInventorySlot = -1;
+    }
+
+    private bool TryCraftInventoryRecipe(
+        string recipeId,
+        out InventoryContainer before,
+        out InventoryContainer after)
+    {
+        before = ActivePlayerInventory();
+        var recipe = CraftingSkill.Recipes.First(value =>
+            value.Id == recipeId);
+        return CraftingService.TryCraftDetailed(
+            recipe,
+            CraftingSkill.LevelForExperience(
+                _activePlayer?.CraftingExperience ?? 0),
+            before, out after,
+            HasRequiredCraftingStation(recipe)) ==
+            CraftingService.CraftResult.Success;
+    }
+
+    private bool TrySharpenInventoryTool(
+        int rocksSlot, int toolSlot,
+        out InventoryContainer inventory)
+    {
+        inventory = ActivePlayerInventory();
+        if (inventory[rocksSlot]?.ItemId != ItemIds.SmallRocks ||
+            inventory[toolSlot] is not { } tool)
+            return false;
+        var sharpened = tool.ItemId switch
+        {
+            ItemIds.BluntStoneAxe => ItemIds.StoneAxe,
+            ItemIds.BluntStoneHammer => ItemIds.StoneHammer,
+            _ => null
+        };
+        if (sharpened is null ||
+            !inventory.TryTake(rocksSlot, 1, out _))
+            return false;
+        return inventory.TryReplace(toolSlot, sharpened);
     }
 
     private void AddBluntToolMonologue(string toolId)

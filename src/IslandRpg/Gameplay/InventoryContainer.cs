@@ -23,6 +23,7 @@ internal sealed class InventoryContainer
 
     public int Capacity => _slots.Length;
     public int UsedSlots => _slots.Count(value => value is not null);
+    public int ItemCount => _slots.Sum(value => value?.Quantity ?? 0);
     public InventoryStack? this[int slot] =>
         (uint)slot < (uint)_slots.Length ? _slots[slot] : null;
 
@@ -68,6 +69,16 @@ internal sealed class InventoryContainer
         return true;
     }
 
+    public bool TryAddAtPreferredSlot(
+        string itemId, int preferredSlot, int quantity = 1)
+    {
+        if ((uint)preferredSlot < (uint)Capacity &&
+            _slots[preferredSlot] is null &&
+            TrySetSlot(preferredSlot, itemId, quantity))
+            return true;
+        return TryAdd(itemId, quantity);
+    }
+
     public bool TryTake(
         int slot,
         int quantity,
@@ -98,6 +109,61 @@ internal sealed class InventoryContainer
             return false;
         _slots[slot] = new(itemId, quantity, ownerId);
         return true;
+    }
+
+    public bool TryReplace(int slot, string itemId, int quantity = 1)
+    {
+        if ((uint)slot >= (uint)_slots.Length || quantity <= 0 ||
+            _slots[slot] is not { } existing ||
+            !ItemCatalog.TryGet(itemId, out var definition) ||
+            quantity > 1 && !definition.CanStack)
+            return false;
+        _slots[slot] = new(itemId, quantity, existing.OwnerId);
+        return true;
+    }
+
+    public bool TrySwap(int source, int target)
+    {
+        if (source == target || (uint)source >= (uint)_slots.Length ||
+            (uint)target >= (uint)_slots.Length || _slots[source] is null)
+            return false;
+        (_slots[source], _slots[target]) = (_slots[target], _slots[source]);
+        return true;
+    }
+
+    public int Count(string itemId) => _slots.Sum(value =>
+        value is not null && value.ItemId.Equals(
+            itemId, StringComparison.OrdinalIgnoreCase)
+            ? value.Quantity
+            : 0);
+
+    public int Count(Predicate<string> accepts) => _slots.Sum(value =>
+        value is not null && accepts(value.ItemId) ? value.Quantity : 0);
+
+    public bool TryTake(Predicate<string> accepts, int quantity)
+    {
+        if (quantity <= 0) return true;
+        if (Count(accepts) < quantity) return false;
+        var remaining = quantity;
+        for (var slot = 0; slot < Capacity && remaining > 0; slot++)
+        {
+            if (_slots[slot] is not { } value ||
+                !accepts(value.ItemId))
+                continue;
+            var take = Math.Min(value.Quantity, remaining);
+            TryTake(slot, take, out _);
+            remaining -= take;
+        }
+        return true;
+    }
+
+    public InventoryContainer Clone()
+    {
+        var clone = new InventoryContainer(Capacity);
+        for (var slot = 0; slot < Capacity; slot++)
+            if (_slots[slot] is { } value)
+                clone._slots[slot] = value;
+        return clone;
     }
 
     public bool CanAdd(

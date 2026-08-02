@@ -25,7 +25,7 @@ internal sealed partial class GameHostWindow
                 "This bush needs time to grow more berries.");
             return;
         }
-        if (PlayerInventory.IsFull(_activePlayer?.Inventory))
+        if (_activePlayer is null)
         {
             ReportBlockedAction(
                 "berry-inventory-full",
@@ -89,13 +89,8 @@ internal sealed partial class GameHostWindow
                             Random.Shared.NextSingle()) +
                         FarmingSkill.GatheringBasketBonus(
                             _activePlayer.Inventory);
-        var previousInventory = PlayerInventory.Normalize(
-            _activePlayer.Inventory);
-        var harvest = EntityInteractionService.Gather(
-            previousInventory, itemId, requested);
-        var inventory = harvest.Inventory;
-        var gathered = inventory.Count(value => value == itemId) -
-                       previousInventory.Count(value => value == itemId);
+        var inventory = ActivePlayerInventory();
+        var gathered = inventory.TryAdd(itemId, requested) ? requested : 0;
         if (gathered == 0)
         {
             ReportBlockedAction(
@@ -111,7 +106,8 @@ internal sealed partial class GameHostWindow
         AwardAdventureExperience(award.Gained);
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             FarmingExperience = award.Experience,
             UpdatedUtc = DateTime.UtcNow
         };

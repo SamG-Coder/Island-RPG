@@ -88,8 +88,9 @@ internal sealed partial class GameHostWindow
                 "mining-pickaxe", "You need a pickaxe to mine this.");
             return;
         }
-        if (found.Value.Definition.RewardItemId is not null &&
-            PlayerInventory.IsFull(_activePlayer?.Inventory))
+        if (found.Value.Definition.RewardItemId is { } rewardItemId &&
+            (_activePlayer is null ||
+             !ActivePlayerInventory().CanAdd(rewardItemId)))
         {
             ReportBlockedAction(
                 "mining-inventory", "Your inventory is too full to mine this.");
@@ -174,13 +175,14 @@ internal sealed partial class GameHostWindow
             MiningFeedbackKey(_activeMiningKey), damage, true);
         var experience = roll.Experience;
         AwardAdventureExperience(experience.Gained);
-        var inventory = _activePlayer.Inventory;
+        var inventory = ActivePlayerInventory();
         if (health == 0 &&
             value.Definition.RewardItemId is { } reward)
-            PlayerInventory.TryAdd(inventory, reward, out inventory);
+            inventory.TryAdd(reward);
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             MiningExperience = experience.Experience,
             UpdatedUtc = DateTime.UtcNow
         };

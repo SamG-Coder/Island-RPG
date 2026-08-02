@@ -197,9 +197,8 @@ internal sealed partial class GameHostWindow
         if (_activePlayer is null ||
             !SurvivalService.TryFoodEffect(itemId, out var effect))
             return;
-        var inventory = PlayerInventory.Normalize(_activePlayer.Inventory);
-        if ((uint)slot >= (uint)inventory.Length ||
-            inventory[slot] != itemId)
+        var inventory = ActivePlayerInventory();
+        if (inventory[slot]?.ItemId != itemId)
             return;
         var maximumHealth = AdventureService.MaximumHealth(
             _activePlayer.AdventureExperience);
@@ -211,20 +210,17 @@ internal sealed partial class GameHostWindow
                 "You are already full and healthy.");
             return;
         }
-        var eaten = EntityInteractionService.Eat(
-            inventory,
-            slot,
-            _activePlayer.Hunger,
+        if (!inventory.TryTake(slot, 1, out _)) return;
+        var update = SurvivalService.Eat(
+            effect, _activePlayer.Hunger,
             _activePlayer.WellFedSeconds,
-            _activePlayer.Health,
-            maximumHealth);
-        if (!eaten.Succeeded) return;
-        var update = eaten.Survival;
+            _activePlayer.Health, maximumHealth);
         if (effect.TimedHealing > 0)
             _playerTimedHealing = TimedHealingService.Start(effect);
         _activePlayer = _activePlayer with
         {
-            Inventory = eaten.Inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             Hunger = update.Hunger,
             WellFedSeconds = update.WellFedSeconds,
             Health = update.Health,

@@ -248,13 +248,11 @@ internal sealed partial class GameHostWindow
             return;
         }
         if (crop) itemId = groundObject.FuelItemId!;
-        var beforeInventory = PlayerInventory.Normalize(
-            _activePlayer.Inventory);
-        var gathered = crop
-            ? EntityInteractionService.Harvest(
-                beforeInventory, groundObject, _worldGameSeconds)
-            : EntityInteractionService.Pickup(beforeInventory, itemId);
-        if (!gathered.Succeeded)
+        var inventory = ActivePlayerInventory();
+        var harvestedCount = crop
+            ? CropService.HarvestCount(_activePlayer.Inventory)
+            : 1;
+        if (!inventory.TryAdd(itemId, harvestedCount))
         {
             ReportBlockedAction(
                 "pickup-inventory-full",
@@ -262,13 +260,13 @@ internal sealed partial class GameHostWindow
             return;
         }
         if (!chunk.Chunk.GroundObjects.Remove(groundObject)) return;
-        var harvestedCount = gathered.Quantity;
         NotifyVillagersOfTaking(crop
             ? groundObject with { ItemId = itemId }
             : groundObject);
         _activePlayer = _activePlayer with
         {
-            Inventory = gathered.Inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
@@ -288,15 +286,6 @@ internal sealed partial class GameHostWindow
     internal void BeginGroundObjectPickup(Guid groundObjectId, Vector2 target)
     {
         if (_player is null || _activePlayer is null) return;
-        if (PlayerInventory.IsFull(_activePlayer.Inventory))
-        {
-            ReportBlockedAction(
-                "pickup-inventory-full",
-                "Your inventory is too full to pick that up.");
-            _player.Stop();
-            return;
-        }
-
         var groundObject = _worldChunks.Values
             .Where(IsActiveWorldChunk)
             .SelectMany(gpu => gpu.Chunk.GroundObjects)
@@ -304,6 +293,18 @@ internal sealed partial class GameHostWindow
         if (groundObject is null ||
             PlaceableObjectCatalog.IsPlaceable(groundObject.ItemId))
             return;
+        var pickupItemId = CropService.IsCrop(groundObject)
+            ? groundObject.FuelItemId
+            : groundObject.ItemId;
+        if (pickupItemId is null ||
+            !ActivePlayerInventory().CanAdd(pickupItemId))
+        {
+            ReportBlockedAction(
+                "pickup-inventory-full",
+                "Your inventory is too full to pick that up.");
+            _player.Stop();
+            return;
+        }
 
         _activeTreeId = null;
         _activeGroundPickupId = groundObjectId;
@@ -641,45 +642,38 @@ internal sealed partial class GameHostWindow
             _player.Stop();
             return;
         }
-        string?[] inventory;
+        var inventory = ActivePlayerInventory();
         WorldGroundObject placed;
         if (PlaceableObjectCatalog.IsPlaceable(drop.ItemId))
         {
-            var interaction = EntityInteractionService.Place(
-                _activePlayer!.Inventory,
-                drop.InventorySlot,
-                drop.Target.X,
-                drop.Target.Y,
-                _activePlayer.Id);
-            if (!interaction.Succeeded || interaction.Object is null)
+            if (!inventory.TryTake(drop.InventorySlot, 1, out _))
             {
                 _player.Stop();
                 return;
             }
-            inventory = interaction.Inventory;
-            placed = interaction.Object;
+            placed = new(
+                Guid.NewGuid(), drop.ItemId,
+                drop.Target.X, drop.Target.Y,
+                OwnerId: _activePlayer!.Id);
         }
         else
         {
-            var interaction = EntityInteractionService.Drop(
-                _activePlayer!.Inventory,
-                drop.InventorySlot,
-                drop.Target.X,
-                drop.Target.Y,
-                _activePlayer.Id);
-            if (!interaction.Succeeded || interaction.Object is null)
+            if (!inventory.TryTake(drop.InventorySlot, 1, out _))
             {
                 _player.Stop();
                 return;
             }
-            inventory = interaction.Inventory;
-            placed = interaction.Object;
+            placed = new(
+                Guid.NewGuid(), drop.ItemId,
+                drop.Target.X, drop.Target.Y,
+                OwnerId: _activePlayer!.Id);
         }
 
         gpu.Chunk.GroundObjects.Add(placed);
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             UpdatedUtc = DateTime.UtcNow
         };
         if (_activeInventorySlot == drop.InventorySlot)

@@ -120,7 +120,8 @@ internal sealed partial class GameHostWindow
                 "This shrub needs time to grow more usable fibres.");
             return;
         }
-        if (PlayerInventory.IsFull(_activePlayer?.Inventory))
+        if (_activePlayer is null ||
+            !ActivePlayerInventory().CanAdd(ItemIds.PlantFibres))
         {
             ReportBlockedAction(
                 "fibre-inventory-full",
@@ -168,17 +169,10 @@ internal sealed partial class GameHostWindow
         var requested = Random.Shared.Next(1, 3) +
                         FarmingSkill.GatheringBasketBonus(
                             _activePlayer.Inventory);
-        var previousInventory = PlayerInventory.Normalize(
-            _activePlayer.Inventory);
-        var harvest = EntityInteractionService.Gather(
-            previousInventory,
-            ItemIds.PlantFibres,
-            requested);
-        var inventory = harvest.Inventory;
-        var gathered = inventory.Count(value =>
-                           value == ItemIds.PlantFibres) -
-                       previousInventory.Count(value =>
-                           value == ItemIds.PlantFibres);
+        var inventory = ActivePlayerInventory();
+        var gathered = inventory.TryAdd(ItemIds.PlantFibres, requested)
+            ? requested
+            : 0;
         if (gathered == 0)
         {
             ReportBlockedAction(
@@ -190,7 +184,8 @@ internal sealed partial class GameHostWindow
 
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             UpdatedUtc = DateTime.UtcNow
         };
         AwardAdventureExperience(gathered * 2);

@@ -27,6 +27,42 @@ internal static class CraftingService
     public static CraftResult TryCraftDetailed(
         CraftingRecipe recipe,
         int craftingLevel,
+        InventoryContainer inventory,
+        out InventoryContainer updated,
+        bool requiredStationAvailable = true)
+    {
+        updated = inventory.Clone();
+        if (craftingLevel < recipe.RequiredLevel)
+            return CraftResult.Locked;
+        if (recipe.RequiredStationItemId is not null &&
+            !requiredStationAvailable)
+            return CraftResult.MissingStation;
+        foreach (var tool in recipe.RequiredTools ?? [])
+            if (updated.Count(itemId =>
+                    ItemCatalog.Get(itemId).HasTag(tool.Tag)) < tool.Count)
+                return CraftResult.MissingResources;
+
+        var steps = recipe.InventorySteps ??
+        [
+            new CraftingInventoryStep(
+                recipe.Ingredients,
+                [new(recipe.ResultItemId, 1)])
+        ];
+        foreach (var step in steps)
+        {
+            foreach (var ingredient in step.Consumes)
+                if (!updated.TryTake(ingredient.Accepts, ingredient.Count))
+                    return CraftResult.MissingResources;
+            foreach (var product in step.Produces)
+                if (!updated.TryAdd(product.ItemId, product.Count))
+                    return CraftResult.InventoryFull;
+        }
+        return CraftResult.Success;
+    }
+
+    public static CraftResult TryCraftDetailed(
+        CraftingRecipe recipe,
+        int craftingLevel,
         string?[]? items,
         out string?[] updated,
         bool requiredStationAvailable = true)

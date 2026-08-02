@@ -339,8 +339,8 @@ internal sealed partial class GameHostWindow
         string itemId, Vector2 excavation)
     {
         if (_activePlayer is null) return;
-        if (!PlayerInventory.TryAdd(
-                _activePlayer.Inventory, itemId, out var inventory))
+        var inventory = ActivePlayerInventory();
+        if (!inventory.TryAdd(itemId))
         {
             if (TryFindGroundObjectDrop(
                     excavation, out var gpu, out var drop,
@@ -358,7 +358,8 @@ internal sealed partial class GameHostWindow
         }
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
@@ -435,15 +436,16 @@ internal sealed partial class GameHostWindow
             FindGroundObjectLocation(holeId) is not { } location ||
             !CaveEntranceService.IsHole(location.Object))
             return;
-        if (!PlayerInventory.TryRemove(
-                _activePlayer.Inventory, ropeSlot, out var inventory))
+        var inventory = ActivePlayerInventory();
+        if (!inventory.TryTake(ropeSlot, 1, out _))
             return;
 
         var entrance = CaveEntranceService.InstallRope(location.Object);
         location.Chunk.GroundObjects[location.Index] = entrance;
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
@@ -462,8 +464,8 @@ internal sealed partial class GameHostWindow
             FindGroundObjectLocation(entranceId) is not { } location ||
             !CaveEntranceService.IsEntrance(location.Object))
             return;
-        if (!PlayerInventory.TryAdd(
-                _activePlayer.Inventory, ItemIds.Rope, out var inventory))
+        var inventory = ActivePlayerInventory();
+        if (!inventory.TryAdd(ItemIds.Rope))
         {
             ReportBlockedAction(
                 "take-rope-inventory-full",
@@ -476,7 +478,8 @@ internal sealed partial class GameHostWindow
         location.Chunk.GroundObjects[location.Index] = openShaft;
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
@@ -583,8 +586,8 @@ internal sealed partial class GameHostWindow
                     $"{ItemCatalog.Get(requiredItemId).Name}.");
             return;
         }
-        if (!PlayerInventory.TryRemove(
-                _activePlayer.Inventory, materialSlot, out var inventory))
+        var inventory = ActivePlayerInventory();
+        if (!inventory.TryTake(materialSlot, 1, out _))
             return;
 
         var filled = location.Object;
@@ -594,7 +597,8 @@ internal sealed partial class GameHostWindow
         RefreshExcavationVegetation(location.Chunk);
         _activePlayer = _activePlayer with
         {
-            Inventory = inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             UpdatedUtc = DateTime.UtcNow
         };
         if (_activeInventorySlot == materialSlot)

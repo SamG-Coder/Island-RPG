@@ -133,6 +133,24 @@ internal sealed class ItemContainerState
         return moved;
     }
 
+    public int TransferAllFrom(InventoryContainer inventory)
+    {
+        if (!Definition.AllowsDeposit) return 0;
+        var moved = 0;
+        for (var slot = 0; slot < inventory.Capacity; slot++)
+        {
+            if (inventory[slot] is not { } stack) continue;
+            var quantity = stack.Quantity;
+            if (!TryAdd(stack.ItemId, quantity, stack.OwnerId))
+                continue;
+            if (!inventory.TryTake(slot, quantity, out _))
+                throw new InvalidOperationException(
+                    "Container transfer changed after validation.");
+            moved += quantity;
+        }
+        return moved;
+    }
+
     public int TransferMatchingFrom(
         string?[] inventory, string itemId, int maximum)
     {
@@ -151,6 +169,27 @@ internal sealed class ItemContainerState
                 break;
             inventory[slot] = null;
             moved++;
+        }
+        return moved;
+    }
+
+    public int TransferMatchingFrom(
+        InventoryContainer inventory, string itemId, int maximum)
+    {
+        if (!Definition.AllowsDeposit || maximum <= 0) return 0;
+        var moved = 0;
+        for (var slot = 0;
+             slot < inventory.Capacity && moved < maximum;
+             slot++)
+        {
+            if (inventory[slot] is not { } stack ||
+                !stack.ItemId.Equals(itemId,
+                    StringComparison.OrdinalIgnoreCase))
+                continue;
+            var quantity = Math.Min(stack.Quantity, maximum - moved);
+            if (!TryAdd(itemId, quantity, stack.OwnerId)) break;
+            inventory.TryTake(slot, quantity, out _);
+            moved += quantity;
         }
         return moved;
     }

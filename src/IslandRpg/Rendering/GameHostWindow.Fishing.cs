@@ -193,7 +193,8 @@ internal sealed partial class GameHostWindow
                 "You need a suitable fishing net to catch this fish.");
             return;
         }
-        if (PlayerInventory.IsFull(_activePlayer.Inventory))
+        if (!ActivePlayerInventory().CanAdd(
+                FishingSkill.Profile(fish.Species).ItemId))
         {
             ReportBlockedAction(
                 "fishing-inventory-full",
@@ -257,11 +258,8 @@ internal sealed partial class GameHostWindow
     {
         if (_activePlayer is null) return false;
         var profile = FishingSkill.Profile(fish.Species);
-        var caught = EntityInteractionService.CatchFish(
-            _activePlayer.Inventory,
-            _activePlayer.FishingExperience,
-            fish.Species);
-        if (!caught.Succeeded)
+        var inventory = ActivePlayerInventory();
+        if (!inventory.TryAdd(profile.ItemId))
         {
             ReportBlockedAction(
                 "fishing-inventory-full",
@@ -269,11 +267,13 @@ internal sealed partial class GameHostWindow
             return false;
         }
 
-        var award = caught.Experience;
+        var award = FishingSkill.AwardExperience(
+            _activePlayer.FishingExperience, fish.Species);
         AwardAdventureExperience(award.Gained);
         _activePlayer = _activePlayer with
         {
-            Inventory = caught.Inventory,
+            Inventory = inventory.ItemIds(),
+            InventoryQuantities = inventory.Quantities(),
             FishingExperience = award.Experience,
             UpdatedUtc = DateTime.UtcNow
         };
