@@ -261,6 +261,8 @@ internal sealed partial class GameHostWindow
             _villagersDirty = true;
             return true;
         }
+        if (step.Action == VillagerPromisePlanAction.Collect)
+            return true;
         CompleteStartedPlanStep(index, step);
         return true;
     }

@@ -52,6 +52,14 @@ internal sealed partial class GameHostWindow
                                 ? seedElement.GetInt64()
                                 : SeedFromText(seedElement.GetString() ?? "")
                             : Random.Shared.NextInt64();
+                        var npcCount = root.TryGetProperty(
+                            "npcCount", out var npcCountElement) &&
+                            npcCountElement.ValueKind == JsonValueKind.Number
+                                ? Math.Clamp(
+                                    npcCountElement.GetInt32(),
+                                    0,
+                                    VillagerSimulation.MaximumPopulation)
+                                : 0;
                         var newPlayer = _saves.CreatePlayer(
                             characterName, gender, skinTone: 2, teamColor: 0);
                         _selectedPlayer = newPlayer;
@@ -60,7 +68,7 @@ internal sealed partial class GameHostWindow
                         CompleteNewWorldCreation(
                             new(
                                 worldName, newSeed, newSpawn,
-                                newPlayer, Population: 0),
+                                newPlayer, Population: npcCount),
                             [], false, "", [], "");
                         request.Complete(ControlSnapshot("new_game_started"));
                         break;
@@ -203,7 +211,8 @@ internal sealed partial class GameHostWindow
                                 new
                                 {
                                     command = "new_game",
-                                    arguments = "character, world, gender?, seed?"
+                                    arguments =
+                                        "character, world, gender?, seed?, npcCount?"
                                 },
                                 new { command = "screenshot" },
                                 new { command = "skip_cinematic" },
@@ -1087,20 +1096,29 @@ internal sealed partial class GameHostWindow
                     "key", out var keyElement)
                     ? keyElement.GetString()
                     : null;
-                var vegetationItem = _worldChunks.Values
+                Vector2? requestedVegetationPosition =
+                    TryControlPosition(root, out var vegetationPosition)
+                        ? vegetationPosition
+                        : _player?.Position;
+                var vegetationItem = ControlTargetSelection.Vegetation(
+                    _worldChunks.Values
                     .Where(value =>
                         value.Chunk.Coordinate.Level == _activeWorldLevel)
-                    .SelectMany(value => value.VegetationRenderItems)
-                    .Where(value =>
-                        value.VegetationIndex >= 0 &&
-                        (wantsBerries
-                            ? value.CanGatherBerries
-                            : value.CanGatherFibre) &&
-                        (string.IsNullOrWhiteSpace(requestedKey) ||
-                         value.StableKey.Equals(
-                             requestedKey,
-                             StringComparison.OrdinalIgnoreCase)))
-                    .FirstOrDefault();
+                    .SelectMany(value => value.VegetationRenderItems
+                        .Where(item => item.VegetationIndex >= 0)
+                        .Select(item => new ControlVegetationTarget(
+                            item,
+                            new(
+                                value.Chunk.Vegetation[
+                                    item.VegetationIndex].X,
+                                value.Chunk.Vegetation[
+                                    item.VegetationIndex].Y)))),
+                    wantsBerries,
+                    requestedKey,
+                    requestedVegetationPosition,
+                    requireNearbyPosition:
+                        string.IsNullOrWhiteSpace(requestedKey) &&
+                        TryControlPosition(root, out _));
                 if (vegetationItem is null)
                 {
                     error = "vegetation_not_found";
@@ -1432,6 +1450,41 @@ internal sealed partial class GameHostWindow
     private static string Error(string error) =>
         JsonSerializer.Serialize(new { ok = false, error });
 }
+
+internal static class ControlTargetSelection
+{
+    private const float CoordinateTolerance = 1f;
+
+    public static WorldVegetationRenderItem? Vegetation(
+        IEnumerable<ControlVegetationTarget> candidates,
+        bool wantsBerries,
+        string? stableKey,
+        Vector2? position,
+        bool requireNearbyPosition)
+    {
+        var eligible = candidates.Where(value =>
+            (wantsBerries
+                ? value.Item.CanGatherBerries
+                : value.Item.CanGatherFibre));
+        if (!string.IsNullOrWhiteSpace(stableKey))
+            return eligible.FirstOrDefault(value =>
+                value.Item.StableKey.Equals(
+                    stableKey, StringComparison.OrdinalIgnoreCase)).Item;
+        if (position is not { } origin)
+            return eligible.FirstOrDefault().Item;
+        if (requireNearbyPosition)
+            eligible = eligible.Where(value =>
+                Vector2.DistanceSquared(value.Position, origin) <=
+                CoordinateTolerance * CoordinateTolerance);
+        return eligible.OrderBy(value =>
+                Vector2.DistanceSquared(value.Position, origin))
+            .FirstOrDefault().Item;
+    }
+}
+
+internal readonly record struct ControlVegetationTarget(
+    WorldVegetationRenderItem Item,
+    Vector2 Position);
 
 internal sealed class GameControlPipe : IDisposable
 {

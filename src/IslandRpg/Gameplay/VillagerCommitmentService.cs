@@ -201,14 +201,27 @@ internal static class VillagerCommitmentService
         foreach (var marker in new[]
                  {
                      "would you ", "could you ", "can you ",
-                     "will you "
+                     "will you ", "please "
                  })
         {
             var candidate = text.LastIndexOf(
                 marker, StringComparison.Ordinal);
             if (candidate > start) start = candidate + marker.Length;
         }
-        return start >= 0 ? text[start..] : text;
+        var request = start >= 0 ? text[start..] : text;
+        var end = request.Length;
+        foreach (var marker in new[]
+                 {
+                     ". i will ", ". i'll ", "; i will ",
+                     ", i will ", " while i will ", " while i'll ",
+                     " and i will ", " and i'll "
+                 })
+        {
+            var candidate = request.IndexOf(
+                marker, StringComparison.Ordinal);
+            if (candidate >= 0) end = Math.Min(end, candidate);
+        }
+        return request[..end];
     }
 
     public static bool TryResolveAiItemProposal(
@@ -226,8 +239,21 @@ internal static class VillagerCommitmentService
         itemId = "";
         quantity = Math.Clamp(modelQuantity, 1, 100);
         if (action is not ("gather" or "give" or "gather_sticks" or
-            "gather_berries" or "gather_fibre"))
+            "gather_berries" or "gather_fibre" or "meet"))
             return false;
+        if (!TryParseGatherRequest(
+                proposalText, out var requestedItemId,
+                out var requestedQuantity))
+            return false;
+        // Smaller local models sometimes select `meet` when a request contains
+        // both collection and rendezvous instructions. The player's explicit
+        // collection clause remains the authoritative executable commitment.
+        if (action == "meet")
+        {
+            itemId = requestedItemId;
+            quantity = requestedQuantity;
+            return true;
+        }
         var impliedItem = action switch
         {
             "gather_sticks" => ItemIds.Sticks,
@@ -241,11 +267,12 @@ internal static class VillagerCommitmentService
             itemId = exact.Id;
         else if (ItemLanguageService.TryResolveMention(modelItem, out var item))
             itemId = item.Id;
-        if (itemId.Length == 0) return false;
-        return ItemLanguageService.TryResolveMention(
-                   proposalText, out var named) &&
-               VillagerSettlementProjectService.MatchesRequirement(
-                   named.Id, itemId);
+        if (itemId.Length == 0 ||
+            !VillagerSettlementProjectService.MatchesRequirement(
+                requestedItemId, itemId))
+            return false;
+        quantity = requestedQuantity;
+        return true;
     }
 
     public static VillagerState AddPromise(
@@ -295,9 +322,12 @@ internal static class VillagerCommitmentService
         List<VillagerPromise>? updatedPromises = null;
         var remainingPromiseQuantity = quantity;
         if (state.Promises is not { Count: > 0 })
-            return updatedGoals is null
+            return VillagerPromisePlanService.RecordDirectiveAcquisition(
+                updatedGoals is null
                 ? state
-                : state with { Goals = updatedGoals };
+                : state with { Goals = updatedGoals },
+                itemId,
+                quantity);
         for (var index = 0;
              index < state.Promises.Count &&
              remainingPromiseQuantity > 0;
@@ -325,11 +355,12 @@ internal static class VillagerCommitmentService
             };
             remainingPromiseQuantity -= applied;
         }
-        return VillagerPromisePlanService.CompileActionPlan(state with
+        return VillagerPromisePlanService.RecordDirectiveAcquisition(
+            VillagerPromisePlanService.CompileActionPlan(state with
         {
             Goals = updatedGoals ?? state.Goals,
             Promises = updatedPromises ?? state.Promises
-        });
+        }), itemId, quantity);
     }
 
     private static bool MatchesGoal(

@@ -130,6 +130,34 @@ internal static class VillagerPromisePlanService
         return villager with { ActionPlan = plan };
     }
 
+    public static VillagerState RecordDirectiveAcquisition(
+        VillagerState villager, string itemId, int quantity = 1)
+    {
+        if (quantity <= 0 || villager.ActionPlan is not { Count: > 0 })
+            return villager;
+        var plan = villager.ActionPlan.ToList();
+        var remaining = quantity;
+        for (var index = 0; index < plan.Count && remaining > 0;)
+        {
+            var step = plan[index];
+            if (step.PromiseId != Guid.Empty ||
+                step.Action != VillagerPromisePlanAction.Collect ||
+                step.ItemId is not { } plannedItem ||
+                !VillagerSettlementProjectService.MatchesRequirement(
+                    itemId, plannedItem))
+            {
+                index++;
+                continue;
+            }
+            var applied = Math.Min(remaining, step.RemainingQuantity);
+            remaining -= applied;
+            var needed = step.RemainingQuantity - applied;
+            if (needed <= 0) plan.RemoveAt(index);
+            else plan[index++] = step with { RemainingQuantity = needed };
+        }
+        return villager with { ActionPlan = plan };
+    }
+
     private static bool TryMapAction(
         string action,
         out VillagerPromisePlanAction opcode)
@@ -231,7 +259,14 @@ internal static class VillagerPromisePlanService
             promise.Progress < promise.TargetQuantity &&
             promise.ItemId is { } promised &&
             VillagerSettlementProjectService.MatchesRequirement(
-                itemId, promised)) == true;
+                itemId, promised)) == true ||
+        villager.ActionPlan?.Any(step =>
+            step.PromiseId == Guid.Empty &&
+            step.Action == VillagerPromisePlanAction.Collect &&
+            step.RemainingQuantity > 0 &&
+            step.ItemId is { } planned &&
+            VillagerSettlementProjectService.MatchesRequirement(
+                itemId, planned)) == true;
 
     public static VillagerState ScheduleRendezvous(
         VillagerState villager,

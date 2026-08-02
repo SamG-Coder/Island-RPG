@@ -3823,6 +3823,56 @@ Require(
         "Would you gather fibre for me?",
         "gather", ItemIds.Logs, 1, out _, out _, out _),
     "only Ollama's structured executable proposal may enter the NPC brain, and its item must validate against the player's words");
+const string observedSplitResponsibilityRequest =
+    "Stephen, please gather three large rocks and meet me at this spot " +
+    "in one hour. I will gather plant fibre while you do that. Do you agree?";
+Require(
+    VillagerCommitmentService.TryResolveAiItemProposal(
+        observedSplitResponsibilityRequest,
+        "gather",
+        ItemIds.LargeRock,
+        1,
+        out var splitProposalKind,
+        out var splitProposalItem,
+        out var splitProposalQuantity) &&
+    splitProposalKind == VillagerPromiseKind.GatherItem &&
+    splitProposalItem == ItemIds.LargeRock &&
+    splitProposalQuantity == 3,
+    "an NPC request followed by the player's separate task must preserve actor responsibility and the NPC quantity");
+Require(
+    VillagerCommitmentService.TryResolveAiItemProposal(
+        observedSplitResponsibilityRequest,
+        "meet",
+        "",
+        1,
+        out var rendezvousProposalKind,
+        out var rendezvousProposalItem,
+        out var rendezvousProposalQuantity) &&
+    rendezvousProposalKind == VillagerPromiseKind.GatherItem &&
+    rendezvousProposalItem == ItemIds.LargeRock &&
+    rendezvousProposalQuantity == 3,
+    "an accepted combined gather-and-rendezvous request must preserve the collection commitment when the model prioritizes meet");
+var distantFibre = new WorldVegetationRenderItem(
+    0, 2, 2, new(2.5f, 2.5f), "fibre-distant", "plant", null,
+    CanGatherFibre: true, CanGatherBerries: false);
+var requestedFibre = new WorldVegetationRenderItem(
+    1, 20, 20, new(20.25f, 20.25f), "fibre-requested", "plant", null,
+    CanGatherFibre: true, CanGatherBerries: false);
+var pipeVegetation = new[]
+{
+    new ControlVegetationTarget(distantFibre, new(2.5f, 2.5f)),
+    new ControlVegetationTarget(requestedFibre, new(20.25f, 20.25f))
+};
+Require(
+    ControlTargetSelection.Vegetation(
+        pipeVegetation, false, null, new(20.2f, 20.2f), true) ==
+        requestedFibre &&
+    ControlTargetSelection.Vegetation(
+        pipeVegetation, false, "FIBRE-DISTANT", new(20.2f, 20.2f), true) ==
+        distantFibre &&
+    ControlTargetSelection.Vegetation(
+        pipeVegetation, false, null, new(50, 50), true) is null,
+    "control-pipe vegetation targeting must prefer the requested coordinates, preserve exact-key selection, and reject unrelated distant plants");
 var acceptance = VillagerCommitmentService.TryAccept(
     villagerSpawnA[0],
     "requester",
@@ -3919,6 +3969,21 @@ for (var retry = 0; retry < retryStep.MaximumAttempts; retry++)
 Require(
     VillagerPromisePlanService.CurrentDirective(retryPlan) is null,
     "invalid or unreachable controller steps must leave the queue after their bounded retry budget");
+var persistentCollectPlan = VillagerPromisePlanService.CompileAiDirective(
+    villagerSpawnA[0] with { ActionPlan = null },
+    "gather", ItemIds.LargeRock, 3, "requester", null, null,
+    (int)WorldLevel.Overworld, 600, 0);
+var collectedOne = VillagerCommitmentService.RecordAcquiredItem(
+    persistentCollectPlan, ItemIds.LargeRock);
+var collectedThree = VillagerCommitmentService.RecordAcquiredItem(
+    collectedOne, ItemIds.LargeRock, 2);
+Require(
+    VillagerPromisePlanService.CurrentDirective(persistentCollectPlan) is
+        { RemainingQuantity: 3 } &&
+    VillagerPromisePlanService.CurrentDirective(collectedOne) is
+        { RemainingQuantity: 2 } &&
+    VillagerPromisePlanService.CurrentDirective(collectedThree) is null,
+    "collection directives must remain queued until matching acquired items satisfy their quantity");
 var scheduledPromiseVillager =
     VillagerPromisePlanService.ScheduleRendezvous(
         committedVillager,
