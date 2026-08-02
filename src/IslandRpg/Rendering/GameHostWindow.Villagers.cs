@@ -49,6 +49,7 @@ internal sealed partial class GameHostWindow
 
     private void LoadVillagers(Vector2 spawn)
     {
+        ResetEnemies();
         _villagers.Clear();
         _villagerSpeechBubbles.Clear();
         _observedVillagerId = null;

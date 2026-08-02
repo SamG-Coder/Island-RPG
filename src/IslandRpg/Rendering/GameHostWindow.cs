@@ -83,7 +83,10 @@ internal sealed partial class GameHostWindow : GameWindow
         Vector2 World,
         bool Mirror,
         bool Wading,
-        int TeamColor);
+        int TeamColor,
+        Vector3? Tint = null,
+        float TintAmount = 0,
+        float RenderScale = 1);
     private sealed record FishingBoatVisual(
         SpriteFrame Frame, int Texture, Vector2 World, bool Mirror);
     private sealed record FishingBoatComposite(
@@ -1930,6 +1933,7 @@ internal sealed partial class GameHostWindow : GameWindow
             ObservationFocusPosition(),
             QueueChunkSave);
         UpdateVillagers(elapsed);
+        UpdateEnemies(elapsed);
         if (_moveMarker is not null)
         {
             var nextTime = _moveMarker.Time + elapsed;
@@ -6232,6 +6236,9 @@ internal sealed partial class GameHostWindow : GameWindow
             if (GetVillagerVisual(villager) is { } visual)
                 actors.Add(visual);
         }
+        foreach (var enemy in _enemies)
+            if (GetEnemyVisual(enemy) is { } enemyVisual)
+                actors.Add(enemyVisual);
         actors.Sort(static (left, right) =>
             left.World.Y.CompareTo(right.World.Y));
         var occludedActors = new bool[actors.Count];
@@ -6298,6 +6305,10 @@ internal sealed partial class GameHostWindow : GameWindow
                 outlineOnly: outlineOnly,
                 wading: actor.Wading,
                 teamColor: actor.TeamColor,
+                tint: actor.Tint,
+                tintAmount: actor.TintAmount,
+                renderScale: actor.RenderScale,
+                preserveDarkTint: actor.TintAmount > 0,
                 outlineColor: new Vector3(1f, .72f, .12f));
         }
     }
@@ -6722,6 +6733,7 @@ internal sealed partial class GameHostWindow : GameWindow
             _skeletonAnimations[gender] = fallback;
         }
         PrepareFishingBoatAnimation();
+        PrepareSlimeAnimations();
 
         var markerGraphic = _catalog!.Graphics.Values.FirstOrDefault(value =>
             value.Definition.Name.Equals("MOVEX_NN", StringComparison.OrdinalIgnoreCase))
@@ -8094,6 +8106,7 @@ internal sealed partial class GameHostWindow : GameWindow
         bool wading = false,
         Vector3? tint = null,
         float tintAmount = 0,
+        float renderScale = 1,
         bool preserveDarkTint = false,
         int teamColor = 0,
         Vector3? outlineColor = null)
@@ -8101,7 +8114,7 @@ internal sealed partial class GameHostWindow : GameWindow
         var width = ReferenceWidth;
         var height = ReferenceHeight;
         var screen = SpriteAnchor(world);
-        var spriteScale = SpritePixelScale();
+        var spriteScale = SpritePixelScale() * renderScale;
         var margin = Math.Max(frame.Width, frame.Height) * spriteScale;
         if (screen.X < -margin || screen.Y < -margin ||
             screen.X > width + margin || screen.Y > height + margin)

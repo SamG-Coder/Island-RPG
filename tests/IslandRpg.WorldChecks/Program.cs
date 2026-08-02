@@ -10,6 +10,23 @@ using StbImageSharp;
 
 WorldCheckProcess.DisableWindowsCrashDialogs();
 
+var slimeExportIndex = Array.FindIndex(
+    args, value => value.Equals(
+        "--export-slime-rig", StringComparison.OrdinalIgnoreCase));
+if (slimeExportIndex >= 0)
+{
+    if (slimeExportIndex + 1 >= args.Length)
+        throw new ArgumentException(
+            "--export-slime-rig requires an output directory.");
+    var combatDirectory = Path.Combine(
+        AppContext.BaseDirectory, "Resources", "Images", "Combat");
+    SlimeSpriteRig.Load(
+            Path.Combine(combatDirectory, "slime-sprites.png"),
+            Path.Combine(combatDirectory, "slime-sprites-back.png"))
+        .ExportMovementPreview(args[slimeExportIndex + 1]);
+    return;
+}
+
 if (args.Contains("--ai-score", StringComparer.OrdinalIgnoreCase))
 {
     var modelIndex = Array.FindIndex(args, value => value == "--model");
@@ -8669,10 +8686,103 @@ var slimeSpawnEnd = SlimeSpriteRig.Resolve(
 Require(
     slimeRig.Frame(slimeFront).Width == SlimeSpriteRig.CellSize &&
     !slimeFront.UsesBackSheet &&
-    slimeBack.UsesBackSheet && slimeBack.FrameIndex == 3 &&
+    slimeBack.UsesBackSheet && slimeBack.FrameIndex == 1 &&
     slimeAttackEnd.Completed && slimeAttackEnd.FrameIndex == 7 &&
-    slimeSpawnEnd.Completed && slimeSpawnEnd.FrameIndex == 7,
+    slimeSpawnEnd.Completed && slimeSpawnEnd.FrameIndex == 7 &&
+    SlimeSpriteRig.SourceState(SlimeAnimationState.Move) ==
+        SlimeAnimationState.Idle &&
+    Enumerable.Range(0, SlimeSpriteRig.Columns).All(frame =>
+        SlimeSpriteRig.AuthoredFrame(
+            SlimeAnimationState.Move, frame) is not (2 or 4) &&
+        SlimeSpriteRig.HasSingleOpaqueComponent(slimeRig.FrameAt(
+            SlimeAnimationState.Move, frame, back: false)) &&
+        SlimeSpriteRig.HasSingleOpaqueComponent(slimeRig.FrameAt(
+            SlimeAnimationState.Move, frame, back: true)) &&
+        SlimeSpriteRig.IsAnchoredBelowOpaquePixels(slimeRig.FrameAt(
+            SlimeAnimationState.Move, frame, back: false)) &&
+        SlimeSpriteRig.IsAnchoredBelowOpaquePixels(slimeRig.FrameAt(
+            SlimeAnimationState.Move, frame, back: true))),
     "the slime rig must validate both sheets and map direction, looping, attacks and spawning");
+
+var grassSpawner = new EnemySpawnerState(
+    Guid.NewGuid(), Vector2.Zero, (int)WorldLevel.Overworld,
+    Biome.Grassland, [new(EnemyKind.GrassSlime)], MaximumAlive: 8);
+var distantSpawner = EnemySpawnerService.Update(
+    grassSpawner, [],
+    [new("player", new Vector2(100, 100), 0, true, 20, true)],
+    0, 2187);
+var firstWave = EnemySpawnerService.Update(
+    grassSpawner, [],
+    [new("player", Vector2.Zero, 0, true, 20, true),
+     new("villager", Vector2.One, 0, true, 10)],
+    0, 2187);
+Require(
+    !distantSpawner.Active && distantSpawner.Enemies.Count == 0 &&
+    firstWave.Active && firstWave.SpawnedWave &&
+    firstWave.Enemies.Count is >= 3 and <= 8 &&
+    firstWave.Enemies.All(enemy =>
+        enemy.Kind == EnemyKind.GrassSlime && enemy.PowerLevel >= 1),
+    "enemy spawners must activate only near actors and scale a biome-compatible wave");
+var enemyRecovery = EnemySpawnerService.Update(
+    firstWave.Spawner, [],
+    [new("player", Vector2.Zero, 0, true, 20, true)],
+    10, 2187);
+var waiting = EnemySpawnerService.Update(
+    enemyRecovery.Spawner, [],
+    [new("player", Vector2.Zero, 0, true, 20, true)],
+    10 + EnemySpawnerService.RecoverySeconds - .01, 2187);
+var nextWave = EnemySpawnerService.Update(
+    waiting.Spawner, [],
+    [new("player", Vector2.Zero, 0, true, 20, true)],
+    10 + EnemySpawnerService.RecoverySeconds, 2187);
+Require(
+    enemyRecovery.StartedRecovery && !enemyRecovery.SpawnedWave &&
+    waiting.Enemies.Count == 0 && nextWave.SpawnedWave &&
+    nextWave.Spawner.Wave == 2,
+    "a cleared enemy wave must remain empty through recovery before adapting the next wave");
+var passiveSlime = firstWave.Enemies[0];
+var nearbyActor = new EnemyActorPresence(
+    "player", passiveSlime.Position + Vector2.UnitX, 0, true, 10, true);
+var passiveUpdate = EnemySpawnerService.UpdateController(
+    passiveSlime, [nearbyActor], 1, .1f, 2187);
+var provokedUpdate = EnemySpawnerService.UpdateController(
+    EnemySpawnerService.Provoke(passiveSlime, "player"),
+    [nearbyActor], 1, .1f, 2187);
+var caveEnemy = passiveSlime with
+{
+    Kind = EnemyKind.CaveSlime,
+    WorldLevel = (int)WorldLevel.Underground,
+    SpawnPosition = Vector2.Zero,
+    Position = Vector2.Zero,
+    Destination = Vector2.Zero
+};
+var caveUpdate = EnemySpawnerService.UpdateController(
+    caveEnemy,
+    [new("villager", Vector2.UnitX * 3,
+        (int)WorldLevel.Underground, true)],
+    1, .1f, 2187);
+var leashed = EnemySpawnerService.UpdateController(
+    EnemySpawnerService.Provoke(
+        passiveSlime with
+        {
+            Position = passiveSlime.SpawnPosition + Vector2.UnitX * 11
+        }, "player"),
+    [new("player",
+        passiveSlime.SpawnPosition + Vector2.UnitX * 30, 0, true)],
+    1, .1f, 2187);
+Require(
+    passiveUpdate.TargetId is null &&
+    provokedUpdate.TargetId == "player" &&
+    provokedUpdate.Behavior == EnemyBehavior.Attack &&
+    caveUpdate.TargetId == "villager" &&
+    leashed.TargetId is null && leashed.Behavior == EnemyBehavior.Return &&
+    EnemySpawnerService.Supports(
+        EnemyKind.WaterSlime, Biome.Beach, 0) &&
+    EnemySpawnerService.Supports(
+        EnemyKind.SandSlime, Biome.DesertSand, 0) &&
+    EnemySpawnerService.Supports(
+        EnemyKind.CaveSlime, Biome.Rock, -1),
+    "passive slimes must require provocation while cave slimes aggro and every enemy obeys its leash");
 
 Console.WriteLine(
     $"World checks passed: {macroBiomes.Count} macro biomes, deterministic generation, seams, " +
