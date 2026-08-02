@@ -1,0 +1,12 @@
+{
+  "Preset": "loot-bag",
+  "FootprintWidth": 0.45,
+  "FootprintDepth": 0.35,
+  "Height": 0.45,
+  "PixelWidth": 36,
+  "PixelHeight": 30,
+  "HotspotX": 18,
+  "HotspotY": 26,
+  "TileWidthPixels": 96,
+  "TileHeightPixels": 48
+}

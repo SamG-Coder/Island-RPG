@@ -116,7 +116,17 @@ internal static class PlaceableObjectCatalog
                 RenderHeight: 72,
                 ChromaKeyMagenta: true,
                 NavigationWidth: .45f,
-                NavigationDepth: .3f)
+                NavigationDepth: .3f),
+            [ItemIds.LootBag] = new(
+                ItemIds.LootBag,
+                "loot-bag.png",
+                FootprintWidth: .45f,
+                FootprintDepth: .35f,
+                Height: .45f,
+                HotspotX: 18,
+                HotspotY: 26,
+                NavigationWidth: .05f,
+                NavigationDepth: .05f)
         };
 
     public static IReadOnlyCollection<PlaceableObjectDefinition> All =>

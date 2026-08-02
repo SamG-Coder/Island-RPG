@@ -10,6 +10,12 @@ internal enum ItemContainerCategory
     Other
 }
 
+internal enum ItemContainerAccess
+{
+    DepositAndWithdraw,
+    WithdrawOnly
+}
+
 internal sealed record ItemContainerDefinition(
     Guid Id,
     string Title,
@@ -17,11 +23,13 @@ internal sealed record ItemContainerDefinition(
     int Rows,
     bool ShowPlayerInventory = true,
     bool AllowStacking = true,
-    bool ShowTransferAllButton = true)
+    bool ShowTransferAllButton = true,
+    ItemContainerAccess Access = ItemContainerAccess.DepositAndWithdraw)
 {
     public int ColumnCount => Math.Max(1, Columns);
     public int RowCount => Math.Max(1, Rows);
     public int Capacity => ColumnCount * RowCount;
+    public bool AllowsDeposit => Access == ItemContainerAccess.DepositAndWithdraw;
 }
 
 internal sealed record ItemContainerSaveState(
@@ -78,6 +86,7 @@ internal sealed class ItemContainerState
     public string?[] OwnerIds => _inventory.OwnerIds();
     public bool IsSpacer(int slot) =>
         (uint)slot < (uint)_spacers.Length && _spacers[slot];
+    public bool IsEmpty => _inventory.UsedSlots == 0;
 
     public ItemContainerSaveState Save() =>
         new(
@@ -91,6 +100,7 @@ internal sealed class ItemContainerState
         int quantity = 1,
         string? ownerId = null)
     {
+        if (!Definition.AllowsDeposit) return false;
         return _inventory.TryAdd(
             itemId, quantity, ownerId,
             Definition.AllowStacking, SlotAvailable);
@@ -109,6 +119,7 @@ internal sealed class ItemContainerState
 
     public int TransferAllFrom(string?[] inventory)
     {
+        if (!Definition.AllowsDeposit) return 0;
         var moved = 0;
         for (var slot = 0; slot < inventory.Length; slot++)
         {
@@ -125,6 +136,7 @@ internal sealed class ItemContainerState
     public int TransferMatchingFrom(
         string?[] inventory, string itemId, int maximum)
     {
+        if (!Definition.AllowsDeposit) return 0;
         if (maximum <= 0) return 0;
         var moved = 0;
         for (var slot = 0;

@@ -175,6 +175,7 @@ internal static class ItemIds
     public const string DigSite = "dig_site";
     public const string ShallowHole = "shallow_hole";
     public const string TrainingDummy = "training_dummy";
+    public const string LootBag = "loot_bag";
 }
 
 internal static class ItemCatalog
@@ -644,6 +645,12 @@ internal static class ItemCatalog
                 ItemIds.TrainingDummy,
                 "training dummy", "Training dummy",
                 "A reinforced practice target available only through developer tools.",
+                0, Droppable: false,
+                Tags: ItemTag.PlaceableObject),
+            [ItemIds.LootBag] = new(
+                ItemIds.LootBag,
+                "loot bag", "Loot",
+                "A dropped bag of spoils. It can only be emptied.",
                 0, Droppable: false,
                 Tags: ItemTag.PlaceableObject),
             [ItemIds.CaveHole] = new(

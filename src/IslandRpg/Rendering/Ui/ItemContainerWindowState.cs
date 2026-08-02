@@ -66,7 +66,8 @@ internal sealed class ItemContainerWindowState
             return default;
         if (CloseBounds(window).Contains(pointer))
             return new(ItemContainerActionType.Close);
-        if (Container.Definition.ShowTransferAllButton &&
+        if (Container.Definition.AllowsDeposit &&
+            Container.Definition.ShowTransferAllButton &&
             TransferAllBounds(window).Contains(pointer))
             return new(ItemContainerActionType.TransferAll);
 
@@ -89,7 +90,8 @@ internal sealed class ItemContainerWindowState
                         : ItemContainerActionType.WithdrawOne,
                     slot);
 
-        if (Container.Definition.ShowPlayerInventory)
+        if (Container.Definition.ShowPlayerInventory &&
+            Container.Definition.AllowsDeposit)
         {
             var playerPanel = PlayerInventoryBounds(window);
             var inventoryPanel = new InventoryPanelState(

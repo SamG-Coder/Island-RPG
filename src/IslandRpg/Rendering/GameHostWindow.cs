@@ -623,6 +623,7 @@ internal sealed partial class GameHostWindow : GameWindow
         UpdateNpcAi();
         ProcessGameControlPipe();
         _clock += e.Time;
+        UpdateLootBags();
         if (FinishLoadingTransition())
         {
             TryBeginObserveMode();
@@ -1746,7 +1747,7 @@ internal sealed partial class GameHostWindow : GameWindow
                         ? ["Cook", "Walk Here", "Examine"]
                         : campfireState == CampfireState.Fueled
                         ? ["Light", "Take log", "Walk Here", "Examine"]
-                        : StorageContainerService.IsStorage(
+                        : WorldItemContainerService.IsContainer(
                             contextObject.ItemId)
                         ? ["Open", "Walk Here", "Examine"]
                         : contextObject.ItemId == ItemIds.CookingPot
@@ -1824,7 +1825,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     QueueContinueCaveDig(groundObject);
                 else if (!CaveEntranceService.IsHole(groundObject) &&
                          !CaveEntranceService.IsShallowHole(groundObject) &&
-                         StorageContainerService.IsStorage(
+                         WorldItemContainerService.IsContainer(
                              groundObject.ItemId))
                     QueueWorldStorage(groundObject);
                 else if (!CaveEntranceService.IsHole(groundObject) &&
@@ -4616,7 +4617,7 @@ internal sealed partial class GameHostWindow : GameWindow
                         ChatMessageStyle.Normal);
                 return;
             }
-            if (StorageContainerService.IsStorage(
+            if (WorldItemContainerService.IsContainer(
                     groundObject.ItemId))
             {
                 if (option == 0)
@@ -6104,7 +6105,8 @@ internal sealed partial class GameHostWindow : GameWindow
             var world = GroundObjectWorld(item.Object);
             var objectOpacity = item.Gpu.Opacity *
                 distantDetailOpacity *
-                CaveEntranceService.Opacity(item.Object);
+                CaveEntranceService.Opacity(item.Object) *
+                LootBagOpacity(item.Object);
             if (!IsAtlasItemVisible(itemAtlasKey, world) &&
                 (shadowAtlasKey is null ||
                  !IsAtlasItemVisible(shadowAtlasKey, world)))

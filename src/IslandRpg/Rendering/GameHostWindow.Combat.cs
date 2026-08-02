@@ -358,6 +358,7 @@ internal sealed partial class GameHostWindow
             ChatMessageStyle.Damage);
         if (!enemy.Alive)
         {
+            DropEnemyLoot(enemy);
             _chatUi.AddMessage(
                 $"The {EnemyDisplayName(enemy.Kind).ToLowerInvariant()} dissolves.",
                 ChatMessageStyle.Action);

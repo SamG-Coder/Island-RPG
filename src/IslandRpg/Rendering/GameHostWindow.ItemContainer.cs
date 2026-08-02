@@ -41,6 +41,7 @@ internal sealed partial class GameHostWindow
     private ItemContainerContextSource _itemContainerContextSource;
     private int _itemContainerContextSlot = -1;
     private Guid? _openWorldStorageId;
+    private readonly Dictionary<Guid, double> _emptyLootBagFadeStarts = [];
 
     private void OpenItemContainer(
         ItemContainerState container,
@@ -134,6 +135,9 @@ internal sealed partial class GameHostWindow
             _ => null
         };
         if (itemId is null) return;
+        if (source == ItemContainerContextSource.Inventory &&
+            _itemContainerWindow.Container?.Definition.AllowsDeposit != true)
+            return;
         _itemContainerContextSource = source;
         _itemContainerContextSlot = slot;
         _itemContainerContext.Open(
@@ -180,7 +184,8 @@ internal sealed partial class GameHostWindow
     private void TransferAllToOpenContainer()
     {
         if (_activePlayer is null ||
-            _itemContainerWindow.Container is not { } container)
+            _itemContainerWindow.Container is not { } container ||
+            !container.Definition.AllowsDeposit)
             return;
         var inventory = (string?[])(
             _activePlayer.Inventory ?? []).Clone();
@@ -201,6 +206,7 @@ internal sealed partial class GameHostWindow
     {
         if (_activePlayer is null ||
             _itemContainerWindow.Container is not { } container ||
+            !container.Definition.AllowsDeposit ||
             (uint)slot >= (uint)(_activePlayer.Inventory?.Length ?? 0) ||
             _activePlayer.Inventory![slot] is not { } itemId ||
             !container.TryAdd(itemId))
@@ -215,7 +221,8 @@ internal sealed partial class GameHostWindow
         string itemId, int maximum)
     {
         if (_activePlayer is null ||
-            _itemContainerWindow.Container is not { } container)
+            _itemContainerWindow.Container is not { } container ||
+            !container.Definition.AllowsDeposit)
             return;
         var inventory = (string?[])(
             _activePlayer.Inventory ?? []).Clone();
@@ -247,6 +254,14 @@ internal sealed partial class GameHostWindow
             inventory[empty] = itemId;
         }
         SaveContainerInventory(inventory);
+        if (container.IsEmpty &&
+            _openWorldStorageId is { } objectId &&
+            FindGroundObject(objectId) is { } worldObject &&
+            LootBagService.IsLootBag(worldObject.ItemId))
+        {
+            _emptyLootBagFadeStarts.TryAdd(objectId, _clock);
+            CloseItemContainer();
+        }
     }
 
     private void SaveContainerInventory(string?[] inventory)
@@ -268,18 +283,18 @@ internal sealed partial class GameHostWindow
             return;
         var location = FindGroundObjectLocation(storageId);
         if (location is null ||
-            !StorageContainerService.IsStorage(
+            !WorldItemContainerService.IsContainer(
                 location.Value.Object.ItemId))
             return;
         location.Value.Chunk.GroundObjects[location.Value.Index] =
-            StorageContainerService.Save(
+            WorldItemContainerService.Save(
                 location.Value.Object, container);
         QueueChunkSave(location.Value.Chunk);
     }
 
     private void QueueWorldStorage(WorldGroundObject storage)
     {
-        if (!StorageContainerService.IsStorage(storage.ItemId))
+        if (!WorldItemContainerService.IsContainer(storage.ItemId))
             return;
         _worldActions.QueuePath(
             new Vector2(storage.X, storage.Y),
@@ -293,10 +308,10 @@ internal sealed partial class GameHostWindow
     {
         var storage = FindGroundObject(storageId);
         if (storage is null ||
-            !StorageContainerService.IsStorage(storage.ItemId))
+            !WorldItemContainerService.IsContainer(storage.ItemId))
             return;
         OpenItemContainer(
-            StorageContainerService.Open(storage),
+            WorldItemContainerService.Open(storage),
             storage.Id);
     }
 
@@ -345,14 +360,16 @@ internal sealed partial class GameHostWindow
                 renderDragPreview: false);
         }
 
-        if (definition.ShowTransferAllButton)
+        if (definition.AllowsDeposit && definition.ShowTransferAllButton)
             DrawMenuButton(
                 ItemContainerWindowState.TransferAllBounds(window),
                 "Deposit all");
         DrawUiText(
-            definition.AllowStacking
-                ? "Stacking enabled"
-                : "Individual slots",
+            definition.AllowsDeposit
+                ? definition.AllowStacking
+                    ? "Stacking enabled"
+                    : "Individual slots"
+                : "Take only",
             new(window.X + 194, window.Y + window.W - 38),
             new(174, 164, 134, 255));
         RenderContextMenu(_itemContainerContext);

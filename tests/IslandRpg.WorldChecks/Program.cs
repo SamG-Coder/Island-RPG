@@ -6435,6 +6435,30 @@ Require(
     StorageContainerService.Definition(
         Guid.NewGuid(), ItemIds.StorageBarrel).Capacity == 40,
     "world storage snapshots must reopen by object ID while barrels retain their smaller layout");
+var lootBagObject = LootBagService.Create(
+    Guid.NewGuid(), new Vector2(4, 7),
+    [new(ItemIds.PlantFibres, 3), new(ItemIds.WildBerries, 1)]);
+var lootBagContainer = WorldItemContainerService.Open(lootBagObject);
+var depositProbe = new string?[] { ItemIds.Logs };
+Require(
+    WorldItemContainerService.IsContainer(ItemIds.LootBag) &&
+    lootBagContainer.Definition.Access == ItemContainerAccess.WithdrawOnly &&
+    !lootBagContainer.Definition.AllowsDeposit &&
+    !lootBagContainer.TryAdd(ItemIds.Logs) &&
+    lootBagContainer.TransferAllFrom(depositProbe) == 0 &&
+    depositProbe[0] == ItemIds.Logs &&
+    lootBagContainer.Quantities.Sum() == 4,
+    "loot bags must reuse persistent containers while rejecting every deposit path");
+Require(
+    lootBagContainer.TryTake(0, 3, out var firstLoot) &&
+    firstLoot == ItemIds.PlantFibres &&
+    lootBagContainer.TryTake(1, 1, out var secondLoot) &&
+    secondLoot == ItemIds.WildBerries &&
+    lootBagContainer.IsEmpty &&
+    LootBagService.FadeOpacity(10, 10) == 1 &&
+    LootBagService.FadeOpacity(10, 10 + LootBagService.FadeSeconds) == 0 &&
+    LootBagService.FadeFinished(10, 10 + LootBagService.FadeSeconds),
+    "taking the final loot item must empty the bag and drive its bounded fade lifecycle");
 var villagerTransferContainer = new ItemContainerState(
     new(
         Guid.NewGuid(), "Villager chest", 2, 1,
@@ -9030,6 +9054,14 @@ Require(
         VillagerSimulation.GameSecondsPerRealSecond,
     "a cleared enemy wave must remain empty through recovery before adapting the next wave");
 var passiveSlime = firstWave.Enemies[0];
+var firstLootRoll = LootBagService.Roll(passiveSlime, 2187);
+var repeatedLootRoll = LootBagService.Roll(passiveSlime, 2187);
+Require(
+    firstLootRoll.Count > 0 &&
+    firstLootRoll.SequenceEqual(repeatedLootRoll) &&
+    firstLootRoll.All(drop =>
+        drop.Quantity > 0 && ItemCatalog.TryGet(drop.ItemId, out _)),
+    "enemy loot rolls must be seeded, repeatable, non-empty, and contain only catalogued items");
 var damagedSlime = EnemyCombatService.ApplyHit(
     passiveSlime, 3, "player");
 var ignoredEnemyDamage = EnemyCombatService.ApplyHit(

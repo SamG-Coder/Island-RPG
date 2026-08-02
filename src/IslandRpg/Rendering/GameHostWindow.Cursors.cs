@@ -177,7 +177,7 @@ internal sealed partial class GameHostWindow
                     next = GameCursorKind.ClimbUp;
                     cursor = _climbUpNativeCursor;
                 }
-                else if (StorageContainerService.IsStorage(
+                else if (WorldItemContainerService.IsContainer(
                              groundObject.ItemId) &&
                          _openStorageNativeCursor is not null)
                 {

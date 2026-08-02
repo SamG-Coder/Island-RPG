@@ -53,6 +53,14 @@
       "padding": 5,
       "description": "Upright storage barrel bound with metal hoops."
     },
+    "loot-bag": {
+      "footprintWidth": 0.45,
+      "footprintDepth": 0.35,
+      "height": 0.45,
+      "visualScale": 0.72,
+      "padding": 4,
+      "description": "Small tied leather bag dropped as an enemy loot container."
+    },
     "chair": {
       "footprintWidth": 0.5,
       "footprintDepth": 0.5,
