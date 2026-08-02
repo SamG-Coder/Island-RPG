@@ -178,7 +178,8 @@ internal sealed class ItemContainerState
     {
         if (item.HasTag(ItemTag.Tool))
             return ItemContainerCategory.Tools;
-        if (item.HasTag(ItemTag.CookedFood) ||
+        if (SurvivalService.TryFoodEffect(item.Id, out _) ||
+            item.HasTag(ItemTag.CookedFood) ||
             item.HasTag(ItemTag.BurntFood) ||
             item.HasTag(ItemTag.Fish) ||
             item.HasTag(ItemTag.Berry))

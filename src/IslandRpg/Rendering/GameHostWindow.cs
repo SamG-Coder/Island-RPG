@@ -370,6 +370,12 @@ internal sealed partial class GameHostWindow : GameWindow
         new SpriteFrame?[ItemSpriteSheetCatalog.SlimeLoot.CellCount];
     private readonly SpriteFrame?[] _slimeLootShadowFrames =
         new SpriteFrame?[ItemSpriteSheetCatalog.SlimeLoot.CellCount];
+    private readonly int[] _slimeCraftedTextures =
+        new int[ItemSpriteSheetCatalog.SlimeCrafted.CellCount];
+    private readonly SpriteFrame?[] _slimeCraftedFrames =
+        new SpriteFrame?[ItemSpriteSheetCatalog.SlimeCrafted.CellCount];
+    private readonly SpriteFrame?[] _slimeCraftedShadowFrames =
+        new SpriteFrame?[ItemSpriteSheetCatalog.SlimeCrafted.CellCount];
     private readonly int[] _stoneToolTextures = new int[14];
     private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[14];
     private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[14];
@@ -4883,6 +4889,7 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.PersonalGoalSprite) ||
             item.HasTag(ItemTag.CropSprite) ||
             item.HasTag(ItemTag.SlimeLootSprite) ||
+            item.HasTag(ItemTag.SlimeCraftedSprite) ||
             item.HasTag(ItemTag.Fish) ||
             item.HasTag(ItemTag.FibreNetSprite) ||
             item.HasTag(ItemTag.PlaceableObject))
@@ -4953,6 +4960,11 @@ internal sealed partial class GameHostWindow : GameWindow
             return item.SpriteCell is { } lootCell &&
                    (uint)lootCell < (uint)_slimeLootTextures.Length
                 ? _slimeLootTextures[lootCell]
+                : 0;
+        if (item.HasTag(ItemTag.SlimeCraftedSprite))
+            return item.SpriteCell is { } craftedCell &&
+                   (uint)craftedCell < (uint)_slimeCraftedTextures.Length
+                ? _slimeCraftedTextures[craftedCell]
                 : 0;
         if (item.HasTag(ItemTag.CoastalSprite))
             return item.SpriteCell is { } coastalCell &&
@@ -5029,6 +5041,9 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.HasTag(ItemTag.SlimeLootSprite) &&
             (uint)cell < (uint)_slimeLootFrames.Length)
             return _slimeLootFrames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.SlimeCraftedSprite) &&
+            (uint)cell < (uint)_slimeCraftedFrames.Length)
+            return _slimeCraftedFrames[cell] ?? WoodcuttingItemsFrame;
         if (item.HasTag(ItemTag.CoastalSprite) &&
             (uint)cell < (uint)_coastalSprites.Frames.Length)
             return _coastalSprites.Frames[cell] ?? WoodcuttingItemsFrame;
@@ -5067,6 +5082,7 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.PersonalGoalSprite) ||
             item.HasTag(ItemTag.CropSprite) ||
             item.HasTag(ItemTag.SlimeLootSprite) ||
+            item.HasTag(ItemTag.SlimeCraftedSprite) ||
             item.HasTag(ItemTag.SupplementalSprite) ||
             item.HasTag(ItemTag.NaturalMaterial) ||
             item.HasTag(ItemTag.Fish) ||
@@ -6884,6 +6900,11 @@ internal sealed partial class GameHostWindow : GameWindow
         LoadHorizontalItemSheet(
             ItemSpriteSheetCatalog.SlimeLoot.FileName,
             _slimeLootFrames, _slimeLootShadowFrames, _slimeLootTextures);
+        LoadHorizontalItemSheet(
+            ItemSpriteSheetCatalog.SlimeCrafted.FileName,
+            _slimeCraftedFrames,
+            _slimeCraftedShadowFrames,
+            _slimeCraftedTextures);
         var stoneToolSheetPath = Path.Combine(
             AppContext.BaseDirectory, "Resources", "Images",
             "stone-tools-items.png");
@@ -7474,6 +7495,13 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_slimeLootShadowFrames[cell] is { } shadowFrame)
                 Place(SlimeLootAtlasKey(cell, true), null, shadowFrame);
         }
+        for (var cell = 0; cell < _slimeCraftedFrames.Length; cell++)
+        {
+            if (_slimeCraftedFrames[cell] is { } itemFrame)
+                Place(SlimeCraftedAtlasKey(cell, false), null, itemFrame);
+            if (_slimeCraftedShadowFrames[cell] is { } shadowFrame)
+                Place(SlimeCraftedAtlasKey(cell, true), null, shadowFrame);
+        }
         for (var cell = 0; cell < _stoneToolFrames.Length; cell++)
         {
             if (_stoneToolFrames[cell] is { } itemFrame)
@@ -7618,6 +7646,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static string SlimeLootAtlasKey(int cell, bool shadow) =>
         shadow ? $"SLIME_LOOT_SHADOW#{cell}" : $"SLIME_LOOT#{cell}";
+
+    private static string SlimeCraftedAtlasKey(int cell, bool shadow) =>
+        shadow ? $"SLIME_CRAFTED_SHADOW#{cell}" : $"SLIME_CRAFTED#{cell}";
 
     private static string StoneToolAtlasKey(int cell, bool shadow) =>
         shadow ? $"STONE_TOOL_SHADOW#{cell}" : $"STONE_TOOL#{cell}";

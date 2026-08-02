@@ -8930,6 +8930,18 @@ using (var slimeLootSheetStream = File.OpenRead(slimeLootSheetPath))
         slimeLootSheet.Height == ItemSpriteSheetCatalog.SlimeLoot.Height,
         "unique slime drops must use the converted four-cell item sprite sheet");
 }
+var slimeCraftedSheetPath = Path.Combine(
+    AppContext.BaseDirectory, "Resources", "Images",
+    ItemSpriteSheetCatalog.SlimeCrafted.FileName);
+using (var slimeCraftedSheetStream = File.OpenRead(slimeCraftedSheetPath))
+{
+    var slimeCraftedSheet = ImageResult.FromStream(
+        slimeCraftedSheetStream, ColorComponents.RedGreenBlueAlpha);
+    Require(
+        slimeCraftedSheet.Width == ItemSpriteSheetCatalog.SlimeCrafted.Width &&
+        slimeCraftedSheet.Height == ItemSpriteSheetCatalog.SlimeCrafted.Height,
+        "salted fish and poultices must use the converted two-cell item sprite sheet");
+}
 
 var slimeFrontPath = Path.Combine(
     AppContext.BaseDirectory, "Resources", "Images", "Combat",
@@ -9099,6 +9111,74 @@ Require(
     LootBagService.BiomeReagent(EnemyKind.GrassSlime) ==
         ItemIds.MedicinalHerbs,
     "all unique slime drops must be stackable, examinable, sprite-backed, and integrated into their biome loot roles");
+var reinforcedNetRecipe = CraftingSkill.Recipes.Single(recipe =>
+    recipe.ResultItemId == ItemIds.ReinforcedFishingNet);
+var advancedNetRecipe = CraftingSkill.Recipes.Single(recipe =>
+    recipe.ResultItemId == ItemIds.AdvancedFishingNet);
+var portableTorchRecipe = CraftingSkill.Recipes.Single(recipe =>
+    recipe.ResultItemId == ItemIds.PortableTorch);
+var saltedFishRecipe = CraftingSkill.Recipes.Single(recipe =>
+    recipe.ResultItemId == ItemIds.SaltedFish);
+var herbalPoulticeRecipe = CraftingSkill.Recipes.Single(recipe =>
+    recipe.ResultItemId == ItemIds.HerbalPoultice);
+Require(
+    reinforcedNetRecipe.Ingredients.Single(ingredient =>
+        ingredient.ItemId == ItemIds.Rope).Accepts(ItemIds.SlimeGel) &&
+    portableTorchRecipe.Ingredients.Single(ingredient =>
+        ingredient.ItemId == ItemIds.PlantFibres).Accepts(ItemIds.SlimeGel) &&
+    advancedNetRecipe.Ingredients.Any(ingredient =>
+        ingredient.ItemId == ItemIds.SlimeCore) &&
+    saltedFishRecipe.Ingredients.Any(ingredient =>
+        ingredient.ItemId == ItemIds.SaltCrystals) &&
+    saltedFishRecipe.Ingredients[0].Accepts(ItemIds.CookedBluefinTuna) &&
+    herbalPoulticeRecipe.Ingredients.Any(ingredient =>
+        ingredient.ItemId == ItemIds.MedicinalHerbs) &&
+    VillagerCraftPlanner.PriorityFor(VillagerWorkRole.Food)
+        .Contains(ItemIds.SaltedFish) &&
+    VillagerCraftPlanner.PriorityFor(VillagerWorkRole.Crafting)
+        .Contains(ItemIds.HerbalPoultice),
+    "slime materials must feed reusable recipe alternatives, advanced progression, preservation, medicine, and NPC planning");
+SurvivalService.TryFoodEffect(ItemIds.MedicinalHerbs, out var herbMedicine);
+SurvivalService.TryFoodEffect(ItemIds.HerbalPoultice, out var poulticeMedicine);
+SurvivalService.TryFoodEffect(ItemIds.SaltedFish, out var saltedFood);
+Require(
+    herbMedicine.TimedHealing == 8 &&
+    poulticeMedicine.TimedHealing > herbMedicine.TimedHealing &&
+    saltedFood.HungerRestored > 0 &&
+    saltedFood.WellFedSeconds > 220 &&
+    ItemCatalog.Get(ItemIds.HerbalPoultice).CanStack &&
+    ItemCatalog.Get(ItemIds.HerbalPoultice).HasTag(ItemTag.Medicine) &&
+    ItemCatalog.Get(ItemIds.SaltedFish).HasTag(ItemTag.SlimeCraftedSprite),
+    "medicine and preserved fish must expose their survival effects and stackable sprite-backed item definitions");
+var healingStart = TimedHealingService.Start(poulticeMedicine);
+var healingHalf = TimedHealingService.Advance(
+    40, 100, poulticeMedicine.TimedHealingSeconds / 2, healingStart);
+var healingComplete = TimedHealingService.Advance(
+    healingHalf.Health, 100,
+    poulticeMedicine.TimedHealingSeconds / 2, healingHalf.State);
+Require(
+    healingStart.Active &&
+    healingHalf.Health > 40 && healingHalf.Health < 58 &&
+    healingComplete.Health == 58 && !healingComplete.State.Active,
+    "medicine must recover health progressively through the reusable timed-healing service");
+var healingVillager = new VillagerState(
+    "healing-villager", "Leofric", EntityGender.Male,
+    0, 0, 0, 0, 0, 40, 50, new string?[PlayerInventory.Capacity],
+    LastSimulatedGameSeconds: 1_000,
+    TimedHealingRemaining: poulticeMedicine.TimedHealing,
+    TimedHealingSeconds: poulticeMedicine.TimedHealingSeconds);
+var caughtUpHealingVillager = VillagerSimulation.CatchUp(
+    healingVillager,
+    1_000 + poulticeMedicine.TimedHealingSeconds *
+    VillagerSimulation.GameSecondsPerRealSecond);
+var interruptedHealingVillager = VillagerSimulation.RecordAttack(
+    healingVillager, "attacker", "Raider", 1, 1_001);
+Require(
+    caughtUpHealingVillager.Health > healingVillager.Health &&
+    caughtUpHealingVillager.TimedHealingRemaining == 0 &&
+    interruptedHealingVillager.TimedHealingRemaining == 0 &&
+    interruptedHealingVillager.TimedHealingSeconds == 0,
+    "NPC catch-up must preserve timed medicine while incoming damage cancels the treatment");
 var damagedSlime = EnemyCombatService.ApplyHit(
     passiveSlime, 3, "player");
 var ignoredEnemyDamage = EnemyCombatService.ApplyHit(

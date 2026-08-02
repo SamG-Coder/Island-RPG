@@ -24,6 +24,7 @@ internal sealed partial class GameHostWindow
         new SpriteFrame?[2];
     private readonly int[] _toolbarActionIconTextures = new int[2];
     private float _starvationDamageRemainder;
+    private TimedHealingState _playerTimedHealing;
 
     private void AwardAdventureExperience(int actionExperience)
     {
@@ -77,6 +78,8 @@ internal sealed partial class GameHostWindow
             elapsed,
             starvationDamageRemainder:
                 _starvationDamageRemainder);
+        if (update.Health < _activePlayer.Health)
+            _playerTimedHealing = default;
         var regeneration = EntityHealthRegenerationService.Advance(
             update.Health,
             maximumHealth,
@@ -86,7 +89,13 @@ internal sealed partial class GameHostWindow
                 ? EntityHealthRegenerationService.LitCampfireHumanMultiplier
                 : 1,
             _activePlayer.HealthRegenerationRemainder);
-        update = update with { Health = regeneration.Health };
+        var healing = TimedHealingService.Advance(
+            regeneration.Health,
+            maximumHealth,
+            elapsed,
+            _playerTimedHealing);
+        _playerTimedHealing = healing.State;
+        update = update with { Health = healing.Health };
         if (_godMode && update.Health < _activePlayer.Health)
             update = update with
             {
@@ -110,6 +119,7 @@ internal sealed partial class GameHostWindow
     {
         if (_activePlayer is null || _playerDefeated ||
             _godMode || damage <= 0) return;
+        _playerTimedHealing = default;
         var health = PlayerDeathService.ApplyDamage(
             _activePlayer.Health, damage);
         _activePlayer = _activePlayer with
@@ -210,6 +220,8 @@ internal sealed partial class GameHostWindow
             maximumHealth);
         if (!eaten.Succeeded) return;
         var update = eaten.Survival;
+        if (effect.TimedHealing > 0)
+            _playerTimedHealing = TimedHealingService.Start(effect);
         _activePlayer = _activePlayer with
         {
             Inventory = eaten.Inventory,
@@ -219,10 +231,15 @@ internal sealed partial class GameHostWindow
             UpdatedUtc = DateTime.UtcNow
         };
         _saves.SavePlayer(_activePlayer);
+        var item = ItemCatalog.Get(itemId);
         _chatUi.AddMessage(
-            $"You eat the {ItemCatalog.Get(itemId).Name}. Hunger restored by " +
-            $"{effect.HungerRestored:0}; digestion slows hunger for " +
-            $"{effect.WellFedSeconds / 60f:0.#} min.",
+            item.HasTag(ItemTag.Medicine)
+                ? $"You apply the {item.Name}; it can restore " +
+                  $"{effect.TimedHealing:0} health over " +
+                  $"{effect.TimedHealingSeconds:0} seconds unless interrupted."
+                : $"You eat the {item.Name}. Hunger restored by " +
+                  $"{effect.HungerRestored:0}; digestion slows hunger for " +
+                  $"{effect.WellFedSeconds / 60f:0.#} min.",
             ChatMessageStyle.Action);
     }
 

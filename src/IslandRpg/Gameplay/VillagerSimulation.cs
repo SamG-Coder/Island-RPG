@@ -190,7 +190,10 @@ internal sealed record VillagerState(
     int? PersonalCampWorldLevel = null,
     bool IndependentByChoice = false,
     IReadOnlyList<VillagerPromisePlanStep>? ActionPlan = null,
-    float HealthRegenerationRemainder = 0);
+    float HealthRegenerationRemainder = 0,
+    float TimedHealingRemaining = 0,
+    float TimedHealingSeconds = 0,
+    float TimedHealingRemainder = 0);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,
@@ -499,20 +502,34 @@ internal static class VillagerSimulation
                 (float)(chunk / GameSecondsPerRealSecond),
                 hungerLossMultiplier,
                 simulated.StarvationDamageRemainder);
+            var activeHealing = survival.Health < simulated.Health
+                ? default
+                : new TimedHealingState(
+                    simulated.TimedHealingRemaining,
+                    simulated.TimedHealingSeconds,
+                    simulated.TimedHealingRemainder);
             var regeneration = EntityHealthRegenerationService.Advance(
                 survival.Health,
                 AdventureService.BaseMaximumHealth,
                 (float)(chunk / GameSecondsPerRealSecond),
                 healthRegenerationMultiplier,
                 simulated.HealthRegenerationRemainder);
+            var healing = TimedHealingService.Advance(
+                regeneration.Health,
+                AdventureService.BaseMaximumHealth,
+                (float)(chunk / GameSecondsPerRealSecond),
+                activeHealing);
             simulated = simulated with
             {
                 Hunger = survival.Hunger,
-                Health = regeneration.Health,
+                Health = healing.Health,
                 WellFedSeconds = survival.WellFedSeconds,
                 StarvationDamageRemainder =
                     survival.StarvationDamageRemainder,
                 HealthRegenerationRemainder = regeneration.Remainder,
+                TimedHealingRemaining = healing.State.RemainingHealth,
+                TimedHealingSeconds = healing.State.RemainingSeconds,
+                TimedHealingRemainder = healing.State.FractionalHealth,
                 LastSimulatedGameSeconds =
                     simulated.LastSimulatedGameSeconds + chunk
             };
@@ -1333,6 +1350,9 @@ internal static class VillagerSimulation
                 : villager.DeathCause,
             TargetX = null,
             TargetY = null,
+            TimedHealingRemaining = 0,
+            TimedHealingSeconds = 0,
+            TimedHealingRemainder = 0,
             NextDecisionGameSeconds = gameSeconds
         };
         return VillagerLocationMemoryService.Remember(
@@ -1585,6 +1605,10 @@ internal static class VillagerSimulation
         var health = state.Health;
         var wellFedSeconds = state.WellFedSeconds;
         var ate = false;
+        var timedHealing = new TimedHealingState(
+            state.TimedHealingRemaining,
+            state.TimedHealingSeconds,
+            state.TimedHealingRemainder);
         if ((uint)decision.ConsumeSlot < (uint)inventory.Length)
         {
             var eaten = EntityInteractionService.Eat(
@@ -1600,6 +1624,11 @@ internal static class VillagerSimulation
                 hunger = eaten.Survival.Hunger;
                 health = eaten.Survival.Health;
                 wellFedSeconds = eaten.Survival.WellFedSeconds;
+                if (eaten.ItemId is { } eatenItemId &&
+                    SurvivalService.TryFoodEffect(
+                        eatenItemId, out var eatenEffect) &&
+                    eatenEffect.TimedHealing > 0)
+                    timedHealing = TimedHealingService.Start(eatenEffect);
                 ate = true;
             }
         }
@@ -1629,6 +1658,9 @@ internal static class VillagerSimulation
             Hunger = hunger,
             Health = health,
             WellFedSeconds = wellFedSeconds,
+            TimedHealingRemaining = timedHealing.RemainingHealth,
+            TimedHealingSeconds = timedHealing.RemainingSeconds,
+            TimedHealingRemainder = timedHealing.FractionalHealth,
             Need = decision.Need,
             Action = action,
             ActionTime = state.Action == action
@@ -1951,7 +1983,10 @@ internal static class VillagerSimulation
             ConflictTargetId = null,
             ConflictIntent = VillagerConflictIntent.None,
             ConflictMotive = null,
-            ConflictExpiresGameSeconds = 0
+            ConflictExpiresGameSeconds = 0,
+            TimedHealingRemaining = 0,
+            TimedHealingSeconds = 0,
+            TimedHealingRemainder = 0
         };
 
     public static bool FootBoxesOverlap(

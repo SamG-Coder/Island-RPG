@@ -3,7 +3,9 @@ namespace IslandRpg.Gameplay;
 internal readonly record struct FoodEffect(
     float HungerRestored,
     int HealthRestored,
-    float WellFedSeconds);
+    float WellFedSeconds,
+    float TimedHealing = 0,
+    float TimedHealingSeconds = 0);
 
 internal readonly record struct SurvivalUpdate(
     float Hunger,
@@ -36,6 +38,9 @@ internal static class SurvivalService
             ItemIds.CookedOceanMackerel => new(40, 13, 175),
             ItemIds.CookedBluefinTuna => new(48, 17, 220),
             ItemIds.FishBerryStew => new(65, 25, 360),
+            ItemIds.MedicinalHerbs => new(0, 0, 0, 8, 8),
+            ItemIds.HerbalPoultice => new(0, 0, 0, 18, 12),
+            ItemIds.SaltedFish => new(36, 14, 300),
             _ => default
         };
         return effect != default;

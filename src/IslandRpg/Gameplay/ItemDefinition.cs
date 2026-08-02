@@ -37,7 +37,9 @@ internal enum ItemTag : long
     Weapon = 1 << 30,
     PersonalGoalSprite = 1L << 31,
     CropSprite = 1L << 32,
-    SlimeLootSprite = 1L << 33
+    SlimeLootSprite = 1L << 33,
+    SlimeCraftedSprite = 1L << 34,
+    Medicine = 1L << 35
 }
 
 internal sealed record ItemDefinition(
@@ -181,6 +183,8 @@ internal static class ItemIds
     public const string SlimeCore = "slime_core";
     public const string SaltCrystals = "salt_crystals";
     public const string MedicinalHerbs = "medicinal_herbs";
+    public const string SaltedFish = "salted_fish";
+    public const string HerbalPoultice = "herbal_poultice";
 }
 
 internal static class ItemCatalog
@@ -346,7 +350,16 @@ internal static class ItemCatalog
             [ItemIds.MedicinalHerbs] = new(
                 ItemIds.MedicinalHerbs, "medicinal herbs", "Herbs",
                 "A fragrant bundle of herbs preserved within a grass slime.", 3,
-                Tags: ItemTag.NaturalMaterial | ItemTag.SlimeLootSprite),
+                Tags: ItemTag.NaturalMaterial | ItemTag.SlimeLootSprite |
+                      ItemTag.Medicine),
+            [ItemIds.SaltedFish] = new(
+                ItemIds.SaltedFish, "salted fish", "Salted fish",
+                "Cooked fish preserved with coarse salt for a sustaining meal.", 0,
+                Tags: ItemTag.CookedFood | ItemTag.SlimeCraftedSprite),
+            [ItemIds.HerbalPoultice] = new(
+                ItemIds.HerbalPoultice, "herbal poultice", "Poultice",
+                "Medicinal leaves wrapped in clean fibre for treating wounds.", 1,
+                Tags: ItemTag.Medicine | ItemTag.SlimeCraftedSprite),
             [ItemIds.TreeSeeds] = new(
                 ItemIds.TreeSeeds, "tree seeds", "Tree seed",
                 "Seeds from a common deciduous tree.", 0,
@@ -708,7 +721,8 @@ internal static class ItemCatalog
         item.HasTag(ItemTag.Fish) ||
         item.HasTag(ItemTag.Berry) ||
         item.HasTag(ItemTag.CookedFood) ||
-        item.HasTag(ItemTag.BurntFood);
+        item.HasTag(ItemTag.BurntFood) ||
+        item.HasTag(ItemTag.Medicine);
 
     private static ItemDefinition Coastal(
         string id, string name, string caption, string examine, int cell) =>

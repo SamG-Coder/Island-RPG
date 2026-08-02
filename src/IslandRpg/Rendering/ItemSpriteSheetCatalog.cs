@@ -26,4 +26,6 @@ internal static class ItemSpriteSheetCatalog
         new("planted-crops.png", 3);
     public static readonly ItemSpriteSheetDefinition SlimeLoot =
         new("slime-loot-items.png", 4);
+    public static readonly ItemSpriteSheetDefinition SlimeCrafted =
+        new("slime-crafted-items.png", 2);
 }

@@ -87,7 +87,7 @@ internal static class CraftingSkill
             CraftingCategory.Tools, 6, 65,
             [
                 new(ItemIds.PrimitiveFishingNet, 1),
-                new(ItemIds.Rope, 2)
+                new(ItemIds.Rope, 2, [ItemIds.SlimeGel])
             ],
             [
                 "Double the primitive mesh with tightly twisted rope.",
@@ -101,7 +101,8 @@ internal static class CraftingSkill
             [
                 new(ItemIds.ReinforcedFishingNet, 1),
                 new(ItemIds.Rope, 2),
-                new(ItemIds.IronBar, 1)
+                new(ItemIds.IronBar, 1),
+                new(ItemIds.SlimeCore, 1)
             ],
             [
                 "Weave a dense second layer through the reinforced mesh.",
@@ -470,12 +471,42 @@ internal static class CraftingSkill
             CraftingCategory.Tools, 2, 30,
             [
                 new(ItemIds.Sticks, 1),
-                new(ItemIds.PlantFibres, 2),
+                new(ItemIds.PlantFibres, 2, [ItemIds.SlimeGel]),
                 new(ItemIds.Charcoal, 1, [ItemIds.Coal])
             ],
             [
                 "Wrap dry fibre tightly around one end of the stick.",
                 "Work powdered fuel into the wrapping so it burns steadily."
+            ]),
+        new(
+            "salted-fish", ItemIds.SaltedFish,
+            CraftingCategory.Resources, 2, 24,
+            [
+                new(
+                    ItemIds.CookedMinnows, 1,
+                    [
+                        ItemIds.CookedRiverPerch,
+                        ItemIds.CookedSilverHerring,
+                        ItemIds.CookedRedSnapper,
+                        ItemIds.CookedOceanMackerel,
+                        ItemIds.CookedBluefinTuna
+                    ]),
+                new(ItemIds.SaltCrystals, 1)
+            ],
+            [
+                "Rub coarse salt over the cooked fish.",
+                "Wrap it tightly so the salt draws out excess moisture."
+            ]),
+        new(
+            "herbal-poultice", ItemIds.HerbalPoultice,
+            CraftingCategory.Resources, 2, 28,
+            [
+                new(ItemIds.MedicinalHerbs, 2),
+                new(ItemIds.PlantFibres, 1)
+            ],
+            [
+                "Crush the medicinal leaves to release their oils.",
+                "Wrap the herbs in clean fibre and bind the poultice firmly."
             ]),
         new(
             "gathering-basket", ItemIds.GatheringBasket,

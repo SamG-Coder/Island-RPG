@@ -195,6 +195,8 @@ internal sealed partial class GameHostWindow
             pointer,
             ItemCatalog.Get(itemId) switch
             {
+                { } item when item.HasTag(ItemTag.Medicine) =>
+                    ["Apply", "Drop", "Examine"],
                 { } item when
                     SurvivalService.TryFoodEffect(item.Id, out _) =>
                     ["Eat", "Drop", "Examine"],

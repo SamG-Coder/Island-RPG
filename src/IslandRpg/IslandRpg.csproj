@@ -63,6 +63,7 @@
     <Content Include="Resources\Images\storage-barrel.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\loot-bag.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\slime-loot-items.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\slime-crafted-items.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\campfire-fire-16.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\CaveGrowth\cave-growth-sprites.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\Ui\player-ui-icons.png" CopyToOutputDirectory="PreserveNewest" />
