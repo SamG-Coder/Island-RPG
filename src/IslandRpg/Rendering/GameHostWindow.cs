@@ -86,7 +86,9 @@ internal sealed partial class GameHostWindow : GameWindow
         int TeamColor,
         Vector3? Tint = null,
         float TintAmount = 0,
-        float RenderScale = 1);
+        float RenderScale = 1,
+        float Opacity = 1,
+        bool SoftShadow = false);
     private sealed record FishingBoatVisual(
         SpriteFrame Frame, int Texture, Vector2 World, bool Mirror);
     private sealed record FishingBoatComposite(
@@ -120,6 +122,7 @@ internal sealed partial class GameHostWindow : GameWindow
         OpenStorage,
         AttackTrainingDummy,
         AttackVillager,
+        AttackEnemy,
         GiveItemToVillager,
         BoardFishingBoat
     }
@@ -435,6 +438,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly ContextMenuControlState _treeContext = new();
     private readonly ContextMenuControlState _groundObjectContext = new();
     private readonly ContextMenuControlState _villagerContext = new();
+    private readonly ContextMenuControlState _enemyContext = new();
     private IReadOnlyList<VillagerInteractionOption> _villagerContextOptions = [];
     private string? _villagerContextTargetId;
     private Vector2 _villagerContextWalkTarget;
@@ -500,6 +504,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _groundObjectContext.Selected +=
             HandleGroundObjectContextSelection;
         _villagerContext.Selected += HandleVillagerContextSelection;
+        _enemyContext.Selected += HandleEnemyContextSelection;
         _chatUi.Submitted += HandleChatSubmission;
         _chatUi.MessageAdded += ObserveChatMessage;
         _gameUi.CraftingButton.Clicked += () =>
@@ -1672,7 +1677,12 @@ internal sealed partial class GameHostWindow : GameWindow
             !IsPointerOverGameUi(MouseState.Position))
         {
             var target = ScreenToTerrain(SceneMousePosition());
-            if (TryGetVillagerUnderMouse(
+            if (TryGetEnemyUnderMouse(
+                    SceneMousePosition(), out var contextEnemy))
+            {
+                OpenEnemyContext(contextEnemy, target);
+            }
+            else if (TryGetVillagerUnderMouse(
                     SceneMousePosition(), out var contextVillager))
             {
                 _villagerContextTargetId = contextVillager.Id;
@@ -1979,6 +1989,9 @@ internal sealed partial class GameHostWindow : GameWindow
         _villagerContext.UpdatePointer(
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
+        _enemyContext.UpdatePointer(
+            MouseState.Position,
+            MouseState.IsButtonDown(MouseButton.Left));
         _fishContext.UpdatePointer(
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
@@ -2021,6 +2034,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _treeContext.HitTest(mouse) ||
         _groundObjectContext.HitTest(mouse) ||
         _villagerContext.HitTest(mouse) ||
+        _enemyContext.HitTest(mouse) ||
         _fishContext.HitTest(mouse) ||
         _vegetationContext.HitTest(mouse) ||
         _miningContext.HitTest(mouse) ||
@@ -4496,6 +4510,9 @@ internal sealed partial class GameHostWindow : GameWindow
                 .Select(value => value.index)
                 .DefaultIfEmpty(-1)
                 .First());
+        RenderContextMenu(
+            _enemyContext,
+            dangerIndex: EnemyInteractionMenu.AttackIndex);
         RenderContextMenu(_fishContext);
         RenderContextMenu(_vegetationContext);
         RenderContextMenu(_miningContext);
@@ -6297,6 +6314,15 @@ internal sealed partial class GameHostWindow : GameWindow
 
         void DrawActor(ActorVisual actor, bool outlineOnly = false)
         {
+            if (actor.SoftShadow && !outlineOnly &&
+                _softActorShadowFrame is not null &&
+                _softActorShadowTexture != 0)
+                DrawSprite(
+                    _softActorShadowFrame,
+                    _softActorShadowTexture,
+                    actor.World,
+                    opacity: .42f,
+                    renderScale: actor.RenderScale);
             DrawSprite(
                 actor.Frame,
                 actor.Texture,
@@ -6308,6 +6334,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 tint: actor.Tint,
                 tintAmount: actor.TintAmount,
                 renderScale: actor.RenderScale,
+                opacity: actor.Opacity,
                 preserveDarkTint: actor.TintAmount > 0,
                 outlineColor: new Vector3(1f, .72f, .12f));
         }
@@ -8468,6 +8495,12 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var texture in _entityAnimations.Values
                      .SelectMany(value => value.Textures).Distinct())
             GL.DeleteTexture(texture);
+        foreach (var texture in _slimeFrontTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _slimeBackTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        if (_softActorShadowTexture != 0)
+            GL.DeleteTexture(_softActorShadowTexture);
         if (_moveMarkerAnimation is not null)
         foreach (var texture in _moveMarkerAnimation.Textures)
             GL.DeleteTexture(texture);

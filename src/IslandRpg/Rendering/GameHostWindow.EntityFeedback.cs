@@ -10,6 +10,7 @@ internal sealed partial class GameHostWindow
 
     private static string PlayerFeedbackKey(string id) => $"player:{id}";
     private static string VillagerFeedbackKey(string id) => $"villager:{id}";
+    private static string EnemyFeedbackKey(Guid id) => $"enemy:{id:N}";
     private static string TreeFeedbackKey(Guid id) => $"tree:{id:N}";
     private static string MiningFeedbackKey(string key) => $"mining:{key}";
     private static string GroundFeedbackKey(Guid id) => $"ground:{id:N}";

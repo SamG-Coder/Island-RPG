@@ -8679,6 +8679,14 @@ var slimeFront = SlimeSpriteRig.Resolve(
     EntityAction.Idle, new Vector2(1, 1), 0);
 var slimeBack = SlimeSpriteRig.Resolve(
     EntityAction.Move, new Vector2(-1, -1), .31);
+var slimeUpLeft = SlimeSpriteRig.Resolve(
+    EntityAction.Move, new Vector2(-1, 0), 0);
+var slimeUpRight = SlimeSpriteRig.Resolve(
+    EntityAction.Move, new Vector2(0, -1), 0);
+var slimeDownLeft = SlimeSpriteRig.Resolve(
+    EntityAction.Move, new Vector2(0, 1), 0);
+var slimeDownRight = SlimeSpriteRig.Resolve(
+    EntityAction.Move, new Vector2(1, 0), 0);
 var slimeAttackEnd = SlimeSpriteRig.Resolve(
     EntityAction.Attack, Vector2.UnitX, 10);
 var slimeSpawnEnd = SlimeSpriteRig.Resolve(
@@ -8687,9 +8695,13 @@ Require(
     slimeRig.Frame(slimeFront).Width == SlimeSpriteRig.CellSize &&
     !slimeFront.UsesBackSheet &&
     slimeBack.UsesBackSheet && slimeBack.FrameIndex == 1 &&
+    slimeUpLeft.UsesBackSheet && slimeUpRight.UsesBackSheet &&
+    !slimeDownLeft.UsesBackSheet && !slimeDownRight.UsesBackSheet &&
     slimeAttackEnd.Completed && slimeAttackEnd.FrameIndex == 7 &&
     slimeSpawnEnd.Completed && slimeSpawnEnd.FrameIndex == 7 &&
     SlimeSpriteRig.SourceState(SlimeAnimationState.Move) ==
+        SlimeAnimationState.Idle &&
+    SlimeSpriteRig.SourceState(SlimeAnimationState.Attack) ==
         SlimeAnimationState.Idle &&
     Enumerable.Range(0, SlimeSpriteRig.Columns).All(frame =>
         SlimeSpriteRig.AuthoredFrame(
@@ -8741,6 +8753,11 @@ Require(
     nextWave.Spawner.Wave == 2,
     "a cleared enemy wave must remain empty through recovery before adapting the next wave");
 var passiveSlime = firstWave.Enemies[0];
+var damagedSlime = EnemyCombatService.ApplyHit(
+    passiveSlime, 3, "player");
+var ignoredEnemyDamage = EnemyCombatService.ApplyHit(
+    passiveSlime, 0, "player");
+var softShadow = SoftShadowSprite.Create();
 var nearbyActor = new EnemyActorPresence(
     "player", passiveSlime.Position + Vector2.UnitX, 0, true, 10, true);
 var passiveUpdate = EnemySpawnerService.UpdateController(
@@ -8748,6 +8765,10 @@ var passiveUpdate = EnemySpawnerService.UpdateController(
 var provokedUpdate = EnemySpawnerService.UpdateController(
     EnemySpawnerService.Provoke(passiveSlime, "player"),
     [nearbyActor], 1, .1f, 2187);
+var reactedUpdate = EnemySpawnerService.UpdateController(
+    provokedUpdate, [nearbyActor], provokedUpdate.AggroReadyAt, .1f, 2187);
+var hitWhileReacting = EnemyCombatService.ApplyHit(
+    provokedUpdate, 1, "player");
 var caveEnemy = passiveSlime with
 {
     Kind = EnemyKind.CaveSlime,
@@ -8761,6 +8782,11 @@ var caveUpdate = EnemySpawnerService.UpdateController(
     [new("villager", Vector2.UnitX * 3,
         (int)WorldLevel.Underground, true)],
     1, .1f, 2187);
+var caveReactedUpdate = EnemySpawnerService.UpdateController(
+    caveUpdate,
+    [new("villager", Vector2.UnitX * 3,
+        (int)WorldLevel.Underground, true)],
+    caveUpdate.AggroReadyAt, .1f, 2187);
 var leashed = EnemySpawnerService.UpdateController(
     EnemySpawnerService.Provoke(
         passiveSlime with
@@ -8770,12 +8796,41 @@ var leashed = EnemySpawnerService.UpdateController(
     [new("player",
         passiveSlime.SpawnPosition + Vector2.UnitX * 30, 0, true)],
     1, .1f, 2187);
+var disengaged = EnemySpawnerService.UpdateController(
+    EnemySpawnerService.Provoke(passiveSlime, "player") with
+    {
+        TargetId = "player",
+        Behavior = EnemyBehavior.Chase,
+        Path = [passiveSlime.SpawnPosition + Vector2.UnitX]
+    },
+    [new("player",
+        passiveSlime.SpawnPosition + Vector2.UnitX *
+        (EnemySpawnerService.LeashRadius + 1), 0, true)],
+    2, .1f, 2187);
 Require(
+    new SlimeEnemyController() is EnemyController &&
+    EnemyInteractionMenu.Options.SequenceEqual(
+        ["Walk Here", "Attack", "Examine"]) &&
+    damagedSlime.Health == passiveSlime.Health - 3 &&
+    damagedSlime.ProvokedById == "player" &&
+    ignoredEnemyDamage == passiveSlime &&
+    softShadow.Rgba.Where((value, index) => index % 4 == 3)
+        .Any(value => value > 0) &&
+    softShadow.Rgba.Where((value, index) => index % 4 == 3).Max() < 128 &&
     passiveUpdate.TargetId is null &&
     provokedUpdate.TargetId == "player" &&
-    provokedUpdate.Behavior == EnemyBehavior.Attack &&
+    provokedUpdate.Behavior == EnemyBehavior.Idle &&
+    provokedUpdate.AggroReadyAt == 1.8 &&
+    hitWhileReacting.AggroReadyAt == provokedUpdate.AggroReadyAt &&
+    reactedUpdate.Behavior == EnemyBehavior.Attack &&
     caveUpdate.TargetId == "villager" &&
+    caveUpdate.Behavior == EnemyBehavior.Idle &&
+    caveUpdate.AggroReadyAt == 1.25 &&
+    caveReactedUpdate.Behavior == EnemyBehavior.Chase &&
     leashed.TargetId is null && leashed.Behavior == EnemyBehavior.Return &&
+    disengaged.TargetId is null && disengaged.ProvokedById is null &&
+    disengaged.Behavior == EnemyBehavior.Return &&
+    disengaged.Path is null &&
     EnemySpawnerService.Supports(
         EnemyKind.WaterSlime, Biome.Beach, 0) &&
     EnemySpawnerService.Supports(

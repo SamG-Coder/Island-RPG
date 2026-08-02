@@ -10,8 +10,11 @@ internal sealed partial class GameHostWindow
 {
     private Guid? _combatTargetId;
     private string? _combatVillagerId;
+    private Guid? _combatEnemyId;
     private double _villagerCombatRepathAt;
     private Vector2 _villagerCombatPathTarget;
+    private double _enemyCombatRepathAt;
+    private Vector2 _enemyCombatPathTarget;
     private readonly Dictionary<string, double>
         _villagerAttackReactionAt = [];
     private readonly EntityActionCooldowns _actionCooldowns = new();
@@ -89,12 +92,54 @@ internal sealed partial class GameHostWindow
             ChatMessageStyle.Warning);
     }
 
+    internal void BeginEnemyCombat(Guid enemyId)
+    {
+        if (_player is null) return;
+        var enemy = _enemies.FirstOrDefault(value =>
+            value.Id == enemyId && value.Alive &&
+            value.WorldLevel == _activeWorldLevel);
+        if (enemy is null) return;
+        _combatTargetId = null;
+        _combatVillagerId = null;
+        _combatEnemyId = enemy.Id;
+        if (Vector2.Distance(_player.Position, enemy.Position) >
+            MeleeCombatService.AttackRange + .3f)
+        {
+            _worldActions.QueueEnemyAttack(enemy);
+            return;
+        }
+        StartPlayerMeleeSwing(enemy.Position);
+        _chatUi.AddMessage(
+            $"You begin attacking {EnemyDisplayName(enemy.Kind).ToLowerInvariant()}.",
+            ChatMessageStyle.Warning);
+    }
+
+    private void StartPlayerMeleeSwing(Vector2 target)
+    {
+        if (_player is null) return;
+        var readyAt = PlayerMeleeReadyAt();
+        if (readyAt <= _clock)
+        {
+            _nextMeleeAttackAt = _clock + MeleeImpactDelay();
+            _swingStartedForAttackAt = _nextMeleeAttackAt;
+            _player.RestartAttackAt(target);
+        }
+        else
+        {
+            _nextMeleeAttackAt = readyAt;
+            _swingStartedForAttackAt = 0;
+            _player.AttackAt(target);
+        }
+    }
+
     internal void CancelMeleeCombat()
     {
-        if (_combatTargetId is null && _combatVillagerId is null)
+        if (_combatTargetId is null && _combatVillagerId is null &&
+            _combatEnemyId is null)
             return;
         _combatTargetId = null;
         _combatVillagerId = null;
+        _combatEnemyId = null;
         _villagerCombatRepathAt = 0;
         // The ready time is global combat state. Movement or target changes
         // cancel targeting without granting an immediate fresh attack.
@@ -105,6 +150,11 @@ internal sealed partial class GameHostWindow
 
     internal void UpdateMeleeCombat()
     {
+        if (_combatEnemyId is { } enemyId)
+        {
+            UpdateEnemyCombat(enemyId);
+            return;
+        }
         if (_combatVillagerId is { } villagerId)
         {
             UpdateVillagerCombat(villagerId);
@@ -226,6 +276,91 @@ internal sealed partial class GameHostWindow
                 $"Your {CombatStatName(_activePlayer.CombatStance)} " +
                 $"level is now {award.Level}.",
                 ChatMessageStyle.LevelUp);
+    }
+
+    private void UpdateEnemyCombat(Guid enemyId)
+    {
+        if (_activePlayer is null || _player is null) return;
+        var index = _enemies.FindIndex(value =>
+            value.Id == enemyId && value.Alive &&
+            value.WorldLevel == _activeWorldLevel);
+        if (index < 0)
+        {
+            CancelMeleeCombat();
+            return;
+        }
+        var enemy = _enemies[index];
+        var target = enemy.Position;
+        if (Vector2.Distance(_player.Position, target) >
+            MeleeCombatService.AttackRange + .22f)
+        {
+            if (MeleeCombatService.ShouldRepathMovingTarget(
+                    _clock, _enemyCombatRepathAt,
+                    _enemyCombatPathTarget, target))
+            {
+                _enemyCombatRepathAt = _clock +
+                    MeleeCombatService.MovingTargetRepathSeconds;
+                _enemyCombatPathTarget = target;
+                _worldActions.QueueEnemyAttack(enemy);
+            }
+            return;
+        }
+        var impactDelay = MeleeImpactDelay();
+        if (_swingStartedForAttackAt != _nextMeleeAttackAt &&
+            _clock < _nextMeleeAttackAt - impactDelay)
+        {
+            if (_player.Action == EntityAction.Attack &&
+                _clock >= _meleeReturnToIdleAt)
+                _player.Stop();
+            return;
+        }
+        if (_clock >= _nextMeleeAttackAt - impactDelay &&
+            _swingStartedForAttackAt != _nextMeleeAttackAt)
+        {
+            _player.RestartAttackAt(target);
+            _swingStartedForAttackAt = _nextMeleeAttackAt;
+        }
+        else
+            _player.AttackAt(target);
+        if (_clock < _nextMeleeAttackAt) return;
+        var interaction = EntityInteractionService.TryMeleeAttack(
+            _actionCooldowns,
+            _activePlayer.Id,
+            _clock,
+            _activePlayer.AttackExperience,
+            _activePlayer.StrengthExperience,
+            MeleeCombatService.ExperienceForStance(
+                _activePlayer, _activePlayer.CombatStance),
+            Random.Shared.NextSingle(),
+            Random.Shared.NextSingle(),
+            _activePlayer.Inventory);
+        if (!interaction.Succeeded) return;
+        _nextMeleeAttackAt = PlayerMeleeReadyAt();
+        _meleeReturnToIdleAt = _clock + MeleeRecoveryDelay();
+        var roll = interaction.Attack;
+        if (!roll.Hit)
+        {
+            ShowEntityImpact(EnemyFeedbackKey(enemy.Id), 0, false);
+            _chatUi.AddMessage(
+                $"You miss {EnemyDisplayName(enemy.Kind).ToLowerInvariant()}.",
+                ChatMessageStyle.Miss);
+            return;
+        }
+        ApplyPlayerCombatExperience(interaction.Experience);
+        enemy = EnemyCombatService.ApplyHit(enemy, roll.Damage, "player");
+        _enemies[index] = enemy;
+        ShowEntityImpact(EnemyFeedbackKey(enemy.Id), roll.Damage, true);
+        _chatUi.AddMessage(
+            $"You hit {EnemyDisplayName(enemy.Kind).ToLowerInvariant()} " +
+            $"for {roll.Damage}.",
+            ChatMessageStyle.Damage);
+        if (!enemy.Alive)
+        {
+            _chatUi.AddMessage(
+                $"The {EnemyDisplayName(enemy.Kind).ToLowerInvariant()} dissolves.",
+                ChatMessageStyle.Action);
+            CancelMeleeCombat();
+        }
     }
 
     private void UpdateVillagerCombat(string villagerId)
@@ -469,6 +604,29 @@ internal sealed partial class GameHostWindow
 
     private void RenderCombatTargetHealthBar(Vector4 scene)
     {
+        var displayedEnemyId = _combatEnemyId;
+        if (displayedEnemyId is null &&
+            _entityFeedback.LatestImpactTargetKey is { } enemyKey &&
+            enemyKey.StartsWith("enemy:", StringComparison.Ordinal) &&
+            Guid.TryParseExact(
+                enemyKey["enemy:".Length..], "N", out var recentEnemyId))
+            displayedEnemyId = recentEnemyId;
+        if (displayedEnemyId is { } enemyId)
+        {
+            var enemy = _enemies.FirstOrDefault(value =>
+                value.Id == enemyId && value.Alive &&
+                value.WorldLevel == _activeWorldLevel);
+            if (enemy is null || _slimeRig is null) return;
+            var pose = SlimeSpriteRig.Resolve(
+                EntityAction.Idle, Vector2.UnitY, 0);
+            DrawEntityFeedback(
+                scene,
+                EnemySpriteBounds(enemy, _slimeRig.Frame(pose)),
+                enemy.Health / (float)enemy.MaximumHealth,
+                EnemyFeedbackKey(enemy.Id),
+                forceHealth: _combatEnemyId == enemy.Id);
+            return;
+        }
         var displayedVillagerId = _combatVillagerId;
         if (displayedVillagerId is null &&
             _entityFeedback.LatestImpactTargetKey is { } recentKey &&

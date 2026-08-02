@@ -37,7 +37,10 @@ internal sealed record EnemyState(
     IReadOnlyList<Vector2>? Path = null,
     int PathIndex = 0,
     Vector2? RoutedDestination = null,
-    double NextPathAt = 0)
+    double NextPathAt = 0,
+    EntityAction VisualAction = EntityAction.Idle,
+    double VisualActionStartedAt = 0,
+    double AggroReadyAt = 0)
 {
     public bool Alive => Health > 0;
 }
@@ -55,6 +58,8 @@ internal readonly record struct EnemySpawnerUpdate(
 
 internal static class EnemySpawnerService
 {
+    private static readonly EnemyController SlimeController =
+        new SlimeEnemyController();
     public const float ActivationRadius = 24f;
     public const float SpawnRadius = 3.5f;
     public const float RoamRadius = 4f;
@@ -127,75 +132,11 @@ internal static class EnemySpawnerService
         double now,
         float elapsed,
         int worldSeed)
-    {
-        if (!enemy.Alive) return enemy with { Behavior = EnemyBehavior.Dead };
-        var target = FindTarget(enemy, actors);
-        if (target is { } actor)
-        {
-            var targetFromSpawn = Vector2.DistanceSquared(
-                actor.Position, enemy.SpawnPosition);
-            if (targetFromSpawn <= LeashRadius * LeashRadius)
-            {
-                var distance = Vector2.Distance(enemy.Position, actor.Position);
-                var behavior = distance <= AttackRange
-                    ? EnemyBehavior.Attack
-                    : EnemyBehavior.Chase;
-                return enemy with
-                {
-                    TargetId = actor.Id,
-                    Destination = actor.Position,
-                    Behavior = behavior
-                };
-            }
-        }
-        if (Vector2.DistanceSquared(enemy.Position, enemy.SpawnPosition) >
-            RoamRadius * RoamRadius)
-            return enemy with
-            {
-                TargetId = null,
-                Destination = enemy.SpawnPosition,
-                Behavior = EnemyBehavior.Return
-            };
-        if (enemy.Behavior is EnemyBehavior.Roam or EnemyBehavior.Return &&
-            enemy.Path is { Count: > 0 })
-            return enemy;
-        if (now < enemy.NextDecisionAt)
-            return enemy;
-        var random = new Random(HashCode.Combine(
-            worldSeed, enemy.Id, (int)(now / 3)));
-        var angle = random.NextSingle() * MathF.Tau;
-        var radius = random.NextSingle() * RoamRadius;
-        var destination = enemy.SpawnPosition +
-            new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * radius;
-        return enemy with
-        {
-            TargetId = null,
-            Destination = destination,
-            Behavior = EnemyBehavior.Roam,
-            NextDecisionAt = now + 2.5 + random.NextDouble() * 3
-        };
-    }
+        => SlimeController.Update(
+            enemy, actors, now, elapsed, worldSeed);
 
     public static EnemyState Provoke(EnemyState enemy, string attackerId) =>
         enemy.Alive ? enemy with { ProvokedById = attackerId } : enemy;
-
-    private static EnemyActorPresence? FindTarget(
-        EnemyState enemy, IReadOnlyList<EnemyActorPresence> actors)
-    {
-        var candidates = actors.Where(actor =>
-            actor.Alive && actor.WorldLevel == enemy.WorldLevel);
-        if (enemy.Kind != EnemyKind.CaveSlime)
-            candidates = candidates.Where(actor =>
-                actor.Id == enemy.ProvokedById);
-        else
-            candidates = candidates.Where(actor =>
-                actor.Id == enemy.ProvokedById ||
-                Vector2.DistanceSquared(actor.Position, enemy.Position) <=
-                CaveAggroRadius * CaveAggroRadius);
-        return candidates.OrderBy(actor =>
-            Vector2.DistanceSquared(actor.Position, enemy.Position))
-            .Cast<EnemyActorPresence?>().FirstOrDefault();
-    }
 
     private static int AdaptiveCount(
         int maximum, IReadOnlyList<EnemyActorPresence> actors)

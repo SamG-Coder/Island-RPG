@@ -35,6 +35,8 @@ internal sealed class SlimeSpriteRig
     private readonly SpriteFrame[] _back;
     private static readonly int[] GroundedMoveFrames =
         [0, 1, 3, 5, 6, 7, 6, 1];
+    private static readonly int[] GroundedAttackFrames =
+        [0, 3, 5, 6, 7, 6, 3, 0];
 
     private SlimeSpriteRig(SpriteFrame[] front, SpriteFrame[] back)
     {
@@ -58,15 +60,20 @@ internal sealed class SlimeSpriteRig
 
     internal static SlimeAnimationState SourceState(
         SlimeAnimationState state) =>
-        state == SlimeAnimationState.Move
+        state is SlimeAnimationState.Move or SlimeAnimationState.Attack
             ? SlimeAnimationState.Idle
             : state;
 
     internal static int AuthoredFrame(
         SlimeAnimationState state, int logicalFrame) =>
-        state == SlimeAnimationState.Move
-            ? GroundedMoveFrames[Math.Clamp(logicalFrame, 0, Columns - 1)]
-            : Math.Clamp(logicalFrame, 0, Columns - 1);
+        state switch
+        {
+            SlimeAnimationState.Move =>
+                GroundedMoveFrames[Math.Clamp(logicalFrame, 0, Columns - 1)],
+            SlimeAnimationState.Attack =>
+                GroundedAttackFrames[Math.Clamp(logicalFrame, 0, Columns - 1)],
+            _ => Math.Clamp(logicalFrame, 0, Columns - 1)
+        };
 
     public static SlimeRigPose Resolve(
         EntityAction action, Vector2 mapFacing, double actionSeconds)
@@ -110,10 +117,13 @@ internal sealed class SlimeSpriteRig
         return new(
             state,
             frame,
-            projected.Y < -.05f,
+            FacesAwayFromCamera(mapFacing),
             projected.X < 0,
             completed);
     }
+
+    internal static bool FacesAwayFromCamera(Vector2 mapFacing) =>
+        mapFacing.X + mapFacing.Y < -.05f;
 
     private static SpriteFrame[] LoadSheet(string path)
     {

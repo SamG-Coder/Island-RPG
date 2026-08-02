@@ -1,4 +1,6 @@
+using IslandRpg.Assets;
 using IslandRpg.Gameplay;
+using IslandRpg.Rendering.Ui;
 using IslandRpg.World;
 using OpenTK.Mathematics;
 
@@ -9,6 +11,10 @@ internal sealed partial class GameHostWindow
     private readonly List<EnemySpawnerState> _enemySpawners = [];
     private readonly List<EnemyState> _enemies = [];
     private SlimeSpriteRig? _slimeRig;
+    private SpriteFrame? _softActorShadowFrame;
+    private int _softActorShadowTexture;
+    private Guid? _enemyContextTargetId;
+    private Vector2 _enemyContextWalkTarget;
     private readonly int[] _slimeFrontTextures =
         new int[SlimeSpriteRig.FrameCount];
     private readonly int[] _slimeBackTextures =
@@ -29,6 +35,8 @@ internal sealed partial class GameHostWindow
         _slimeRig = SlimeSpriteRig.Load(
             Path.Combine(directory, "slime-sprites.png"),
             Path.Combine(directory, "slime-sprites-back.png"));
+        _softActorShadowFrame = SoftShadowSprite.Create();
+        _softActorShadowTexture = Upload(_softActorShadowFrame);
         foreach (var state in Enum.GetValues<SlimeAnimationState>())
         for (var frame = 0; frame < SlimeSpriteRig.Columns; frame++)
         {
@@ -86,12 +94,129 @@ internal sealed partial class GameHostWindow
                 var controlled = EnemySpawnerService.UpdateController(
                     placed, actors, _clock, elapsed,
                     unchecked((int)_worldSeed));
+                controlled = ResolveEnemyAttack(controlled);
                 nextEnemies.Add(AdvanceEnemyPath(controlled, elapsed));
             }
         }
         _enemies.Clear();
         _enemies.AddRange(nextEnemies);
     }
+
+    private EnemyState ResolveEnemyAttack(EnemyState enemy)
+    {
+        if (enemy.Behavior != EnemyBehavior.Attack ||
+            enemy.TargetId != "player" || _activePlayer is null ||
+            _playerDefeated) return enemy;
+        var experience = Math.Max(1, enemy.PowerLevel * 100);
+        var interaction = EntityInteractionService.TryMeleeAttack(
+            _actionCooldowns,
+            $"enemy:{enemy.Id:N}",
+            _clock,
+            experience,
+            experience,
+            experience,
+            Random.Shared.NextSingle(),
+            Random.Shared.NextSingle());
+        if (!interaction.Succeeded) return enemy;
+        enemy = enemy with
+        {
+            VisualAction = EntityAction.Attack,
+            VisualActionStartedAt = _clock
+        };
+        if (interaction.Attack.Hit)
+            ApplyPlayerDamage(
+                interaction.Attack.Damage,
+                EnemyDisplayName(enemy.Kind));
+        else
+            ShowEntityImpact(
+                PlayerFeedbackKey(_activePlayer.Id), 0, false);
+        return enemy;
+    }
+
+    private void OpenEnemyContext(EnemyState enemy, Vector2 walkTarget)
+    {
+        _enemyContextTargetId = enemy.Id;
+        _enemyContextWalkTarget = walkTarget;
+        _inventoryContext.Close();
+        _treeContext.Close();
+        _groundObjectContext.Close();
+        _villagerContext.Close();
+        _fishContext.Close();
+        _vegetationContext.Close();
+        _miningContext.Close();
+        _enemyContext.Open(
+            MouseState.Position,
+            EnemyInteractionMenu.Options,
+            SceneClientBounds(), 148);
+    }
+
+    private void HandleEnemyContextSelection(int option)
+    {
+        var targetId = _enemyContextTargetId;
+        _enemyContextTargetId = null;
+        if (option == EnemyInteractionMenu.WalkHereIndex)
+        {
+            QueueWalk(_enemyContextWalkTarget);
+            return;
+        }
+        if (targetId is not { } id) return;
+        var enemy = _enemies.FirstOrDefault(value =>
+            value.Id == id && value.Alive &&
+            value.WorldLevel == _activeWorldLevel);
+        if (enemy is null) return;
+        if (option == EnemyInteractionMenu.AttackIndex)
+            _worldActions.QueueEnemyAttack(enemy);
+        else if (option == EnemyInteractionMenu.ExamineIndex)
+            _chatUi.AddMessage(
+                $"A {EnemyDisplayName(enemy.Kind).ToLowerInvariant()}. " +
+                $"Health {enemy.Health}/{enemy.MaximumHealth}.",
+                ChatMessageStyle.Normal);
+    }
+
+    private bool TryGetEnemyUnderMouse(
+        Vector2 mouse, out EnemyState enemy)
+    {
+        for (var index = _enemies.Count - 1; index >= 0; index--)
+        {
+            var candidate = _enemies[index];
+            if (!candidate.Alive ||
+                candidate.WorldLevel != _activeWorldLevel ||
+                _slimeRig is null) continue;
+            var visual = GetEnemyVisual(candidate);
+            if (visual is null) continue;
+            var bounds = EnemySpriteBounds(candidate, visual.Frame);
+            if (mouse.X < bounds.Left || mouse.X > bounds.Right ||
+                mouse.Y < bounds.Top || mouse.Y > bounds.Bottom) continue;
+            enemy = candidate;
+            return true;
+        }
+        enemy = null!;
+        return false;
+    }
+
+    private (float Left, float Top, float Right, float Bottom)
+        EnemySpriteBounds(EnemyState enemy, SpriteFrame frame)
+    {
+        var terrain = SamplePlayerTerrain(enemy.Position.X, enemy.Position.Y);
+        var world = IsometricTerrainProjection.Project(
+            enemy.Position.X, enemy.Position.Y, terrain.Height);
+        var anchor = SpriteAnchor(world);
+        var scale = SpritePixelScale() * SlimeSpriteRig.WorldScale;
+        return (
+            anchor.X - frame.HotspotX * scale,
+            anchor.Y - frame.HotspotY * scale,
+            anchor.X + (frame.Width - frame.HotspotX) * scale,
+            anchor.Y + (frame.Height - frame.HotspotY) * scale);
+    }
+
+    private static string EnemyDisplayName(EnemyKind kind) => kind switch
+    {
+        EnemyKind.WaterSlime => "Water slime",
+        EnemyKind.GrassSlime => "Grass slime",
+        EnemyKind.SandSlime => "Sand slime",
+        EnemyKind.CaveSlime => "Cave slime",
+        _ => "Slime"
+    };
 
     private EnemyState AdvanceEnemyPath(EnemyState enemy, float elapsed)
     {
@@ -383,16 +508,22 @@ internal sealed partial class GameHostWindow
             ? path[enemy.PathIndex] - enemy.Position
             : enemy.Destination - enemy.Position;
         if (facing.LengthSquared < .001f) facing = Vector2.UnitY;
-        var action = enemy.Behavior switch
+        var attackAge = _clock - enemy.VisualActionStartedAt;
+        var activeAttack = enemy.VisualAction == EntityAction.Attack &&
+                           attackAge >= 0 && attackAge < 1.12;
+        var action = activeAttack
+            ? EntityAction.Attack
+            : enemy.Behavior switch
         {
             EnemyBehavior.Chase or EnemyBehavior.Return or EnemyBehavior.Roam =>
                 EntityAction.Move,
-            EnemyBehavior.Attack => EntityAction.Attack,
             _ => EntityAction.Idle
         };
         var pose = SlimeSpriteRig.Resolve(
             action, facing,
-            _clock + Math.Abs(enemy.Id.GetHashCode() % 100) * .013);
+            activeAttack
+                ? attackAge
+                : _clock + Math.Abs(enemy.Id.GetHashCode() % 100) * .013);
         var frame = _slimeRig.Frame(pose);
         var textureIndex = (int)pose.State * SlimeSpriteRig.Columns +
                            pose.FrameIndex;
@@ -410,7 +541,9 @@ internal sealed partial class GameHostWindow
             0,
             SlimeTint(enemy.Kind),
             .28f,
-            SlimeSpriteRig.WorldScale);
+            SlimeSpriteRig.WorldScale,
+            Opacity: .88f,
+            SoftShadow: true);
     }
 
     private static Vector3 SlimeTint(EnemyKind kind) => kind switch

@@ -677,6 +677,26 @@ internal sealed partial class GameHostWindow
                     y = value.PositionY,
                     distance = Vector2.Distance(
                         new(value.PositionX, value.PositionY), origin)
+                }),
+            enemies = _enemies
+                .Where(value => value.Alive &&
+                    value.WorldLevel == _activeWorldLevel &&
+                    Vector2.DistanceSquared(value.Position, origin) <=
+                    radiusSquared)
+                .OrderBy(value => Vector2.DistanceSquared(
+                    value.Position, origin))
+                .Select(value => new
+                {
+                    id = value.Id,
+                    kind = value.Kind.ToString(),
+                    x = value.Position.X,
+                    y = value.Position.Y,
+                    value.Health,
+                    value.MaximumHealth,
+                    behavior = value.Behavior.ToString(),
+                    value.TargetId,
+                    action = "attack_enemy",
+                    distance = Vector2.Distance(value.Position, origin)
                 })
         });
     }
@@ -1125,6 +1145,24 @@ internal sealed partial class GameHostWindow
                 }
                 _worldActions.QueueVillagerGift(
                     villager, slot, itemId);
+                return true;
+            case "attack_enemy":
+                var requestedEnemy = root.TryGetProperty(
+                    "actor", out var enemyElement)
+                    ? enemyElement.GetString()
+                    : null;
+                var enemy = _enemies.FirstOrDefault(value =>
+                    value.Alive && value.WorldLevel == _activeWorldLevel &&
+                    (string.IsNullOrWhiteSpace(requestedEnemy) ||
+                     value.Id.ToString("N").Equals(
+                         requestedEnemy,
+                         StringComparison.OrdinalIgnoreCase)));
+                if (enemy is null)
+                {
+                    error = "enemy_not_found";
+                    return false;
+                }
+                _worldActions.QueueEnemyAttack(enemy);
                 return true;
             default:
                 return false;

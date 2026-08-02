@@ -97,6 +97,24 @@ internal sealed partial class GameHostWindow
             clearTreeActions: true);
     }
 
+    public void QueueEnemyAttack(EnemyState enemy)
+    {
+        if (window._combatEnemyId != enemy.Id)
+            window.CancelMeleeCombat();
+        window._combatTargetId = null;
+        window._combatVillagerId = null;
+        window._combatEnemyId = enemy.Id;
+        window._enemyCombatPathTarget = enemy.Position;
+        window._enemyCombatRepathAt =
+            window._clock + MeleeCombatService.MovingTargetRepathSeconds;
+        QueuePath(
+            enemy.Position,
+            MeleeCombatService.AttackRange,
+            GameHostWindow.WorldActionType.AttackEnemy,
+            actorId: enemy.Id.ToString("N"),
+            clearTreeActions: true);
+    }
+
     public void QueueVillagerGift(
         VillagerState villager,
         int inventorySlot,
@@ -199,7 +217,8 @@ internal sealed partial class GameHostWindow
         if (window._player is null) return;
         if (type is not (
                 GameHostWindow.WorldActionType.AttackTrainingDummy or
-                GameHostWindow.WorldActionType.AttackVillager))
+                GameHostWindow.WorldActionType.AttackVillager or
+                GameHostWindow.WorldActionType.AttackEnemy))
             window.CancelMeleeCombat();
         if (clearTreeActions)
         {
@@ -268,6 +287,13 @@ internal sealed partial class GameHostWindow
                 ActorId: { } villagerId
             }:
                 window.BeginVillagerCombat(villagerId);
+                break;
+            case
+            {
+                Type: GameHostWindow.WorldActionType.AttackEnemy,
+                ActorId: { } enemyId
+            } when Guid.TryParseExact(enemyId, "N", out var parsedEnemyId):
+                window.BeginEnemyCombat(parsedEnemyId);
                 break;
             case
             {
