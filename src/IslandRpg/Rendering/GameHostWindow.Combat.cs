@@ -14,17 +14,11 @@ internal sealed partial class GameHostWindow
     private Vector2 _villagerCombatPathTarget;
     private readonly Dictionary<string, double>
         _villagerAttackReactionAt = [];
+    private readonly EntityActionCooldowns _actionCooldowns = new();
     private double _nextMeleeAttackAt;
     private double _swingStartedForAttackAt;
     private double _meleeReturnToIdleAt;
     private bool _combatLeftWasDown;
-    private CombatHitSplat? _combatHitSplat;
-
-    private readonly record struct CombatHitSplat(
-        string TargetKey,
-        int Damage,
-        bool Hit,
-        double ShownAt);
 
     private static readonly MeleeCombatStance[] MeleeStances =
         Enum.GetValues<MeleeCombatStance>();
@@ -40,7 +34,8 @@ internal sealed partial class GameHostWindow
             return;
         _combatTargetId = dummyId;
         var target = new Vector2(dummy.X, dummy.Y);
-        if (_nextMeleeAttackAt <= _clock)
+        var readyAt = PlayerMeleeReadyAt();
+        if (readyAt <= _clock)
         {
             _nextMeleeAttackAt = _clock + MeleeImpactDelay();
             _swingStartedForAttackAt = _nextMeleeAttackAt;
@@ -76,9 +71,19 @@ internal sealed partial class GameHostWindow
             _worldActions.QueueVillagerAttack(villager);
             return;
         }
-        _nextMeleeAttackAt = _clock + MeleeImpactDelay();
-        _swingStartedForAttackAt = _nextMeleeAttackAt;
-        _player.RestartAttackAt(target);
+        var readyAt = PlayerMeleeReadyAt();
+        if (readyAt <= _clock)
+        {
+            _nextMeleeAttackAt = _clock + MeleeImpactDelay();
+            _swingStartedForAttackAt = _nextMeleeAttackAt;
+            _player.RestartAttackAt(target);
+        }
+        else
+        {
+            _nextMeleeAttackAt = readyAt;
+            _swingStartedForAttackAt = 0;
+            _player.AttackAt(target);
+        }
         _chatUi.AddMessage(
             $"You begin attacking {villager.Name}.",
             ChatMessageStyle.Warning);
@@ -146,10 +151,10 @@ internal sealed partial class GameHostWindow
             _player.AttackAt(target);
         }
         if (_clock < _nextMeleeAttackAt) return;
-        _nextMeleeAttackAt += MeleeCombatService.AttackIntervalSeconds;
-        _meleeReturnToIdleAt = _clock + MeleeRecoveryDelay();
-
-        var interaction = EntityInteractionService.MeleeAttack(
+        var interaction = EntityInteractionService.TryMeleeAttack(
+            _actionCooldowns,
+            _activePlayer.Id,
+            _clock,
             _activePlayer.AttackExperience,
             _activePlayer.StrengthExperience,
             MeleeCombatService.ExperienceForStance(
@@ -157,17 +162,20 @@ internal sealed partial class GameHostWindow
             Random.Shared.NextSingle(),
             Random.Shared.NextSingle(),
             _activePlayer.Inventory);
+        if (!interaction.Succeeded) return;
+        _nextMeleeAttackAt = PlayerMeleeReadyAt();
+        _meleeReturnToIdleAt = _clock + MeleeRecoveryDelay();
         var roll = interaction.Attack;
         if (!roll.Hit)
         {
-            _combatHitSplat = new(
-                targetId.ToString("N"), 0, false, _clock);
+            ShowEntityImpact(
+                GroundFeedbackKey(targetId), 0, false);
             _chatUi.AddMessage("You miss.", ChatMessageStyle.Action);
             return;
         }
 
-        _combatHitSplat = new(
-            targetId.ToString("N"), roll.Damage, true, _clock);
+        ShowEntityImpact(
+            GroundFeedbackKey(targetId), roll.Damage, true);
         var health = location.Object.Health <= 0
             ? MeleeCombatService.TrainingDummyMaximumHealth
             : location.Object.Health;
@@ -271,11 +279,10 @@ internal sealed partial class GameHostWindow
         else
             _player.AttackAt(target);
         if (_clock < _nextMeleeAttackAt) return;
-        _nextMeleeAttackAt +=
-            MeleeCombatService.AttackIntervalSeconds;
-        _meleeReturnToIdleAt = _clock + MeleeRecoveryDelay();
-
-        var interaction = EntityInteractionService.MeleeAttack(
+        var interaction = EntityInteractionService.TryMeleeAttack(
+            _actionCooldowns,
+            _activePlayer.Id,
+            _clock,
             _activePlayer.AttackExperience,
             _activePlayer.StrengthExperience,
             MeleeCombatService.ExperienceForStance(
@@ -283,11 +290,14 @@ internal sealed partial class GameHostWindow
             Random.Shared.NextSingle(),
             Random.Shared.NextSingle(),
             _activePlayer.Inventory);
+        if (!interaction.Succeeded) return;
+        _nextMeleeAttackAt = PlayerMeleeReadyAt();
+        _meleeReturnToIdleAt = _clock + MeleeRecoveryDelay();
         var roll = interaction.Attack;
         if (!roll.Hit)
         {
-            _combatHitSplat = new(
-                villager.Id, 0, false, _clock);
+            ShowEntityImpact(
+                VillagerFeedbackKey(villager.Id), 0, false);
             _chatUi.AddMessage(
                 $"You miss {villager.Name}.",
                 ChatMessageStyle.Miss);
@@ -301,8 +311,8 @@ internal sealed partial class GameHostWindow
                 villager, _activePlayer.Id),
             roll.Damage,
             _worldGameSeconds);
-        _combatHitSplat = new(
-            villager.Id, roll.Damage, true, _clock);
+        ShowEntityImpact(
+            VillagerFeedbackKey(villager.Id), roll.Damage, true);
         _villagers[index] = villager;
         _villagersDirty = true;
         ReactToVillagerAttack(index);
@@ -317,6 +327,12 @@ internal sealed partial class GameHostWindow
             CancelMeleeCombat();
         }
     }
+
+    private double PlayerMeleeReadyAt() =>
+        _activePlayer is null
+            ? double.PositiveInfinity
+            : _actionCooldowns.ReadyAt(
+                _activePlayer.Id, EntityAction.Attack);
 
     private void ReactToVillagerAttack(int victimIndex)
     {
@@ -455,12 +471,10 @@ internal sealed partial class GameHostWindow
     {
         var displayedVillagerId = _combatVillagerId;
         if (displayedVillagerId is null &&
-            _combatHitSplat is { } recentSplat &&
-            _clock - recentSplat.ShownAt <
-            MeleeCombatService.HitSplatSeconds &&
-            _villagers.Any(value =>
-                value.Id == recentSplat.TargetKey))
-            displayedVillagerId = recentSplat.TargetKey;
+            _entityFeedback.LatestImpactTargetKey is { } recentKey &&
+            recentKey.StartsWith("villager:",
+                StringComparison.Ordinal))
+            displayedVillagerId = recentKey["villager:".Length..];
         if (displayedVillagerId is { } villagerId)
         {
             var villager = _villagers.FirstOrDefault(value =>
@@ -470,13 +484,13 @@ internal sealed partial class GameHostWindow
                 !TryVillagerSpriteBounds(
                     villager, out var villagerBounds))
                 return;
-            DrawWorldHealthBar(
+            DrawEntityFeedback(
                 scene,
                 villagerBounds,
                 villager.Health /
-                (float)AdventureService.BaseMaximumHealth);
-            RenderCombatHitSplat(
-                scene, villagerBounds, villager.Id);
+                (float)AdventureService.BaseMaximumHealth,
+                VillagerFeedbackKey(villager.Id),
+                forceHealth: _combatVillagerId == villager.Id);
             return;
         }
         if (_combatTargetId is not { } targetId ||
@@ -491,96 +505,12 @@ internal sealed partial class GameHostWindow
         var health = location.Object.Health > 0
             ? location.Object.Health
             : maximum;
-        DrawWorldHealthBar(
+        DrawEntityFeedback(
             scene,
             SpriteBounds(frame, GroundObjectWorld(location.Object)),
-            health / (float)maximum);
-        RenderCombatHitSplat(
-            scene,
-            SpriteBounds(frame, GroundObjectWorld(location.Object)),
-            targetId.ToString("N"));
-    }
-
-    private void RenderCombatHitSplat(
-        Vector4 scene,
-        (float Left, float Top, float Right, float Bottom) targetBounds,
-        string targetKey)
-    {
-        if (_combatHitSplat is not { } splat ||
-            splat.TargetKey != targetKey)
-            return;
-        var age = (float)(_clock - splat.ShownAt);
-        if (age >= MeleeCombatService.HitSplatSeconds)
-        {
-            _combatHitSplat = null;
-            return;
-        }
-
-        var sceneScale = scene.Z / ReferenceWidth;
-        var fade = Math.Clamp(
-            (MeleeCombatService.HitSplatSeconds - age) / .55f, 0, 1);
-        var entrance = Math.Clamp(age / .08f, 0, 1);
-        var centerX = scene.X +
-            (targetBounds.Left + targetBounds.Right) * .5f * sceneScale;
-        var centerY = scene.Y +
-            (targetBounds.Top +
-             (targetBounds.Bottom - targetBounds.Top) * .42f) * sceneScale;
-        // The target position belongs to the scaled world scene, but the
-        // hit-splat is a UI element. Keep its pixel size stable across zoom,
-        // window resolutions, and fullscreen display modes.
-        const int fullRadius = 12;
-        var radius = Math.Max(3, (int)MathF.Round(fullRadius * entrance));
-        DrawCombatSplatBadge(
-            centerX, centerY, radius, splat.Hit, fade);
-        var textBounds = new Vector4(
-            centerX - radius, centerY - radius - 2,
-            radius * 2, radius * 2);
-        DrawCenteredUiText(
-            splat.Damage.ToString(),
-            new(textBounds.X + 1, textBounds.Y + 1,
-                textBounds.Z, textBounds.W),
-            new FSColor(28, 10, 7, (int)(235 * fade)));
-        DrawCenteredUiText(
-            splat.Damage.ToString(),
-            textBounds,
-            new FSColor(255, 246, 218, (int)(255 * fade)));
-    }
-
-    private void DrawCombatSplatBadge(
-        float centerX, float centerY, int radius, bool hit, float fade)
-    {
-        var edge = hit
-            ? new Vector4(.48f, .025f, .015f, fade)
-            : new Vector4(.045f, .16f, .52f, fade);
-        var face = hit
-            ? new Vector4(.78f, .055f, .030f, fade)
-            : new Vector4(.06f, .28f, .74f, fade);
-
-        // Use the same compact eight-point impact silhouette for hits and
-        // misses; only the combat meaning changes the palette.
-        var point = Math.Max(2, radius / 4);
-        DrawUiColor(new(
-            centerX - point / 2f, centerY - radius - 1,
-            point, radius * 2 + 2), edge);
-        DrawUiColor(new(
-            centerX - radius - 1, centerY - point / 2f,
-            radius * 2 + 2, point), edge);
-        var diagonalOffset = radius * .68f;
-        var diagonalSize = Math.Max(2, point);
-        foreach (var (x, y) in new[]
-                 {
-                     (-diagonalOffset, -diagonalOffset),
-                     (diagonalOffset, -diagonalOffset),
-                     (-diagonalOffset, diagonalOffset),
-                     (diagonalOffset, diagonalOffset)
-                 })
-            DrawUiColor(new(
-                centerX + x - diagonalSize / 2f,
-                centerY + y - diagonalSize / 2f,
-                diagonalSize,
-                diagonalSize), edge);
-        DrawUiCircle(centerX, centerY, radius, edge);
-        DrawUiCircle(centerX, centerY, Math.Max(1, radius - 2), face);
+            health / (float)maximum,
+            GroundFeedbackKey(targetId),
+            forceHealth: true);
     }
 
     private double MeleeImpactDelay()

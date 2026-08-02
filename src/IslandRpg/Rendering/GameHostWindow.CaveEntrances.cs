@@ -222,6 +222,8 @@ internal sealed partial class GameHostWindow
                 PlayerInventory.BestShovel(
                     _activePlayer?.Inventory)?.DiggingPower ?? 1));
         var health = site.Health - damage;
+        ShowEntityImpact(
+            DigFeedbackKey(site.Id), damage, true);
         PlaySoundCue("digging-impact");
         _chatUi.AddMessage(
             $"You excavate for {damage} damage " +
@@ -367,29 +369,16 @@ internal sealed partial class GameHostWindow
         if (ActiveDigSiteLocation() is not { } location ||
             location.Object.MaxHealth <= 0)
             return;
-        var scale = scene.Z / ReferenceWidth;
         var world = GroundObjectWorld(location.Object);
         var anchor = SpriteAnchor(world);
-        var width = Math.Clamp(42 * _zoom, 28, 64);
-        var bar = new Vector4(
-            scene.X + (anchor.X - width * .5f) * scale,
-            scene.Y + (anchor.Y - 42 * _zoom) * scale,
-            width * scale,
-            Math.Max(5, 7 * scale));
-        var ratio = location.Object.Health /
-                    (float)location.Object.MaxHealth;
-        DrawUiColor(bar, new(.035f, .028f, .022f, .96f));
-        DrawUiColor(
-            new(
-                bar.X + 2, bar.Y + 2,
-                Math.Max(0, (bar.Z - 4) * ratio),
-                Math.Max(1, bar.W - 4)),
-            ratio > .5f
-                ? new(.24f, .62f, .18f, 1)
-                : ratio > .25f
-                    ? new(.74f, .55f, .12f, 1)
-                    : new(.70f, .14f, .09f, 1));
-        DrawPanelOutline(bar, 0, new(.10f, .08f, .05f, 1));
+        DrawEntityFeedback(
+            scene,
+            (anchor.X - 20, anchor.Y - 40,
+                anchor.X + 20, anchor.Y),
+            location.Object.Health /
+            (float)location.Object.MaxHealth,
+            DigFeedbackKey(location.Object.Id),
+            forceHealth: true);
     }
 
     private void QueueCaveEntry(WorldGroundObject entrance) =>

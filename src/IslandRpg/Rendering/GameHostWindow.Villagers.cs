@@ -67,10 +67,7 @@ internal sealed partial class GameHostWindow
         _settlementCouncilDeadline = 0;
         _settlementCouncilTimedOut = false;
         _nextVillagerRoleAssignment = 0;
-        _recentNpcTreeHealthId = null;
-        _recentNpcMiningHealthKey = null;
-        _recentNpcResourceHealthUntil = 0;
-        _playerWorldHealthUntil = 0;
+        _entityFeedback.Clear();
         if (_activeWorld is null) return;
         _settlementGroup = _saves.LoadSettlementGroup(_activeWorld.Id);
         _villagerDeaths = _saves.LoadVillagerDeaths(_activeWorld.Id);

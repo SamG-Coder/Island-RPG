@@ -4611,6 +4611,58 @@ var nonKnifeWeaponHit = MeleeCombatService.Roll(
     hitRoll: 0,
     damageRoll: 0,
     inventory: [ItemIds.IronAxe]);
+var attackCooldowns = new EntityActionCooldowns();
+Require(
+    attackCooldowns.TryCommit(
+        "attacker-a", EntityAction.Attack, 10, 2.4) &&
+    !attackCooldowns.TryCommit(
+        "attacker-a", EntityAction.Attack, 10.1, 2.4) &&
+    !attackCooldowns.TryCommit(
+        "attacker-a", EntityAction.Attack, 12.39, 2.4) &&
+    attackCooldowns.TryCommit(
+        "attacker-b", EntityAction.Attack, 10.1, 2.4) &&
+    attackCooldowns.TryCommit(
+        "attacker-a", EntityAction.Attack, 12.4, 2.4) &&
+    attackCooldowns.TryCommit(
+        "attacker-a", EntityAction.Attack, 100, 2.4) &&
+    !attackCooldowns.TryCommit(
+        "attacker-a", EntityAction.Attack, 100.01, 2.4) &&
+    attackCooldowns.ReadyAt(
+        "attacker-a", EntityAction.Attack) == 102.4,
+    "melee cooldowns must be per attacker, survive movement or target changes, and never replay overdue impacts");
+var sharedCombatCooldowns = new EntityActionCooldowns();
+var firstSharedAttack = EntityInteractionService.TryMeleeAttack(
+    sharedCombatCooldowns, "shared-a", 20,
+    0, 0, 0, 0, 0);
+var retargetedSharedAttack = EntityInteractionService.TryMeleeAttack(
+    sharedCombatCooldowns, "shared-a", 20.1,
+    0, 0, 0, 0, 0);
+var otherEntitySharedAttack = EntityInteractionService.TryMeleeAttack(
+    sharedCombatCooldowns, "shared-b", 20.1,
+    0, 0, 0, 0, 0);
+var recoveredSharedAttack = EntityInteractionService.TryMeleeAttack(
+    sharedCombatCooldowns, "shared-a",
+    20 + MeleeCombatService.AttackIntervalSeconds + .001,
+    0, 0, 0, 0, 0);
+Require(
+    firstSharedAttack is { Succeeded: true, Attack.Hit: true } &&
+    retargetedSharedAttack is
+        { Succeeded: false, Failure: "attack_cooldown" } &&
+    otherEntitySharedAttack.Succeeded &&
+    recoveredSharedAttack.Succeeded,
+    "the shared entity interaction layer must enforce combat cadence independently of controller and target");
+var entityFeedback = new EntityFeedbackState();
+entityFeedback.ShowImpact("tree:oak", 7, true, 50);
+entityFeedback.ShowImpact("villager:ada", -3, false, 51);
+Require(
+    entityFeedback.HealthVisible("tree:oak", 52.99) &&
+    !entityFeedback.HealthVisible("tree:oak", 53) &&
+    entityFeedback.TryGet("tree:oak", out var treeFeedback) &&
+    treeFeedback is { Damage: 7, Hit: true, ImpactAt: 50 } &&
+    entityFeedback.TryGet("villager:ada", out var villagerFeedback) &&
+    villagerFeedback is { Damage: 0, Hit: false } &&
+    entityFeedback.LatestImpactTargetKey == "villager:ada",
+    "all damageable entity types must share bounded health and impact presentation state");
 Require(
     meleeHit is { Hit: true, Damage: 1, Experience: 4 } &&
     !meleeMiss.Hit &&

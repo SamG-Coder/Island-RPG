@@ -382,10 +382,6 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _pathRequestId;
     private QueuedWorldAction? _queuedAction;
     private Guid? _activeTreeId;
-    private Guid? _recentNpcTreeHealthId;
-    private string? _recentNpcMiningHealthKey;
-    private double _recentNpcResourceHealthUntil;
-    private double _playerWorldHealthUntil;
     private Guid? _activeTreeStickGatherId;
     private Guid? _activeGroundPickupId;
     private GroundDropPreview? _groundDropPreview;
@@ -2516,6 +2512,8 @@ internal sealed partial class GameHostWindow : GameWindow
             PlaySoundCue("woodcutting-impact");
             if (!strikeResult.Hit)
             {
+                ShowEntityImpact(
+                    TreeFeedbackKey(instance.Id), 0, false);
                 _chatUi.AddMessage(
                     $"Woodcutting {strikeResult.Experience.Level}: you miss the tree.",
                     ChatMessageStyle.Miss);
@@ -2523,6 +2521,8 @@ internal sealed partial class GameHostWindow : GameWindow
             }
             var damage = strikeResult.Damage;
             var health = strikeResult.Health;
+            ShowEntityImpact(
+                TreeFeedbackKey(instance.Id), damage, true);
             var state = health == 0
                 ? TreeLifecycleState.Stump
                 : TreeLifecycleState.Standing;
@@ -4326,6 +4326,8 @@ internal sealed partial class GameHostWindow : GameWindow
         _gameUi.Layout(scene);
         _chatUi.Layout(scene);
         _minimapUi.Layout(scene);
+        _entityFeedback.Prune(
+            _clock, MeleeCombatService.HitSplatSeconds);
         RenderNavigationBlocks(scene);
         RenderTreeHealthBars(scene);
         RenderMiningHealthBars(scene);
@@ -5102,8 +5104,8 @@ internal sealed partial class GameHostWindow : GameWindow
             if (instance.State != TreeLifecycleState.Standing ||
                 instance.Health >= instance.MaxHealth &&
                 instance.Id != _activeTreeId &&
-                !(_clock < _recentNpcResourceHealthUntil &&
-                  instance.Id == _recentNpcTreeHealthId))
+                !_entityFeedback.HealthVisible(
+                    TreeFeedbackKey(instance.Id), _clock))
                 continue;
             var sourceTree = gpu.Chunk.Trees.FirstOrDefault(tree =>
                 tree.X == instance.X && tree.Y == instance.Y);
@@ -5118,40 +5120,12 @@ internal sealed partial class GameHostWindow : GameWindow
                 (instance.X - instance.Y) * 48,
                 (instance.X + instance.Y + 1) * 24 - elevation * 20);
             var bounds = SpriteBounds(entry.Frame, world);
-            DrawWorldHealthBar(
+            DrawEntityFeedback(
                 scene, bounds,
-                instance.Health / (float)instance.MaxHealth);
+                instance.Health / (float)instance.MaxHealth,
+                TreeFeedbackKey(instance.Id),
+                forceHealth: instance.Id == _activeTreeId);
         }
-    }
-
-    private void DrawWorldHealthBar(
-        Vector4 scene,
-        (float Left, float Top, float Right, float Bottom) bounds,
-        float ratio)
-    {
-        var scale = scene.Z / ReferenceWidth;
-        var width = Math.Clamp(42 * _zoom, 28, 64);
-        var bar = new Vector4(
-            scene.X + ((bounds.Left + bounds.Right) * .5f -
-                       width * .5f) * scale,
-            scene.Y + (bounds.Top - 9) * scale,
-            width * scale,
-            Math.Max(5, 7 * scale));
-        if (bar.X + bar.Z < scene.X || bar.X > scene.X + scene.Z ||
-            bar.Y + bar.W < scene.Y || bar.Y > scene.Y + scene.W)
-            return;
-        DrawUiColor(bar, new(.035f, .028f, .022f, .96f));
-        ratio = Math.Clamp(ratio, 0, 1);
-        DrawUiColor(
-            new(bar.X + 2, bar.Y + 2,
-                Math.Max(0, (bar.Z - 4) * ratio),
-                Math.Max(1, bar.W - 4)),
-            ratio > .5f
-                ? new(.24f, .62f, .18f, 1)
-                : ratio > .25f
-                    ? new(.74f, .55f, .12f, 1)
-                    : new(.70f, .14f, .09f, 1));
-        DrawPanelOutline(bar, 0, new(.10f, .08f, .05f, 1));
     }
 
     private void DrawUiButtonCaption(string caption, Vector4 bounds)

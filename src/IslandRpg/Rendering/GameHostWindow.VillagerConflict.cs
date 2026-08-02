@@ -109,13 +109,18 @@ internal sealed partial class GameHostWindow
                 var currentTarget = _villagers[currentTargetIndex];
                 if (actor.Health <= 0 || currentTarget.Health <= 0)
                     return new(intent, false, "target_unavailable");
-                var interaction = EntityInteractionService.MeleeAttack(
+                var interaction = EntityInteractionService.TryMeleeAttack(
+                    _actionCooldowns,
+                    actor.Id,
+                    _clock,
                     actor.AttackExperience,
                     actor.StrengthExperience,
                     actor.AttackExperience,
                     DeterministicRoll(actor.Id, $"npc-hit:{targetId}"),
                     DeterministicRoll(actor.Id, $"npc-damage:{targetId}"),
                     actor.Inventory);
+                if (!interaction.Succeeded)
+                    return new(intent, false, interaction.Failure);
                 var roll = interaction.Attack;
                 _villagers[actorIndex] = actor with
                 {
@@ -134,11 +139,10 @@ internal sealed partial class GameHostWindow
                             actorIndex, currentTargetIndex,
                             actor.ConflictMotive ?? "attack", true);
                 }
-                _combatHitSplat = new(
-                    currentTarget.Id,
+                ShowEntityImpact(
+                    VillagerFeedbackKey(currentTarget.Id),
                     roll.Hit ? roll.Damage : 0,
-                    roll.Hit,
-                    _clock);
+                    roll.Hit);
                 ObserveLog("conflict_attack", actor.Id, new
                 {
                     TargetId = currentTarget.Id,

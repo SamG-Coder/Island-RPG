@@ -1418,7 +1418,7 @@ internal sealed partial class GameHostWindow
         string target,
         ResourceStrikeResult strike)
     {
-        ShowNpcResourceHealth(skill, targetId);
+        ShowNpcResourceFeedback(skill, targetId, strike);
         villager = VillagerActionMemoryService.RecordResourceStrike(
             villager, skill, targetId, target, strike,
             _worldGameSeconds);
@@ -1449,14 +1449,20 @@ internal sealed partial class GameHostWindow
         return villager;
     }
 
-    private void ShowNpcResourceHealth(string skill, string targetId)
+    private void ShowNpcResourceFeedback(
+        string skill, string targetId, ResourceStrikeResult strike)
     {
-        _recentNpcResourceHealthUntil = _clock + 3;
         if (skill.Equals("woodcutting", StringComparison.OrdinalIgnoreCase) &&
             Guid.TryParse(targetId, out var treeId))
-            _recentNpcTreeHealthId = treeId;
+            ShowEntityImpact(
+                TreeFeedbackKey(treeId),
+                strike.Hit ? strike.Damage : 0,
+                strike.Hit);
         else if (skill.Equals("mining", StringComparison.OrdinalIgnoreCase))
-            _recentNpcMiningHealthKey = targetId;
+            ShowEntityImpact(
+                MiningFeedbackKey(targetId),
+                strike.Hit ? strike.Damage : 0,
+                strike.Hit);
     }
 
     private bool TryVillagerPlaceOrTendCampfire(
@@ -1669,16 +1675,24 @@ internal sealed partial class GameHostWindow
                     _player is null || _activePlayer.Health <= 0)
                     return new(intent, false, "target_unavailable");
                 var actor = _villagers[actorIndex];
-                var interaction = EntityInteractionService.MeleeAttack(
+                var interaction = EntityInteractionService.TryMeleeAttack(
+                    _actionCooldowns,
+                    actor.Id,
+                    _clock,
                     actor.AttackExperience,
                     actor.StrengthExperience,
                     actor.AttackExperience,
                     DeterministicRoll(actor.Id, "combat-hit"),
                     DeterministicRoll(actor.Id, "combat-damage"),
                     actor.Inventory);
+                if (!interaction.Succeeded)
+                    return new(intent, false, interaction.Failure);
                 if (interaction.Attack.Hit)
                     ApplyPlayerDamage(
                         interaction.Attack.Damage, actor.Name);
+                else
+                    ShowEntityImpact(
+                        PlayerFeedbackKey(targetId), 0, false);
                 _villagers[actorIndex] = actor with
                 {
                     AttackExperience = interaction.Experience.Experience

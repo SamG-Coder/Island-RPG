@@ -19,8 +19,10 @@ internal readonly record struct EntityResourceInteraction(
     int CompletionExperience = 0);
 
 internal readonly record struct EntityMeleeInteractionResult(
+    bool Succeeded,
     MeleeAttackRoll Attack,
-    SkillExperienceChange Experience);
+    SkillExperienceChange Experience,
+    string? Failure = null);
 
 internal readonly record struct EntitySurvivalInteractionResult(
     bool Succeeded,
@@ -96,9 +98,44 @@ internal static class EntityInteractionService
             damageRoll,
             inventory);
         return new(
+            true,
             attack,
             SkillService.AwardExperience(
                 progressionExperience, attack.Experience));
+    }
+
+    public static EntityMeleeInteractionResult TryMeleeAttack(
+        EntityActionCooldowns cooldowns,
+        string attackerId,
+        double clock,
+        int attackExperience,
+        int strengthExperience,
+        int progressionExperience,
+        float hitRoll,
+        float damageRoll,
+        string?[]? inventory = null)
+    {
+        if (!cooldowns.TryCommit(
+                attackerId,
+                EntityAction.Attack,
+                clock,
+                MeleeCombatService.AttackIntervalSeconds))
+            return new(
+                false,
+                default,
+                new(
+                    progressionExperience,
+                    0,
+                    SkillService.LevelForExperience(progressionExperience),
+                    SkillService.LevelForExperience(progressionExperience)),
+                "attack_cooldown");
+        return MeleeAttack(
+            attackExperience,
+            strengthExperience,
+            progressionExperience,
+            hitRoll,
+            damageRoll,
+            inventory);
     }
 
     public static ActorInventoryResult Gather(

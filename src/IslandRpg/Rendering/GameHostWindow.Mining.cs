@@ -159,6 +159,8 @@ internal sealed partial class GameHostWindow
         PlaySoundCue("mining-impact");
         if (!roll.Hit)
         {
+            ShowEntityImpact(
+                MiningFeedbackKey(_activeMiningKey), 0, false);
             _chatUi.AddMessage(
                 $"Mining {roll.Experience.Level}: you miss the " +
                 $"{value.Definition.DisplayName.ToLowerInvariant()}.",
@@ -168,6 +170,8 @@ internal sealed partial class GameHostWindow
 
         var damage = roll.Damage;
         health = roll.Health;
+        ShowEntityImpact(
+            MiningFeedbackKey(_activeMiningKey), damage, true);
         var experience = roll.Experience;
         AwardAdventureExperience(experience.Gained);
         var inventory = _activePlayer.Inventory;
@@ -235,10 +239,8 @@ internal sealed partial class GameHostWindow
                 var active = cached.StableKey.Equals(
                     _activeMiningKey, StringComparison.Ordinal);
                 var recentlyStruck =
-                    _clock < _recentNpcResourceHealthUntil &&
-                    cached.StableKey.Equals(
-                        _recentNpcMiningHealthKey,
-                        StringComparison.Ordinal);
+                    _entityFeedback.HealthVisible(
+                        MiningFeedbackKey(cached.StableKey), _clock);
                 var state = gpu.Chunk.MiningStates.Find(candidate =>
                     candidate.StableKey.Equals(
                         cached.StableKey, StringComparison.Ordinal));
@@ -248,12 +250,14 @@ internal sealed partial class GameHostWindow
                 if (!_treeAtlas.TryGetValue(
                         cached.AtlasKey, out var entry))
                     continue;
-                DrawWorldHealthBar(
+                DrawEntityFeedback(
                     scene,
                     SpriteBounds(entry.Frame, cached.World),
                     (state?.Health ?? definition.MaximumHealth) /
                     (float)(state?.MaxHealth ??
-                            definition.MaximumHealth));
+                            definition.MaximumHealth),
+                    MiningFeedbackKey(cached.StableKey),
+                    forceHealth: active);
             }
         }
     }

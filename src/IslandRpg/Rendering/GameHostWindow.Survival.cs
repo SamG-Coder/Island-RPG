@@ -51,16 +51,18 @@ internal sealed partial class GameHostWindow
 
     private void RenderPlayerWorldHealthBar(Vector4 scene)
     {
-        if (_clock >= _playerWorldHealthUntil ||
-            _activePlayer is null ||
+        if (_activePlayer is null ||
             GetPlayerVisual() is not { } visual)
             return;
-        DrawWorldHealthBar(
+        var key = PlayerFeedbackKey(_activePlayer.Id);
+        if (!_entityFeedback.HealthVisible(key, _clock)) return;
+        DrawEntityFeedback(
             scene,
             SpriteBounds(visual.Frame, visual.World, visual.Mirror),
             _activePlayer.Health /
             (float)Math.Max(1, AdventureService.MaximumHealth(
-                _activePlayer.AdventureExperience)));
+                _activePlayer.AdventureExperience)),
+            key);
     }
 
     private void UpdateSurvival(float elapsed)
@@ -104,7 +106,8 @@ internal sealed partial class GameHostWindow
             Health = health,
             UpdatedUtc = DateTime.UtcNow
         };
-        _playerWorldHealthUntil = _clock + 3;
+        ShowEntityImpact(
+            PlayerFeedbackKey(_activePlayer.Id), damage, true);
         _chatUi.AddMessage(
             $"{source} hits you for {damage}.",
             ChatMessageStyle.Damage);
