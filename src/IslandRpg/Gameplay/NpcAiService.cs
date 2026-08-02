@@ -116,7 +116,8 @@ internal sealed record NpcAiInterpretation(
     int Risk = 0,
     int Priority = 50,
     string LocationHint = "",
-    string ReplyMeaning = "");
+    string ReplyMeaning = "",
+    int DelayMinutes = 0);
 
 internal sealed record NpcAiDialogueContext(
     string SpeakerName,
@@ -312,7 +313,9 @@ internal sealed class NpcAiService : IDisposable
                 "craft, build, cook, light_fire, mine, dig, enter_cave, " +
                 "board_boat, drop, withdraw, attack, flee, warn, surrender, " +
                 "defend, call_help, retaliate, forgive, deescalate, threaten, " +
-                "seek_trade, take_food. Prefer a specific " +
+                "seek_trade, take_food, meet. Use meet with delayMinutes when " +
+                "someone agrees to regroup or return after a stated time. " +
+                "Prefer a specific " +
                 "action over gather/build when the request makes it knowable. " +
                 "Decision must be accept, refuse, negotiate, " +
                 "clarify, or none. Weigh hunger, health, distance, ownership, tools, " +
@@ -671,7 +674,8 @@ internal sealed class NpcAiService : IDisposable
             .Select(item => item.ItemId)
             .Concat(context.Self?.Inventory ?? [])
             .ToHashSet(StringComparer.Ordinal);
-        var itemId = knownItemIds.Contains(value.ItemId)
+        var itemId = knownItemIds.Contains(value.ItemId) ||
+                     ItemWasNamedBySpeaker(value.ItemId, context.Text)
             ? value.ItemId
             : "";
         if (action is "gather" or "give" &&
@@ -701,8 +705,21 @@ internal sealed class NpcAiService : IDisposable
             Risk = Math.Clamp(value.Risk, 0, 100),
             Priority = Math.Clamp(value.Priority, 0, 100),
             LocationHint = Limit(value.LocationHint, 80),
-            ReplyMeaning = Limit(value.ReplyMeaning, 160)
+            ReplyMeaning = Limit(value.ReplyMeaning, 160),
+            DelayMinutes = Math.Clamp(value.DelayMinutes, 0, 24 * 60)
         };
+    }
+
+    private static bool ItemWasNamedBySpeaker(
+        string itemId,
+        string speech)
+    {
+        if (string.IsNullOrWhiteSpace(itemId)) return false;
+        if (!ItemCatalog.TryGet(itemId, out var item)) return false;
+        return speech.Contains(
+                   itemId.Replace('_', ' '),
+                   StringComparison.OrdinalIgnoreCase) ||
+               speech.Contains(item.Name, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string NormalizeAction(string? value)
@@ -722,7 +739,7 @@ internal sealed class NpcAiService : IDisposable
             "attack" or "flee" or "warn" or "surrender" or
             "defend" or "call_help" or "retaliate" or
             "forgive" or "deescalate" or "threaten" or
-            "seek_trade" or "take_food"
+            "seek_trade" or "take_food" or "meet"
             ? action
             : "none";
     }
@@ -1193,6 +1210,8 @@ internal sealed class NpcAiService : IDisposable
             priority = new { type = "integer" },
             locationHint = new { type = "string" },
             replyMeaning = new { type = "string" }
+            ,
+            delayMinutes = new { type = "integer" }
         },
         required = new[]
         {
@@ -1201,7 +1220,8 @@ internal sealed class NpcAiService : IDisposable
             "sentiment", "goal", "memory", "reply",
             "freeformThought", "privateThought", "decision",
             "willingness", "estimatedCost", "risk",
-            "priority", "locationHint", "replyMeaning"
+            "priority", "locationHint", "replyMeaning",
+            "delayMinutes"
         }
     };
 }

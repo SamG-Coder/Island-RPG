@@ -44,11 +44,5 @@ internal static class VillagerResourcePriority
             }) == true;
 
     private static bool IsPromised(VillagerState villager, string itemId) =>
-        villager.Promises?.Any(promise =>
-            promise.Status == CommitmentStatus.Active &&
-            promise.Kind == VillagerPromiseKind.GatherItem &&
-            promise.Progress < promise.TargetQuantity &&
-            string.Equals(
-                promise.ItemId, itemId,
-                StringComparison.OrdinalIgnoreCase)) == true;
+        VillagerPromisePlanService.NeedsItem(villager, itemId);
 }

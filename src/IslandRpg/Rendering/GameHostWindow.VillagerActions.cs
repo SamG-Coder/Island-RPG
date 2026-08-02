@@ -87,11 +87,22 @@ internal sealed partial class GameHostWindow
         VillagerState villager,
         VillagerSimulationTier tier)
     {
-        if (!VillagerIntentPriorityService.HasAssignedProject(villager) ||
+        if (!VillagerIntentPriorityService.HasCommittedWork(villager) ||
             !VillagerIntentPriorityService.ShouldProtectCommittedWork(
                 villager))
             return false;
-        return TryVillagerSettlementContribution(index, villager, tier) ||
+        if (VillagerPromisePlanService.HasActiveWork(villager))
+            return TryVillagerPromiseRendezvous(index, villager, tier) ||
+                   TryExecuteVillagerWorldAction(index, villager, tier) ||
+                   TryVillagerGatherTreeSticks(index, villager, tier) ||
+                   TryVillagerForage(index, villager, tier) ||
+                   TryVillagerCutTree(index, villager, tier) ||
+                   TryVillagerMine(index, villager, tier) ||
+                   TryVillagerFish(index, villager, tier) ||
+                   TryVillagerFulfilGift(index, villager, tier) ||
+                   TryExploreForPromise(index, villager, tier);
+        return TryVillagerPromiseRendezvous(index, villager, tier) ||
+               TryVillagerSettlementContribution(index, villager, tier) ||
                TryVillagerReachProjectWorksite(index, villager, tier) ||
                TryVillagerWithdrawWorkItem(index, villager) ||
                TryVillagerCraft(index, villager) ||
@@ -101,7 +112,69 @@ internal sealed partial class GameHostWindow
                TryVillagerMine(index, villager, tier) ||
                TryVillagerPlaceObject(index, villager) ||
                TryVillagerPlaceOrTendCampfire(index, villager) ||
-               TryVillagerProjectExplore(index, villager, tier);
+               TryVillagerProjectExplore(index, villager, tier) ||
+               TryExecuteVillagerWorldAction(index, villager, tier);
+    }
+
+    private bool TryExploreForPromise(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier)
+    {
+        if (!VillagerPromisePlanService.PlansFor(villager).Any(step =>
+                step.Action == VillagerPromisePlanAction.Collect))
+            return false;
+        MoveVillagerForCapability(
+            index,
+            villager,
+            tier,
+            VillagerSettlementProjectService.ExplorationTarget(
+                villager, _worldGameSeconds),
+            VillagerNeed.Explore);
+        return true;
+    }
+
+    private bool TryVillagerPromiseRendezvous(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier)
+    {
+        var step = VillagerPromisePlanService.DueRendezvous(
+            villager, _worldGameSeconds);
+        if (step?.TargetX is not { } x ||
+            step.TargetY is not { } y ||
+            step.WorldLevel is { } level && level != villager.WorldLevel)
+            return false;
+        var target = new Vector2(x, y);
+        if (Vector2.DistanceSquared(
+                new(villager.PositionX, villager.PositionY), target) <=
+            VillagerSimulation.InteractionRange *
+            VillagerSimulation.InteractionRange)
+        {
+            _villagers[index] =
+                VillagerPromisePlanService.RecordRendezvousReached(
+                    villager, step.PromiseId) with
+            {
+                Activity = VillagerActivity.Idle,
+                Action = EntityAction.Idle,
+                ActionTime = 0,
+                TargetX = null,
+                TargetY = null,
+                NextDecisionGameSeconds = _worldGameSeconds +
+                    VillagerSimulation.NearbyDecisionSeconds
+            };
+            _villagersDirty = true;
+            ObserveLog("promise_rendezvous_reached", villager.Id, new
+            {
+                step.PromiseId,
+                step.ItemId,
+                step.RemainingQuantity
+            });
+            return true;
+        }
+        MoveVillagerForCapability(
+            index, villager, tier, target, VillagerNeed.Safe);
+        return true;
     }
 
     private bool TryVillagerRoleAction(
@@ -382,7 +455,9 @@ internal sealed partial class GameHostWindow
         var requested = RequestedVillagerAction(
             villager, "gather_sticks");
         var needsSticks =
-            VillagerWorkSupplyPlanner.NeedsSticks(villager);
+            VillagerWorkSupplyPlanner.NeedsSticks(villager) ||
+            VillagerPromisePlanService.NeedsItem(
+                villager, ItemIds.Sticks);
         if ((!requested && !needsSticks) ||
             PlayerInventory.IsFull(villager.Inventory))
             return false;
@@ -512,13 +587,22 @@ internal sealed partial class GameHostWindow
     {
         var requested = RequestedVillagerAction(villager,
             "gather", "gather_berries", "gather_fibre", "seek_food");
-        var wantsFood = (villager.Hunger <= 82 ||
-                         RequestedVillagerAction(villager, "gather_berries", "seek_food")) &&
+        var promisedBerries =
+            VillagerPromisePlanService.NeedsItem(
+                villager, ItemIds.WildBerries) ||
+            VillagerPromisePlanService.NeedsItem(
+                villager, ItemIds.TropicalBerries);
+        var wantsFood = promisedBerries ||
+                        (villager.Hunger <= 82 ||
+                         RequestedVillagerAction(
+                             villager, "gather_berries", "seek_food")) &&
                         VillagerSimulation.CountFood(
                             villager.Inventory) == 0;
         var wantsFibre =
             RequestedVillagerAction(villager, "gather_fibre") ||
-            VillagerWorkSupplyPlanner.NeedsFibre(villager);
+            VillagerWorkSupplyPlanner.NeedsFibre(villager) ||
+            VillagerPromisePlanService.NeedsItem(
+                villager, ItemIds.PlantFibres);
         if (!requested && !wantsFood && !wantsFibre) return false;
 
         var position = new Vector2(villager.PositionX, villager.PositionY);
@@ -882,7 +966,9 @@ internal sealed partial class GameHostWindow
             return false;
         var needsLogs = villager.Goals?.Any(goal =>
             goal.Status == CommitmentStatus.Active &&
-            goal.ItemId == ItemIds.Logs) == true;
+            goal.ItemId == ItemIds.Logs) == true ||
+            VillagerPromisePlanService.NeedsItem(
+                villager, ItemIds.Logs);
         if (!needsLogs &&
             !VillagerWorkCapability.CanPerform(
                 villager, VillagerWorkRole.Wood) &&

@@ -12,7 +12,8 @@ internal static class VillagerIntentPriorityService
     public static bool HasCommittedWork(VillagerState villager) =>
         villager.Health > 0 &&
         (HasAssignedProject(villager) ||
-         villager.GoalObjectId is not null);
+         villager.GoalObjectId is not null ||
+         VillagerPromisePlanService.HasActiveWork(villager));
 
     public static bool HasAssignedProject(VillagerState villager) =>
         villager.Health > 0 && villager.ProjectAssignment is not null;

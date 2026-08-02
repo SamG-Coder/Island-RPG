@@ -3532,6 +3532,61 @@ var committedVillager =
     VillagerCommitmentService.AddPromise(
         villagerSpawnA[0],
         acceptance.Promise!);
+var scheduledPromiseVillager =
+    VillagerPromisePlanService.ScheduleRendezvous(
+        committedVillager,
+        "requester",
+        12.5f,
+        -4.5f,
+        (int)WorldLevel.Overworld,
+        300 + 60 * 60);
+var scheduledPlans =
+    VillagerPromisePlanService.PlansFor(scheduledPromiseVillager);
+Require(
+    scheduledPlans.Count == 2 &&
+    scheduledPlans[0] is
+    {
+        Action: VillagerPromisePlanAction.Collect,
+        ItemId: ItemIds.Logs,
+        RemainingQuantity: 3
+    } &&
+    scheduledPlans[1] is
+    {
+        Action: VillagerPromisePlanAction.Rendezvous,
+        TargetX: 12.5f,
+        TargetY: -4.5f
+    } &&
+    VillagerIntentPriorityService.ShouldProtectCommittedWork(
+        scheduledPromiseVillager) &&
+    VillagerPromisePlanService.DueRendezvous(
+        scheduledPromiseVillager, 3899) is null &&
+    VillagerPromisePlanService.DueRendezvous(
+        scheduledPromiseVillager, 3900) is not null,
+    "accepted promises must become prioritized collect and timed rendezvous plan steps instead of remaining social narration");
+Require(
+    VillagerStatusService.CurrentThought(
+        scheduledPromiseVillager with
+        {
+            LastDeliberation = new(
+                "I am still talking.", "accept", "gather",
+                90, 10, 5, 90, 300, ItemIds.Logs)
+        },
+        301).Contains("Collecting 3 logs") &&
+    VillagerStatusService.CurrentThought(
+        scheduledPromiseVillager, 3900).Contains("meeting place"),
+    "observable NPC status must show the executable promise plan instead of stale social deliberation text");
+var readyToReturn = VillagerCommitmentService.RecordAcquiredItem(
+    scheduledPromiseVillager, ItemIds.OakLogs, 3);
+var completedRendezvous =
+    VillagerPromisePlanService.RecordRendezvousReached(
+        readyToReturn, acceptance.Promise!.Id);
+Require(
+    readyToReturn.Promises?.Single().Progress == 3 &&
+    readyToReturn.Promises.Single().Status == CommitmentStatus.Active &&
+    completedRendezvous.Promises?.Single().Status ==
+        CommitmentStatus.Fulfilled &&
+    !VillagerPromisePlanService.HasActiveWork(completedRendezvous),
+    "interchangeable gathered resources must satisfy collection while a scheduled promise remains active until the NPC physically returns");
 var promisePriorityInventory =
     PlayerInventory.CreateStartingInventory();
 promisePriorityInventory[0] = ItemIds.Logs;

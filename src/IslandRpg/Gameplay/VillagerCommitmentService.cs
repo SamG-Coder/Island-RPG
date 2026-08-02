@@ -48,7 +48,11 @@ internal sealed record VillagerPromise(
     int Progress,
     double CreatedGameSeconds,
     double DeadlineGameSeconds,
-    CommitmentStatus Status = CommitmentStatus.Active);
+    CommitmentStatus Status = CommitmentStatus.Active,
+    float? RendezvousX = null,
+    float? RendezvousY = null,
+    int? RendezvousWorldLevel = null,
+    double? RendezvousGameSeconds = null);
 
 internal readonly record struct PromiseAcceptance(
     bool Accepted,
@@ -241,9 +245,9 @@ internal static class VillagerCommitmentService
             var promise = state.Promises[index];
             if (promise.Status != CommitmentStatus.Active ||
                 promise.Kind != VillagerPromiseKind.GatherItem ||
-                !string.Equals(
-                    promise.ItemId, itemId,
-                    StringComparison.OrdinalIgnoreCase))
+                promise.ItemId is not { } promisedItem ||
+                !VillagerSettlementProjectService.MatchesRequirement(
+                    itemId, promisedItem))
                 continue;
             updatedPromises ??= state.Promises.ToList();
             var applied = Math.Min(
@@ -253,7 +257,8 @@ internal static class VillagerCommitmentService
             updatedPromises[index] = promise with
             {
                 Progress = progress,
-                Status = progress >= promise.TargetQuantity
+                Status = progress >= promise.TargetQuantity &&
+                         promise.RendezvousGameSeconds is null
                     ? CommitmentStatus.Fulfilled
                     : CommitmentStatus.Active
             };

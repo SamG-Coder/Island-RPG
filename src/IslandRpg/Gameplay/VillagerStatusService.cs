@@ -8,6 +8,9 @@ internal static class VillagerStatusService
         bool controllerBusy = false)
     {
         if (villager.Health <= 0) return "Dead.";
+        if (VillagerPromisePlanService.CurrentPlanDescription(
+                villager, gameSeconds) is { } promisePlan)
+            return promisePlan;
         if (!string.IsNullOrWhiteSpace(
                 villager.LastDeliberation?.PrivateThought))
             return villager.LastDeliberation.PrivateThought;

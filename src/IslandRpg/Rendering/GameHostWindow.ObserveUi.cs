@@ -262,6 +262,7 @@ internal sealed partial class GameHostWindow
             value.Status == CommitmentStatus.Active) ?? 0;
         var promises = villager.Promises?.Count(value =>
             value.Status == CommitmentStatus.Active) ?? 0;
+        var plans = VillagerPromisePlanService.PlansFor(villager).Count;
         var totalSkillLevel = ObserveSkillEntries.Sum(entry =>
             VillagerSkillService.Level(villager, entry.Skill));
         string[] left =
@@ -286,7 +287,7 @@ internal sealed partial class GameHostWindow
             $"Inventory: {PlayerInventory.Count(villager.Inventory)}/{villager.Inventory.Length}",
             $"Food carried: {VillagerSimulation.CountFood(villager.Inventory)}",
             $"Total skill level: {totalSkillLevel}",
-            $"Goals / promises: {goal} / {promises}",
+            $"Goals/promises/plans: {goal}/{promises}/{plans}",
             $"Relationships: {villager.Relationships?.Count ?? 0}",
             $"Memories: {villager.Memories?.Count ?? 0}",
             $"Location memories: {villager.LocationMemories?.Count ?? 0}",

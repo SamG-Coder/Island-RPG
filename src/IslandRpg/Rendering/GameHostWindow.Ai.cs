@@ -769,7 +769,8 @@ internal sealed partial class GameHostWindow
                         promise.Status == CommitmentStatus.Active)
                     .Select(promise =>
                         $"{promise.Kind}:{promise.ItemId ?? ""}:" +
-                        $"{promise.Progress}/{promise.TargetQuantity}")
+                        $"{promise.Progress}/{promise.TargetQuantity}:" +
+                        $"meet={promise.RendezvousGameSeconds?.ToString("0") ?? "none"}")
                     .ToArray() ?? [],
                 listener.LastDeliberation?.PrivateThought ?? ""),
             nearbyWorld);
@@ -870,6 +871,11 @@ internal sealed partial class GameHostWindow
                 {
                     FollowingActorId = null,
                     Need = VillagerNeed.Safe,
+                    NextDecisionGameSeconds = _worldGameSeconds
+                },
+                "meet" => villager with
+                {
+                    FollowingActorId = null,
                     NextDecisionGameSeconds = _worldGameSeconds
                 },
                 _ => villager
@@ -1003,6 +1009,17 @@ internal sealed partial class GameHostWindow
                     VillagerCommitmentService.AddPromise(
                         villager, promise);
         }
+        if (permitsAction &&
+            interpretation.DelayMinutes > 0 &&
+            _activePlayer is not null)
+            villager = VillagerPromisePlanService.ScheduleRendezvous(
+                villager,
+                _activePlayer.Id,
+                villager.PositionX,
+                villager.PositionY,
+                villager.WorldLevel,
+                _worldGameSeconds +
+                interpretation.DelayMinutes * 60d);
         var reply = string.IsNullOrWhiteSpace(
                 interpretation.Reply)
             ? speechFallback
