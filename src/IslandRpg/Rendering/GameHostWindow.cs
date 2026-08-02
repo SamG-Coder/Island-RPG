@@ -470,7 +470,8 @@ internal sealed partial class GameHostWindow : GameWindow
         long worldSeed = 2187,
         bool useTestAssets = false,
         bool cannotLocateAoeAssets = false,
-        ObserveModeOptions? observeMode = null) : base(
+        ObserveModeOptions? observeMode = null,
+        string? controlPipeName = null) : base(
         GameWindowSettings.Default,
         new NativeWindowSettings
         {
@@ -484,6 +485,8 @@ internal sealed partial class GameHostWindow : GameWindow
         _useTestAssets = useTestAssets;
         _cannotLocateAoeAssets = cannotLocateAoeAssets;
         _observeMode = observeMode;
+        if (!string.IsNullOrWhiteSpace(controlPipeName))
+            _gameControlPipe = new(controlPipeName);
         _pauseMenu = new(this);
         _worldActions = new(this);
         _levelUpParticleAdder = AddLevelUpParticle;
@@ -612,6 +615,7 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         base.OnUpdateFrame(e);
         UpdateNpcAi();
+        ProcessGameControlPipe();
         _clock += e.Time;
         if (FinishLoadingTransition())
         {
@@ -8435,6 +8439,8 @@ internal sealed partial class GameHostWindow : GameWindow
     protected override void OnUnload()
     {
         _newWorldPreviewCancellation?.Cancel();
+        _gameControlPipe?.Dispose();
+        _gameControlPipe = null;
         _npcAi.Dispose();
         _uiColorBatch.Dispose();
         _soundEffects?.Dispose();

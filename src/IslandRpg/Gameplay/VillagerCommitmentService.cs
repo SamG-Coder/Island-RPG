@@ -150,65 +150,102 @@ internal static class VillagerCommitmentService
         itemId = "";
         quantity = 1;
         var normalized = text.Trim().ToLowerInvariant();
-        if (!(normalized.Contains("gather") ||
-              normalized.Contains("collect") ||
-              normalized.Contains("bring") ||
-              normalized.Contains("get ")))
+        var request = RequestedActionClause(normalized);
+        if (!ContainsCollectionRequest(request))
             return false;
-        foreach (var token in normalized.Split(
+        foreach (var token in request.Split(
                      [' ', ',', '.', '?', '!'],
                      StringSplitOptions.RemoveEmptyEntries))
-            if (int.TryParse(token, out var parsed))
+            if (TryParseQuantity(token, out var parsed))
             {
                 quantity = Math.Clamp(parsed, 1, 100);
                 break;
             }
-        ItemDefinition? best = null;
-        foreach (var item in ItemCatalog.All)
-        {
-            if (!item.Droppable) continue;
-            var name = item.Name.ToLowerInvariant();
-            if (!normalized.Contains(name) &&
-                !normalized.Contains(
-                    item.Id.Replace('_', ' '),
-                    StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (best is null ||
-                item.Name.Length > best.Name.Length)
-                best = item;
-        }
-        if (best is null)
-        {
-            if (normalized.Contains("wood"))
-                best = ItemCatalog.Get(ItemIds.Logs);
-            else
-                return false;
-        }
-        itemId = best.Id;
+        if (!ItemLanguageService.TryResolveMention(request, out var item))
+            return false;
+        itemId = item.Id;
         return true;
     }
 
-    public static bool IsAffirmativeResponse(
-        string decision,
-        string action,
-        string reply)
+    private static bool ContainsCollectionRequest(string text) =>
+        new[]
+        {
+            "gather", "collect", "bring", "fetch", "find", "harvest",
+            "pick up", "look for", "search for", "get"
+        }.Any(verb => text.Contains(verb, StringComparison.Ordinal));
+
+    private static bool TryParseQuantity(string token, out int quantity)
     {
-        if (decision.Equals("refuse", StringComparison.OrdinalIgnoreCase) ||
-            decision.Equals("clarify", StringComparison.OrdinalIgnoreCase))
+        if (int.TryParse(token, out quantity)) return true;
+        quantity = token switch
+        {
+            "a" or "an" or "one" => 1,
+            "two" => 2,
+            "three" => 3,
+            "four" => 4,
+            "five" => 5,
+            "six" => 6,
+            "seven" => 7,
+            "eight" => 8,
+            "nine" => 9,
+            "ten" => 10,
+            "dozen" => 12,
+            _ => 0
+        };
+        return quantity > 0;
+    }
+
+    private static string RequestedActionClause(string text)
+    {
+        var start = -1;
+        foreach (var marker in new[]
+                 {
+                     "would you ", "could you ", "can you ",
+                     "will you "
+                 })
+        {
+            var candidate = text.LastIndexOf(
+                marker, StringComparison.Ordinal);
+            if (candidate > start) start = candidate + marker.Length;
+        }
+        return start >= 0 ? text[start..] : text;
+    }
+
+    public static bool TryResolveAiItemProposal(
+        string proposalText,
+        string action,
+        string modelItem,
+        int modelQuantity,
+        out VillagerPromiseKind kind,
+        out string itemId,
+        out int quantity)
+    {
+        kind = action.Equals("give", StringComparison.OrdinalIgnoreCase)
+            ? VillagerPromiseKind.GiveItem
+            : VillagerPromiseKind.GatherItem;
+        itemId = "";
+        quantity = Math.Clamp(modelQuantity, 1, 100);
+        if (action is not ("gather" or "give" or "gather_sticks" or
+            "gather_berries" or "gather_fibre"))
             return false;
-        if (decision.Equals("accept", StringComparison.OrdinalIgnoreCase) ||
-            action.Equals("gather", StringComparison.OrdinalIgnoreCase) ||
-            action.Equals("give", StringComparison.OrdinalIgnoreCase) ||
-            action.StartsWith("gather_", StringComparison.OrdinalIgnoreCase))
-            return true;
-        var normalized = reply.Trim().ToLowerInvariant();
-        return normalized.StartsWith("yes") ||
-               normalized.StartsWith("all right") ||
-               normalized.StartsWith("alright") ||
-               normalized.StartsWith("okay") ||
-               normalized.StartsWith("i'll") ||
-               normalized.StartsWith("i will") ||
-               normalized.StartsWith("agreed");
+        var impliedItem = action switch
+        {
+            "gather_sticks" => ItemIds.Sticks,
+            "gather_berries" => ItemIds.WildBerries,
+            "gather_fibre" => ItemIds.PlantFibres,
+            _ => null
+        };
+        if (impliedItem is not null)
+            itemId = impliedItem;
+        else if (ItemCatalog.TryGet(modelItem, out var exact))
+            itemId = exact.Id;
+        else if (ItemLanguageService.TryResolveMention(modelItem, out var item))
+            itemId = item.Id;
+        if (itemId.Length == 0) return false;
+        return ItemLanguageService.TryResolveMention(
+                   proposalText, out var named) &&
+               VillagerSettlementProjectService.MatchesRequirement(
+                   named.Id, itemId);
     }
 
     public static VillagerState AddPromise(
@@ -222,7 +259,8 @@ internal static class VillagerCommitmentService
         if (promises.Count >= MaximumPromises)
             promises.RemoveAt(0);
         promises.Add(promise);
-        return state with { Promises = promises };
+        return VillagerPromisePlanService.CompileActionPlan(
+            state with { Promises = promises });
     }
 
     public static VillagerState RecordAcquiredItem(
@@ -287,11 +325,11 @@ internal static class VillagerCommitmentService
             };
             remainingPromiseQuantity -= applied;
         }
-        return state with
+        return VillagerPromisePlanService.CompileActionPlan(state with
         {
             Goals = updatedGoals ?? state.Goals,
             Promises = updatedPromises ?? state.Promises
-        };
+        });
     }
 
     private static bool MatchesGoal(
@@ -329,7 +367,8 @@ internal static class VillagerCommitmentService
         }
         return updated is null
             ? state
-            : state with { Promises = updated };
+            : VillagerPromisePlanService.CompileActionPlan(
+                state with { Promises = updated });
     }
 
     public static (VillagerState Promisor, VillagerState Promisee)
@@ -364,7 +403,8 @@ internal static class VillagerCommitmentService
                 -20);
         }
         promisor = AddMemory(
-            promisor with { Promises = promises },
+            VillagerPromisePlanService.CompileActionPlan(
+                promisor with { Promises = promises }),
             "promise-broken",
             promisee.Id,
             gameSeconds,
@@ -441,7 +481,8 @@ internal static class VillagerCommitmentService
                 : CommitmentStatus.Active
         };
         promisor = AddMemory(
-            promisor with { Promises = promises },
+            VillagerPromisePlanService.CompileActionPlan(
+                promisor with { Promises = promises }),
             "favor-delivered",
             promisee.Id,
             gameSeconds,
@@ -458,6 +499,65 @@ internal static class VillagerCommitmentService
             $"{promisor.Name} kept a promise to bring {ItemCatalog.Get(promise.ItemId).Name}.",
             20);
         return (promisor, promisee);
+    }
+
+    public static bool TryCompleteDeliveryToInventory(
+        VillagerState promisor,
+        string promiseeId,
+        string?[] promiseeInventory,
+        Guid promiseId,
+        double gameSeconds,
+        out VillagerState updatedPromisor,
+        out string?[] updatedPromiseeInventory)
+    {
+        updatedPromisor = promisor;
+        updatedPromiseeInventory = promiseeInventory;
+        var promises = promisor.Promises?.ToList() ?? [];
+        var promiseIndex = promises.FindIndex(value =>
+            value.Id == promiseId &&
+            value.Status == CommitmentStatus.Active &&
+            value.Kind == VillagerPromiseKind.GiveItem &&
+            value.PromiseeId == promiseeId &&
+            value.ItemId is not null);
+        if (promiseIndex < 0) return false;
+        var promise = promises[promiseIndex];
+        var sourceSlot = Array.FindIndex(promisor.Inventory, value =>
+            value is not null &&
+            VillagerSettlementProjectService.MatchesRequirement(
+                value, promise.ItemId!));
+        if (!EntityInteractionService.TryTransfer(
+                promisor.Inventory,
+                promiseeInventory,
+                sourceSlot,
+                out var sourceInventory,
+                out var destinationInventory,
+                out var transferredItem) ||
+            transferredItem is null ||
+            !VillagerSettlementProjectService.MatchesRequirement(
+                transferredItem, promise.ItemId!))
+            return false;
+        var progress = Math.Min(
+            promise.TargetQuantity, promise.Progress + 1);
+        promises[promiseIndex] = promise with
+        {
+            Progress = progress,
+            Status = progress >= promise.TargetQuantity
+                ? CommitmentStatus.Fulfilled
+                : CommitmentStatus.Active
+        };
+        updatedPromisor = AddMemory(
+            VillagerPromisePlanService.CompileActionPlan(promisor with
+            {
+                Inventory = sourceInventory,
+                Promises = promises
+            }),
+            "favor-delivered",
+            promiseeId,
+            gameSeconds,
+            $"Delivered {ItemCatalog.Get(transferredItem).Name} as promised.",
+            progress >= promise.TargetQuantity ? 12 : 5);
+        updatedPromiseeInventory = destinationInventory;
+        return true;
     }
 
     private static VillagerState AddRelationshipOutcome(

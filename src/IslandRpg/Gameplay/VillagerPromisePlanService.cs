@@ -4,7 +4,26 @@ internal enum VillagerPromisePlanAction : byte
 {
     Collect,
     Deliver,
-    Rendezvous
+    Rendezvous,
+    MoveTo,
+    InteractWithTarget,
+    CraftItem,
+    BuildObject,
+    DepositItem,
+    WithdrawItem,
+    FollowActor,
+    ExploreArea,
+    WaitUntil,
+    TalkToActor,
+    AttackTarget,
+    FleeFromTarget,
+    Rest,
+    Eat,
+    CutTree,
+    Mine,
+    Fish,
+    Cook,
+    Dig
 }
 
 internal sealed record VillagerPromisePlanStep(
@@ -15,7 +34,11 @@ internal sealed record VillagerPromisePlanStep(
     double ExecuteAfterGameSeconds = 0,
     float? TargetX = null,
     float? TargetY = null,
-    int? WorldLevel = null);
+    int? WorldLevel = null,
+    string? TargetActorId = null,
+    string? TargetKey = null,
+    int Attempts = 0,
+    int MaximumAttempts = 4);
 
 /// <summary>
 /// Projects social promises into concrete simulation work. Dialogue may add
@@ -28,16 +51,154 @@ internal static class VillagerPromisePlanService
     {
         if (villager.Health <= 0 || villager.Promises is not { Count: > 0 })
             return [];
+        return villager.ActionPlan ?? BuildPlans(villager);
+    }
+
+    /// <summary>
+    /// Compiles social commitments into a persistent high-level queue. Ollama
+    /// chooses the commitment; the simulation controller remains responsible
+    /// for finding valid targets and completing physical interactions.
+    /// </summary>
+    public static VillagerState CompileActionPlan(VillagerState villager) =>
+        villager with
+        {
+            ActionPlan = BuildPlans(villager)
+                .Concat(villager.ActionPlan?.Where(step =>
+                    step.PromiseId == Guid.Empty) ?? [])
+                .Take(16)
+                .ToArray()
+        };
+
+    public static VillagerState CompileAiDirective(
+        VillagerState villager,
+        string action,
+        string itemId,
+        int quantity,
+        string? targetActorId,
+        float? targetX,
+        float? targetY,
+        int worldLevel,
+        double gameSeconds,
+        int delayMinutes)
+    {
+        if (!TryMapAction(action, out var opcode)) return villager;
+        var existing = villager.ActionPlan?
+            .Where(step => step.PromiseId != Guid.Empty)
+            .ToList() ?? [];
+        existing.Add(new(
+            Guid.Empty,
+            opcode,
+            string.IsNullOrWhiteSpace(itemId) ? null : itemId,
+            Math.Max(1, quantity),
+            delayMinutes > 0
+                ? gameSeconds + delayMinutes * 60d
+                : gameSeconds,
+            targetX,
+            targetY,
+            worldLevel,
+            targetActorId));
+        return villager with { ActionPlan = existing };
+    }
+
+    public static VillagerPromisePlanStep? CurrentDirective(
+        VillagerState villager) =>
+        villager.ActionPlan?.FirstOrDefault(step =>
+            step.PromiseId == Guid.Empty);
+
+    public static VillagerState CompleteDirective(
+        VillagerState villager,
+        VillagerPromisePlanStep directive)
+    {
+        var plan = villager.ActionPlan?.ToList() ?? [];
+        var index = plan.FindIndex(step => ReferenceEquals(step, directive) ||
+            step == directive);
+        if (index >= 0) plan.RemoveAt(index);
+        return villager with { ActionPlan = plan };
+    }
+
+    public static VillagerState FailOrRetryDirective(
+        VillagerState villager,
+        VillagerPromisePlanStep directive)
+    {
+        var plan = villager.ActionPlan?.ToList() ?? [];
+        var index = plan.FindIndex(step => step == directive);
+        if (index < 0) return villager;
+        if (directive.Attempts + 1 >= directive.MaximumAttempts)
+            plan.RemoveAt(index);
+        else
+            plan[index] = directive with { Attempts = directive.Attempts + 1 };
+        return villager with { ActionPlan = plan };
+    }
+
+    private static bool TryMapAction(
+        string action,
+        out VillagerPromisePlanAction opcode)
+    {
+        opcode = action switch
+        {
+            "follow" or "come" => VillagerPromisePlanAction.FollowActor,
+            "wait" or "stop_following" => VillagerPromisePlanAction.WaitUntil,
+            "go_away" or "flee" => VillagerPromisePlanAction.FleeFromTarget,
+            "explore" => VillagerPromisePlanAction.ExploreArea,
+            "seek_shelter" => VillagerPromisePlanAction.MoveTo,
+            "rest" => VillagerPromisePlanAction.Rest,
+            "seek_food" or "take_food" => VillagerPromisePlanAction.Eat,
+            "craft" => VillagerPromisePlanAction.CraftItem,
+            "build" or "help_build" or "light_fire" => VillagerPromisePlanAction.BuildObject,
+            "cut_tree" => VillagerPromisePlanAction.CutTree,
+            "mine" => VillagerPromisePlanAction.Mine,
+            "fish" => VillagerPromisePlanAction.Fish,
+            "cook" => VillagerPromisePlanAction.Cook,
+            "dig" => VillagerPromisePlanAction.Dig,
+            "withdraw" => VillagerPromisePlanAction.WithdrawItem,
+            "drop" => VillagerPromisePlanAction.DepositItem,
+            "give" => VillagerPromisePlanAction.Deliver,
+            "attack" or "retaliate" or "defend" => VillagerPromisePlanAction.AttackTarget,
+            "enter_cave" or "board_boat" => VillagerPromisePlanAction.InteractWithTarget,
+            "meet" => VillagerPromisePlanAction.Rendezvous,
+            "warn" or "surrender" or "call_help" or "forgive" or
+                "deescalate" or "threaten" or "seek_trade" =>
+                VillagerPromisePlanAction.TalkToActor,
+            "gather" or "gather_sticks" or "gather_berries" or
+                "gather_fibre" => VillagerPromisePlanAction.Collect,
+            _ => default
+        };
+        return action is
+            "follow" or "come" or "wait" or "stop_following" or
+            "go_away" or "flee" or "explore" or "seek_shelter" or
+            "rest" or "seek_food" or "take_food" or "craft" or
+            "build" or "help_build" or "light_fire" or "cut_tree" or
+            "mine" or "fish" or "cook" or "dig" or "withdraw" or
+            "drop" or "give" or "attack" or "retaliate" or "defend" or
+            "enter_cave" or "board_boat" or "meet" or "gather" or
+            "gather_sticks" or "gather_berries" or "gather_fibre" or
+            "warn" or "surrender" or "call_help" or "forgive" or
+            "deescalate" or "threaten" or "seek_trade";
+    }
+
+    private static IReadOnlyList<VillagerPromisePlanStep> BuildPlans(
+        VillagerState villager)
+    {
         var result = new List<VillagerPromisePlanStep>();
-        foreach (var promise in villager.Promises)
+        foreach (var promise in villager.Promises ?? [])
         {
             if (promise.Status != CommitmentStatus.Active) continue;
             var remaining = Math.Max(0,
                 promise.TargetQuantity - promise.Progress);
-            if (remaining > 0 && promise.ItemId is not null)
+            var carried = promise.ItemId is null
+                ? 0
+                : villager.Inventory.Count(value =>
+                    value is not null &&
+                    VillagerSettlementProjectService.MatchesRequirement(
+                        value, promise.ItemId));
+            var acquisitionRemaining = promise.Kind ==
+                                       VillagerPromiseKind.GiveItem
+                ? Math.Max(0, remaining - carried)
+                : remaining;
+            if (acquisitionRemaining > 0 && promise.ItemId is not null)
                 result.Add(new(
                     promise.Id, VillagerPromisePlanAction.Collect,
-                    promise.ItemId, remaining));
+                    promise.ItemId, acquisitionRemaining));
             if (promise.RendezvousGameSeconds is { } rendezvousAt &&
                 promise.RendezvousX is { } x &&
                 promise.RendezvousY is { } y)
@@ -46,10 +207,10 @@ internal static class VillagerPromisePlanService
                     promise.ItemId, remaining, rendezvousAt,
                     x, y, promise.RendezvousWorldLevel));
             else if (promise.Kind == VillagerPromiseKind.GiveItem &&
-                     remaining == 0)
+                     remaining > 0 && carried > 0)
                 result.Add(new(
                     promise.Id, VillagerPromisePlanAction.Deliver,
-                    promise.ItemId, 0));
+                    promise.ItemId, remaining));
         }
         return result;
     }
@@ -60,6 +221,9 @@ internal static class VillagerPromisePlanService
             (promise.Progress < promise.TargetQuantity ||
              promise.RendezvousGameSeconds is not null ||
              promise.Kind == VillagerPromiseKind.GiveItem)) == true;
+
+    public static bool HasQueuedDirective(VillagerState villager) =>
+        villager.Health > 0 && CurrentDirective(villager) is not null;
 
     public static bool NeedsItem(VillagerState villager, string itemId) =>
         villager.Promises?.Any(promise =>
@@ -89,7 +253,7 @@ internal static class VillagerPromisePlanService
             RendezvousWorldLevel = worldLevel,
             RendezvousGameSeconds = rendezvousGameSeconds
         };
-        return villager with { Promises = promises };
+        return CompileActionPlan(villager with { Promises = promises });
     }
 
     public static VillagerPromisePlanStep? DueRendezvous(
@@ -141,6 +305,6 @@ internal static class VillagerPromisePlanService
                 ? CommitmentStatus.Fulfilled
                 : CommitmentStatus.Active
         };
-        return villager with { Promises = promises };
+        return CompileActionPlan(villager with { Promises = promises });
     }
 }

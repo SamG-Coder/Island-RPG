@@ -321,7 +321,21 @@ internal sealed class NpcAiService : IDisposable
                 "clarify, or none. Weigh hunger, health, distance, ownership, tools, " +
                 "trust, promises, goals, risk, personal cost, and group benefit. " +
                 "privateThought is never spoken. Use only actor IDs, item IDs, and " +
-                "world objects present in context. Willingness, cost, risk, and " +
+                "world objects present in context. For a proposal, first parse the " +
+                "proposed action, item and quantity, then decide as this NPC. If the " +
+                "NPC accepts, decision must be accept and action must be executable; " +
+                "never express acceptance only in reply text. Use the speaker's item " +
+                "wording in itemId when its canonical ID is uncertain. " +
+                "For every imperative request or proposal, decision must be accept, " +
+                "refuse, negotiate, or clarify; never none. A refusal must still " +
+                "classify the requested action so the brain understands what it rejected. " +
+                "Map imperative proposals consistently: go to shelter=seek_shelter, " +
+                "enter a cave=enter_cave, craft=craft, build=build, place on ground=drop, " +
+                "take from storage=withdraw, accompany=follow, scout=explore, stay=wait, " +
+                "warn=warn, fight back=defend, escape=flee, recover=rest, find food=seek_food, " +
+                "fell a tree=cut_tree, extract ore=mine, catch fish=fish, prepare food=cook, " +
+                "excavate=dig, regroup later=meet, obtain items=gather, hand over items=give. " +
+                "Willingness, cost, risk, and " +
                 "priority are integers from 0 to 100.",
             prompt,
             stream = false,
@@ -670,14 +684,14 @@ internal sealed class NpcAiService : IDisposable
             reply = "";
         var action = NormalizeAction(value.Action);
         var decision = NormalizeDecision(value.Decision);
+        if (decision == "none" && action is not ("none" or "clarify"))
+            decision = "clarify";
         var knownItemIds = (context.NearbyWorld ?? [])
             .Select(item => item.ItemId)
             .Concat(context.Self?.Inventory ?? [])
             .ToHashSet(StringComparer.Ordinal);
-        var itemId = knownItemIds.Contains(value.ItemId) ||
-                     ItemWasNamedBySpeaker(value.ItemId, context.Text)
-            ? value.ItemId
-            : "";
+        var itemId = NormalizeProposedItem(
+            value.ItemId, context.Text, knownItemIds);
         if (action is "gather" or "give" &&
             itemId.Length == 0)
             action = "clarify";
@@ -720,6 +734,25 @@ internal sealed class NpcAiService : IDisposable
                    itemId.Replace('_', ' '),
                    StringComparison.OrdinalIgnoreCase) ||
                speech.Contains(item.Name, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeProposedItem(
+        string modelItem,
+        string speech,
+        IReadOnlySet<string> knownItemIds)
+    {
+        if (string.IsNullOrWhiteSpace(modelItem)) return "";
+        if (knownItemIds.Contains(modelItem)) return modelItem;
+        if (ItemCatalog.TryGet(modelItem, out var exact) &&
+            ItemWasNamedBySpeaker(exact.Id, speech))
+            return exact.Id;
+        if (!ItemLanguageService.TryResolveMention(modelItem, out var item))
+            return "";
+        return ItemLanguageService.TryResolveMention(
+                   speech, out var spokenItem) &&
+               spokenItem.Id == item.Id
+            ? item.Id
+            : "";
     }
 
     private static string NormalizeAction(string? value)

@@ -13,6 +13,7 @@ internal static class VillagerIntentPriorityService
         villager.Health > 0 &&
         (HasAssignedProject(villager) ||
          villager.GoalObjectId is not null ||
+         VillagerPromisePlanService.HasQueuedDirective(villager) ||
          VillagerPromisePlanService.HasActiveWork(villager));
 
     public static bool HasAssignedProject(VillagerState villager) =>
@@ -23,4 +24,9 @@ internal static class VillagerIntentPriorityService
         HasCommittedWork(villager) &&
         !HasUrgentOverride(villager) &&
         !VillagerFatigueService.ShouldRest(villager);
+
+    public static bool CanInterruptScriptedActivity(
+        VillagerState villager) =>
+        HasUrgentOverride(villager) ||
+        ShouldProtectCommittedWork(villager);
 }

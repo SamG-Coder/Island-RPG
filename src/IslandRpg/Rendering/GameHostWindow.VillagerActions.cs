@@ -91,15 +91,20 @@ internal sealed partial class GameHostWindow
             !VillagerIntentPriorityService.ShouldProtectCommittedWork(
                 villager))
             return false;
+        if (TryExecuteVillagerPlanDirective(index, villager, tier))
+            return true;
         if (VillagerPromisePlanService.HasActiveWork(villager))
             return TryVillagerPromiseRendezvous(index, villager, tier) ||
+                   // Deliver possessed promised items before looking for more
+                   // resources. Otherwise any available forage target can
+                   // indefinitely starve the hand-off.
+                   TryVillagerFulfilGift(index, villager, tier) ||
                    TryExecuteVillagerWorldAction(index, villager, tier) ||
                    TryVillagerGatherTreeSticks(index, villager, tier) ||
                    TryVillagerForage(index, villager, tier) ||
                    TryVillagerCutTree(index, villager, tier) ||
                    TryVillagerMine(index, villager, tier) ||
                    TryVillagerFish(index, villager, tier) ||
-                   TryVillagerFulfilGift(index, villager, tier) ||
                    TryExploreForPromise(index, villager, tier);
         return TryVillagerPromiseRendezvous(index, villager, tier) ||
                TryVillagerSettlementContribution(index, villager, tier) ||
@@ -115,6 +120,191 @@ internal sealed partial class GameHostWindow
                TryVillagerProjectExplore(index, villager, tier) ||
                TryExecuteVillagerWorldAction(index, villager, tier);
     }
+
+    private bool TryExecuteVillagerPlanDirective(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier)
+    {
+        var step = VillagerPromisePlanService.CurrentDirective(villager);
+        if (step is null) return false;
+        if (step.ExecuteAfterGameSeconds > _worldGameSeconds)
+        {
+            _villagers[index] = villager with
+            {
+                Activity = VillagerActivity.Idle,
+                Action = EntityAction.Idle,
+                NextDecisionGameSeconds = Math.Min(
+                    step.ExecuteAfterGameSeconds,
+                    _worldGameSeconds +
+                    VillagerSimulation.NearbyDecisionSeconds)
+            };
+            return true;
+        }
+
+        bool started;
+        switch (step.Action)
+        {
+            case VillagerPromisePlanAction.FollowActor:
+                _villagers[index] = CompletePlanStep(
+                    villager with
+                    {
+                        FollowingActorId = step.TargetActorId,
+                        NextDecisionGameSeconds = _worldGameSeconds
+                    }, step);
+                _villagersDirty = true;
+                return true;
+            case VillagerPromisePlanAction.WaitUntil:
+                _villagers[index] = CompletePlanStep(
+                    villager with
+                    {
+                        FollowingActorId = null,
+                        Activity = VillagerActivity.Idle,
+                        Action = EntityAction.Idle
+                    }, step);
+                _villagersDirty = true;
+                return true;
+            case VillagerPromisePlanAction.MoveTo:
+            case VillagerPromisePlanAction.Rendezvous:
+                return TryExecutePlanMovement(index, villager, tier, step);
+            case VillagerPromisePlanAction.ExploreArea:
+                MoveVillagerForCapability(
+                    index, villager, tier,
+                    VillagerSettlementProjectService.ExplorationTarget(
+                        villager, _worldGameSeconds),
+                    VillagerNeed.Explore);
+                CompleteStartedPlanStep(index, step);
+                return true;
+            case VillagerPromisePlanAction.FleeFromTarget:
+                var origin = _player?.Position ??
+                    new Vector2(villager.PositionX - 1, villager.PositionY);
+                var away = new Vector2(villager.PositionX, villager.PositionY) - origin;
+                if (away.LengthSquared < .01f) away = Vector2.UnitX;
+                away = away.Normalized();
+                MoveVillagerForCapability(
+                    index, villager, tier,
+                    new(villager.PositionX + away.X * 8,
+                        villager.PositionY + away.Y * 8),
+                    VillagerNeed.Safe);
+                CompleteStartedPlanStep(index, step);
+                return true;
+            case VillagerPromisePlanAction.Rest:
+                _villagers[index] = CompletePlanStep(
+                    VillagerFatigueService.BeginRest(
+                        villager, _worldGameSeconds), step);
+                _villagersDirty = true;
+                return true;
+            case VillagerPromisePlanAction.Eat:
+                started = TryVillagerEat(index, villager, tier);
+                break;
+            case VillagerPromisePlanAction.CraftItem:
+                started = TryVillagerCraft(index, villager);
+                break;
+            case VillagerPromisePlanAction.BuildObject:
+                started = TryVillagerPlaceObject(index, villager) ||
+                          TryVillagerPlaceOrTendCampfire(index, villager);
+                break;
+            case VillagerPromisePlanAction.DepositItem:
+                started = TryExecuteVillagerWorldAction(index, villager, tier);
+                break;
+            case VillagerPromisePlanAction.WithdrawItem:
+                started = TryVillagerWithdrawWorkItem(index, villager) ||
+                          TryVillagerWithdrawFood(index, villager);
+                break;
+            case VillagerPromisePlanAction.CutTree:
+                started = TryVillagerCutTree(index, villager, tier);
+                break;
+            case VillagerPromisePlanAction.Mine:
+            case VillagerPromisePlanAction.Dig:
+                started = TryVillagerMine(index, villager, tier);
+                break;
+            case VillagerPromisePlanAction.Fish:
+                started = TryVillagerFish(index, villager, tier);
+                break;
+            case VillagerPromisePlanAction.Cook:
+                started = TryVillagerCook(index, villager) ||
+                          TryVillagerCookStew(index, villager);
+                break;
+            case VillagerPromisePlanAction.AttackTarget:
+                started = TryVillagerDefendSelf(index, villager, tier);
+                break;
+            case VillagerPromisePlanAction.Collect:
+                started = TryExecuteVillagerWorldAction(index, villager, tier) ||
+                          TryVillagerGatherTreeSticks(index, villager, tier) ||
+                          TryVillagerForage(index, villager, tier) ||
+                          TryVillagerCutTree(index, villager, tier) ||
+                          TryVillagerMine(index, villager, tier) ||
+                          TryVillagerFish(index, villager, tier);
+                break;
+            case VillagerPromisePlanAction.Deliver:
+                started = TryVillagerDropRequestedItem(index, villager) ||
+                          TryVillagerFulfilGift(index, villager, tier);
+                break;
+            case VillagerPromisePlanAction.InteractWithTarget:
+                started = TryExecuteVillagerWorldAction(index, villager, tier);
+                break;
+            case VillagerPromisePlanAction.TalkToActor:
+                _villagers[index] = CompletePlanStep(villager, step);
+                _villagersDirty = true;
+                return true;
+            default:
+                return false;
+        }
+        if (!started)
+        {
+            _villagers[index] = VillagerPromisePlanService
+                .FailOrRetryDirective(villager, step) with
+            {
+                NextDecisionGameSeconds = _worldGameSeconds +
+                    VillagerSimulation.NearbyDecisionSeconds
+            };
+            _villagersDirty = true;
+            return true;
+        }
+        CompleteStartedPlanStep(index, step);
+        return true;
+    }
+
+    private bool TryExecutePlanMovement(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier,
+        VillagerPromisePlanStep step)
+    {
+        if (step.TargetX is not { } x || step.TargetY is not { } y)
+        {
+            _villagers[index] = VillagerPromisePlanService
+                .FailOrRetryDirective(villager, step);
+            _villagersDirty = true;
+            return true;
+        }
+        var target = new Vector2(x, y);
+        if (Vector2.DistanceSquared(
+                new(villager.PositionX, villager.PositionY), target) <=
+            VillagerSimulation.InteractionRange *
+            VillagerSimulation.InteractionRange)
+        {
+            _villagers[index] = CompletePlanStep(villager, step);
+            _villagersDirty = true;
+            return true;
+        }
+        MoveVillagerForCapability(index, villager, tier, target,
+            VillagerNeed.Explore);
+        return true;
+    }
+
+    private void CompleteStartedPlanStep(
+        int index,
+        VillagerPromisePlanStep step)
+    {
+        _villagers[index] = CompletePlanStep(_villagers[index], step);
+        _villagersDirty = true;
+    }
+
+    private static VillagerState CompletePlanStep(
+        VillagerState villager,
+        VillagerPromisePlanStep step) =>
+        VillagerPromisePlanService.CompleteDirective(villager, step);
 
     private bool TryExploreForPromise(
         int index,
@@ -181,10 +371,6 @@ internal sealed partial class GameHostWindow
         int index, VillagerState villager,
         VillagerSimulationTier tier)
     {
-        if (villager.LastDeliberation is { Action: not "none" } trace &&
-            trace.Decision is not ("refuse" or "clarify") &&
-            _worldGameSeconds - trace.GameSeconds <= 15 * 60)
-            return false;
         return villager.WorkRole switch
         {
             VillagerWorkRole.Food =>
@@ -1699,6 +1885,45 @@ internal sealed partial class GameHostWindow
             value.Kind == VillagerPromiseKind.GiveItem &&
             value.ItemId is not null);
         if (promise is null) return false;
+        if (_activePlayer is not null && _player is not null &&
+            promise.PromiseeId == _activePlayer.Id)
+        {
+            var playerDistance = Vector2.DistanceSquared(
+                new(villager.PositionX, villager.PositionY),
+                _player.Position);
+            if (playerDistance > VillagerSimulation.InteractionRange *
+                                 VillagerSimulation.InteractionRange)
+            {
+                MoveVillagerForCapability(
+                    index, villager, tier, _player.Position,
+                    VillagerNeed.Social);
+                return true;
+            }
+            if (!VillagerCommitmentService.TryCompleteDeliveryToInventory(
+                    villager,
+                    _activePlayer.Id,
+                    PlayerInventory.Normalize(_activePlayer.Inventory),
+                    promise.Id,
+                    _worldGameSeconds,
+                    out var deliveredVillager,
+                    out var playerInventory))
+                return false;
+            _villagers[index] = deliveredVillager;
+            _activePlayer = _activePlayer with
+            {
+                Inventory = playerInventory,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            _saves.SavePlayer(_activePlayer);
+            ObserveLog("favor_completed", villager.Id, new
+            {
+                PromiseId = promise.Id,
+                PromiseeId = _activePlayer.Id,
+                promise.ItemId
+            });
+            _villagersDirty = true;
+            return true;
+        }
         var receiverIndex = _villagers.FindIndex(value =>
             value.Id == promise.PromiseeId && value.Health > 0);
         if (receiverIndex < 0) return false;

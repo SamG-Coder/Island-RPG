@@ -154,6 +154,7 @@ internal sealed partial class GameHostWindow
     private void UpdateVillagers(float elapsed)
     {
         if (_player is null || _activeWorld is null) return;
+        AdvanceVillagerTimedActivities();
         UpdateConversationTurns();
         _villagerWork.Expire(_worldGameSeconds);
         var openingIncidentActive = UpdateOpeningIncident();
@@ -281,14 +282,6 @@ internal sealed partial class GameHostWindow
                     VillagerActivity.Following ||
                 previous.ConflictIntent != VillagerConflictIntent.None)
                 _villagerWork.ReleaseActor(previous.Id);
-            if (previous.Activity == VillagerActivity.Conversing &&
-                ConversationHasFinished(previous))
-            {
-                previous = VillagerSimulation.CompleteConversation(
-                    previous, _worldGameSeconds);
-            }
-            previous = VillagerSimulation.CompleteReflection(
-                previous, _worldGameSeconds);
             previous = AdvanceNpcController(previous);
             previous = CompleteVillagerActionAnimation(previous);
             if (_activePlayer is not null &&
@@ -438,19 +431,25 @@ internal sealed partial class GameHostWindow
                         _worldGameSeconds);
                 break;
             }
-            if (!ReferenceEquals(previous, villager))
+            // Compare against the persisted state, not the local state passed to
+            // AdvanceMovement. Activity transitions (notably conversation
+            // completion) can occur without movement returning another record.
+            if (!ReferenceEquals(_villagers[index], villager))
             {
                 _villagers[index] = villager;
                 _villagersDirty = true;
             }
             if (_settlementCouncilResult is not null &&
-                !VillagerIntentPriorityService.HasUrgentOverride(villager))
+                !VillagerIntentPriorityService.CanInterruptScriptedActivity(
+                    villager))
                 continue;
             if (openingIncidentActive &&
-                !VillagerIntentPriorityService.HasUrgentOverride(villager))
+                !VillagerIntentPriorityService.CanInterruptScriptedActivity(
+                    villager))
                 continue;
             if (settlementOpeningActive &&
-                !VillagerIntentPriorityService.HasUrgentOverride(villager))
+                !VillagerIntentPriorityService.CanInterruptScriptedActivity(
+                    villager))
                 continue;
             if (villager.Activity is
                 VillagerActivity.Conversing or
@@ -555,6 +554,24 @@ internal sealed partial class GameHostWindow
         if (_villagersDirty &&
             _worldGameSeconds >= _villagersNextSaveAt)
             SaveVillagers();
+    }
+
+    private void AdvanceVillagerTimedActivities()
+    {
+        for (var index = 0; index < _villagers.Count; index++)
+        {
+            var current = _villagers[index];
+            var advanced = current;
+            if (advanced.Activity == VillagerActivity.Conversing &&
+                ConversationHasFinished(advanced))
+                advanced = VillagerSimulation.CompleteConversation(
+                    advanced, _worldGameSeconds);
+            advanced = VillagerSimulation.CompleteReflection(
+                advanced, _worldGameSeconds);
+            if (ReferenceEquals(current, advanced)) continue;
+            _villagers[index] = advanced;
+            _villagersDirty = true;
+        }
     }
 
     private void FinalizeVillagerDeaths()
@@ -2394,26 +2411,11 @@ internal sealed partial class GameHostWindow
                 text, out var requestedItem,
                 out var requestedQuantity))
         {
-            var acceptance =
-                VillagerCommitmentService.TryAccept(
-                    target,
-                    _activePlayer?.Id ?? "player",
-                    VillagerPromiseKind.GatherItem,
-                    requestedItem,
-                    requestedQuantity,
-                    _worldGameSeconds);
-            if (acceptance.Accepted &&
-                acceptance.Promise is { } promise)
-            {
-                target =
-                    VillagerCommitmentService.AddPromise(
-                        target, promise);
-                _villagers[nearestIndex] = target;
-                _villagersDirty = true;
-            }
             ShowVillagerSpeech(
                 nearestIndex,
-                acceptance.Reply,
+                $"I understand you are proposing {requestedQuantity} " +
+                $"{ItemCatalog.Get(requestedItem).Name}, but I cannot " +
+                "decide without thinking it through.",
                 _player.Position);
             return true;
         }

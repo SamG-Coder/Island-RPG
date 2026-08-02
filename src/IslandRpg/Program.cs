@@ -141,7 +141,8 @@ try
                 options.Seed,
                 useTestAssets,
                 cannotLocateAoeAssets,
-                observeMode);
+                observeMode,
+                options.ControlPipeName);
             host.Run();
             assetCatalog = host.Catalog ??
                            throw new InvalidOperationException("The asset catalogue did not finish loading.");
@@ -227,7 +228,8 @@ internal sealed record AppOptions(
     string ObserveScenario,
     float ObserveHungerRateMultiplier,
     int ObserveStartingFoodCount,
-    string? ObserveOutputFolder)
+    string? ObserveOutputFolder,
+    string? ControlPipeName)
 {
     public static AppOptions Parse(string[] args)
     {
@@ -248,6 +250,7 @@ internal sealed record AppOptions(
         float observeHungerRateMultiplier = 1;
         var observeStartingFoodCount = 20;
         string? observeOutputFolder = null;
+        string? controlPipeName = null;
         long seed = 2187;
         for (var i = 0; i < args.Length; i++)
         {
@@ -344,6 +347,10 @@ internal sealed record AppOptions(
                 observeStartingFoodCount = parsedFoodCount;
             else if (args[i] == "--seed" && i + 1 < args.Length &&
                      long.TryParse(args[++i], out var parsedSeed)) seed = parsedSeed;
+            else if (args[i] == "--control-pipe" &&
+                     i + 1 < args.Length &&
+                     !string.IsNullOrWhiteSpace(args[i + 1]))
+                controlPipeName = args[++i];
             else if (args[i] == "--validate") validateOnly = true;
             else throw new ArgumentException($"Unknown or incomplete argument: {args[i]}");
         }
@@ -352,6 +359,7 @@ internal sealed record AppOptions(
             catalog, island, world, game, seed,
             observe, observeSeconds, observeLogIntervalSeconds,
             observeScenario, observeHungerRateMultiplier,
-            observeStartingFoodCount, observeOutputFolder);
+            observeStartingFoodCount, observeOutputFolder,
+            controlPipeName);
     }
 }

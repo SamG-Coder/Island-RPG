@@ -28,8 +28,7 @@ internal sealed partial class GameHostWindow
     private sealed record PendingVillagerRequest(
         string VillagerId,
         string PlayerId,
-        string ItemId,
-        int Quantity);
+        string ProposalText);
     private PendingVillagerGift? _pendingVillagerGift;
     private sealed record PendingVillagerGift(
         string VillagerId,
@@ -789,16 +788,10 @@ internal sealed partial class GameHostWindow
         _npcAiSpeechVillagerIndex = villagerIndex;
         _npcAiSpeechFallback =
             FallbackNpcReply(listener, message);
-        _pendingVillagerRequest =
-            VillagerCommitmentService.TryParseGatherRequest(
-                message, out var requestedItem,
-                out var requestedQuantity)
-                ? new(
-                    listener.Id,
-                    _activePlayer.Id,
-                    requestedItem,
-                    requestedQuantity)
-                : null;
+        _pendingVillagerRequest = new(
+            listener.Id,
+            _activePlayer.Id,
+            message);
         _npcAiSpeechTask = _npcAi.InterpretAsync(
             ActiveNpcAiSettings(),
             context);
@@ -828,26 +821,28 @@ internal sealed partial class GameHostWindow
                 _worldGameSeconds,
                 interpretation.ItemId)
         };
-        var permitsAction =
-            interpretation.Decision is not
-                ("refuse" or "clarify");
+        var permitsAction = interpretation.Decision == "accept";
         var acceptedPendingRequest = false;
         if (pendingRequest is not null &&
             string.Equals(
                 pendingRequest.VillagerId, villager.Id,
                 StringComparison.Ordinal) &&
-            permitsAction &&
-            VillagerCommitmentService.IsAffirmativeResponse(
-                interpretation.Decision,
+            interpretation.Decision == "accept" &&
+            VillagerCommitmentService.TryResolveAiItemProposal(
+                pendingRequest.ProposalText,
                 interpretation.Action,
-                interpretation.Reply))
+                interpretation.ItemId,
+                interpretation.Quantity,
+                out var proposalKind,
+                out var proposalItemId,
+                out var proposalQuantity))
         {
             var acceptance = VillagerCommitmentService.TryAccept(
                 villager,
                 pendingRequest.PlayerId,
-                VillagerPromiseKind.GatherItem,
-                pendingRequest.ItemId,
-                pendingRequest.Quantity,
+                proposalKind,
+                proposalItemId,
+                proposalQuantity,
                 _worldGameSeconds);
             if (acceptance.Accepted && acceptance.Promise is { } promise)
             {
@@ -1069,6 +1064,28 @@ internal sealed partial class GameHostWindow
                 villager.WorldLevel,
                 _worldGameSeconds +
                 interpretation.DelayMinutes * 60d);
+        if (interpretation.Decision == "accept" &&
+            !interpretation.FreeformThought &&
+            !acceptedPendingRequest &&
+            _activePlayer is not null &&
+            !(interpretation.Action == "meet" &&
+              villager.Promises?.Any(promise =>
+                  promise.Status == CommitmentStatus.Active &&
+                  promise.RendezvousGameSeconds is not null) == true))
+            villager = VillagerPromisePlanService.CompileAiDirective(
+                villager,
+                interpretation.Action,
+                interpretation.ItemId,
+                Math.Max(1, interpretation.Quantity),
+                _activePlayer.Id,
+                _player?.Position.X,
+                _player?.Position.Y,
+                villager.WorldLevel,
+                _worldGameSeconds,
+                interpretation.DelayMinutes) with
+            {
+                NextDecisionGameSeconds = _worldGameSeconds
+            };
         var reply = string.IsNullOrWhiteSpace(
                 interpretation.Reply)
             ? speechFallback

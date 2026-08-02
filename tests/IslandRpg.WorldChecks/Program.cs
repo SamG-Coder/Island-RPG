@@ -266,9 +266,13 @@ Require(
     VillagerIntentPriorityService.HasAssignedProject(priorityVillager) &&
     VillagerIntentPriorityService.ShouldProtectCommittedWork(
         priorityVillager) &&
+    VillagerIntentPriorityService.CanInterruptScriptedActivity(
+        priorityVillager) &&
     !VillagerIntentPriorityService.ShouldProtectCommittedWork(
         priorityVillager with { Hunger = 20 }) &&
     VillagerIntentPriorityService.HasUrgentOverride(
+        priorityVillager with { Hunger = 20 }) &&
+    VillagerIntentPriorityService.CanInterruptScriptedActivity(
         priorityVillager with { Hunger = 20 }) &&
     !VillagerIntentPriorityService.ShouldProtectCommittedWork(
         priorityVillager with
@@ -993,6 +997,118 @@ Require(NpcAiService.AvailabilityProbeTimeout >= TimeSpan.FromSeconds(45),
 Require(OllamaRequestPolicy.KeepAlive == "30m",
     "all Ollama requests must share the 30-minute residency policy");
 await NpcAiScenarioChecks.RunAsync();
+if (string.Equals(
+        Environment.GetEnvironmentVariable("ISLANDRPG_LIVE_OLLAMA_CHECK"),
+        "1",
+        StringComparison.Ordinal))
+{
+    using var liveProposalAi = new NpcAiService();
+    var liveOpcodeCases = new (
+        string Speech,
+        VillagerPromisePlanAction Opcode,
+        string[] Actions)[]
+    {
+        ("Bring me two logs.", VillagerPromisePlanAction.Collect, ["gather"]),
+        ("Can I have one of your berries?", VillagerPromisePlanAction.Deliver, ["give"]),
+        ("Meet me back at this spot in one minute.", VillagerPromisePlanAction.Rendezvous, ["meet"]),
+        ("Go to this safe shelter spot.", VillagerPromisePlanAction.MoveTo, ["seek_shelter"]),
+        ("Enter that cave entrance.", VillagerPromisePlanAction.InteractWithTarget, ["enter_cave"]),
+        ("Craft a rope for our camp.", VillagerPromisePlanAction.CraftItem, ["craft"]),
+        ("Build a campfire here.", VillagerPromisePlanAction.BuildObject, ["build", "light_fire"]),
+        ("Drop one log here for the cache.", VillagerPromisePlanAction.DepositItem, ["drop"]),
+        ("Withdraw one log from storage.", VillagerPromisePlanAction.WithdrawItem, ["withdraw"]),
+        ("Follow me for a while.", VillagerPromisePlanAction.FollowActor, ["follow", "come"]),
+        ("Explore the land beyond the palms.", VillagerPromisePlanAction.ExploreArea, ["explore"]),
+        ("Wait here for one minute.", VillagerPromisePlanAction.WaitUntil, ["wait"]),
+        ("Warn me about the danger ahead.", VillagerPromisePlanAction.TalkToActor, ["warn"]),
+        ("Defend yourself from my attack.", VillagerPromisePlanAction.AttackTarget, ["defend", "retaliate", "attack"]),
+        ("Run away from me now.", VillagerPromisePlanAction.FleeFromTarget, ["flee", "go_away"]),
+        ("Rest here until you recover.", VillagerPromisePlanAction.Rest, ["rest"]),
+        ("Find food before you starve.", VillagerPromisePlanAction.Eat, ["seek_food", "take_food"]),
+        ("Cut down that tree for logs.", VillagerPromisePlanAction.CutTree, ["cut_tree"]),
+        ("Mine that iron deposit.", VillagerPromisePlanAction.Mine, ["mine"]),
+        ("Catch us a fish at the shore.", VillagerPromisePlanAction.Fish, ["fish"]),
+        ("Cook that raw fish on the fire.", VillagerPromisePlanAction.Cook, ["cook"]),
+        ("Dig into the soft ground here.", VillagerPromisePlanAction.Dig, ["dig"])
+    };
+    var liveWorld = new NpcAiWorldObservation[]
+    {
+        new("logs", ItemIds.Logs, "item", 2, "", true),
+        new("berries", ItemIds.WildBerries, "item", 2, "joan", true),
+        new("cave", ItemIds.CaveEntrance, "item", 3, "", true),
+        new("campfire", ItemIds.Campfire, "item", 2, "", true),
+        new("storage", ItemIds.StorageChest, "storage", 2, "", true),
+        new("tree", ItemIds.PalmLogs, "tree", 3, "", true),
+        new("iron", ItemIds.IronOre, "ore", 3, "", true),
+        new("fish", ItemIds.RawMinnows, "fish", 3, "", true)
+    };
+    var liveOpcodeFailures = new List<string>();
+    foreach (var liveCase in liveOpcodeCases)
+    {
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var interpretation = await liveProposalAi.InterpretAsync(
+            defaultAi,
+            new(
+                "player-requester", "Sam", "joan", "Joan",
+                liveCase.Speech,
+                [new("joan", "Joan", 1, 90, "trusts")],
+                [],
+                [],
+                Personality: "cooperative, practical, willing to help Sam",
+                KnownToolIds:
+                [
+                    ItemIds.StoneAxe, ItemIds.StonePickaxe,
+                    ItemIds.StoneShovel, ItemIds.StoneKnife
+                ],
+                RecentConversation:
+                [
+                    new("joan", "Joan",
+                        "I am willing to help with a reasonable task.", 400)
+                ],
+                Self: new(
+                    100, 90,
+                    [
+                        ItemIds.WildBerries, ItemIds.Logs,
+                        ItemIds.StoneAxe, ItemIds.StonePickaxe,
+                        ItemIds.StoneShovel, ItemIds.RawMinnows
+                    ],
+                    "Idle", "Idle", [], []),
+                NearbyWorld: liveWorld));
+        timer.Stop();
+        var actionMatches = interpretation is not null &&
+                            liveCase.Actions.Contains(
+                                interpretation.Action,
+                                StringComparer.Ordinal);
+        var compiled = interpretation is null
+            ? advancedVillagers[0]
+            : VillagerPromisePlanService.CompileAiDirective(
+                advancedVillagers[0] with { ActionPlan = null },
+                interpretation.Action,
+                interpretation.ItemId,
+                Math.Max(1, interpretation.Quantity),
+                "player-requester", 4, 5,
+                (int)WorldLevel.Overworld, 600,
+                interpretation.DelayMinutes);
+        var passed = interpretation?.Decision is
+                         "accept" or "refuse" or "negotiate" or "clarify" &&
+                     actionMatches &&
+                     VillagerPromisePlanService.CurrentDirective(compiled)?.Action ==
+                         liveCase.Opcode;
+        if (!passed)
+            liveOpcodeFailures.Add(
+                $"'{liveCase.Speech}' expected {liveCase.Opcode}; " +
+                $"decision={interpretation?.Decision}, action={interpretation?.Action}, " +
+                $"item={interpretation?.ItemId}");
+        Console.WriteLine(
+            $"Live opcode {liveCase.Opcode,-20} {timer.ElapsedMilliseconds,6} ms | " +
+            $"decision={interpretation?.Decision,-9} action={interpretation?.Action,-14} " +
+            $"item={interpretation?.ItemId,-20} | {liveCase.Speech}");
+    }
+    Require(
+        liveOpcodeFailures.Count == 0,
+        "live Ollama opcode failures: " +
+        string.Join("; ", liveOpcodeFailures));
+}
 using (var disabledAi = new NpcAiService(
            new HttpClient(new StubHttpHandler(_ =>
                throw new InvalidOperationException(
@@ -3513,13 +3629,65 @@ Require(
     promisedQuantity == 3,
     "natural chat requests must resolve to validated item commitments");
 Require(
-    VillagerCommitmentService.IsAffirmativeResponse(
-        "accept", "none", "I can do that.") &&
-    VillagerCommitmentService.IsAffirmativeResponse(
-        "", "none", "All right, I'll find them.") &&
-    !VillagerCommitmentService.IsAffirmativeResponse(
-        "refuse", "none", "No, I need food first."),
-    "natural AI agreement must activate parsed work even when its structured action is missing, while refusals must not");
+    VillagerCommitmentService.TryParseGatherRequest(
+        "If I gather stones for you, would you gather fibre for me?",
+        out var tradedItem,
+        out var tradedQuantity) &&
+    tradedItem == ItemIds.PlantFibres &&
+    tradedQuantity == 1,
+    "conditional trades must plan the NPC's requested clause and resolve common item aliases");
+var requestTemplates = new Func<string, string>[]
+{
+    item => $"Please fetch two {item} for me.",
+    item => $"Can you find {item}?",
+    item => $"Would you collect {item} for me?",
+    item => $"Go look for {item}.",
+    item => $"Pick up {item} and bring it back."
+};
+var requestTemplateIndex = 0;
+foreach (var catalogItem in ItemCatalog.All.Where(item => item.Droppable))
+{
+    var template = requestTemplates[
+        requestTemplateIndex++ % requestTemplates.Length];
+    var requestText = template(catalogItem.Name);
+    Require(
+        VillagerCommitmentService.TryParseGatherRequest(
+            requestText, out var resolvedCatalogItem,
+            out var resolvedCatalogQuantity) &&
+        resolvedCatalogItem == catalogItem.Id &&
+        resolvedCatalogQuantity ==
+            (requestText.Contains("two", StringComparison.Ordinal) ? 2 : 1),
+        $"catalog-driven request language must resolve '{requestText}' to {catalogItem.Id}");
+}
+Require(
+    VillagerCommitmentService.TryParseGatherRequest(
+        "Could you fetch a bundle of timber?",
+        out var timberItem, out _) && timberItem == ItemIds.Logs &&
+    VillagerCommitmentService.TryParseGatherRequest(
+        "Please search for some kindling.",
+        out var kindlingItem, out _) && kindlingItem == ItemIds.Sticks &&
+    VillagerCommitmentService.TryParseGatherRequest(
+        "Will you bring me three fibers?",
+        out var fiberItem, out var fiberQuantity) &&
+    fiberItem == ItemIds.PlantFibres && fiberQuantity == 3,
+    "resource synonyms and written quantities must resolve through the reusable item-language layer");
+Require(
+    VillagerCommitmentService.TryResolveAiItemProposal(
+        "If I gather stones for you, would you gather fibre for me?",
+        "gather", "fibre", 1,
+        out var aiProposalKind,
+        out var aiProposalItem,
+        out var aiProposalQuantity) &&
+    aiProposalKind == VillagerPromiseKind.GatherItem &&
+    aiProposalItem == ItemIds.PlantFibres &&
+    aiProposalQuantity == 1 &&
+    !VillagerCommitmentService.TryResolveAiItemProposal(
+        "Would you gather fibre for me?",
+        "none", "fibre", 1, out _, out _, out _) &&
+    !VillagerCommitmentService.TryResolveAiItemProposal(
+        "Would you gather fibre for me?",
+        "gather", ItemIds.Logs, 1, out _, out _, out _),
+    "only Ollama's structured executable proposal may enter the NPC brain, and its item must validate against the player's words");
 var acceptance = VillagerCommitmentService.TryAccept(
     villagerSpawnA[0],
     "requester",
@@ -3540,6 +3708,82 @@ var committedVillager =
     VillagerCommitmentService.AddPromise(
         villagerSpawnA[0],
         acceptance.Promise!);
+Require(
+    committedVillager.ActionPlan is
+    [
+        {
+            Action: VillagerPromisePlanAction.Collect,
+            ItemId: ItemIds.Logs,
+            RemainingQuantity: 3
+        }
+    ],
+    "accepting an Ollama-guided commitment must compile a persistent controller action queue");
+var opcodeMappings = new (string Action, VillagerPromisePlanAction Opcode)[]
+{
+    ("gather", VillagerPromisePlanAction.Collect),
+    ("give", VillagerPromisePlanAction.Deliver),
+    ("meet", VillagerPromisePlanAction.Rendezvous),
+    ("seek_shelter", VillagerPromisePlanAction.MoveTo),
+    ("enter_cave", VillagerPromisePlanAction.InteractWithTarget),
+    ("craft", VillagerPromisePlanAction.CraftItem),
+    ("build", VillagerPromisePlanAction.BuildObject),
+    ("drop", VillagerPromisePlanAction.DepositItem),
+    ("withdraw", VillagerPromisePlanAction.WithdrawItem),
+    ("follow", VillagerPromisePlanAction.FollowActor),
+    ("explore", VillagerPromisePlanAction.ExploreArea),
+    ("wait", VillagerPromisePlanAction.WaitUntil),
+    ("warn", VillagerPromisePlanAction.TalkToActor),
+    ("attack", VillagerPromisePlanAction.AttackTarget),
+    ("flee", VillagerPromisePlanAction.FleeFromTarget),
+    ("rest", VillagerPromisePlanAction.Rest),
+    ("seek_food", VillagerPromisePlanAction.Eat),
+    ("cut_tree", VillagerPromisePlanAction.CutTree),
+    ("mine", VillagerPromisePlanAction.Mine),
+    ("fish", VillagerPromisePlanAction.Fish),
+    ("cook", VillagerPromisePlanAction.Cook),
+    ("dig", VillagerPromisePlanAction.Dig)
+};
+foreach (var mapping in opcodeMappings)
+{
+    var planned = VillagerPromisePlanService.CompileAiDirective(
+        villagerSpawnA[0] with { ActionPlan = null },
+        mapping.Action,
+        ItemIds.Logs,
+        2,
+        "requester",
+        4,
+        5,
+        (int)WorldLevel.Overworld,
+        600,
+        10);
+    Require(
+        VillagerPromisePlanService.CurrentDirective(planned) is
+        {
+            PromiseId: var directivePromiseId,
+            TargetActorId: "requester",
+            TargetX: 4,
+            TargetY: 5,
+            ExecuteAfterGameSeconds: 1200
+        } directive &&
+        directivePromiseId == Guid.Empty &&
+        directive.Action == mapping.Opcode,
+        $"Ollama action '{mapping.Action}' must compile to the {mapping.Opcode} controller opcode");
+}
+var retryPlan = VillagerPromisePlanService.CompileAiDirective(
+    villagerSpawnA[0] with { ActionPlan = null },
+    "seek_shelter", "", 1, null, null, null,
+    (int)WorldLevel.Overworld, 600, 0);
+var retryStep = VillagerPromisePlanService.CurrentDirective(retryPlan)!;
+for (var retry = 0; retry < retryStep.MaximumAttempts; retry++)
+{
+    var activeRetry = VillagerPromisePlanService.CurrentDirective(retryPlan);
+    if (activeRetry is null) break;
+    retryPlan = VillagerPromisePlanService.FailOrRetryDirective(
+        retryPlan, activeRetry);
+}
+Require(
+    VillagerPromisePlanService.CurrentDirective(retryPlan) is null,
+    "invalid or unreachable controller steps must leave the queue after their bounded retry budget");
 var scheduledPromiseVillager =
     VillagerPromisePlanService.ScheduleRendezvous(
         committedVillager,
@@ -3552,6 +3796,7 @@ var scheduledPlans =
     VillagerPromisePlanService.PlansFor(scheduledPromiseVillager);
 Require(
     scheduledPlans.Count == 2 &&
+    scheduledPromiseVillager.ActionPlan?.Count == 2 &&
     scheduledPlans[0] is
     {
         Action: VillagerPromisePlanAction.Collect,
@@ -3591,8 +3836,16 @@ var completedRendezvous =
 Require(
     readyToReturn.Promises?.Single().Progress == 3 &&
     readyToReturn.Promises.Single().Status == CommitmentStatus.Active &&
+    readyToReturn.ActionPlan is
+    [
+        {
+            Action: VillagerPromisePlanAction.Rendezvous,
+            RemainingQuantity: 0
+        }
+    ] &&
     completedRendezvous.Promises?.Single().Status ==
         CommitmentStatus.Fulfilled &&
+    completedRendezvous.ActionPlan?.Count == 0 &&
     !VillagerPromisePlanService.HasActiveWork(completedRendezvous),
     "interchangeable gathered resources must satisfy collection while a scheduled promise remains active until the NPC physically returns");
 var promisePriorityInventory =
@@ -3631,14 +3884,20 @@ committedVillager =
 Require(
     committedVillager.Promises?.Single().Progress == 2 &&
     committedVillager.Promises.Single().Status ==
-        CommitmentStatus.Active,
-    "promise progress must track actual acquired items");
+        CommitmentStatus.Active &&
+    committedVillager.ActionPlan?.Single() is
+    {
+        Action: VillagerPromisePlanAction.Collect,
+        RemainingQuantity: 1
+    },
+    "promise progress must track actual acquired items and recompile the remaining controller work");
 committedVillager =
     VillagerCommitmentService.RecordAcquiredItem(
         committedVillager, ItemIds.Logs);
 Require(
     committedVillager.Promises?.Single().Status ==
         CommitmentStatus.Fulfilled &&
+    committedVillager.ActionPlan?.Count == 0 &&
     VillagerCommitmentService.ApplyOutcome(
         default,
         CommitmentStatus.Fulfilled).Trust > 0,
@@ -3656,6 +3915,7 @@ var brokenPromiseVillager =
 Require(
     brokenPromiseVillager.Promises?.Single().Status ==
         CommitmentStatus.Broken &&
+    brokenPromiseVillager.ActionPlan?.Count == 0 &&
     VillagerCommitmentService.ApplyOutcome(
         default,
         CommitmentStatus.Broken).Trust < 0,
@@ -3692,6 +3952,60 @@ var favorAcceptance = VillagerCommitmentService.TryAccept(
     ItemIds.Sticks,
     quantity: 2,
     gameSeconds: 400);
+var playerBerryAcceptance = VillagerCommitmentService.TryAccept(
+    villagerSpawnA[0],
+    "player-requester",
+    VillagerPromiseKind.GiveItem,
+    ItemIds.WildBerries,
+    quantity: 1,
+    gameSeconds: 400);
+var berryGiverInventory = new string?[PlayerInventory.Capacity];
+berryGiverInventory[0] = ItemIds.WildBerries;
+var berryGiver = VillagerCommitmentService.AddPromise(
+    villagerSpawnA[0] with { Inventory = berryGiverInventory },
+    playerBerryAcceptance.Promise!);
+var playerBerryInventory = new string?[PlayerInventory.Capacity];
+Require(
+    berryGiver.ActionPlan?.Single() is
+    {
+        Action: VillagerPromisePlanAction.Deliver,
+        ItemId: ItemIds.WildBerries,
+        RemainingQuantity: 1
+    },
+    "an accepted player request for an item already carried by the NPC must queue delivery, not collection");
+var berryDelivered = VillagerCommitmentService
+    .TryCompleteDeliveryToInventory(
+        berryGiver,
+        "player-requester",
+        playerBerryInventory,
+        playerBerryAcceptance.Promise!.Id,
+        410,
+        out var berryGiverAfterDelivery,
+        out var playerAfterBerryDelivery);
+Require(
+    berryDelivered &&
+    !berryGiverAfterDelivery.Inventory.Contains(ItemIds.WildBerries) &&
+    playerAfterBerryDelivery.Count(value =>
+        value == ItemIds.WildBerries) == 1 &&
+    berryGiverAfterDelivery.Promises?.Single().Status ==
+        CommitmentStatus.Fulfilled &&
+    berryGiverAfterDelivery.ActionPlan?.Count == 0,
+    "NPC-to-player delivery must atomically transfer the accepted item, fulfil the promise, and clear its controller queue");
+var fullPlayerInventory = Enumerable.Repeat<string?>(
+    ItemIds.Logs, PlayerInventory.Capacity).ToArray();
+Require(
+    !VillagerCommitmentService.TryCompleteDeliveryToInventory(
+        berryGiver,
+        "player-requester",
+        fullPlayerInventory,
+        playerBerryAcceptance.Promise.Id,
+        410,
+        out var blockedBerryGiver,
+        out var blockedPlayerInventory) &&
+    blockedBerryGiver.Inventory.Contains(ItemIds.WildBerries) &&
+    blockedBerryGiver.Promises?.Single().Progress == 0 &&
+    blockedPlayerInventory.All(value => value == ItemIds.Logs),
+    "NPC-to-player delivery must remain atomic when the player's inventory is full");
 var favorPromisor = VillagerCommitmentService.AddPromise(
     villagerSpawnA[0] with
     {
@@ -8030,6 +8344,12 @@ try
         loadedVillagers[0].Goals?.Count == 2 &&
         loadedVillagers[0].Promises?.Single().Id ==
             persistedPromise.Id &&
+        loadedVillagers[0].ActionPlan?.Single() is
+        {
+            Action: VillagerPromisePlanAction.Collect,
+            ItemId: ItemIds.Logs,
+            RemainingQuantity: 2
+        } &&
         loadedVillagers[0].FollowingActorId == player.Id &&
         loadedVillagers[0].Energy == 37.5f &&
         loadedVillagers[0].LastEnergyGameSeconds == 812 &&

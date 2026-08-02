@@ -188,7 +188,8 @@ internal sealed record VillagerState(
     float? PersonalCampX = null,
     float? PersonalCampY = null,
     int? PersonalCampWorldLevel = null,
-    bool IndependentByChoice = false);
+    bool IndependentByChoice = false,
+    IReadOnlyList<VillagerPromisePlanStep>? ActionPlan = null);
 
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,
