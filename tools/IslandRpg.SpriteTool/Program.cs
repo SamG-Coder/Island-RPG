@@ -65,9 +65,36 @@ internal static class SpriteSheetTool
                 var red = sourcePixels[sourceOffset + 2];
                 var alpha = sourcePixels[sourceOffset + 3];
 
-                if (IsChroma(
-                        red, green, blue, options.Chroma,
-                        options.ChromaTolerance))
+                if (options.SoftChroma)
+                {
+                    var distance = Math.Sqrt(
+                        Math.Pow(red - options.Chroma.Red, 2) +
+                        Math.Pow(green - options.Chroma.Green, 2) +
+                        Math.Pow(blue - options.Chroma.Blue, 2));
+                    var transparent = options.ChromaTolerance;
+                    var opaque = Math.Min(441, Math.Max(
+                        transparent + 1, transparent * 3));
+                    var matte = distance <= transparent
+                        ? 0
+                        : distance >= opaque
+                            ? 255
+                            : (int)Math.Round(
+                                (distance - transparent) * 255 /
+                                (opaque - transparent));
+                    alpha = (byte)(alpha * matte / 255);
+                    if (alpha == 0)
+                    {
+                        outputPixels[outputOffset] = 0;
+                        outputPixels[outputOffset + 1] = 0;
+                        outputPixels[outputOffset + 2] = 0;
+                        outputPixels[outputOffset + 3] = 0;
+                        continue;
+                    }
+                    DespillMagenta(ref red, ref green, ref blue);
+                }
+                else if (IsChroma(
+                             red, green, blue, options.Chroma,
+                             options.ChromaTolerance))
                 {
                     outputPixels[outputOffset] = 0;
                     outputPixels[outputOffset + 1] = 0;
@@ -152,6 +179,16 @@ internal static class SpriteSheetTool
         Math.Abs(green - chroma.Green) <= tolerance &&
         Math.Abs(blue - chroma.Blue) <= tolerance;
 
+    private static void DespillMagenta(
+        ref byte red, ref byte green, ref byte blue)
+    {
+        var magenta = Math.Min(red, blue);
+        if (magenta <= green + 20 || Math.Abs(red - blue) > 72) return;
+        var neutralLimit = (byte)Math.Min(255, green + 20);
+        red = Math.Min(red, neutralLimit);
+        blue = Math.Min(blue, neutralLimit);
+    }
+
     private readonly record struct CropRectangle(
         int X, int Y, int Width, int Height);
 
@@ -181,6 +218,7 @@ internal static class SpriteSheetTool
         int CellSize,
         Rgb Chroma,
         int ChromaTolerance,
+        bool SoftChroma,
         float? BottomFadeStart,
         float BottomFadeStrength)
     {
@@ -196,6 +234,7 @@ internal static class SpriteSheetTool
             var cellSize = 32;
             var chroma = new Rgb(255, 0, 255);
             var tolerance = 32;
+            var softChroma = false;
             float? bottomFadeStart = null;
             var bottomFadeStrength = .94f;
 
@@ -225,6 +264,9 @@ internal static class SpriteSheetTool
                             throw new ArgumentException(
                                 "--tolerance must be between 0 and 255.");
                         break;
+                    case "--soft-chroma":
+                        softChroma = bool.Parse(value);
+                        break;
                     case "--bottom-fade-start":
                         bottomFadeStart = UnitFloat(option, value);
                         break;
@@ -239,7 +281,7 @@ internal static class SpriteSheetTool
             return new(
                 Path.GetFullPath(args[0]),
                 Path.GetFullPath(args[1]),
-                columns, rows, cellSize, chroma, tolerance,
+                columns, rows, cellSize, chroma, tolerance, softChroma,
                 bottomFadeStart, bottomFadeStrength);
         }
 
@@ -272,6 +314,7 @@ internal static class SpriteSheetTool
             Console.Error.WriteLine("  --cell-size <px>   Square cell size (default: 32)");
             Console.Error.WriteLine("  --chroma <#RRGGBB> Transparent colour (default: #FF00FF)");
             Console.Error.WriteLine("  --tolerance <0-255> Chroma tolerance (default: 32)");
+            Console.Error.WriteLine("  --soft-chroma <bool> Soft alpha and magenta despill (default: false)");
             Console.Error.WriteLine(
                 "  --bottom-fade-start <0-1> Darken pixels below this height");
             Console.Error.WriteLine(

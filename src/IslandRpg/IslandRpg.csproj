@@ -68,6 +68,8 @@
     <Content Include="Resources\Images\Ui\quest-crafting-ui-icons-source.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\loading-world.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\Combat\training-dummy-source.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\Combat\slime-sprites.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\Images\Combat\slime-sprites-back.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Images\TestAssets\**\*" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Audio\aoe-sound-cues.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Audio\thunder.wav" CopyToOutputDirectory="PreserveNewest" />

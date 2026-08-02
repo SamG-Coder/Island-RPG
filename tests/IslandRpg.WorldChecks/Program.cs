@@ -8651,6 +8651,29 @@ using (var cropSheetStream = File.OpenRead(cropSheetPath))
         "planted crops must use the converted three-cell world sprite sheet");
 }
 
+var slimeFrontPath = Path.Combine(
+    AppContext.BaseDirectory, "Resources", "Images", "Combat",
+    "slime-sprites.png");
+var slimeBackPath = Path.Combine(
+    AppContext.BaseDirectory, "Resources", "Images", "Combat",
+    "slime-sprites-back.png");
+var slimeRig = SlimeSpriteRig.Load(slimeFrontPath, slimeBackPath);
+var slimeFront = SlimeSpriteRig.Resolve(
+    EntityAction.Idle, new Vector2(1, 1), 0);
+var slimeBack = SlimeSpriteRig.Resolve(
+    EntityAction.Move, new Vector2(-1, -1), .31);
+var slimeAttackEnd = SlimeSpriteRig.Resolve(
+    EntityAction.Attack, Vector2.UnitX, 10);
+var slimeSpawnEnd = SlimeSpriteRig.Resolve(
+    SlimeAnimationState.Spawn, Vector2.UnitY, 10);
+Require(
+    slimeRig.Frame(slimeFront).Width == SlimeSpriteRig.CellSize &&
+    !slimeFront.UsesBackSheet &&
+    slimeBack.UsesBackSheet && slimeBack.FrameIndex == 3 &&
+    slimeAttackEnd.Completed && slimeAttackEnd.FrameIndex == 7 &&
+    slimeSpawnEnd.Completed && slimeSpawnEnd.FrameIndex == 7,
+    "the slime rig must validate both sheets and map direction, looping, attacks and spawning");
+
 Console.WriteLine(
     $"World checks passed: {macroBiomes.Count} macro biomes, deterministic generation, seams, " +
     $"persistence, and 64-slot region storage ({regionBytes:N0} bytes for the test region). " +
