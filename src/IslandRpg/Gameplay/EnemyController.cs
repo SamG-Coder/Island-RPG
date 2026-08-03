@@ -101,6 +101,7 @@ internal abstract class EnemyController
         EnemyState enemy, IReadOnlyList<EnemyActorPresence> actors) =>
         actors.Where(actor =>
                 actor.Alive && actor.WorldLevel == enemy.WorldLevel &&
+                actor.CanBeTargeted &&
                 CanTarget(enemy, actor))
             .OrderBy(actor =>
                 Vector2.DistanceSquared(actor.Position, enemy.Position))

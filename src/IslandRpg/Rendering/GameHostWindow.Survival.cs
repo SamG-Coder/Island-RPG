@@ -119,6 +119,7 @@ internal sealed partial class GameHostWindow
     {
         if (_activePlayer is null || _playerDefeated ||
             _godMode || damage <= 0) return;
+        InterruptOpenItemContainer();
         _playerTimedHealing = default;
         var health = PlayerDeathService.ApplyDamage(
             _activePlayer.Health, damage);

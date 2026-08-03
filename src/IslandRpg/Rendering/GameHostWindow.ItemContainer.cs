@@ -313,9 +313,25 @@ internal sealed partial class GameHostWindow
         if (storage is null ||
             !WorldItemContainerService.IsContainer(storage.ItemId))
             return;
+        if (EnemyThreatService.HasActiveThreat(_enemies, "player"))
+        {
+            _chatUi.AddMessage(
+                "It is too dangerous to search a container now.",
+                ChatMessageStyle.Warning);
+            return;
+        }
         OpenItemContainer(
             WorldItemContainerService.Open(storage),
             storage.Id);
+    }
+
+    private void InterruptOpenItemContainer()
+    {
+        if (!_itemContainerWindow.Visible) return;
+        CloseItemContainer();
+        _chatUi.AddMessage(
+            "The attack forces you away from the open container.",
+            ChatMessageStyle.Warning);
     }
 
     private void RenderItemContainerWindow()

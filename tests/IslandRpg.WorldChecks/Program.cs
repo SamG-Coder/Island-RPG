@@ -9547,6 +9547,49 @@ Require(
         (int)MathF.Floor(strandedSearchTarget.Y),
         (int)WorldLevel.Overworld),
     "urgent food exploration must choose a meaningful walkable route when the preferred shoreline ray is blocked");
+var escapedInteractionFootprint = GridPathfinder.Find(
+    7319,
+    Vector2.Zero,
+    new Vector2(5, 0),
+    worldLevel: (int)WorldLevel.Overworld,
+    obstacles:
+    [
+        new NavigationObstacle(Vector2.Zero, 4, 4)
+    ]);
+var blockedInteractionFootprint = GridPathfinder.Find(
+    7319,
+    new Vector2(-5, 0),
+    new Vector2(5, 0),
+    worldLevel: (int)WorldLevel.Overworld,
+    obstacles:
+    [
+        new NavigationObstacle(Vector2.Zero, 4, 4)
+    ]);
+Require(
+    escapedInteractionFootprint.Count > 0 &&
+    escapedInteractionFootprint[^1] == new Vector2(5, 0) &&
+    blockedInteractionFootprint.Count > 0 &&
+    blockedInteractionFootprint.All(point =>
+        !new NavigationObstacle(Vector2.Zero, 4, 4).Contains(point)),
+    "pathfinding must let actors leave a starting obstacle overlap without making that obstacle passable to outside routes");
+var invalidCaveInteractionStand = new Vector2(
+    75.07983f, -15.079827f);
+var caveEntranceStand = new Vector2(84.5f, -16.5f);
+var recoveredCaveRoute = GridPathfinder.Find(
+    7319,
+    invalidCaveInteractionStand,
+    caveEntranceStand,
+    worldLevel: (int)WorldLevel.Underground);
+Require(
+    !GridPathfinder.CanStandAt(
+        7319, invalidCaveInteractionStand,
+        (int)WorldLevel.Underground) &&
+    GridPathfinder.CanStandAt(
+        7319, caveEntranceStand,
+        (int)WorldLevel.Underground) &&
+    recoveredCaveRoute.Count > 0 &&
+    recoveredCaveRoute[^1] == caveEntranceStand,
+    "cave routing must reject wall-side interaction endpoints and recover a route from an already-invalid stand point");
 var distantSpawner = EnemySpawnerService.Update(
     grassSpawner, [],
     [new("player", new Vector2(100, 100), 0, true, 20, true)],
@@ -9735,6 +9778,40 @@ var caveReactedUpdate = EnemySpawnerService.UpdateController(
     [new("villager", Vector2.UnitX * 3,
         (int)WorldLevel.Underground, true)],
     caveUpdate.AggroReadyAt, .1f, 2187);
+var caveArrivalGrace = EnemySpawnerService.UpdateController(
+    caveEnemy with
+    {
+        TargetId = "player",
+        Behavior = EnemyBehavior.Attack
+    },
+    [new("player", Vector2.UnitX,
+        (int)WorldLevel.Underground, true, 10, true,
+        CanBeTargeted: false)],
+    2, .1f, 2187);
+var caveWaveDuringArrivalGrace = EnemySpawnerService.Update(
+    new EnemySpawnerState(
+        Guid.NewGuid(), Vector2.Zero,
+        (int)WorldLevel.Underground, Biome.Rock,
+        [new(EnemyKind.CaveSlime)]),
+    [],
+    [new("player", Vector2.Zero,
+        (int)WorldLevel.Underground, true, 10, true,
+        CanBeTargeted: false)],
+    2, 2187);
+var activeCaveThreat = EnemyThreatService.HasActiveThreat(
+    [caveEnemy with
+    {
+        TargetId = "player",
+        Behavior = EnemyBehavior.Attack
+    }],
+    "player");
+var harmlessCavePresence = EnemyThreatService.HasActiveThreat(
+    [caveEnemy with
+    {
+        TargetId = null,
+        Behavior = EnemyBehavior.Roam
+    }],
+    "player");
 var leashed = EnemySpawnerService.UpdateController(
     EnemySpawnerService.Provoke(
         passiveSlime with
@@ -9784,6 +9861,13 @@ Require(
     caveUpdate.Behavior == EnemyBehavior.Idle &&
     caveUpdate.AggroReadyAt == 1.25 &&
     caveReactedUpdate.Behavior == EnemyBehavior.Chase &&
+    caveArrivalGrace.TargetId is null &&
+    caveArrivalGrace.Behavior == EnemyBehavior.Return &&
+    caveWaveDuringArrivalGrace.Active &&
+    caveWaveDuringArrivalGrace.SpawnedWave &&
+    caveWaveDuringArrivalGrace.Enemies.Count > 0 &&
+    EnemySpawnerService.WorldTransitionGraceSeconds == 5 &&
+    activeCaveThreat && !harmlessCavePresence &&
     leashed.TargetId is null && leashed.Behavior == EnemyBehavior.Return &&
     disengaged.TargetId is null && disengaged.ProvokedById is null &&
     disengaged.Behavior == EnemyBehavior.Return &&

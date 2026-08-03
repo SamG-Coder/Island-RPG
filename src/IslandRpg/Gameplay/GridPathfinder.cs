@@ -44,6 +44,15 @@ internal static class GridPathfinder
         int worldLevel = (int)WorldLevel.Overworld,
         IReadOnlyList<NavigationObstacle>? obstacles = null)
     {
+        // Interaction stand-off points can legitimately finish just inside a
+        // resource's conservative navigation footprint. Do not let that
+        // footprint imprison the actor on the next route; it remains solid
+        // for every path that starts outside it.
+        var routeObstacles = obstacles is null
+            ? null
+            : obstacles.Where(obstacle =>
+                    !obstacle.Contains(startPosition))
+                .ToArray();
         var start = (
             WorldPlacementGrid.Cell(startPosition.X),
             WorldPlacementGrid.Cell(startPosition.Y));
@@ -70,7 +79,7 @@ internal static class GridPathfinder
             if (passability.TryGetValue((x, y), out var value))
                 return value;
             value = Passable(
-                seed, x, y, worldLevel, Density, obstacles);
+                seed, x, y, worldLevel, Density, routeObstacles);
             passability[(x, y)] = value;
             return value;
         }
@@ -83,7 +92,7 @@ internal static class GridPathfinder
             return value;
         }
         var exactTarget = PassablePoint(
-            seed, requestedTarget, worldLevel, caveContext, obstacles);
+            seed, requestedTarget, worldLevel, caveContext, routeObstacles);
         var goal = ResolveGoal(
             seed,
             requestedGoal,
@@ -94,10 +103,20 @@ internal static class GridPathfinder
             return [];
         var resolvedGoal = goal.Value;
 
+        var resolvedStart = CanPass(start.Item1, start.Item2)
+            ? start
+            : ResolveGoal(
+                seed, start, startPosition, worldLevel, CanPass);
+        if (resolvedStart is null)
+            return [];
+        var searchStart = resolvedStart.Value;
         var frontier = new PriorityQueue<(int X, int Y), float>();
         var cameFrom = new Dictionary<(int X, int Y), (int X, int Y)>();
-        var costs = new Dictionary<(int X, int Y), float> { [start] = 0 };
-        frontier.Enqueue(start, 0);
+        var costs = new Dictionary<(int X, int Y), float>
+        {
+            [searchStart] = 0
+        };
+        frontier.Enqueue(searchStart, 0);
         var visited = 0;
         while (frontier.Count > 0 && visited++ < maximumVisited)
         {
@@ -138,7 +157,7 @@ internal static class GridPathfinder
         IReadOnlyList<Vector2> Reconstruct((int X, int Y) current)
         {
             var result = new List<Vector2>();
-            while (current != start)
+            while (current != searchStart)
             {
                 result.Add(WorldPlacementGrid.CellCenter(
                     current.X, current.Y));
@@ -154,6 +173,19 @@ internal static class GridPathfinder
             }
             return result;
         }
+    }
+
+    public static bool CanStandAt(
+        long seed,
+        Vector2 point,
+        int worldLevel,
+        IReadOnlyList<NavigationObstacle>? obstacles = null)
+    {
+        var caveContext = worldLevel == (int)WorldLevel.Underground
+            ? new CaveHydrologyField.SamplingContext(seed)
+            : null;
+        return PassablePoint(
+            seed, point, worldLevel, caveContext, obstacles);
     }
 
     private static (int X, int Y)? ResolveGoal(

@@ -21,6 +21,7 @@ internal sealed partial class GameHostWindow
     private readonly int[] _slimeBackTextures =
         new int[SlimeSpriteRig.FrameCount];
     private double _nextEnemySpawnerProbe;
+    private double _playerEnemyTargetableAt;
     private readonly Dictionary<Guid, Task<EnemyPathResult>>
         _enemyPathTasks = [];
     private CancellationTokenSource _enemyPathCancellation = new();
@@ -59,6 +60,7 @@ internal sealed partial class GameHostWindow
         _enemies.Clear();
         _slimeAttackEffects.Clear();
         _nextEnemySpawnerProbe = 0;
+        _playerEnemyTargetableAt = 0;
     }
 
     private void UpdateEnemies(float elapsed)
@@ -467,7 +469,8 @@ internal sealed partial class GameHostWindow
         if (_player is not null && !_playerDefeated)
             actors.Add(new(
                 "player", _player.Position, _activeWorldLevel, true,
-                PlayerCombatPower(), true));
+                PlayerCombatPower(), true,
+                _clock >= _playerEnemyTargetableAt));
         foreach (var villager in _villagers)
             if (villager.Health > 0)
                 actors.Add(new(

@@ -48,7 +48,8 @@ internal sealed record EnemyState(
 
 internal readonly record struct EnemyActorPresence(
     string Id, Vector2 Position, int WorldLevel, bool Alive,
-    int PowerLevel = 1, bool IsPlayer = false);
+    int PowerLevel = 1, bool IsPlayer = false,
+    bool CanBeTargeted = true);
 
 internal readonly record struct EnemySpawnerUpdate(
     EnemySpawnerState Spawner,
@@ -200,6 +201,7 @@ internal static class EnemySpawnerService
     public const float LeashRadius = 8f;
     public const float CaveAggroRadius = 5f;
     public const float AttackRange = 1.25f;
+    public const double WorldTransitionGraceSeconds = 5;
     public const double RecoveryRealSeconds = 45;
     public const double RecoveryGameSeconds =
         RecoveryRealSeconds * VillagerSimulation.GameSecondsPerRealSecond;

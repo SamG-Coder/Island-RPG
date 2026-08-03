@@ -2157,6 +2157,14 @@ internal sealed partial class GameHostWindow : GameWindow
             var standPosition = actionType == WorldActionType.Fish
                 ? candidate
                 : target + approach.Normalized() * finalDistance;
+            if (!GridPathfinder.CanStandAt(
+                    _worldSeed,
+                    standPosition,
+                    worldLevel,
+                    obstacles) ||
+                !WorldActionReach.CanComplete(
+                    standPosition, target, standOff))
+                continue;
             var actionPath = path.ToList();
             if (actionPath.Count == 0)
                 actionPath.Add(standPosition);

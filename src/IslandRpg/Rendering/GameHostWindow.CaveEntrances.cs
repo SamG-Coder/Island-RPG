@@ -408,6 +408,8 @@ internal sealed partial class GameHostWindow
                 : (int)WorldLevel.Overworld;
         CancelWorldLevelWork(clearMinimap: true);
         _activeWorldLevel = destinationLevel;
+        _playerEnemyTargetableAt = _clock +
+            EnemySpawnerService.WorldTransitionGraceSeconds;
         _caveEntranceLightWorld =
             destinationLevel == (int)WorldLevel.Underground
                 ? new(entrance.X, entrance.Y)
