@@ -2119,7 +2119,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 targetCell.X + x + .5f,
                 targetCell.Y + y + .5f);
             if (actionType != WorldActionType.Fish ||
-                (candidate - target).Length <= standOff + .25f)
+                WorldActionReach.CanComplete(candidate, target, standOff))
                 candidates.Add(candidate);
         }
 
@@ -2161,7 +2161,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 actionPath,
                 new QueuedWorldAction(
                     actionType, target,
-                    Math.Max(standOff, .72f) + .08f,
+                    WorldActionReach.CompletionRange(standOff),
                     groundObjectId,
                 inventorySlot,
                 itemId,

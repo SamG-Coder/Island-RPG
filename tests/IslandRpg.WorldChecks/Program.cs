@@ -4108,6 +4108,12 @@ Require(
         [beginnerFish], null, 1, null).Failure ==
         FishingTargetFailure.FishingNetNotFound,
     "automatic fishing must skip inaccessible nearby fish while exact targets report their skill or equipment requirement");
+Require(
+    WorldActionReach.CanComplete(
+        new Vector2(3.08f, 0), Vector2.Zero, 3) &&
+    !WorldActionReach.CanComplete(
+        new Vector2(3.081f, 0), Vector2.Zero, 3),
+    "fishing approach selection and queued-action completion must use the same reach boundary");
 
 var seekFoodPlan = VillagerPromisePlanService.CompileAiDirective(
     villagerSpawnA[0] with { ActionPlan = null },
@@ -7585,6 +7591,16 @@ Require(
     cookedMinnows.ItemId == ItemIds.CookedMinnows &&
     cookedMinnows.Experience > 0,
     "cooking rolls must deterministically map failures to shader-derived burnt fish and successes to cooked sprites");
+Require(
+    SurvivalService.TryFoodEffect(
+        ItemIds.BurntMinnows, out var burntMinnowsFood) &&
+    SurvivalService.TryFoodEffect(
+        ItemIds.CookedMinnows, out var cookedMinnowsFood) &&
+    burntMinnowsFood.HungerRestored > 0 &&
+    burntMinnowsFood.HungerRestored <
+        cookedMinnowsFood.HungerRestored &&
+    burntMinnowsFood.WellFedSeconds == 0,
+    "burnt fish must remain weak desperation food without the well-fed benefit of a successful cook");
 var woodcuttingGuide =
     SkillGuideService.Definition(SkillType.Woodcutting);
 Require(
