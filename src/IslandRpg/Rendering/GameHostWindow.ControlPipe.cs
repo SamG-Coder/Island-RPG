@@ -680,20 +680,29 @@ internal sealed partial class GameHostWindow
             eventType = "nearby",
             origin = new { origin.X, origin.Y },
             radius,
-            trees = chunks.SelectMany(value => value.Trees)
+            trees = chunks.SelectMany(chunk => chunk.Trees.Select(tree => new
+                {
+                    Tree = tree,
+                    State = TreeInteractionAvailability.StateAt(
+                        chunk.TreeInstances, tree.X, tree.Y)
+                }))
                 .Where(value => Vector2.DistanceSquared(
-                    new(value.X + .5f, value.Y + .5f), origin) <=
+                    new(value.Tree.X + .5f, value.Tree.Y + .5f), origin) <=
                     radiusSquared)
                 .OrderBy(value => Vector2.DistanceSquared(
-                    new(value.X + .5f, value.Y + .5f), origin))
+                    new(value.Tree.X + .5f, value.Tree.Y + .5f), origin))
                 .Take(32)
                 .Select(value => new
                 {
-                    x = value.X,
-                    y = value.Y,
-                    value.GraphicName,
+                    x = value.Tree.X,
+                    y = value.Tree.Y,
+                    value.Tree.GraphicName,
+                    state = value.State.ToString(),
+                    actions = value.State == TreeLifecycleState.Standing
+                        ? new[] { "cut_tree", "gather_sticks" }
+                        : [],
                     distance = Vector2.Distance(
-                        new(value.X + .5f, value.Y + .5f), origin)
+                        new(value.Tree.X + .5f, value.Tree.Y + .5f), origin)
                 }),
             groundObjects = chunks.SelectMany(value => value.GroundObjects)
                 .Where(value => Vector2.DistanceSquared(
@@ -1180,18 +1189,28 @@ internal sealed partial class GameHostWindow
                 var tree = _worldChunks.Values
                     .Where(value =>
                         value.Chunk.Coordinate.Level == _activeWorldLevel)
-                    .SelectMany(value => value.Chunk.Trees)
+                    .SelectMany(value => value.Chunk.Trees.Select(tree => new
+                    {
+                        Tree = tree,
+                        value.Chunk.TreeInstances
+                    }))
                     .Where(value =>
-                        value.X == (int)MathF.Floor(treePosition.X) &&
-                        value.Y == (int)MathF.Floor(treePosition.Y))
+                        value.Tree.X == (int)MathF.Floor(treePosition.X) &&
+                        value.Tree.Y == (int)MathF.Floor(treePosition.Y))
                     .FirstOrDefault();
                 if (tree is null)
                 {
                     error = "tree_not_found";
                     return false;
                 }
+                if (!TreeInteractionAvailability.CanUseStandingTree(
+                        tree.TreeInstances, tree.Tree.X, tree.Tree.Y))
+                {
+                    error = "tree_not_standing";
+                    return false;
+                }
                 _worldActions.QueueTree(
-                    tree,
+                    tree.Tree,
                     action == "cut_tree"
                         ? WorldActionType.CutTree
                         : WorldActionType.GatherTreeSticks);

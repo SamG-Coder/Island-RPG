@@ -1674,6 +1674,78 @@ Require(
     MathF.Abs(oneRealMinuteLater.WellFedSeconds -
               sharedMinute.WellFedSeconds) < .001f,
     "villager hunger, health, and well-fed catch-up must exactly use the player's shared survival result");
+var carriedMealStart = villagerSpawnA[0] with
+{
+    Hunger = 34,
+    Health = 80,
+    Inventory = [ItemIds.WildBerries, null, null],
+    LastSimulatedGameSeconds = 0,
+    SurvivalTimeScaleVersion = 1
+};
+var carriedMealCatchUp = VillagerSimulation.CatchUp(
+    carriedMealStart,
+    VillagerSimulation.GameSecondsPerRealSecond);
+Require(
+    carriedMealCatchUp.Inventory.All(value => value is null) &&
+    carriedMealCatchUp.Hunger > carriedMealStart.Hunger &&
+    carriedMealCatchUp.Health >= carriedMealStart.Health &&
+    carriedMealCatchUp.Memories?.Any(value =>
+        value.Summary?.Contains(
+            "after eating", StringComparison.Ordinal) == true) == true,
+    "off-level catch-up must consume carried food and immediately record the meal");
+var crossingMealStart = carriedMealStart with
+{
+    Hunger = 36,
+    Inventory = [ItemIds.WildBerries, null, null],
+    Memories = null
+};
+var crossingMealCatchUp = VillagerSimulation.CatchUp(
+    crossingMealStart,
+    VillagerSimulation.GameSecondsPerRealSecond * 24);
+Require(
+    crossingMealCatchUp.Inventory.All(value => value is null) &&
+    crossingMealCatchUp.Health >= crossingMealStart.Health &&
+    crossingMealCatchUp.Hunger >
+        VillagerFoodService.UrgentHungerThreshold,
+    "a long catch-up chunk must stop at the urgent threshold and eat before starvation");
+var mealConsistencyStart = carriedMealStart with
+{
+    Hunger = 50,
+    Inventory =
+    [
+        ItemIds.WildBerries,
+        ItemIds.TropicalBerries,
+        ItemIds.CookedMinnows
+    ],
+    Memories = null
+};
+var singleMealCatchUp = VillagerSimulation.CatchUp(
+    mealConsistencyStart,
+    VillagerSimulation.GameSecondsPerRealSecond * 360);
+var steppedMealCatchUp = mealConsistencyStart;
+for (var step = 1; step <= 36; step++)
+    steppedMealCatchUp = VillagerSimulation.CatchUp(
+        steppedMealCatchUp,
+        VillagerSimulation.GameSecondsPerRealSecond * step * 10);
+Require(
+    MathF.Abs(singleMealCatchUp.Hunger - steppedMealCatchUp.Hunger) < .001f &&
+    singleMealCatchUp.Health == steppedMealCatchUp.Health &&
+    singleMealCatchUp.Inventory.SequenceEqual(steppedMealCatchUp.Inventory),
+    "carried-food catch-up must match equivalent smaller simulation steps");
+var deadCarriedMeal = VillagerSimulation.CatchUp(
+    carriedMealStart with
+    {
+        Health = 0,
+        Hunger = 0,
+        DeathCause = "Defeated.",
+        Inventory = [ItemIds.WildBerries, null, null]
+    },
+    VillagerSimulation.GameSecondsPerRealSecond * 60);
+Require(
+    deadCarriedMeal.Inventory[0] == ItemIds.WildBerries &&
+    deadCarriedMeal.Hunger == 0 &&
+    deadCarriedMeal.Health == 0,
+    "dead villagers must not consume carried food during catch-up");
 var wellFedStart = villagerSpawnA[0] with
 {
     Hunger = 70,
@@ -8524,6 +8596,24 @@ var root = Path.Combine(Path.GetTempPath(), $"IslandRpg.WorldChecks.{Guid.NewGui
 long regionBytes = 0;
 try
 {
+    var availableTree = new WorldTreeInstance(
+        Guid.NewGuid(), 4, 7, "FSNO_NN", 20, 20,
+        TreeLifecycleState.Standing);
+    var felledTree = availableTree with
+    {
+        Id = Guid.NewGuid(),
+        X = 8,
+        State = TreeLifecycleState.Stump,
+        Health = 0
+    };
+    WorldTreeInstance[] treeStates = [availableTree, felledTree];
+    Require(
+        TreeInteractionAvailability.CanUseStandingTree(treeStates, 4, 7) &&
+        !TreeInteractionAvailability.CanUseStandingTree(treeStates, 8, 7) &&
+        TreeInteractionAvailability.CanUseStandingTree(treeStates, 12, 7) &&
+        TreeInteractionAvailability.StateAt(treeStates, 8, 7) ==
+            TreeLifecycleState.Stump,
+        "tree actions must distinguish untouched and standing trees from persisted stumps");
     var testAssetRoot = Path.Combine(root, "test-assets");
     var testCatalog = TestAssetLoader.LoadAll(
         testAssetRoot,

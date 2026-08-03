@@ -90,6 +90,31 @@ internal static class SurvivalService
             accumulatedDamage - wholeDamage);
     }
 
+    public static float RealSecondsUntilHunger(
+        float hunger,
+        float wellFedSeconds,
+        float targetHunger,
+        float hungerLossMultiplier = 1)
+    {
+        hunger = Math.Clamp(hunger, 0, MaximumHunger);
+        targetHunger = Math.Clamp(targetHunger, 0, MaximumHunger);
+        wellFedSeconds = Math.Max(0, wellFedSeconds);
+        hungerLossMultiplier = Math.Max(0, hungerLossMultiplier);
+        if (hunger <= targetHunger) return 0;
+        if (hungerLossMultiplier <= 0) return float.PositiveInfinity;
+
+        var protectedRate = BaseHungerLossPerSecond *
+                            WellFedHungerMultiplier *
+                            hungerLossMultiplier;
+        var normalRate = BaseHungerLossPerSecond * hungerLossMultiplier;
+        var hungerUntilTarget = hunger - targetHunger;
+        var protectedLoss = protectedRate * wellFedSeconds;
+        if (hungerUntilTarget <= protectedLoss)
+            return hungerUntilTarget / protectedRate;
+        return wellFedSeconds +
+               (hungerUntilTarget - protectedLoss) / normalRate;
+    }
+
     private static float ConsumePeriod(
         ref float hunger,
         float elapsed,

@@ -511,7 +511,35 @@ internal static class VillagerSimulation
         var remaining = elapsed;
         while (remaining > 0)
         {
+            if (simulated.Health > 0 &&
+                simulated.Hunger <=
+                    VillagerFoodService.UrgentHungerThreshold)
+            {
+                var fed = VillagerFoodService.EatCarriedMeal(
+                    simulated,
+                    simulated.LastSimulatedGameSeconds);
+                if (!ReferenceEquals(fed, simulated))
+                {
+                    simulated = fed;
+                    continue;
+                }
+            }
             var chunk = Math.Min(remaining, maximumChunkGameSeconds);
+            if (simulated.Health > 0 &&
+                VillagerFoodService.FindMealSlot(simulated.Inventory) >= 0)
+            {
+                var secondsUntilMeal =
+                    SurvivalService.RealSecondsUntilHunger(
+                        simulated.Hunger,
+                        simulated.WellFedSeconds,
+                        VillagerFoodService.UrgentHungerThreshold,
+                        hungerLossMultiplier);
+                if (float.IsFinite(secondsUntilMeal) &&
+                    secondsUntilMeal > 0)
+                    chunk = Math.Min(
+                        chunk,
+                        secondsUntilMeal * GameSecondsPerRealSecond);
+            }
             var survival = SurvivalService.Advance(
                 simulated.Hunger,
                 simulated.WellFedSeconds,
@@ -552,6 +580,10 @@ internal static class VillagerSimulation
             };
             remaining -= chunk;
         }
+        if (simulated.Health > 0 &&
+            simulated.Hunger <= VillagerFoodService.UrgentHungerThreshold)
+            simulated = VillagerFoodService.EatCarriedMeal(
+                simulated, simulated.LastSimulatedGameSeconds);
         return simulated.Health <= 0 && simulated.DeathCause is null
             ? simulated with { DeathCause = "Died from starvation." }
             : simulated;
@@ -569,11 +601,9 @@ internal static class VillagerSimulation
                 playerPosition, 4));
         if (state.Hunger <= 35)
         {
-            var inventory = state.Inventory;
-            for (var slot = 0; slot < inventory.Length; slot++)
-                if (inventory[slot] is { } item &&
-                    SurvivalService.TryFoodEffect(item, out _))
-                    return new(VillagerNeed.Food, null, slot);
+            var slot = VillagerFoodService.FindMealSlot(state.Inventory);
+            if (slot >= 0)
+                return new(VillagerNeed.Food, null, slot);
             return new(VillagerNeed.Food, null);
         }
         if (VillagerFatigueService.ShouldRest(state))
@@ -1602,8 +1632,7 @@ internal static class VillagerSimulation
     {
         var count = 0;
         for (var slot = 0; slot < inventory.Length; slot++)
-            if (inventory[slot] is { } item &&
-                SurvivalService.TryFoodEffect(item, out _))
+            if (VillagerFoodService.IsMeal(inventory[slot]))
                 count++;
         return count;
     }

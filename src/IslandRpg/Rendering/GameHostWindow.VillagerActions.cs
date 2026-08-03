@@ -807,10 +807,7 @@ internal sealed partial class GameHostWindow
         VillagerSimulationTier tier)
     {
         if (villager.Hunger > 62) return false;
-        var slot = Array.FindIndex(
-            villager.Inventory,
-            item => item is not null &&
-                    SurvivalService.TryFoodEffect(item, out _));
+        var slot = VillagerFoodService.FindMealSlot(villager.Inventory);
         if (slot < 0) return false;
         _villagers[index] = VillagerSimulation.ApplyDecision(
             villager,
