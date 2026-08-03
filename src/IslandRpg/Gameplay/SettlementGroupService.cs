@@ -98,6 +98,17 @@ internal static class SettlementGroupService
         SettlementGroupState? group, string actorId) =>
         group?.MemberIds.Contains(actorId, StringComparer.Ordinal) == true;
 
+    public static SettlementGroupState IncludeMember(
+        SettlementGroupState group, string? actorId)
+    {
+        if (string.IsNullOrWhiteSpace(actorId) || IsMember(group, actorId))
+            return group;
+        return group with
+        {
+            MemberIds = group.MemberIds.Append(actorId).ToArray()
+        };
+    }
+
     public static bool CanAccess(
         VillagerState villager,
         string? characterOwnerId,

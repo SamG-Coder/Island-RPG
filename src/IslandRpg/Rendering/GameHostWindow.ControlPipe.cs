@@ -1711,6 +1711,14 @@ internal sealed partial class GameHostWindow
                 _activePlayer.StrengthExperience,
                 _activePlayer.DefenceExperience,
                 combatEnemyId = _combatEnemyId,
+                settlementGroupId = SettlementGroupService.IsMember(
+                    _settlementGroup, _activePlayer.Id)
+                    ? _settlementGroup!.Id
+                    : null,
+                recognizedLeaderId = SettlementGroupService.IsMember(
+                    _settlementGroup, _activePlayer.Id)
+                    ? _settlementGroup!.LeaderId
+                    : null,
                 position = _player is null ? null : new
                 {
                     _player.Position.X,
@@ -1763,6 +1771,18 @@ internal sealed partial class GameHostWindow
                         spawner.Position.Y
                     }
                 }),
+            settlement = _settlementGroup is null ? null : new
+            {
+                _settlementGroup.Id,
+                _settlementGroup.LeaderId,
+                _settlementGroup.MemberIds,
+                openingStage = _settlementGroup.OpeningStage.ToString(),
+                camp = new
+                {
+                    X = _settlementGroup.CampX,
+                    Y = _settlementGroup.CampY
+                }
+            },
             villagers = _villagers.Select(villager => new
             {
                 villager.Id,

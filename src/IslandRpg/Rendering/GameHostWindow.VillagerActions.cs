@@ -53,6 +53,8 @@ internal sealed partial class GameHostWindow
         if (VillagerFatigueService.ShouldRest(villager)) return false;
         if (TryExecuteVillagerUrgentAction(index, villager, tier) ||
             TryVillagerSettlementContribution(index, villager, tier) ||
+            TryVillagerReachProjectWorksite(index, villager, tier) ||
+            TryVillagerPlaceCompletedProject(index, villager) ||
             TryVillagerWithdrawWorkItem(index, villager) ||
             TryVillagerRoleAction(index, villager, tier) ||
             TryVillagerCookStew(index, villager) ||
@@ -142,6 +144,7 @@ internal sealed partial class GameHostWindow
         return TryVillagerPromiseRendezvous(index, villager, tier) ||
                TryVillagerSettlementContribution(index, villager, tier) ||
                TryVillagerReachProjectWorksite(index, villager, tier) ||
+               TryVillagerPlaceCompletedProject(index, villager) ||
                TryVillagerWithdrawWorkItem(index, villager) ||
                TryVillagerCraft(index, villager) ||
                TryVillagerGatherTreeSticks(index, villager, tier) ||
@@ -711,6 +714,11 @@ internal sealed partial class GameHostWindow
             index, villager, tier, worksite, VillagerNeed.Safe);
         return true;
     }
+
+    private bool TryVillagerPlaceCompletedProject(
+        int index, VillagerState villager) =>
+        VillagerSettlementProjectService.CarriesCompletedProject(villager) &&
+        TryVillagerPlaceObject(index, villager);
 
     private bool TryVillagerProjectExplore(
         int index,
@@ -1663,16 +1671,14 @@ internal sealed partial class GameHostWindow
                 VillagerNeed.Safe);
             return true;
         }
-        if (!TryGetDropTerrain(
-                (int)MathF.Floor(villager.PositionX),
-                (int)MathF.Floor(villager.PositionY),
-                out var gpu, out _))
+        var placementOrigin = villager.ProjectAssignment is { } assignment &&
+                              assignment.BuilderId == villager.Id &&
+                              assignment.ProjectItemId == itemId
+            ? new Vector2(assignment.WorksiteX, assignment.WorksiteY)
+            : new Vector2(villager.PositionX, villager.PositionY);
+        if (!TryFindGroundObjectDrop(
+                placementOrigin, out var gpu, out var position, out _))
             return false;
-        var offset = new Vector2(
-            .75f + DeterministicRoll(villager.Id, itemId),
-            .4f);
-        var position = new Vector2(
-            villager.PositionX, villager.PositionY) + offset;
         var placed = EntityInteractionService.Place(
             villager.Inventory, slot,
             position.X, position.Y, villager.Id);

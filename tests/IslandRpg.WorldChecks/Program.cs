@@ -2118,8 +2118,14 @@ Require(campfireProject is
         campfireProject.Assignments.Values
             .SelectMany(value => value)
             .Where(value => value.ItemId == ItemIds.LargeRock)
-            .Sum(value => value.Quantity) == 3,
-    "settlement planning must select a crafter and divide campfire resources across villagers");
+            .Sum(value => value.Quantity) == 3 &&
+        VillagerSettlementProjectService.SuggestedContribution(
+            campfireProject) is
+        {
+            ItemId: ItemIds.LargeRock,
+            Quantity: 3
+        },
+    "settlement planning must select a crafter, divide resources, and expose one reusable contribution request for a participating player");
 var unavailableBuilderProject = VillagerSettlementProjectService.Plan(
     projectVillagers.Select(value => value with
     {
@@ -2203,8 +2209,22 @@ var assignedProjectVillager = projectVillagers[0] with
         [new(ItemIds.LargeRock, 1)],
         AssignedGameSeconds: 100)
 };
+var completedProjectBuilder = projectVillagers[2] with
+{
+    Inventory = PlayerInventory.CreateStartingInventory(),
+    ProjectAssignment = new(
+        ItemIds.Campfire,
+        "project-builder",
+        [],
+        AssignedGameSeconds: 100)
+};
+completedProjectBuilder.Inventory[0] = ItemIds.Campfire;
 Require(VillagerSettlementProjectService.NeedsItem(
             assignedProjectVillager, ItemIds.LargeRock) &&
+        VillagerSettlementProjectService.CarriesCompletedProject(
+            completedProjectBuilder) &&
+        !VillagerSettlementProjectService.CarriesCompletedProject(
+            assignedProjectVillager) &&
         VillagerResourcePriority.Score(
             assignedProjectVillager, ItemIds.LargeRock) == 90 &&
         VillagerSettlementProjectService.IsStalled(
@@ -2725,6 +2745,18 @@ var settlementGroup = SettlementGroupService.Form(
     new(10, 12),
     0,
     500);
+var playerSettlementGroup = SettlementGroupService.IncludeMember(
+    settlementGroup, "player-member");
+Require(
+    SettlementGroupService.IsMember(
+        playerSettlementGroup, "player-member") &&
+    playerSettlementGroup.MemberIds.Count ==
+        settlementGroup.MemberIds.Count + 1 &&
+    ReferenceEquals(
+        SettlementGroupService.IncludeMember(
+            playerSettlementGroup, "player-member"),
+        playerSettlementGroup),
+    "settlement membership must include a player actor exactly once");
 var groupMember = new VillagerState(
     "group-builder", "Builder", EntityGender.Male,
     0, 0, 10, 12, 0, 100, 100,
@@ -2776,7 +2808,7 @@ var reconGroup = settlementGroup with
     ]
 };
 var openingGroup = SettlementOpeningService.AssignScouts(
-    reconGroup,
+    SettlementGroupService.IncludeMember(reconGroup, "player-member"),
     [
         groupMember with { Id = "group-leader" },
         groupMember,
@@ -2797,6 +2829,29 @@ Require(
         new(openingGroup.ScoutAssignments[1].TargetX,
             openingGroup.ScoutAssignments[1].TargetY)) > 20 * 20,
     "opening coordination must assign capable scouts to distinct outward sectors before projects begin");
+var campDecisionWithPlayer = SettlementOpeningService.DecideCamp(
+    openingGroup with
+    {
+        OpeningStage = SettlementOpeningStage.ComparingCamps,
+        ScoutReports =
+        [
+            new(
+                "group-scout", 20, 20,
+                true, true, true, true, false, true, 90, 600)
+        ]
+    },
+    [
+        groupMember with { Id = "group-leader" },
+        groupMember,
+        groupMember with { Id = "group-scout" },
+        groupMember with { Id = "group-scout-2" },
+        groupMember with { Id = "group-worker-1" },
+        groupMember with { Id = "group-worker-2" }
+    ]);
+Require(
+    SettlementGroupService.IsMember(
+        campDecisionWithPlayer, "player-member"),
+    "camp votes must preserve non-autonomous player members who do not produce villager responses");
 openingGroup = openingGroup with
 {
     ScoutAssignments = openingGroup.ScoutAssignments!.Take(2).ToArray()

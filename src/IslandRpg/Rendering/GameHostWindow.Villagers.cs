@@ -152,14 +152,25 @@ internal sealed partial class GameHostWindow
                     };
             }
             else
-            for (var index = 0; index < _villagers.Count; index++)
-                if (loadedGroup.MemberIds.Contains(
-                        _villagers[index].Id,
-                        StringComparer.Ordinal))
-                    _villagers[index] = _villagers[index] with
-                    {
-                        SettlementGroupId = loadedGroup.Id
-                    };
+            {
+                var reconciledGroup = SettlementGroupService.IncludeMember(
+                    loadedGroup, _activePlayer?.Id);
+                if (!ReferenceEquals(reconciledGroup, loadedGroup))
+                {
+                    _settlementGroup = reconciledGroup;
+                    loadedGroup = reconciledGroup;
+                    _saves.SaveSettlementGroup(
+                        _activeWorld.Id, reconciledGroup);
+                }
+                for (var index = 0; index < _villagers.Count; index++)
+                    if (loadedGroup.MemberIds.Contains(
+                            _villagers[index].Id,
+                            StringComparer.Ordinal))
+                        _villagers[index] = _villagers[index] with
+                        {
+                            SettlementGroupId = loadedGroup.Id
+                        };
+            }
         }
         _villagersNextSaveAt = _worldGameSeconds + 30;
     }
@@ -771,10 +782,20 @@ internal sealed partial class GameHostWindow
                     $"{value.Quantity} {ItemCatalog.Get(value.ItemId).Name}"));
                 return $"{worker.Name}, bring {needs}";
             });
+        var playerOrder = _activePlayer is not null &&
+                          SettlementGroupService.IsMember(
+                              _settlementGroup, _activePlayer.Id) &&
+                          VillagerSettlementProjectService
+                              .SuggestedContribution(plan) is { } contribution
+            ? $"{_activePlayer.Name}, help if you can by adding " +
+              $"{contribution.Quantity} " +
+              $"{ItemCatalog.Get(contribution.ItemId).Name} to our shared cache"
+            : null;
         var projectName = ItemCatalog.Get(plan.ProjectItemId).Name;
         var text = $"We are building the {projectName}. " +
                    $"{builder.Name}, remain at the worksite. " +
-                   string.Join(". ", orders) + ".";
+                   string.Join(". ", orders.Append(playerOrder)
+                       .Where(value => !string.IsNullOrWhiteSpace(value))) + ".";
         ShowVillagerSpeech(
             leaderIndex, text, plan.Worksite);
         for (var index = 0; index < _villagers.Count; index++)
@@ -1008,30 +1029,34 @@ internal sealed partial class GameHostWindow
             living, resultToApply);
         foreach (var departureId in departures)
             ApplyLeadershipDeparture(departureId, leader.Id);
-        var livingIds = _villagers
+        var livingVillagerIds = _villagers
             .Where(value => value.Health > 0 &&
                             !value.IndependentByChoice)
             .Select(value => value.Id)
             .ToArray();
-        if (IndependentSurvivorPolicy.CanFormSettlement(livingIds.Length))
+        if (IndependentSurvivorPolicy.CanFormSettlement(
+                livingVillagerIds.Length))
         {
+            var memberIds = _activePlayer is null
+                ? livingVillagerIds
+                : livingVillagerIds.Append(_activePlayer.Id).ToArray();
             _settlementGroup = previousGroup is null
                 ? SettlementGroupService.Form(
                     _activeWorld!.Id,
                     leader.Id,
-                    livingIds,
+                    memberIds,
                     _settlementCouncilPoint,
                     leader.WorldLevel,
                     _worldGameSeconds)
                 : previousGroup with
                 {
                     LeaderId = leader.Id,
-                    MemberIds = livingIds
+                    MemberIds = memberIds
                 };
             for (var index = 0; index < _villagers.Count; index++)
                 _villagers[index] = _villagers[index] with
                 {
-                    SettlementGroupId = livingIds.Contains(
+                    SettlementGroupId = livingVillagerIds.Contains(
                         _villagers[index].Id, StringComparer.Ordinal)
                         ? _settlementGroup.Id
                         : null

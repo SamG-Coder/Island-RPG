@@ -142,11 +142,27 @@ internal static class VillagerSettlementProjectService
         _ => []
     };
 
+    public static VillagerProjectRequirement? SuggestedContribution(
+        VillagerSettlementProjectPlan plan) =>
+        plan.Assignments.Values
+            .SelectMany(value => value)
+            .GroupBy(value => value.ItemId, StringComparer.Ordinal)
+            .Select(group => new VillagerProjectRequirement(
+                group.Key, group.Sum(value => value.Quantity)))
+            .OrderByDescending(value => value.Quantity)
+            .ThenBy(value => value.ItemId, StringComparer.Ordinal)
+            .FirstOrDefault();
+
     public static bool NeedsItem(VillagerState villager, string itemId) =>
         villager.ProjectAssignment?.Requirements.Any(requirement =>
             MatchesRequirement(itemId, requirement.ItemId) &&
             CountMatching(villager.Inventory, requirement.ItemId) <
             requirement.Quantity) == true;
+
+    public static bool CarriesCompletedProject(VillagerState villager) =>
+        villager.ProjectAssignment is { } assignment &&
+        assignment.BuilderId == villager.Id &&
+        villager.Inventory.Any(value => value == assignment.ProjectItemId);
 
     public static bool SameAssignment(
         VillagerProjectAssignment? left,

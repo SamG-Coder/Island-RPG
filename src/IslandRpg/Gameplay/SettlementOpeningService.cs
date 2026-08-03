@@ -108,9 +108,15 @@ internal static class SettlementOpeningService
                 value.Health > 0 && IsMember(group, value.Id))
             .Select(value => Response(value, group.LeaderId, selected))
             .ToArray();
+        var respondingIds = responses
+            .Select(value => value.VillagerId)
+            .ToHashSet(StringComparer.Ordinal);
         var remaining = responses
             .Where(value => value.Response != SettlementCampResponseKind.Leave)
             .Select(value => value.VillagerId)
+            .Concat(group.MemberIds.Where(value =>
+                !respondingIds.Contains(value)))
+            .Distinct(StringComparer.Ordinal)
             .ToArray();
         return group with
         {
