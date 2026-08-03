@@ -80,7 +80,21 @@ internal sealed partial class GameHostWindow
         villager.Health > 0 &&
         (TryVillagerResolveNpcConflict(index, villager, tier) ||
          TryVillagerDefendSelf(index, villager, tier) ||
-         TryVillagerEat(index, villager, tier));
+         TryVillagerMeetUrgentFoodNeed(index, villager, tier));
+
+    private bool TryVillagerMeetUrgentFoodNeed(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier)
+    {
+        if (!VillagerIntentPriorityService.NeedsUrgentFood(villager))
+            return false;
+
+        return TryVillagerEat(index, villager, tier) ||
+               TryVillagerWithdrawFood(index, villager) ||
+               TryVillagerForage(index, villager, tier) ||
+               TryVillagerFish(index, villager, tier);
+    }
 
     private bool TryExecuteVillagerCommittedAction(
         int index,
@@ -1315,7 +1329,10 @@ internal sealed partial class GameHostWindow
                 var inventory = actor.Inventory;
                 if (felled)
                     inventory = EntityInteractionService.Gather(
-                        inventory, ItemIds.Logs, 1).Inventory;
+                        inventory,
+                        ItemIds.Logs,
+                        WoodcuttingSkill.FellingLogCount(
+                            tree.MaxHealth)).Inventory;
                 var updated = actor with
                 {
                     Inventory = inventory,

@@ -733,8 +733,7 @@ internal static class VillagerSimulation
             state.Hunger <= 35 ||
             VillagerNeedPatternMemory.NeedsFoodSoon(
                 state, state.Id, gameSeconds);
-        if (gameSeconds < state.NextSocialGameSeconds &&
-            !projectedFoodNeed)
+        if (gameSeconds < state.NextSocialGameSeconds)
             return default;
         var position = new Vector2(
             state.PositionX, state.PositionY);

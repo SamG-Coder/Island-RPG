@@ -34,6 +34,9 @@ internal static class WoodcuttingSkill
     public static bool GrantsSwingLog(int level, float roll) =>
         Math.Clamp(roll, 0, .999999f) < SwingLogChance(level);
 
+    public static int FellingLogCount(int maximumHealth) =>
+        Math.Clamp((Math.Max(1, maximumHealth) + 49) / 50, 2, 4);
+
     public static int MinimumDamage(int level, int axePower = 1) =>
         3 + Math.Clamp(level, 1, MaximumLevel) +
         Math.Max(0, axePower - 1) * 2;

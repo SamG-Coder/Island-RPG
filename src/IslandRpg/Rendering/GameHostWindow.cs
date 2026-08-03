@@ -2643,7 +2643,9 @@ internal sealed partial class GameHostWindow : GameWindow
             }
             if (state == TreeLifecycleState.Stump)
             {
-                AddWoodcuttingLog(instance.TreeType);
+                AddWoodcuttingLog(
+                    instance.TreeType,
+                    WoodcuttingSkill.FellingLogCount(instance.MaxHealth));
                 _chatUi.AddMessage(
                     $"The {TreeDisplayName(instance.TreeType)} falls.",
                     ChatMessageStyle.Action);
@@ -2706,12 +2708,16 @@ internal sealed partial class GameHostWindow : GameWindow
                 ChatMessageStyle.LevelUp);
     }
 
-    private void AddWoodcuttingLog(string treeType)
+    private void AddWoodcuttingLog(string treeType, int quantity = 1)
     {
         if (_activePlayer is null) return;
         var item = TreeLogItem(treeType);
         var inventory = ActivePlayerInventory();
-        if (!inventory.TryAdd(item.Id))
+        var added = 0;
+        for (; added < Math.Max(1, quantity); added++)
+            if (!inventory.TryAdd(item.Id))
+                break;
+        if (added == 0)
         {
             _chatUi.AddMessage(
                 "Your inventory is full. The logs were left behind.",
@@ -2726,8 +2732,14 @@ internal sealed partial class GameHostWindow : GameWindow
         };
         _saves.SavePlayer(_activePlayer);
         _chatUi.AddMessage(
-            $"You add {item.Name} to your inventory.",
+            added == 1
+                ? $"You add {item.Name} to your inventory."
+                : $"You add {added} {item.Name} to your inventory.",
             ChatMessageStyle.Experience);
+        if (added < quantity)
+            _chatUi.AddMessage(
+                $"Your inventory is full. {quantity - added} logs were left behind.",
+                ChatMessageStyle.Warning);
     }
 
     private static ItemDefinition TreeLogItem(string treeType)

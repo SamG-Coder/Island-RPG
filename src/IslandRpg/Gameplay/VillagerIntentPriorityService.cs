@@ -2,9 +2,12 @@ namespace IslandRpg.Gameplay;
 
 internal static class VillagerIntentPriorityService
 {
+    public static bool NeedsUrgentFood(VillagerState villager) =>
+        villager.Health > 0 && villager.Hunger <= 35;
+
     public static bool HasUrgentOverride(VillagerState villager) =>
         villager.Health > 0 &&
-        (villager.Hunger <= 35 ||
+        (NeedsUrgentFood(villager) ||
          villager.Health <= 20 ||
          villager.ConflictIntent != VillagerConflictIntent.None ||
          villager.Action == EntityAction.Attack);

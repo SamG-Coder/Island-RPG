@@ -2890,7 +2890,7 @@ var futureFoodProvider = new SocialActorObservation(
     90,
     20);
 var proactiveFoodGoal = VillagerSimulation.SelectSocialGoal(
-    decliningNeedMemory with { NextSocialGameSeconds = 9999 },
+    decliningNeedMemory with { NextSocialGameSeconds = 650 },
     new[] { futureFoodProvider },
     gameSeconds: 700);
 Require(
@@ -2898,6 +2898,25 @@ Require(
     proactiveFoodGoal.Speech?.Contains(
         "plan", StringComparison.OrdinalIgnoreCase) == true,
     "a forecast food shortage must create a proactive sharing request before current hunger reaches crisis level");
+var coolingDownFoodGoal = VillagerSimulation.SelectSocialGoal(
+    decliningNeedMemory with
+    {
+        Hunger = 10,
+        NextSocialGameSeconds = 9999
+    },
+    new[] { futureFoodProvider },
+    gameSeconds: 700);
+Require(
+    coolingDownFoodGoal.Intent == VillagerSocialIntent.None,
+    "urgent hunger must not bypass the social cooldown and repeatedly spam the same food request");
+Require(
+    VillagerIntentPriorityService.NeedsUrgentFood(
+        decliningNeedMemory with { Hunger = 35, Health = 1 }) &&
+    !VillagerIntentPriorityService.NeedsUrgentFood(
+        decliningNeedMemory with { Hunger = 35, Health = 0 }) &&
+    !VillagerIntentPriorityService.NeedsUrgentFood(
+        decliningNeedMemory with { Hunger = 36, Health = 1 }),
+    "urgent autonomous food acquisition must use the shared living-and-hunger boundary");
 var scarceOwnerInventory = PlayerInventory.CreateStartingInventory();
 scarceOwnerInventory[0] = ItemIds.CookedMinnows;
 var requestOwner = villagerSpawnA[1] with
@@ -5701,6 +5720,12 @@ Require(
     !WoodcuttingSkill.GrantsSwingLog(1, .0501f) &&
     WoodcuttingSkill.GrantsSwingLog(20, .2499f),
     "damaging woodcutting swings must have a log chance scaling from 5 to 25 percent");
+Require(
+    WoodcuttingSkill.FellingLogCount(65) == 2 &&
+    WoodcuttingSkill.FellingLogCount(75) == 2 &&
+    WoodcuttingSkill.FellingLogCount(125) == 3 &&
+    WoodcuttingSkill.FellingLogCount(175) == 4,
+    "felling rewards must scale with tree durability while guaranteeing more than one construction log");
 var noviceHit = WoodcuttingSkill.Roll(0, 0, 0);
 var masterHit = WoodcuttingSkill.Roll(
     WoodcuttingSkill.ExperienceForLevel(20), 0, .999f);
