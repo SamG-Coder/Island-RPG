@@ -412,57 +412,61 @@ internal sealed partial class GameHostWindow
                 _villagerWork.ReleaseActor(villager.Id);
             var movedPosition = new Vector2(
                 villager.PositionX, villager.PositionY);
-            for (var otherIndex = 0;
-                 otherIndex < _villagers.Count;
-                 otherIndex++)
+            if (VillagerSimulation.ShouldResolveActorCollision(
+                    previous, villager))
             {
-                if (otherIndex == index ||
-                    _villagers[otherIndex].WorldLevel !=
-                    villager.WorldLevel)
-                    continue;
-                var otherPosition = new Vector2(
-                    _villagers[otherIndex].PositionX,
-                    _villagers[otherIndex].PositionY);
-                if (!VillagerSimulation.FootBoxesOverlap(
-                        movedPosition, otherPosition))
-                    continue;
-                var previousPosition = new Vector2(
-                    previous.PositionX, previous.PositionY);
-                var movementTarget = new Vector2(
-                    previous.TargetX ?? previous.PositionX,
-                    previous.TargetY ?? previous.PositionY);
-                if (VillagerSimulation.TryCollisionSidestep(
-                        previousPosition,
-                        movedPosition,
-                        movementTarget,
-                        otherPosition,
-                        candidate => WorldLevelNavigation.IsWalkable(
-                            _worldSeed,
-                            (int)MathF.Floor(candidate.X),
-                            (int)MathF.Floor(candidate.Y),
-                            previous.WorldLevel),
-                        out var sidestep))
-                    villager = villager with
-                    {
-                        PositionX = sidestep.X,
-                        PositionY = sidestep.Y,
-                        BlockedMoveAttempts = 0
-                    };
-                else if (VillagerSimulation.ShouldYieldThroughActor(
-                             previous.BlockedMoveAttempts))
-                    villager = villager with
-                    {
-                        BlockedMoveAttempts = 0
-                    };
-                else
-                    villager = VillagerSimulation.BlockMovement(
-                        villager with
+                for (var otherIndex = 0;
+                     otherIndex < _villagers.Count;
+                     otherIndex++)
+                {
+                    if (otherIndex == index ||
+                        _villagers[otherIndex].WorldLevel !=
+                        villager.WorldLevel)
+                        continue;
+                    var otherPosition = new Vector2(
+                        _villagers[otherIndex].PositionX,
+                        _villagers[otherIndex].PositionY);
+                    if (!VillagerSimulation.FootBoxesOverlap(
+                            movedPosition, otherPosition))
+                        continue;
+                    var previousPosition = new Vector2(
+                        previous.PositionX, previous.PositionY);
+                    var movementTarget = new Vector2(
+                        previous.TargetX ?? previous.PositionX,
+                        previous.TargetY ?? previous.PositionY);
+                    if (VillagerSimulation.TryCollisionSidestep(
+                            previousPosition,
+                            movedPosition,
+                            movementTarget,
+                            otherPosition,
+                            candidate => WorldLevelNavigation.IsWalkable(
+                                _worldSeed,
+                                (int)MathF.Floor(candidate.X),
+                                (int)MathF.Floor(candidate.Y),
+                                previous.WorldLevel),
+                            out var sidestep))
+                        villager = villager with
                         {
-                            PositionX = previous.PositionX,
-                            PositionY = previous.PositionY
-                        },
-                        _worldGameSeconds);
-                break;
+                            PositionX = sidestep.X,
+                            PositionY = sidestep.Y,
+                            BlockedMoveAttempts = 0
+                        };
+                    else if (VillagerSimulation.ShouldYieldThroughActor(
+                                 previous.BlockedMoveAttempts))
+                        villager = villager with
+                        {
+                            BlockedMoveAttempts = 0
+                        };
+                    else
+                        villager = VillagerSimulation.BlockMovement(
+                            villager with
+                            {
+                                PositionX = previous.PositionX,
+                                PositionY = previous.PositionY
+                            },
+                            _worldGameSeconds);
+                    break;
+                }
             }
             // Compare against the persisted state, not the local state passed to
             // AdvanceMovement. Activity transitions (notably conversation

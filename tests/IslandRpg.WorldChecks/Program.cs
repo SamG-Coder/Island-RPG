@@ -5322,6 +5322,13 @@ Require(
     !VillagerSimulation.ShouldYieldThroughActor(1) &&
     VillagerSimulation.ShouldYieldThroughActor(2),
     "failed targets must remain blacklisted and repeatedly blocked actors must yield through each other");
+Require(
+    !VillagerSimulation.ShouldResolveActorCollision(
+        blockedState, blockedState) &&
+    VillagerSimulation.ShouldResolveActorCollision(
+        movementState,
+        movementState with { PositionX = movementState.PositionX + .1f }),
+    "stationary villagers must not repeatedly block each other while moving villagers still resolve collisions");
 var movementProbeEntity = new WorldEntity(Vector2.Zero);
 Require(
     movementProbeEntity.MoveSpeed ==

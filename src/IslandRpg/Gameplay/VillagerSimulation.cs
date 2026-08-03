@@ -271,7 +271,7 @@ internal readonly record struct VillagerSocialGoal(
 internal static class VillagerSimulation
 {
     public const int InitialPopulation = 3;
-    public const int MaximumPopulation = 10;
+    public const int MaximumPopulation = 20;
     public const int NamePoolSize = 100;
     public const float NearbyRadius = 28;
     public const float RegionalRadius = 128;
@@ -2017,6 +2017,14 @@ internal static class VillagerSimulation
 
     public static bool ShouldYieldThroughActor(int blockedMoveAttempts) =>
         blockedMoveAttempts >= 2;
+
+    public static bool ShouldResolveActorCollision(
+        VillagerState before,
+        VillagerState after) =>
+        before.Action == EntityAction.Move &&
+        Vector2.DistanceSquared(
+            new Vector2(before.PositionX, before.PositionY),
+            new Vector2(after.PositionX, after.PositionY)) > .000001f;
 
     private static VillagerState DeadState(VillagerState state) =>
         state with
