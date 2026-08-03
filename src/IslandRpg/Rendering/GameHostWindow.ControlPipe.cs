@@ -768,18 +768,18 @@ internal sealed partial class GameHostWindow
                     value.Chunk.Coordinate.Level == _activeWorldLevel)
                 .SelectMany(value => value.FishRenderItems)
                 .Where(value => Vector2.DistanceSquared(
-                    value.World, origin) <= radiusSquared)
+                    value.Grid, origin) <= radiusSquared)
                 .OrderBy(value => Vector2.DistanceSquared(
-                    value.World, origin))
+                    value.Grid, origin))
                 .Take(32)
                 .Select(value => new
                 {
                     key = value.Fish.StableKey,
                     species = value.Fish.Species.ToString(),
-                    x = value.World.X,
-                    y = value.World.Y,
+                    x = value.Grid.X,
+                    y = value.Grid.Y,
                     action = "fish",
-                    distance = Vector2.Distance(value.World, origin)
+                    distance = Vector2.Distance(value.Grid, origin)
                 }),
             miningNodes = _worldChunks.Values
                 .Where(value =>
@@ -1106,7 +1106,7 @@ internal sealed partial class GameHostWindow
                          value.Fish.StableKey.Equals(
                              fishKey, StringComparison.Ordinal)))
                     .OrderBy(value => Vector2.DistanceSquared(
-                        value.World, _player.Position))
+                        value.Grid, _player.Position))
                     .Select(value => value.Fish);
                 var fishingNet = PlayerInventory.BestFishingNet(
                     _activePlayer.Inventory);

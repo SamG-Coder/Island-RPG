@@ -2,6 +2,8 @@ namespace IslandRpg.World;
 
 internal static class WorldVegetationGenerator
 {
+    public const int MinimumCoastalFibreSourcesPerChunk = 2;
+
     public static readonly string[] RequiredGraphicNames =
     [
         "PLANTS",
@@ -161,11 +163,65 @@ internal static class WorldVegetationGenerator
             }
         }
 
-        return candidates
+        var result = candidates
             .OrderBy(candidate => candidate.Priority)
             .Take(maximumPerChunk)
             .Select(candidate => candidate.Value)
-            .ToArray();
+            .ToList();
+        EnsureCoastalFibreSources(seed, tiles, treeTiles, result);
+        return result.ToArray();
+    }
+
+    private static void EnsureCoastalFibreSources(
+        long seed,
+        IReadOnlyList<IslandTile> tiles,
+        HashSet<(int X, int Y)> treeTiles,
+        List<WorldVegetation> vegetation)
+    {
+        var existingTiles = vegetation
+            .Select(value => (
+                (int)MathF.Floor(value.X),
+                (int)MathF.Floor(value.Y)))
+            .ToHashSet();
+        var existingFibre = vegetation.Count(value =>
+            value.CanBecomeInstance &&
+            value.Kind == WorldVegetationKind.Shrub &&
+            CoastalTileAt(tiles, value.X, value.Y));
+        if (existingFibre >= MinimumCoastalFibreSourcesPerChunk)
+            return;
+
+        foreach (var tile in tiles
+                     .Where(tile =>
+                         tile.Biome == Biome.Beach &&
+                         Relief(tile) <= 2 &&
+                         !treeTiles.Contains((tile.X, tile.Y)) &&
+                         !existingTiles.Contains((tile.X, tile.Y)))
+                     .OrderBy(tile => Hash(
+                         seed, tile.X, tile.Y, 3191)))
+        {
+            var frame = FrameIndex(
+                Hash(seed, tile.X, tile.Y, 3203), 12);
+            vegetation.Add(new(
+                tile.X + .2f + Hash(seed, tile.X, tile.Y, 3217) * .6f,
+                tile.Y + .2f + Hash(seed, tile.X, tile.Y, 3221) * .6f,
+                "BUSH2_NN",
+                frame,
+                WorldVegetationKind.Shrub,
+                true));
+            existingFibre++;
+            if (existingFibre >= MinimumCoastalFibreSourcesPerChunk)
+                return;
+        }
+    }
+
+    private static bool CoastalTileAt(
+        IReadOnlyList<IslandTile> tiles, float x, float y)
+    {
+        var tileX = (int)MathF.Floor(x);
+        var tileY = (int)MathF.Floor(y);
+        return tiles.Any(tile =>
+            tile.X == tileX && tile.Y == tileY &&
+            tile.Biome == Biome.Beach);
     }
 
     private static float NearbyTreeInfluence(

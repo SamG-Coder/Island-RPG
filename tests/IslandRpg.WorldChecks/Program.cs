@@ -8469,9 +8469,24 @@ Require(
             (int)MathF.Floor(fish.Y)) <=
         WorldFishGenerator.MaximumBeginnerShoreDistance),
     "a chunk containing suitable shoreline shallows must guarantee beginner fish within casting distance");
+var fishBlockedStartChunks = Enumerable.Range(-1, 3)
+    .SelectMany(chunkY => Enumerable.Range(-1, 3)
+        .Select(chunkX => InfiniteWorldGenerator.Generate(
+            88421, new(chunkX, chunkY))))
+    .ToArray();
+Require(
+    fishBlockedStartChunks.Any(chunk => chunk.Fish.Any(fish =>
+        fish.Species == WorldFishSpecies.ShoreMinnows)),
+    "a previously fish-blocked beach start must provide beginner minnows in its nearby chunks");
 var animationFish = new WorldFish(
     0, 0, WorldFishSpecies.ShoreMinnows,
     "FISHS_NN", 3, "fish:test");
+var positionedFish = animationFish with { X = 7.25f, Y = 11.5f };
+var positionedFishRender = WorldFishRenderCache.Build(
+    seed, [positionedFish]).Single();
+Require(
+    positionedFishRender.Grid == new Vector2(7.25f, 11.5f),
+    "fish range and navigation checks must use grid coordinates instead of the projected render anchor");
 Require(WorldFishAnimation.FrameAt(animationFish, 0) == 3 &&
         WorldFishAnimation.FrameAt(
             animationFish,
@@ -8539,13 +8554,29 @@ Require(origin.Vegetation.All(item =>
         var tileY = (int)MathF.Floor(item.Y) - origin.Coordinate.Y * WorldChunk.Size;
         var tile = origin.Tiles[tileY * WorldChunk.Size + tileX];
         var relief = new[] { tile.North, tile.East, tile.South, tile.West };
-        return tile.Biome is not (Biome.DeepWater or Biome.ShallowWater or
-                   Biome.RiverWater or Biome.MangroveShallows or
-                   Biome.Beach or Biome.DesertSand) &&
+        var coastalFibre = tile.Biome == Biome.Beach &&
+            item.Kind == WorldVegetationKind.Shrub &&
+            item.CanBecomeInstance;
+        return (coastalFibre ||
+                tile.Biome is not (Biome.DeepWater or Biome.ShallowWater or
+                    Biome.RiverWater or Biome.MangroveShallows or
+                    Biome.Beach or Biome.DesertSand)) &&
                relief.Max() - relief.Min() <= 2 &&
                origin.Trees.All(tree => tree.X != tile.X || tree.Y != tile.Y);
     }),
-    "vegetation must avoid water, sand, steep ground, and occupied tree tiles");
+    "vegetation must avoid water, desert sand, steep ground and trees while allowing interactive coastal scrub");
+var fibreBlockedStartChunk = InfiniteWorldGenerator.Generate(
+    88421, new(-1, 0));
+Require(
+    fibreBlockedStartChunk.Vegetation.Count(item =>
+        item.CanBecomeInstance &&
+        item.Kind == WorldVegetationKind.Shrub &&
+        fibreBlockedStartChunk.Tiles.Any(tile =>
+            tile.X == (int)MathF.Floor(item.X) &&
+            tile.Y == (int)MathF.Floor(item.Y) &&
+            tile.Biome == Biome.Beach)) >=
+        WorldVegetationGenerator.MinimumCoastalFibreSourcesPerChunk,
+    "a beach chunk from a previously blocked opening seed must contain enough interactive coastal scrub for the fibre quest");
 Require(origin.Vegetation
         .Where(item => item.GraphicName == "BUSH2_NN")
         .All(item =>

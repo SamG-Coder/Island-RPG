@@ -4,7 +4,12 @@ using OpenTK.Mathematics;
 namespace IslandRpg.Rendering;
 
 internal readonly record struct WorldFishRenderItem(
-    WorldFish Fish, Vector2 World);
+    WorldFish Fish, Vector2 World)
+{
+    // Fish positions drive navigation and range checks in world-grid space.
+    // World is the isometric render anchor and must never be mixed with it.
+    public Vector2 Grid => new(Fish.X, Fish.Y);
+}
 
 internal static class WorldFishRenderCache
 {
