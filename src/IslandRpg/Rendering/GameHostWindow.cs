@@ -31,7 +31,7 @@ internal sealed partial class GameHostWindow : GameWindow
         long, Vector2> PlayableSpawnCache = new();
     private const int ReferenceWidth = 1280;
     private const int ReferenceHeight = 720;
-    private const string ReleaseVersion = "v0.2.0";
+    private const string ReleaseVersion = "v0.3.0";
     internal enum PreviewMode { Assets, Island, World, Game }
     private enum ScreenState
     {

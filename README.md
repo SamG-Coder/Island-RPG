@@ -5,13 +5,13 @@ C#, .NET and OpenTK. It combines a persistent procedurally generated world with
 classic point-and-click interactions, gathering, crafting, fishing, cooking and
 placeable objects.
 
-The project is currently at **v0.2.0**. It is playable, but it remains an early
+The project is currently at **v0.3.0**. It is playable, but it remains an early
 prototype and its systems, balance and save format may continue to evolve.
 
 Visit the [Island RPG website](https://samg-coder.github.io/Island-RPG/) for a
 visual overview, release history and installation links.
 
-See [the v0.2.0 release notes](release-notes/RELEASE_NOTES_0.2.md) for the complete feature
+See [the v0.3.0 release notes](release-notes/RELEASE_NOTES_0.3.md) for the complete feature
 summary.
 
 The long-term direction for autonomous characters is defined in the
@@ -54,6 +54,13 @@ third-party content.
   well-fed bonuses that slow hunger loss.
 - RuneScape-style unarmed melee targeting with Accurate, Aggressive and
   Defensive stances training Attack, Strength and Defence.
+- Optional autonomous survivors with local knowledge, memory, personalities,
+  leadership, group planning, promises and settlement projects.
+- Observe mode with survivor status, inventory, skills, memories, free camera
+  control and live simulation logging.
+- Biome-specific slime enemies with reusable combat AI, local spawners,
+  elemental attack effects and persistent loot bags.
+- A skippable storm and shipwreck cinematic for shoreline starts.
 - Level-based recipes, primitive tools, workbenches and campfires.
 - Reusable skill guides, crafting screens, pause menus and settings.
 - Optional performance metrics and developer world tools.
@@ -160,7 +167,7 @@ Developer mode's item bank contains a placeable training dummy; left-click it
 or choose **Attack** from its context menu to approach and fight on fixed
 combat ticks.
 
-### v0.2 progression loop
+### v0.3 progression loop
 
 1. Right-click the stone shovel, select **Excavate**, and choose a clear,
    non-water tile. Left-click the dig site to continue excavating.
@@ -180,7 +187,15 @@ combat ticks.
    place a cooking pot beside a lit campfire to turn raw fish and berries into
    stew.
 9. Build wooden chests and barrels at a nearby workbench. Open placed storage
-   to deposit, stack, withdraw, and preserve supplies with the world.
+   to deposit, withdraw and preserve supplies with the world.
+10. Explore beaches, grasslands, deserts and caves to discover different slime
+    populations. Surface slimes retaliate when attacked; cave slimes are
+    naturally aggressive.
+11. Loot defeated slimes for stackable gel, cores, salt crystals and medicinal
+    herbs, then use those materials in preservation, medicine and advanced
+    crafting.
+12. Enable AI survivors from Advanced new-game setup to play alongside an
+    autonomous group, or select Observe to follow their settlement decisions.
 
 Unfinished excavations can be restored. Completed holes can be filled using
 matching dirt or sand, and installed rope can be recovered from the context
@@ -351,12 +366,12 @@ Before submitting a change:
 
 ## Status and limitations
 
-This is an early playable prototype. Combat currently covers unarmed training
-against the developer dummy; hostile enemies, death and respawning, NPC
-simulation, building construction and audio are not implemented. Farming covers tree
-planting and berry foraging, Cooking supports fish and berries, and placeable
-furniture remains limited. See the
-[v0.2.0 release notes](release-notes/RELEASE_NOTES_0.2.md) for more detail.
+This is an early playable prototype. Slimes are the first complete enemy family,
+and autonomous-survivor planning remains experimental and dependent on the
+selected local Ollama model. Farming covers tree planting, crops and berry
+foraging; Cooking supports fish, berries, stew and preserved food; placeable
+furniture and construction remain limited. Multiplayer is not implemented. See
+the [v0.3.0 release notes](release-notes/RELEASE_NOTES_0.3.md) for more detail.
 
 ## License and acknowledgements
 
