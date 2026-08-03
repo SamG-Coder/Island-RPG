@@ -26,6 +26,13 @@ internal sealed partial class GameHostWindow
             if (result.RequestId == window._pathRequestId &&
                 result.WorldLevel == window._activeWorldLevel)
             {
+                if (result.Path.Count == 0)
+                {
+                    window.CancelMeleeCombat();
+                    window.ReportBlockedAction(
+                        "path-unreachable",
+                        "You cannot reach that target from here.");
+                }
                 window._queuedAction = result.Action;
                 window._player?.FollowPath(result.Path);
                 if (result.Path.Count > 0)

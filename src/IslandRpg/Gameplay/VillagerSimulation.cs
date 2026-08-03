@@ -195,6 +195,23 @@ internal sealed record VillagerState(
     float TimedHealingSeconds = 0,
     float TimedHealingRemainder = 0);
 
+internal static class VillagerSimulationClock
+{
+    public static double ReconcileWorldTime(
+        double savedWorldGameSeconds,
+        IEnumerable<VillagerState> villagers)
+    {
+        var reconciled = double.IsFinite(savedWorldGameSeconds)
+            ? Math.Max(0, savedWorldGameSeconds)
+            : 0;
+        foreach (var villager in villagers)
+            if (double.IsFinite(villager.LastSimulatedGameSeconds))
+                reconciled = Math.Max(
+                    reconciled, villager.LastSimulatedGameSeconds);
+        return reconciled;
+    }
+}
+
 internal readonly record struct VillagerDecision(
     VillagerNeed Need,
     Vector2? MoveTarget,

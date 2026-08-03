@@ -15,6 +15,17 @@ internal readonly record struct NavigationObstacle(
             Depth * .5f + clearance;
 }
 
+internal static class ActionPathSearchPolicy
+{
+    public const int MaximumVisited = 16384;
+    public const float AlternativeApproachDistance = 12f;
+
+    public static bool ShouldTryAlternativeApproach(
+        in Vector2 start, in Vector2 target) =>
+        Vector2.DistanceSquared(start, target) <=
+        AlternativeApproachDistance * AlternativeApproachDistance;
+}
+
 internal static class GridPathfinder
 {
     private static readonly (int X, int Y, float Cost)[] Neighbours =

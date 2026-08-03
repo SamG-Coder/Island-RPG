@@ -105,6 +105,8 @@ internal sealed partial class GameHostWindow
                 _worldGameSeconds,
                 unchecked((int)_worldSeed));
             _enemySpawners[index] = spawned.Spawner;
+            if (EnemyWavePresentation.Message(spawned) is { } waveMessage)
+                _chatUi.AddMessage(waveMessage, ChatMessageStyle.Action);
             if (!spawned.Active)
             {
                 nextEnemies.AddRange(spawned.Enemies);

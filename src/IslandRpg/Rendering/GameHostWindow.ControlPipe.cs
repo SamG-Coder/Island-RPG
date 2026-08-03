@@ -950,11 +950,12 @@ internal sealed partial class GameHostWindow
                     error = "campfire_not_found";
                     return false;
                 }
-                if (!CampfireService.CanLight(
-                        lightCampfire, _activePlayer.Inventory ?? [],
-                        _worldGameSeconds))
+                var lightFailure = CampfireService.LightFailure(
+                    lightCampfire, _activePlayer.Inventory ?? [],
+                    _worldGameSeconds);
+                if (lightFailure != CampfireLightFailure.None)
                 {
-                    error = "campfire_light_requirements";
+                    error = CampfireService.LightFailureCode(lightFailure);
                     return false;
                 }
                 QueueCampfireLight(lightCampfire);

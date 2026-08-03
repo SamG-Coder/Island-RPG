@@ -1454,13 +1454,16 @@ internal sealed partial class GameHostWindow : GameWindow
             _selectedPlayer = _activePlayer;
         if (_activeWorld is not null)
         {
-            SaveVillagers();
             _activeWorld = _activeWorld with
             {
                 ElapsedGameSeconds = _worldGameSeconds,
                 UpdatedUtc = DateTime.UtcNow
             };
             _saves.SaveWorld(_activeWorld);
+            // Persist the clock first. If the process stops between these two
+            // files, villagers can be caught up from an older snapshot; the
+            // inverse ordering can strand their deadlines in the future.
+            SaveVillagers();
             _saves.SaveWorldPlayer(
                 _activeWorld.Id,
                 new(
@@ -2134,11 +2137,17 @@ internal sealed partial class GameHostWindow : GameWindow
                 (int)MathF.Floor(candidate.Y) == (int)MathF.Floor(start.Y);
             var path = GridPathfinder.Find(
                 _worldSeed, start, candidate,
-                maximumVisited: 65536,
+                maximumVisited: ActionPathSearchPolicy.MaximumVisited,
                 cancellationToken: cancellationToken,
                 worldLevel: worldLevel,
                 obstacles: obstacles);
-            if (!sameCell && path.Count == 0) continue;
+            if (!sameCell && path.Count == 0)
+            {
+                if (!ActionPathSearchPolicy.ShouldTryAlternativeApproach(
+                        start, target))
+                    break;
+                continue;
+            }
             var approach = candidate - target;
             var diagonal = MathF.Abs(approach.X) > .5f &&
                            MathF.Abs(approach.Y) > .5f;

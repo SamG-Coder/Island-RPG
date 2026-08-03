@@ -203,15 +203,16 @@ internal sealed partial class GameHostWindow
     {
         if (_activePlayer is null) return;
         var location = FindGroundObjectLocation(campfireId);
-        if (location is null ||
-            !CampfireService.CanLight(
-                location.Value.Object,
-                _activePlayer.Inventory ?? [],
-                _worldGameSeconds))
+        if (location is null) return;
+        var failure = CampfireService.LightFailure(
+            location.Value.Object,
+            _activePlayer.Inventory ?? [],
+            _worldGameSeconds);
+        if (failure != CampfireLightFailure.None)
         {
             ReportBlockedAction(
-                "campfire-light-requirements",
-                "You need a fueled campfire, small rocks, and a knife.");
+                CampfireService.LightFailureCode(failure),
+                CampfireService.LightFailureMessage(failure));
             return;
         }
         var level = FiremakingSkill.LevelForExperience(

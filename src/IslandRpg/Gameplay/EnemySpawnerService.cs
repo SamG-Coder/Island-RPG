@@ -57,6 +57,49 @@ internal readonly record struct EnemySpawnerUpdate(
     bool StartedRecovery,
     bool SpawnedWave);
 
+internal static class EnemyWavePresentation
+{
+    public static string? Message(EnemySpawnerUpdate update)
+    {
+        if (update.StartedRecovery)
+            return $"Wave {update.Spawner.Wave} cleared. " +
+                   "The area grows quiet for a short while.";
+        if (!update.SpawnedWave) return null;
+
+        var living = 0;
+        EnemyKind? firstKind = null;
+        var mixedKinds = false;
+        foreach (var enemy in update.Enemies)
+        {
+            if (!enemy.Alive) continue;
+            living++;
+            if (firstKind is null)
+                firstKind = enemy.Kind;
+            else if (firstKind != enemy.Kind)
+                mixedKinds = true;
+        }
+
+        var enemies = mixedKinds || firstKind is null
+            ? living == 1 ? "enemy" : "enemies"
+            : EnemyName(firstKind.Value, living);
+        return $"Wave {update.Spawner.Wave}: {living} {enemies} " +
+               "emerge nearby.";
+    }
+
+    private static string EnemyName(EnemyKind kind, int count)
+    {
+        var name = kind switch
+        {
+            EnemyKind.WaterSlime => "water slime",
+            EnemyKind.GrassSlime => "grass slime",
+            EnemyKind.SandSlime => "sand slime",
+            EnemyKind.CaveSlime => "cave slime",
+            _ => "slime"
+        };
+        return count == 1 ? name : name + "s";
+    }
+}
+
 internal readonly record struct EnemySpawnerSite(
     Vector2 Position, Biome Biome, EnemyKind Kind);
 

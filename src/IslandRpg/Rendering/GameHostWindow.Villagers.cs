@@ -80,11 +80,26 @@ internal sealed partial class GameHostWindow
         }
         var saved = _saves.LoadVillagers(_activeWorld.Id);
         if (saved.Count > 0)
+        {
+            var reconciledGameSeconds =
+                VillagerSimulationClock.ReconcileWorldTime(
+                    _worldGameSeconds, saved);
+            if (reconciledGameSeconds > _worldGameSeconds)
+            {
+                _worldGameSeconds = reconciledGameSeconds;
+                _activeWorld = _activeWorld with
+                {
+                    ElapsedGameSeconds = _worldGameSeconds,
+                    UpdatedUtc = DateTime.UtcNow
+                };
+                _saves.SaveWorld(_activeWorld);
+            }
             _villagers.AddRange(saved.Select(value =>
                 VillagerSimulation.CatchUp(
                     value,
                     _worldGameSeconds,
                     _observeMode?.HungerRateMultiplier ?? 1)));
+        }
         else
         {
             var arrivals = VillagerSimulation.CreateInitial(

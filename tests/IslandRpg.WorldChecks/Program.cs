@@ -1636,6 +1636,21 @@ var soloVillagerSpawn = VillagerSimulation.CreateInitial(
     2187, Vector2.Zero, population: 0);
 var twoVillagerSpawn = VillagerSimulation.CreateInitial(
     2187, Vector2.Zero, population: 2);
+Require(
+    VillagerSimulationClock.ReconcileWorldTime(
+        100,
+        [villagerSpawnA[0] with
+        {
+            LastSimulatedGameSeconds = 175,
+            NextDecisionGameSeconds = 200
+        }]) == 175 &&
+    VillagerSimulationClock.ReconcileWorldTime(
+        250,
+        [villagerSpawnA[0] with
+        {
+            LastSimulatedGameSeconds = 175
+        }]) == 250,
+    "loading must reconcile a stale world clock from the last simulated villager time without advancing to an unprocessed future deadline");
 var oneRealMinuteLater = VillagerSimulation.CatchUp(
     villagerSpawnA[0],
     VillagerSimulation.GameSecondsPerRealSecond * 60);
@@ -6089,7 +6104,22 @@ Require(fueledCampfire.FuelItemId == ItemIds.OakLogs &&
             [ItemIds.SmallRocks, ItemIds.StoneKnife],
             100) &&
         !CampfireService.CanLight(
-            fueledCampfire, [ItemIds.SmallRocks], 100),
+            fueledCampfire, [ItemIds.SmallRocks], 100) &&
+        CampfireService.LightFailure(
+            emptyCampfire,
+            [ItemIds.SmallRocks, ItemIds.StoneKnife],
+            100) == CampfireLightFailure.NotFueled &&
+        CampfireService.LightFailure(
+            fueledCampfire, [ItemIds.StoneKnife], 100) ==
+            CampfireLightFailure.SmallRocksMissing &&
+        CampfireService.LightFailure(
+            fueledCampfire, [ItemIds.SmallRocks], 100) ==
+            CampfireLightFailure.KnifeMissing &&
+        CampfireService.LightFailureCode(
+            CampfireLightFailure.SmallRocksMissing) ==
+            "campfire_small_rocks_missing" &&
+        CampfireService.LightFailureMessage(
+            CampfireLightFailure.KnifeMissing).Contains("knife"),
     "campfire fuel must preserve its exact log type and lighting must require small rocks and a knife");
 var litCampfire = CampfireService.Light(fueledCampfire, 100);
 Require(CampfireService.State(litCampfire, 100) ==
@@ -6242,6 +6272,15 @@ Require(
     !blockingNavigationObstacle.Contains(resolvedNavigationPath[^1]) &&
     (resolvedNavigationPath[^1] - blockedNavigationTarget).Length <= .26f,
     "blocked movement clicks must resolve to the nearest clear quarter-cell");
+var farActionTarget = navigationStart + new OpenTK.Mathematics.Vector2(
+    ActionPathSearchPolicy.AlternativeApproachDistance + 1, 0);
+Require(
+    ActionPathSearchPolicy.MaximumVisited < 65536 &&
+    ActionPathSearchPolicy.ShouldTryAlternativeApproach(
+        navigationStart, exactNavigationTarget) &&
+    !ActionPathSearchPolicy.ShouldTryAlternativeApproach(
+        navigationStart, farActionTarget),
+    "action paths must bound expensive searches while retaining nearby alternate interaction sides");
 Require(PlaceableObjectCatalog.TryGet(
             ItemIds.Campfire, out var campfireDefinition) &&
         campfireDefinition.FootprintWidth == 1 &&
@@ -9508,6 +9547,13 @@ Require(
         EnemySpawnerService.RecoveryRealSeconds *
         VillagerSimulation.GameSecondsPerRealSecond,
     "a cleared enemy wave must remain empty through recovery before adapting the next wave");
+Require(
+    EnemyWavePresentation.Message(firstWave) ==
+        "Wave 1: 5 grass slimes emerge nearby." &&
+    EnemyWavePresentation.Message(enemyRecovery) ==
+        "Wave 1 cleared. The area grows quiet for a short while." &&
+    EnemyWavePresentation.Message(waiting) is null,
+    "enemy wave presentation must announce one-shot starts and clears without repeating while waiting");
 var passiveSlime = firstWave.Enemies[0];
 var firstLootRoll = LootBagService.Roll(passiveSlime, 2187);
 var repeatedLootRoll = LootBagService.Roll(passiveSlime, 2187);
