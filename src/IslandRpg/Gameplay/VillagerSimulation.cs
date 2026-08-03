@@ -271,7 +271,7 @@ internal readonly record struct VillagerSocialGoal(
 internal static class VillagerSimulation
 {
     public const int InitialPopulation = 3;
-    public const int MaximumPopulation = 20;
+    public const int MaximumPopulation = 10;
     public const int NamePoolSize = 100;
     public const float NearbyRadius = 28;
     public const float RegionalRadius = 128;
