@@ -32,7 +32,7 @@ internal sealed class SettingsMenuState
     private static readonly string[] GameItems =
     [
         "occluded-player-outline", "unlimited-zoom",
-        "chat-size", "chat-wrap"
+        "chat-size", "chat-wrap", "auto-retaliate"
     ];
     private static readonly string[] SoundItems =
         ["music-enabled", "music-volume", "effects-volume"];

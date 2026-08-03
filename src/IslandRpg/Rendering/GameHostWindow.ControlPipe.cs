@@ -170,6 +170,27 @@ internal sealed partial class GameHostWindow
                         request.Complete(ControlSnapshot(
                             "combat_style_changed"));
                         break;
+                    case "auto_retaliate":
+                        if (!root.TryGetProperty(
+                                "enabled", out var enabledElement) ||
+                            enabledElement.ValueKind is not (
+                                JsonValueKind.True or JsonValueKind.False))
+                        {
+                            request.Complete(Error(
+                                "auto_retaliate_enabled_required"));
+                            break;
+                        }
+                        var autoRetaliateSettings =
+                            _saves.LoadSettings() with
+                            {
+                                AutoRetaliate =
+                                    enabledElement.GetBoolean()
+                            };
+                        _saves.SaveSettings(autoRetaliateSettings);
+                        ApplyDisplaySettings(autoRetaliateSettings);
+                        request.Complete(ControlSnapshot(
+                            "auto_retaliate_changed"));
+                        break;
                     case "act":
                         if (!TryQueueControlAction(root, out var actionError))
                         {
@@ -196,6 +217,17 @@ internal sealed partial class GameHostWindow
                         CloseQuestWindow();
                         request.Complete(ControlSnapshot(
                             "quest_complete_dismissed"));
+                        break;
+                    case "respawn":
+                        if (!ControlModalCommands.CanRespawn(
+                                _playerDefeated, _modalScreen.Active))
+                        {
+                            request.Complete(Error("death_not_open"));
+                            break;
+                        }
+                        RespawnPlayer();
+                        request.Complete(ControlSnapshot(
+                            "player_respawned"));
                         break;
                     case "nearby":
                         request.Complete(ControlNearby(root));
@@ -259,9 +291,20 @@ internal sealed partial class GameHostWindow
                                 },
                                 new
                                 {
+                                    command = "auto_retaliate",
+                                    arguments = "enabled: true|false"
+                                },
+                                new
+                                {
                                     command = "continue",
                                     description =
                                         "Dismiss the quest-complete popup"
+                                },
+                                new
+                                {
+                                    command = "respawn",
+                                    description =
+                                        "Activate the normal death-screen respawn"
                                 },
                                 new { command = "nearby", arguments = "radius?" },
                                 new
@@ -1754,6 +1797,13 @@ internal static class ControlCombatCommands
 internal readonly record struct ControlVegetationTarget(
     WorldVegetationRenderItem Item,
     Vector2 Position);
+
+internal static class ControlModalCommands
+{
+    public static bool CanRespawn(
+        bool playerDefeated, ModalScreenKind activeModal) =>
+        playerDefeated && activeModal == ModalScreenKind.Death;
+}
 
 internal sealed class GameControlPipe : IDisposable
 {

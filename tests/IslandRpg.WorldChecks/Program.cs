@@ -191,6 +191,17 @@ Require(
     codexCommand.Arguments.SequenceEqual(
         ["inspect", "the", "western", "shore"]),
     "the player must be able to publish free-form messages through /codex");
+Require(
+    ControlModalCommands.CanRespawn(true, ModalScreenKind.Death) &&
+    !ControlModalCommands.CanRespawn(false, ModalScreenKind.Death) &&
+    !ControlModalCommands.CanRespawn(
+        true, ModalScreenKind.QuestComplete),
+    "the control pipe must expose normal respawning only while a defeated player has the death modal open");
+Require(
+    PlayerDeathService.IsDefeated(0) &&
+    PlayerDeathService.IsDefeated(-1) &&
+    !PlayerDeathService.IsDefeated(1),
+    "persisted zero-health players must restore the normal defeated lifecycle instead of loading as actionable actors");
 var screenshotCheckPath = Path.Combine(
     Path.GetTempPath(), $"island-rpg-shot-{Guid.NewGuid():N}.png");
 try
@@ -5027,6 +5038,16 @@ Require(
     MeleeCombatService.AttackIntervalSeconds == 2.4f,
     "melee must apply only one best-knife damage bonus and leave other carried tools unarmed");
 Require(
+    MeleeCombatService.ShouldAutoRetaliate(
+        true, playerDefeated: false, hasCombatTarget: false) &&
+    !MeleeCombatService.ShouldAutoRetaliate(
+        false, playerDefeated: false, hasCombatTarget: false) &&
+    !MeleeCombatService.ShouldAutoRetaliate(
+        true, playerDefeated: true, hasCombatTarget: false) &&
+    !MeleeCombatService.ShouldAutoRetaliate(
+        true, playerDefeated: false, hasCombatTarget: true),
+    "auto-retaliation must be optional and must not override death or an existing combat target");
+Require(
     PlaceableObjectCatalog.TryGet(
         ItemIds.TrainingDummy, out var dummyDefinition) &&
     dummyDefinition.ChromaKeyMagenta &&
@@ -5049,7 +5070,8 @@ Require(
 Require(defaultDisplaySettings.VSyncMode ==
             DisplayVSyncMode.Adaptive &&
         defaultDisplaySettings.FrameRateLimit == 0 &&
-        !defaultDisplaySettings.UseTestAssets,
+        !defaultDisplaySettings.UseTestAssets &&
+        defaultDisplaySettings.AutoRetaliate,
     "display settings must default to adaptive VSync and unlimited FPS");
 var cycledDisplaySettings =
     DisplaySettingsController.CycleVSync(defaultDisplaySettings);
@@ -5687,6 +5709,16 @@ Require(
     CraftingSkill.Recipes.Any(recipe =>
         recipe.ResultItemId == ItemIds.Rope),
     "cave access and excavation presentation must follow their authored states");
+Require(
+    CaveEntranceService.TryProspect(
+        9187, 58.5f, 39.5f, out var caveProspect) &&
+    CaveEntranceService.CaveBelow(
+        9187, caveProspect.X, caveProspect.Y) &&
+    caveProspect.Distance is > 0 and <= 32 &&
+    !string.IsNullOrWhiteSpace(caveProspect.Direction) &&
+    CaveEntranceService.ProspectMessage(caveProspect).Contains(
+        caveProspect.Direction, StringComparison.Ordinal),
+    "failed excavations must provide a bounded, truthful bearing toward nearby cave-bearing ground");
 var sandDigging = DiggingSkill.Terrain(Biome.Beach);
 var rockDigging = DiggingSkill.Terrain(Biome.Rock);
 Require(

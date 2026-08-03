@@ -68,6 +68,7 @@ internal sealed partial class GameHostWindow
         _performanceMetricsEnabled = settings.PerformanceMetrics;
         _occludedPlayerOutlineEnabled =
             settings.OccludedPlayerOutline;
+        _autoRetaliateEnabled = settings.AutoRetaliate;
         _chatUi.Configure(
             settings.ChatSize,
             settings.WrapChatText,
@@ -249,6 +250,14 @@ internal sealed partial class GameHostWindow
             settings = settings with
             {
                 WrapChatText = !settings.WrapChatText
+            };
+        }
+        else if (_settingsMenu.ContentList.VisibleIndices.Contains(4) &&
+                 _settingsMenu.OptionBounds(4).Contains(pointer))
+        {
+            settings = settings with
+            {
+                AutoRetaliate = !settings.AutoRetaliate
             };
         }
         else

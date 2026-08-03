@@ -13,6 +13,8 @@ internal static class PlayerDeathService
     public static int ApplyDamage(int health, int damage) =>
         Math.Max(0, health - Math.Max(0, damage));
 
+    public static bool IsDefeated(int health) => health <= 0;
+
     public static PlayerRecovery Recover(int maximumHealth) =>
         new(
             Math.Max(1, maximumHealth / 2),

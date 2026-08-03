@@ -266,6 +266,11 @@ internal sealed partial class GameHostWindow
                 ? "The completed excavation opens into a cave. A rope could secure the descent."
                 : "The hole has a solid bottom. Nothing lies below.",
             ChatMessageStyle.Action);
+        if (!cave && CaveEntranceService.TryProspect(
+                _worldSeed, site.X, site.Y, out var prospect))
+            _chatUi.AddMessage(
+                CaveEntranceService.ProspectMessage(prospect),
+                ChatMessageStyle.Action);
         StopCaveDigging();
     }
 

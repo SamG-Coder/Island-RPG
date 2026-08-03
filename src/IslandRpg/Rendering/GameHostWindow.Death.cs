@@ -10,6 +10,23 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
+    private void RestoreLoadedPlayerLifeState()
+    {
+        if (_activePlayer is null || _player is null) return;
+        _playerDefeated = PlayerDeathService.IsDefeated(
+            _activePlayer.Health);
+        if (!_playerDefeated)
+        {
+            _modalScreen.Close(ModalScreenKind.Death);
+            return;
+        }
+
+        _player.Die();
+        _deathMessage = "You must recover from your last defeat.";
+        _deathOverlayAt = _clock;
+        _modalScreen.Open(ModalScreenKind.Death);
+    }
+
     private void UpdateDeathOverlay()
     {
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);

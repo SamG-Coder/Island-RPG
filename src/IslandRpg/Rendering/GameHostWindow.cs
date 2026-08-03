@@ -439,6 +439,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly DropdownControlState _resolutionDropdown = new();
     private readonly DropdownControlState _chatSizeDropdown = new();
     private readonly DeveloperSettingsController _developerSettings = new();
+    private bool _autoRetaliateEnabled = true;
     private readonly DeveloperMapWindow _developerMap = new();
     private readonly SkillGuideWindowState _skillGuideWindow = new();
     private readonly WorldActionController _worldActions;
@@ -1399,6 +1400,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _player = new WorldEntity(
             new Vector2(worldPlayer.PositionX, worldPlayer.PositionY),
             player.Gender);
+        RestoreLoadedPlayerLifeState();
         LoadVillagers(spawn);
         InitializeFishingBoat(worldPlayer);
         _camera = Vector2.Zero;

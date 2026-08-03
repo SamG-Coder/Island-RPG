@@ -114,6 +114,31 @@ internal sealed partial class GameHostWindow
             ChatMessageStyle.Warning);
     }
 
+    private bool HasMeleeCombatTarget =>
+        _combatTargetId is not null ||
+        _combatVillagerId is not null ||
+        _combatEnemyId is not null;
+
+    private void TryAutoRetaliate(EnemyState attacker)
+    {
+        if (!MeleeCombatService.ShouldAutoRetaliate(
+                _autoRetaliateEnabled,
+                _playerDefeated,
+                HasMeleeCombatTarget))
+            return;
+        _worldActions.QueueEnemyAttack(attacker);
+    }
+
+    private void TryAutoRetaliate(VillagerState attacker)
+    {
+        if (!MeleeCombatService.ShouldAutoRetaliate(
+                _autoRetaliateEnabled,
+                _playerDefeated,
+                HasMeleeCombatTarget))
+            return;
+        _worldActions.QueueVillagerAttack(attacker);
+    }
+
     private void StartPlayerMeleeSwing(Vector2 target)
     {
         if (_player is null) return;

@@ -205,6 +205,10 @@ internal sealed partial class GameHostWindow
                     _settingsMenu.OptionBounds(3),
                     "Wrap chat text: " +
                     (gameSettings.WrapChatText ? "On" : "Off"));
+                DrawMenuButton(
+                    _settingsMenu.OptionBounds(4),
+                    "Auto-retaliate: " +
+                    (gameSettings.AutoRetaliate ? "On" : "Off"));
                 break;
             case SettingsTab.Sound:
                 var soundSettings = _saves.LoadSettings();

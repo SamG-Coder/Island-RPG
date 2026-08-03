@@ -1758,6 +1758,7 @@ internal sealed partial class GameHostWindow
                 else
                     ShowEntityImpact(
                         PlayerFeedbackKey(targetId), 0, false);
+                TryAutoRetaliate(actor);
                 _villagers[actorIndex] = actor with
                 {
                     AttackExperience = interaction.Experience.Experience

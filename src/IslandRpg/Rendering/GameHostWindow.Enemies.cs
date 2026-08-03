@@ -163,6 +163,7 @@ internal sealed partial class GameHostWindow
         else
             ShowEntityImpact(
                 PlayerFeedbackKey(_activePlayer.Id), 0, false);
+        TryAutoRetaliate(enemy);
         return enemy;
     }
 

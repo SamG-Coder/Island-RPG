@@ -103,6 +103,7 @@ internal sealed record GameSettings(
     bool UnlimitedZoom = true,
     ChatDisplaySize ChatSize = ChatDisplaySize.Small,
     bool WrapChatText = true,
+    bool AutoRetaliate = true,
     NpcAiSettings? Ai = null)
 {
     public NpcAiSettings EffectiveAi

@@ -43,6 +43,10 @@ internal static class MeleeCombatService
         !pathPending && ShouldRepathMovingTarget(
             clock, nextRepathAt, previousTarget, currentTarget);
 
+    public static bool ShouldAutoRetaliate(
+        bool enabled, bool playerDefeated, bool hasCombatTarget) =>
+        enabled && !playerDefeated && !hasCombatTarget;
+
     public static float InteractionRange(Vector2 direction)
     {
         if (direction.LengthSquared < .0001f)
