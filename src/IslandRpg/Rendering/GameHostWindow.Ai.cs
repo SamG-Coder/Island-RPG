@@ -819,6 +819,10 @@ internal sealed partial class GameHostWindow
                     _activePlayer.Id,
                     latestPlayerTurn.Text);
         }
+        if (pendingRequest is not null)
+            interpretation = VillagerDialogueCommitmentService
+                .NormalizePendingProposal(
+                    interpretation, pendingRequest.ProposalText);
         villager = villager with
         {
             LastDeliberation = new(
@@ -834,49 +838,29 @@ internal sealed partial class GameHostWindow
         };
         var permitsAction = interpretation.Decision == "accept";
         var acceptedPendingRequest = false;
+        string? commitmentReply = null;
         if (pendingRequest is not null &&
             string.Equals(
                 pendingRequest.VillagerId, villager.Id,
-                StringComparison.Ordinal) &&
-            interpretation.Decision == "accept" &&
-            VillagerCommitmentService.TryResolveAiItemProposal(
-                pendingRequest.ProposalText,
-                interpretation.Action,
-                interpretation.ItemId,
-                interpretation.Quantity,
-                out var proposalKind,
-                out var proposalItemId,
-                out var proposalQuantity))
+                StringComparison.Ordinal))
         {
-            var acceptance = VillagerCommitmentService.TryAccept(
-                villager,
-                pendingRequest.PlayerId,
-                proposalKind,
-                proposalItemId,
-                proposalQuantity,
-                _worldGameSeconds);
-            if (acceptance.Accepted && acceptance.Promise is { } promise)
-                villager = VillagerCommitmentService.AddPromise(
-                    villager, promise);
-            // The model's accepted decision is authoritative for immediate
-            // controller work. A formal promise can still be declined by its
-            // social limits, but the NPC must not say yes and then do nothing.
-            var directiveAction = proposalKind ==
-                                  VillagerPromiseKind.GiveItem
-                ? "give"
-                : "gather";
-            villager = VillagerPromisePlanService.CompileAiDirective(
-                villager,
-                directiveAction,
-                proposalItemId,
-                proposalQuantity,
-                pendingRequest.PlayerId,
-                null,
-                null,
-                villager.WorldLevel,
-                _worldGameSeconds,
-                0);
-            acceptedPendingRequest = true;
+            var resolution = VillagerCommitmentService
+                .ResolveAcceptedItemProposal(
+                    villager,
+                    pendingRequest.PlayerId,
+                pendingRequest.ProposalText,
+                    interpretation,
+                    _worldGameSeconds);
+            if (resolution.Recognized)
+            {
+                villager = resolution.State;
+                acceptedPendingRequest = true;
+                if (!resolution.Accepted)
+                {
+                    permitsAction = false;
+                    commitmentReply = resolution.Reply;
+                }
+            }
         }
         if (permitsAction && _activePlayer is not null)
         {
@@ -1114,10 +1098,10 @@ internal sealed partial class GameHostWindow
             {
                 NextDecisionGameSeconds = _worldGameSeconds
             };
-        var reply = string.IsNullOrWhiteSpace(
+        var reply = commitmentReply ?? (string.IsNullOrWhiteSpace(
                 interpretation.Reply)
             ? speechFallback
-            : interpretation.Reply;
+            : interpretation.Reply);
         villager = VillagerSimulation.RecordDialogueTurn(
             villager,
             villager.Id,

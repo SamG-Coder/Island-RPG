@@ -82,9 +82,10 @@ internal static class VillagerPromisePlanService
         int delayMinutes)
     {
         if (!TryMapAction(action, out var opcode)) return villager;
-        var existing = villager.ActionPlan?
-            .Where(step => step.PromiseId != Guid.Empty)
-            .ToList() ?? [];
+        var existing = BuildPlans(villager).ToList();
+        if (IsCoveredByPromise(
+                villager, existing, opcode, itemId, targetActorId))
+            return villager with { ActionPlan = existing };
         existing.Add(new(
             Guid.Empty,
             opcode,
@@ -100,10 +101,42 @@ internal static class VillagerPromisePlanService
         return villager with { ActionPlan = existing };
     }
 
+    private static bool IsCoveredByPromise(
+        VillagerState villager,
+        IReadOnlyList<VillagerPromisePlanStep> plans,
+        VillagerPromisePlanAction opcode,
+        string itemId,
+        string? targetActorId)
+    {
+        if (opcode is not (VillagerPromisePlanAction.Collect or
+            VillagerPromisePlanAction.Deliver))
+            return false;
+        return plans.Any(step =>
+            step.PromiseId != Guid.Empty &&
+            step.Action is (VillagerPromisePlanAction.Collect or
+                VillagerPromisePlanAction.Deliver) &&
+            (string.IsNullOrWhiteSpace(itemId) ||
+             step.ItemId is { } plannedItem &&
+             VillagerSettlementProjectService.MatchesRequirement(
+                 itemId, plannedItem)) &&
+            (targetActorId is null ||
+             villager.Promises?.Any(promise =>
+                 promise.Id == step.PromiseId &&
+                 promise.Status == CommitmentStatus.Active &&
+                 string.Equals(
+                     promise.PromiseeId, targetActorId,
+                     StringComparison.Ordinal)) == true));
+    }
+
     public static VillagerPromisePlanStep? CurrentDirective(
         VillagerState villager) =>
         villager.ActionPlan?.FirstOrDefault(step =>
             step.PromiseId == Guid.Empty);
+
+    public static string? CurrentCollectionItem(VillagerState villager) =>
+        PlansFor(villager).FirstOrDefault(step =>
+            step.Action == VillagerPromisePlanAction.Collect &&
+            step.RemainingQuantity > 0)?.ItemId;
 
     public static VillagerState CompleteDirective(
         VillagerState villager,
@@ -263,11 +296,7 @@ internal static class VillagerPromisePlanService
 
     public static bool NeedsItem(VillagerState villager, string itemId) =>
         villager.Promises?.Any(promise =>
-            promise.Status == CommitmentStatus.Active &&
-            promise.Progress < promise.TargetQuantity &&
-            promise.ItemId is { } promised &&
-            VillagerSettlementProjectService.MatchesRequirement(
-                itemId, promised)) == true ||
+            NeedsPromiseItem(villager, promise, itemId)) == true ||
         villager.ActionPlan?.Any(step =>
             step.PromiseId == Guid.Empty &&
             step.Action == VillagerPromisePlanAction.Collect &&
@@ -275,6 +304,26 @@ internal static class VillagerPromisePlanService
             step.ItemId is { } planned &&
             VillagerSettlementProjectService.MatchesRequirement(
                 itemId, planned)) == true;
+
+    private static bool NeedsPromiseItem(
+        VillagerState villager,
+        VillagerPromise promise,
+        string itemId)
+    {
+        if (promise.Status != CommitmentStatus.Active ||
+            promise.Progress >= promise.TargetQuantity ||
+            promise.ItemId is not { } promised ||
+            !VillagerSettlementProjectService.MatchesRequirement(
+                itemId, promised))
+            return false;
+        if (promise.Kind != VillagerPromiseKind.GiveItem) return true;
+        var remaining = promise.TargetQuantity - promise.Progress;
+        var carried = villager.Inventory.Count(value =>
+            value is not null &&
+            VillagerSettlementProjectService.MatchesRequirement(
+                value, promised));
+        return carried < remaining;
+    }
 
     public static VillagerState ScheduleRendezvous(
         VillagerState villager,

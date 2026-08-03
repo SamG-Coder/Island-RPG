@@ -207,6 +207,22 @@ internal static class VillagerSettlementProjectService
                new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * 8;
     }
 
+    public static Vector2 ContinuingExplorationTarget(
+        VillagerState villager,
+        double gameSeconds,
+        float arrivalDistance = 1f)
+    {
+        if (villager.TargetX is { } x && villager.TargetY is { } y)
+        {
+            var existing = new Vector2(x, y);
+            if (Vector2.DistanceSquared(
+                    new(villager.PositionX, villager.PositionY), existing) >
+                arrivalDistance * arrivalDistance)
+                return existing;
+        }
+        return ExplorationTarget(villager, gameSeconds);
+    }
+
     public static Vector2 RendezvousPoint(
         Vector2 worksite,
         string actorId,

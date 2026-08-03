@@ -1627,7 +1627,8 @@ internal sealed partial class GameHostWindow
     private bool TryExecuteVillagerWorldAction(
         int villagerIndex,
         VillagerState villager,
-        VillagerSimulationTier tier)
+        VillagerSimulationTier tier,
+        string? requiredItemId = null)
     {
         if (villager.Health <= 0) return false;
         _villagerWorldObjects.Clear();
@@ -1667,7 +1668,8 @@ internal sealed partial class GameHostWindow
         var action = VillagerSimulation.SelectWorldAction(
             villager,
             CollectionsMarshal.AsSpan(_villagerWorldObjects),
-            _worldGameSeconds);
+            _worldGameSeconds,
+            requiredItemId);
         ObserveLog("world_decision", villager.Id, new
         {
             Kind = action.Kind.ToString(),

@@ -638,7 +638,8 @@ internal static class VillagerSimulation
     public static VillagerWorldAction SelectWorldAction(
         VillagerState state,
         ReadOnlySpan<VillagerWorldObject> objects,
-        double gameSeconds = 0)
+        double gameSeconds = 0,
+        string? requiredItemId = null)
     {
         if (state.Health <= 0) return default;
         if (VillagerFatigueService.ShouldRest(state)) return default;
@@ -711,7 +712,10 @@ internal static class VillagerSimulation
                     state, candidate.OwnerId, candidate.GroupOwnerId) ||
                 !ItemCatalog.TryGet(candidate.ItemId, out var item) ||
                 item.HasTag(ItemTag.PlaceableObject) ||
-                !ShouldGather(state, item))
+                requiredItemId is not null &&
+                !VillagerSettlementProjectService.MatchesRequirement(
+                    candidate.ItemId, requiredItemId) ||
+                requiredItemId is null && !ShouldGather(state, item))
                 continue;
             var distanceSquared = Vector2.DistanceSquared(
                 position, candidate.Position);
@@ -735,6 +739,7 @@ internal static class VillagerSimulation
         }
         if (!found)
         {
+            if (requiredItemId is not null) return default;
             var remembered =
                 VillagerLocationMemoryService.SelectUsefulLocation(
                     state, gameSeconds);

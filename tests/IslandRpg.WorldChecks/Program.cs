@@ -4138,27 +4138,40 @@ Require(
     immediateGiveQuantity == 4,
     "direct hand-over wording must become a quantity-aware give proposal rather than speech-only acceptance");
 var immediateGiveAcceptance = VillagerCommitmentService.TryAccept(
-    villagerSpawnA[0], "requester", immediateGiveKind,
+    villagerSpawnA[0] with
+    {
+        Inventory =
+        [
+            ItemIds.Logs, ItemIds.Logs, ItemIds.Logs, ItemIds.Logs
+        ]
+    }, "requester", immediateGiveKind,
     immediateGiveItem, immediateGiveQuantity, 275);
 var immediateGivePlan = immediateGiveAcceptance.Promise is { } givePromise
     ? VillagerPromisePlanService.CompileAiDirective(
         VillagerCommitmentService.AddPromise(
-            villagerSpawnA[0], givePromise),
+            villagerSpawnA[0] with
+            {
+                Inventory =
+                [
+                    ItemIds.Logs, ItemIds.Logs,
+                    ItemIds.Logs, ItemIds.Logs
+                ]
+            }, givePromise),
         "give", immediateGiveItem, immediateGiveQuantity,
         "requester", 4, 5, 0, 275, 0)
     : villagerSpawnA[0];
-var immediateGiveDirective =
-    VillagerPromisePlanService.CurrentDirective(immediateGivePlan);
 Require(
     immediateGiveAcceptance.Accepted &&
-    immediateGiveDirective is
-    {
-        Action: VillagerPromisePlanAction.Deliver,
-        ItemId: ItemIds.Logs,
-        RemainingQuantity: 4,
-        TargetActorId: "requester"
-    },
-    "an accepted immediate give request must enter the controller as a deliver opcode targeting the requester");
+    VillagerPromisePlanService.CurrentDirective(immediateGivePlan) is null &&
+    immediateGivePlan.ActionPlan is
+    [
+        {
+            Action: VillagerPromisePlanAction.Deliver,
+            ItemId: ItemIds.Logs,
+            RemainingQuantity: 4
+        }
+    ],
+    "an accepted immediate give request must enter the formal controller plan once without a duplicate directive");
 const string observedSplitResponsibilityRequest =
     "Stephen, please gather three large rocks and meet me at this spot " +
     "in one hour. I will gather plant fibre while you do that. Do you agree?";
@@ -4458,6 +4471,186 @@ Require(
         { RemainingQuantity: 2 } &&
     VillagerPromisePlanService.CurrentDirective(collectedThree) is null,
     "collection directives must remain queued until matching acquired items satisfy their quantity");
+Require(
+    VillagerCommitmentService.TryResolveAiItemProposal(
+        "Can you gather two plant fibres and bring them back to me here?",
+        "gather", ItemIds.PlantFibres, 2,
+        out var deliveryKind, out var deliveryItem, out var deliveryQuantity) &&
+    deliveryKind == VillagerPromiseKind.GiveItem &&
+    deliveryItem == ItemIds.PlantFibres &&
+    deliveryQuantity == 2,
+    "explicit bring-back language must create a delivery promise even when Ollama emits the generic gather opcode");
+var malformedSpokenAcceptance = new NpcAiInterpretation(
+    "merewin", "", "help", "none", "", 2, 0,
+    "", "", "I shall gather the plant fibres for your tools immediately.",
+    false,
+    "Merewin needs materials. I must find and collect two pieces of plant fibre.",
+    "none", 100, 5, 0, 80);
+var normalizedSpokenAcceptance = VillagerDialogueCommitmentService
+    .NormalizePendingProposal(
+        malformedSpokenAcceptance,
+        "Can you gather two plant fibres and bring them back to me here?");
+var preservedRefusal = VillagerDialogueCommitmentService
+    .NormalizePendingProposal(
+        malformedSpokenAcceptance with
+        {
+            Reply = "I cannot agree to gather those plant fibres."
+        },
+        "Can you gather two plant fibres and bring them back to me here?");
+Require(
+    normalizedSpokenAcceptance is
+    {
+        Decision: "accept",
+        Action: "give",
+        ItemId: ItemIds.PlantFibres,
+        Quantity: 2
+    } &&
+    preservedRefusal.Decision == "none" &&
+    preservedRefusal.Action == "none",
+    "clear high-willingness spoken acceptance must repair malformed none/none model output without converting refusals");
+var liveProposalResolution = VillagerCommitmentService
+    .ResolveAcceptedItemProposal(
+        villagerSpawnA[0] with
+        {
+            Inventory = [ItemIds.PlantFibres]
+        },
+        "merewin",
+        "Conrad, please gather two plant fibres and bring them back to me here. Will you do that now?",
+        normalizedSpokenAcceptance,
+        700);
+Require(
+    liveProposalResolution is
+    {
+        Recognized: true,
+        Accepted: true,
+        State:
+        {
+            Promises:
+            [
+                {
+                    Kind: VillagerPromiseKind.GiveItem,
+                    PromiseeId: "merewin",
+                    ItemId: ItemIds.PlantFibres,
+                    TargetQuantity: 2
+                }
+            ]
+        }
+    } &&
+    liveProposalResolution.State.ActionPlan is
+    [
+        {
+            Action: VillagerPromisePlanAction.Collect,
+            RemainingQuantity: 1
+        },
+        {
+            Action: VillagerPromisePlanAction.Deliver,
+            RemainingQuantity: 2
+        }
+    ],
+    "the exact live proposal must atomically create one executable delivery promise and account for carried fibre");
+var liveDeliveryPromise = liveProposalResolution.State.Promises!.Single();
+var partiallyDeliveredPromise = liveDeliveryPromise with { Progress = 1 };
+var deliveryReadyState = liveProposalResolution.State with
+{
+    Promises = [partiallyDeliveredPromise],
+    Inventory = [ItemIds.PlantFibres]
+};
+Require(
+    VillagerCommitmentService.HasDeliverableItem(
+        liveProposalResolution.State, liveDeliveryPromise) &&
+    !VillagerCommitmentService.HasDeliverableItem(
+        liveProposalResolution.State with
+        {
+            Inventory = [ItemIds.LargeRock]
+        },
+        liveDeliveryPromise) &&
+    !VillagerPromisePlanService.NeedsItem(
+        deliveryReadyState, ItemIds.PlantFibres) &&
+    VillagerPromisePlanService.NeedsItem(
+        deliveryReadyState with { Inventory = [] },
+        ItemIds.PlantFibres),
+    "delivery rendezvous must require a matching carried item, and collection must stop once carried stock covers the outstanding promise");
+var deliveryAcceptance = VillagerCommitmentService.TryAccept(
+    villagerSpawnA[0] with
+    {
+        Inventory = [ItemIds.PlantFibres]
+    },
+    "requester",
+    VillagerPromiseKind.GiveItem,
+    ItemIds.PlantFibres,
+    2,
+    700);
+var deliveryPlan = VillagerCommitmentService.AddPromise(
+    villagerSpawnA[0] with
+    {
+        Inventory = [ItemIds.PlantFibres]
+    },
+    deliveryAcceptance.Promise!);
+deliveryPlan = VillagerPromisePlanService.CompileAiDirective(
+    deliveryPlan,
+    "gather",
+    ItemIds.PlantFibres,
+    2,
+    "requester",
+    null,
+    null,
+    (int)WorldLevel.Overworld,
+    700,
+    0);
+Require(
+    VillagerPromisePlanService.CurrentDirective(deliveryPlan) is null &&
+    deliveryPlan.ActionPlan is
+    [
+        {
+            PromiseId: var collectPromiseId,
+            Action: VillagerPromisePlanAction.Collect,
+            RemainingQuantity: 1
+        },
+        {
+            PromiseId: var deliverPromiseId,
+            Action: VillagerPromisePlanAction.Deliver,
+            RemainingQuantity: 2
+        }
+    ] &&
+    collectPromiseId == deliveryAcceptance.Promise!.Id &&
+    deliverPromiseId == deliveryAcceptance.Promise.Id,
+    "formal delivery promises must replace duplicate Ollama directives and account for matching items already carried");
+var unrelatedGroundItemId = Guid.NewGuid();
+var promisedGroundItemId = Guid.NewGuid();
+var exactPromiseTarget = VillagerSimulation.SelectWorldAction(
+    villagerSpawnA[0],
+    [
+        new(unrelatedGroundItemId, ItemIds.LargeRock, new Vector2(.5f, 0),
+            null, false, null),
+        new(promisedGroundItemId, ItemIds.PlantFibres, new Vector2(2, 0),
+            null, false, null)
+    ],
+    700,
+    ItemIds.PlantFibres);
+Require(
+    exactPromiseTarget.Kind is (VillagerWorldActionKind.TakeItem or
+        VillagerWorldActionKind.ApproachItem) &&
+    exactPromiseTarget.ObjectId == promisedGroundItemId,
+    "committed collection must select the promised resource instead of a closer unrelated ground item");
+var persistentSearchVillager = villagerSpawnA[0] with
+{
+    PositionX = 10,
+    PositionY = 20,
+    TargetX = 18,
+    TargetY = 20,
+    Action = EntityAction.Move
+};
+Require(
+    VillagerSettlementProjectService.ContinuingExplorationTarget(
+        persistentSearchVillager, 700) == new Vector2(18, 20) &&
+    VillagerSettlementProjectService.ContinuingExplorationTarget(
+        persistentSearchVillager with
+        {
+            PositionX = 18,
+            PositionY = 20
+        },
+        700) != new Vector2(18, 20),
+    "resource searches must finish a persistent outward exploration leg before choosing another direction");
 var scheduledPromiseVillager =
     VillagerPromisePlanService.ScheduleRendezvous(
         committedVillager,

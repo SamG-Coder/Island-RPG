@@ -98,14 +98,8 @@ internal sealed partial class GameHostWindow
                             "actor", out var actorElement)
                             ? actorElement.GetString()
                             : null;
-                        var target = _villagers.FirstOrDefault(value =>
-                            value.Health > 0 &&
-                            (string.IsNullOrWhiteSpace(requestedActor) ||
-                             value.Id.Equals(requestedActor,
-                                 StringComparison.OrdinalIgnoreCase) ||
-                             value.Name.Equals(requestedActor,
-                                 StringComparison.OrdinalIgnoreCase))) ??
-                            _villagers.First(value => value.Health > 0);
+                        var target = FindControlVillager(requestedActor) ??
+                            FindControlVillager(null)!;
                         _player.TeleportTo(new(
                             target.PositionX - 1,
                             target.PositionY));
@@ -119,6 +113,23 @@ internal sealed partial class GameHostWindow
                             break;
                         }
                         var text = root.GetProperty("text").GetString() ?? "";
+                        var chatActor = root.TryGetProperty(
+                            "actor", out var chatActorElement)
+                            ? chatActorElement.GetString()
+                            : null;
+                        if (!string.IsNullOrWhiteSpace(chatActor))
+                        {
+                            var chatTarget = FindControlVillager(chatActor);
+                            if (chatTarget is null)
+                            {
+                                request.Complete(Error("actor_not_found"));
+                                break;
+                            }
+                            _player.TeleportTo(new(
+                                chatTarget.PositionX - 1,
+                                chatTarget.PositionY));
+                            _player.Stop();
+                        }
                         HandleChatSubmission(text);
                         request.Complete(ControlSnapshot("chat_submitted"));
                         break;
@@ -363,7 +374,7 @@ internal sealed partial class GameHostWindow
                                 },
                                 new { command = "stop_player" },
                                 new { command = "approach", arguments = "actor?" },
-                                new { command = "chat", arguments = "text" },
+                                new { command = "chat", arguments = "text, actor?" },
                                 new
                                 {
                                     command = "chat_history",
@@ -1555,6 +1566,16 @@ internal sealed partial class GameHostWindow
             height = FramebufferSize.Y
         });
     }
+
+    private VillagerState? FindControlVillager(string? actor) =>
+        string.IsNullOrWhiteSpace(actor)
+            ? _villagers.FirstOrDefault(value => value.Health > 0)
+            : _villagers.FirstOrDefault(value =>
+                value.Health > 0 &&
+                (value.Id.Equals(
+                     actor, StringComparison.OrdinalIgnoreCase) ||
+                 value.Name.Equals(
+                     actor, StringComparison.OrdinalIgnoreCase)));
 
     private void LogControlPipeCommand(
         string? command, JsonElement root)

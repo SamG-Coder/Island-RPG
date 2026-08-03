@@ -102,8 +102,8 @@ internal sealed partial class GameHostWindow
         VillagerState villager,
         VillagerSimulationTier tier)
     {
-        var preferred = VillagerSettlementProjectService.ExplorationTarget(
-            villager, _worldGameSeconds);
+        var preferred = VillagerSettlementProjectService
+            .ContinuingExplorationTarget(villager, _worldGameSeconds);
         var target = WorldLevelNavigation.ReachableExplorationTarget(
             _worldSeed,
             new(villager.PositionX, villager.PositionY),
@@ -131,7 +131,10 @@ internal sealed partial class GameHostWindow
                    // resources. Otherwise any available forage target can
                    // indefinitely starve the hand-off.
                    TryVillagerFulfilGift(index, villager, tier) ||
-                   TryExecuteVillagerWorldAction(index, villager, tier) ||
+                   TryExecuteVillagerWorldAction(
+                       index, villager, tier,
+                       VillagerPromisePlanService.CurrentCollectionItem(
+                           villager)) ||
                    TryVillagerGatherTreeSticks(index, villager, tier) ||
                    TryVillagerForage(index, villager, tier) ||
                    TryVillagerCutTree(index, villager, tier) ||
@@ -280,7 +283,8 @@ internal sealed partial class GameHostWindow
                 started = TryVillagerDefendSelf(index, villager, tier);
                 break;
             case VillagerPromisePlanAction.Collect:
-                started = TryExecuteVillagerWorldAction(index, villager, tier) ||
+                started = TryExecuteVillagerWorldAction(
+                              index, villager, tier, step.ItemId) ||
                           TryVillagerGatherTreeSticks(index, villager, tier) ||
                           TryVillagerForage(index, villager, tier) ||
                           TryVillagerCutTree(index, villager, tier) ||
@@ -367,8 +371,8 @@ internal sealed partial class GameHostWindow
         if (!VillagerPromisePlanService.PlansFor(villager).Any(step =>
                 step.Action == VillagerPromisePlanAction.Collect))
             return false;
-        var preferred = VillagerSettlementProjectService.ExplorationTarget(
-            villager, _worldGameSeconds);
+        var preferred = VillagerSettlementProjectService
+            .ContinuingExplorationTarget(villager, _worldGameSeconds);
         var target = WorldLevelNavigation.ReachableExplorationTarget(
             _worldSeed,
             new(villager.PositionX, villager.PositionY),
@@ -1985,7 +1989,10 @@ internal sealed partial class GameHostWindow
             value.Status == CommitmentStatus.Active &&
             value.Kind == VillagerPromiseKind.GiveItem &&
             value.ItemId is not null);
-        if (promise is null) return false;
+        if (promise is null ||
+            !VillagerCommitmentService.HasDeliverableItem(
+                villager, promise))
+            return false;
         if (_activePlayer is not null && _player is not null &&
             promise.PromiseeId == _activePlayer.Id)
         {

@@ -59,6 +59,12 @@ internal readonly record struct PromiseAcceptance(
     string Reply,
     VillagerPromise? Promise = null);
 
+internal readonly record struct AcceptedItemProposalResolution(
+    VillagerState State,
+    bool Recognized,
+    bool Accepted,
+    string? Reply = null);
+
 internal static class VillagerCommitmentService
 {
     public const int MaximumGoals = 8;
@@ -142,6 +148,43 @@ internal static class VillagerCommitmentService
             promise);
     }
 
+    public static AcceptedItemProposalResolution ResolveAcceptedItemProposal(
+        VillagerState villager,
+        string promiseeId,
+        string proposalText,
+        NpcAiInterpretation interpretation,
+        double gameSeconds)
+    {
+        if (interpretation.Decision != "accept" ||
+            !TryResolveAiItemProposal(
+                proposalText,
+                interpretation.Action,
+                interpretation.ItemId,
+                interpretation.Quantity,
+                out var kind,
+                out var itemId,
+                out var quantity))
+            return new(villager, false, false);
+
+        var acceptance = TryAccept(
+            villager, promiseeId, kind, itemId, quantity, gameSeconds);
+        return acceptance.Accepted && acceptance.Promise is { } promise
+            ? new(AddPromise(villager, promise), true, true)
+            : new(villager, true, false, acceptance.Reply);
+    }
+
+    public static bool HasDeliverableItem(
+        VillagerState villager,
+        VillagerPromise promise) =>
+        villager.Health > 0 &&
+        promise.Status == CommitmentStatus.Active &&
+        promise.Kind == VillagerPromiseKind.GiveItem &&
+        promise.ItemId is { } promisedItem &&
+        villager.Inventory.Any(itemId =>
+            itemId is not null &&
+            VillagerSettlementProjectService.MatchesRequirement(
+                itemId, promisedItem));
+
     public static bool TryParseGatherRequest(
         string text,
         out string itemId,
@@ -214,18 +257,36 @@ internal static class VillagerCommitmentService
 
     private static string RequestedActionClause(string text)
     {
-        var start = -1;
+        var starts = new List<int>();
         foreach (var marker in new[]
                  {
                      "would you ", "could you ", "can you ",
                      "will you ", "please "
                  })
         {
-            var candidate = text.LastIndexOf(
-                marker, StringComparison.Ordinal);
-            if (candidate > start) start = candidate + marker.Length;
+            var searchFrom = 0;
+            while (searchFrom < text.Length)
+            {
+                var candidate = text.IndexOf(
+                    marker, searchFrom, StringComparison.Ordinal);
+                if (candidate < 0) break;
+                starts.Add(candidate + marker.Length);
+                searchFrom = candidate + marker.Length;
+            }
         }
-        var request = start >= 0 ? text[start..] : text;
+        foreach (var start in starts.OrderDescending())
+        {
+            var candidate = BoundRequestedClause(text[start..]);
+            if (ContainsCollectionRequest(candidate) ||
+                ContainsTransferRequest(candidate))
+                return candidate;
+        }
+        return BoundRequestedClause(
+            starts.Count > 0 ? text[starts.Max()..] : text);
+    }
+
+    private static string BoundRequestedClause(string request)
+    {
         var end = request.Length;
         foreach (var marker in new[]
                  {
@@ -250,7 +311,8 @@ internal static class VillagerCommitmentService
         out string itemId,
         out int quantity)
     {
-        kind = action.Equals("give", StringComparison.OrdinalIgnoreCase)
+        kind = action.Equals("give", StringComparison.OrdinalIgnoreCase) ||
+               RequestsDelivery(proposalText)
             ? VillagerPromiseKind.GiveItem
             : VillagerPromiseKind.GatherItem;
         itemId = "";
@@ -292,6 +354,17 @@ internal static class VillagerCommitmentService
             return false;
         quantity = requestedQuantity;
         return true;
+    }
+
+    private static bool RequestsDelivery(string proposalText)
+    {
+        var text = proposalText.Trim().ToLowerInvariant();
+        return new[]
+        {
+            "bring me", "bring it to me", "bring them to me",
+            "bring it back", "bring them back", "bring back",
+            "return with", "deliver", "hand it to me", "hand them to me"
+        }.Any(phrase => text.Contains(phrase, StringComparison.Ordinal));
     }
 
     public static VillagerState AddPromise(
