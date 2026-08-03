@@ -70,6 +70,37 @@ internal sealed class InventoryContainer
     }
 
     /// <summary>
+    /// Adds as much of a gathered quantity as the available slots can hold.
+    /// Unlike an atomic transfer, a world harvest should not discard every
+    /// obtainable item merely because the complete rolled yield will not fit.
+    /// </summary>
+    public int AddUpTo(
+        string itemId,
+        int quantity,
+        string? ownerId = null,
+        bool allowStacking = true,
+        Predicate<int>? slotAvailable = null)
+    {
+        if (quantity <= 0 ||
+            !ItemCatalog.TryGet(itemId, out var definition))
+            return 0;
+        if (allowStacking && definition.CanStack)
+            return TryAdd(
+                itemId, quantity, ownerId,
+                allowStacking: true, slotAvailable: slotAvailable)
+                ? quantity
+                : 0;
+
+        var available = Math.Min(
+            quantity, EmptySlots(slotAvailable).Count());
+        return available > 0 && TryAdd(
+            itemId, available, ownerId,
+            allowStacking: false, slotAvailable: slotAvailable)
+            ? available
+            : 0;
+    }
+
+    /// <summary>
     /// Reserves ordinary slots for an internal, short-lived crafting product.
     /// These values may exist only inside an atomic crafting transaction and
     /// must be consumed before the successful inventory is committed.

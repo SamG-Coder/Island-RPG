@@ -90,7 +90,7 @@ internal sealed partial class GameHostWindow
                         FarmingSkill.GatheringBasketBonus(
                             _activePlayer.Inventory);
         var inventory = ActivePlayerInventory();
-        var gathered = inventory.TryAdd(itemId, requested) ? requested : 0;
+        var gathered = inventory.AddUpTo(itemId, requested);
         if (gathered == 0)
         {
             ReportBlockedAction(
@@ -119,6 +119,10 @@ internal sealed partial class GameHostWindow
             $"You pick {gathered} " +
             $"{ItemCatalog.Get(itemId).Name}.",
             ChatMessageStyle.Action);
+        if (gathered < requested)
+            _chatUi.AddMessage(
+                "You leave some berries behind because your inventory is full.",
+                ChatMessageStyle.Warning);
         _chatUi.AddMessage(
             FarmingSkill.ExperienceMessage(award.Gained),
             ChatMessageStyle.Experience);

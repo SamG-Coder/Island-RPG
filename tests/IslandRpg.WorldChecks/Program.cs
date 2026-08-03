@@ -90,6 +90,20 @@ Require(
     roundTrippedStackInventory.Count(ItemIds.PlantFibres) == 2 &&
     roundTrippedStackInventory.Count(ItemIds.StoneAxe) == 1,
     "player inventory quantity saves must round-trip stack and non-stack counts");
+var partialHarvestInventory = new InventoryContainer(3);
+partialHarvestInventory.TryAdd(ItemIds.StoneAxe);
+Require(
+    partialHarvestInventory.AddUpTo(ItemIds.WildBerries, 3) == 2 &&
+    partialHarvestInventory.Count(ItemIds.WildBerries) == 2 &&
+    partialHarvestInventory.UsedSlots == 3,
+    "world harvesting must collect the quantity that fits instead of rejecting the whole yield");
+var stackHarvestInventory = new InventoryContainer(1);
+stackHarvestInventory.TryAdd(ItemIds.SlimeGel, 2);
+Require(
+    stackHarvestInventory.AddUpTo(ItemIds.SlimeGel, 5) == 5 &&
+    stackHarvestInventory.Count(ItemIds.SlimeGel) == 7 &&
+    stackHarvestInventory.UsedSlots == 1,
+    "partial harvest collection must preserve stackable-item capacity");
 var craftingStacks = PlayerInventory.CreateContainer();
 craftingStacks.TryAdd(ItemIds.PlantFibres, 5);
 var stackRopeRecipe = CraftingSkill.Recipes.Single(
@@ -102,6 +116,37 @@ Require(
     craftedStacks.Count(ItemIds.Rope) == 1 &&
     craftedStacks.ItemCount == 3,
     "crafting must consume quantities from stacks and conserve the recipe result");
+var alternativePortableTorchRecipe = CraftingSkill.Recipes.Single(
+    recipe => recipe.Id == "portable-torch");
+var preferredIngredientInventory = PlayerInventory.CreateContainer();
+preferredIngredientInventory.TryAdd(ItemIds.SlimeGel, 4);
+preferredIngredientInventory.TryAdd(ItemIds.PlantFibres, 3);
+preferredIngredientInventory.TryAdd(ItemIds.Sticks);
+preferredIngredientInventory.TryAdd(ItemIds.Charcoal);
+Require(
+    CraftingService.TryCraftDetailed(
+        alternativePortableTorchRecipe,
+        alternativePortableTorchRecipe.RequiredLevel,
+        preferredIngredientInventory,
+        out var preferredIngredientResult) ==
+    CraftingService.CraftResult.Success &&
+    preferredIngredientResult.Count(ItemIds.PlantFibres) == 1 &&
+    preferredIngredientResult.Count(ItemIds.SlimeGel) == 4 &&
+    preferredIngredientResult.Count(ItemIds.PortableTorch) == 1,
+    "crafting must preserve alternatives when enough named ingredients are carried");
+Require(
+    CraftingService.TryCraft(
+        alternativePortableTorchRecipe,
+        alternativePortableTorchRecipe.RequiredLevel,
+        [
+            ItemIds.SlimeGel, ItemIds.SlimeGel,
+            ItemIds.PlantFibres, ItemIds.Sticks, ItemIds.Charcoal
+        ],
+        out var mixedAlternativeResult) &&
+    mixedAlternativeResult.Count(item => item == ItemIds.PlantFibres) == 0 &&
+    mixedAlternativeResult.Count(item => item == ItemIds.SlimeGel) == 1 &&
+    mixedAlternativeResult.Count(item => item == ItemIds.PortableTorch) == 1,
+    "crafting must use named ingredients before only the alternatives needed to cover a shortage");
 var playerTransferInventory = PlayerInventory.CreateContainer();
 playerTransferInventory.TryAdd(ItemIds.SlimeGel, 7);
 var stackTransferContainer = new ItemContainerState(
@@ -160,6 +205,20 @@ Require(
         "not read", out var parsedHistoryScope) &&
     parsedHistoryScope == ChatHistoryScope.Unread,
     "control chat history must exclude debug lines and maintain an independent unread cursor");
+var worldSessionChat = new ChatUiControlState();
+var worldSessionReader = new ChatHistoryReader();
+worldSessionChat.AddMessage("old world event", ChatMessageStyle.Action);
+worldSessionReader.Read(worldSessionChat.Messages, ChatHistoryScope.All);
+worldSessionChat.AddMessage("late old-world event", ChatMessageStyle.Action);
+worldSessionChat.ClearMessages();
+worldSessionChat.AddMessage("new world event", ChatMessageStyle.Action);
+var newWorldUnread = worldSessionReader.Read(
+    worldSessionChat.Messages, ChatHistoryScope.Unread);
+Require(
+    worldSessionChat.Messages.Count == 1 &&
+    newWorldUnread.Messages.Count == 1 &&
+    newWorldUnread.Messages[0].Text == "new world event",
+    "new world chat reset must remove stale messages without breaking unread tracking");
 var stateHistoryReader = new ChatHistoryReader();
 var stateUnreadHistory = stateHistoryReader.Read(
     historyChat.Messages, ChatHistoryScope.Unread);

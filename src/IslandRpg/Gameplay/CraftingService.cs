@@ -38,10 +38,11 @@ internal static class CraftingService
             !requiredStationAvailable)
             return CraftResult.MissingStation;
         foreach (var tool in recipe.RequiredTools ?? [])
-            if (updated.Count(itemId =>
+            if (inventory.Count(itemId =>
                     ItemCatalog.Get(itemId).HasTag(tool.Tag)) < tool.Count)
                 return CraftResult.MissingResources;
 
+        var working = inventory.Clone();
         var steps = recipe.InventorySteps ??
         [
             new CraftingInventoryStep(
@@ -50,16 +51,16 @@ internal static class CraftingService
         ];
         foreach (var step in steps)
         {
-            foreach (var ingredient in step.Consumes)
-                if (!updated.TryTake(ingredient.Accepts, ingredient.Count))
-                    return CraftResult.MissingResources;
+            if (!TryConsumePreferredIngredients(working, step.Consumes))
+                return CraftResult.MissingResources;
             foreach (var product in step.Produces)
                 if (!(ItemCatalog.TryGet(product.ItemId, out _)
-                        ? updated.TryAdd(product.ItemId, product.Count)
-                        : updated.TryAddTransient(
+                        ? working.TryAdd(product.ItemId, product.Count)
+                        : working.TryAddTransient(
                             product.ItemId, product.Count)))
                     return CraftResult.InventoryFull;
         }
+        updated = working;
         return CraftResult.Success;
     }
 
@@ -94,15 +95,8 @@ internal static class CraftingService
         ];
         foreach (var step in steps)
         {
-            foreach (var ingredient in step.Consumes)
-                for (var count = 0; count < ingredient.Count; count++)
-                {
-                    var slot = Array.FindIndex(
-                        working,
-                        ingredient.Accepts);
-                    if (slot < 0) return CraftResult.MissingResources;
-                    working[slot] = null;
-                }
+            if (!TryConsumePreferredIngredients(working, step.Consumes))
+                return CraftResult.MissingResources;
 
             foreach (var product in step.Produces)
                 for (var count = 0; count < product.Count; count++)
@@ -115,5 +109,83 @@ internal static class CraftingService
 
         updated = working;
         return CraftResult.Success;
+    }
+
+    /// <summary>
+    /// Consumes every recipe's named material before considering substitutes.
+    /// This both preserves more valuable alternatives and prevents an earlier
+    /// flexible requirement from stealing a later requirement's primary item.
+    /// </summary>
+    private static bool TryConsumePreferredIngredients(
+        InventoryContainer inventory,
+        IReadOnlyList<CraftingIngredient> ingredients)
+    {
+        var remaining = new int[ingredients.Count];
+        for (var index = 0; index < ingredients.Count; index++)
+        {
+            var ingredient = ingredients[index];
+            remaining[index] = ingredient.Count - TakeUpTo(
+                inventory, ingredient.ItemId, ingredient.Count);
+        }
+        for (var index = 0; index < ingredients.Count; index++)
+        {
+            var ingredient = ingredients[index];
+            foreach (var alternative in ingredient.AlternativeItemIds ?? [])
+                remaining[index] -= TakeUpTo(
+                    inventory, alternative, remaining[index]);
+            if (remaining[index] > 0) return false;
+        }
+        return true;
+    }
+
+    private static bool TryConsumePreferredIngredients(
+        string?[] inventory,
+        IReadOnlyList<CraftingIngredient> ingredients)
+    {
+        var remaining = new int[ingredients.Count];
+        for (var index = 0; index < ingredients.Count; index++)
+        {
+            var ingredient = ingredients[index];
+            remaining[index] = ingredient.Count - TakeUpTo(
+                inventory, ingredient.ItemId, ingredient.Count);
+        }
+        for (var index = 0; index < ingredients.Count; index++)
+        {
+            var ingredient = ingredients[index];
+            foreach (var alternative in ingredient.AlternativeItemIds ?? [])
+                remaining[index] -= TakeUpTo(
+                    inventory, alternative, remaining[index]);
+            if (remaining[index] > 0) return false;
+        }
+        return true;
+    }
+
+    private static int TakeUpTo(
+        InventoryContainer inventory, string itemId, int maximum)
+    {
+        var count = Math.Min(maximum, inventory.Count(itemId));
+        return count > 0 && inventory.TryTake(
+            candidate => candidate.Equals(
+                itemId, StringComparison.OrdinalIgnoreCase), count)
+            ? count
+            : 0;
+    }
+
+    private static int TakeUpTo(
+        string?[] inventory, string itemId, int maximum)
+    {
+        var taken = 0;
+        for (var slot = 0;
+             slot < inventory.Length && taken < maximum;
+             slot++)
+        {
+            if (!string.Equals(
+                    inventory[slot], itemId,
+                    StringComparison.OrdinalIgnoreCase))
+                continue;
+            inventory[slot] = null;
+            taken++;
+        }
+        return taken;
     }
 }

@@ -170,9 +170,8 @@ internal sealed partial class GameHostWindow
                         FarmingSkill.GatheringBasketBonus(
                             _activePlayer.Inventory);
         var inventory = ActivePlayerInventory();
-        var gathered = inventory.TryAdd(ItemIds.PlantFibres, requested)
-            ? requested
-            : 0;
+        var gathered = inventory.AddUpTo(
+            ItemIds.PlantFibres, requested);
         if (gathered == 0)
         {
             ReportBlockedAction(
@@ -202,6 +201,10 @@ internal sealed partial class GameHostWindow
                 ? "You gather some plant fibres."
                 : "You gather two bundles of plant fibres.",
             ChatMessageStyle.Action);
+        if (gathered < requested)
+            _chatUi.AddMessage(
+                "You leave some fibres behind because your inventory is full.",
+                ChatMessageStyle.Warning);
         _player.Stop();
     }
 

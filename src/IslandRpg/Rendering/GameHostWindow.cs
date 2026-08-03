@@ -1342,6 +1342,7 @@ internal sealed partial class GameHostWindow : GameWindow
         bool playOpeningCinematic = false)
     {
         CancelWorldLevelWork(clearMinimap: true);
+        _chatUi.ClearMessages();
         player ??= _selectedPlayer;
         player ??= _saves.ListPlayers().FirstOrDefault();
         _worldSeed = world.Seed;
