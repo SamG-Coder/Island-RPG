@@ -126,21 +126,19 @@ internal sealed partial class GameHostWindow
         if (TryExecuteVillagerPlanDirective(index, villager, tier))
             return true;
         if (VillagerPromisePlanService.HasActiveWork(villager))
+        {
+            var collectionItem = VillagerPromisePlanService
+                .CurrentCollectionItem(villager);
             return TryVillagerPromiseRendezvous(index, villager, tier) ||
                    // Deliver possessed promised items before looking for more
                    // resources. Otherwise any available forage target can
                    // indefinitely starve the hand-off.
                    TryVillagerFulfilGift(index, villager, tier) ||
-                   TryExecuteVillagerWorldAction(
-                       index, villager, tier,
-                       VillagerPromisePlanService.CurrentCollectionItem(
-                           villager)) ||
-                   TryVillagerGatherTreeSticks(index, villager, tier) ||
-                   TryVillagerForage(index, villager, tier) ||
-                   TryVillagerCutTree(index, villager, tier) ||
-                   TryVillagerMine(index, villager, tier) ||
-                   TryVillagerFish(index, villager, tier) ||
+                   collectionItem is not null &&
+                   TryCollectPromisedItem(
+                       index, villager, tier, collectionItem) ||
                    TryExploreForPromise(index, villager, tier);
+        }
         return TryVillagerPromiseRendezvous(index, villager, tier) ||
                TryVillagerSettlementContribution(index, villager, tier) ||
                TryVillagerReachProjectWorksite(index, villager, tier) ||
@@ -154,6 +152,42 @@ internal sealed partial class GameHostWindow
                TryVillagerPlaceOrTendCampfire(index, villager) ||
                TryVillagerProjectExplore(index, villager, tier) ||
                TryExecuteVillagerWorldAction(index, villager, tier);
+    }
+
+    private bool TryCollectPromisedItem(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier,
+        string itemId)
+    {
+        // A matching loose item is always cheaper than producing another.
+        if (TryExecuteVillagerWorldAction(
+                index, villager, tier, itemId))
+            return true;
+        var route = VillagerCollectionRouteService.For(itemId);
+        if (!VillagerCollectionRouteService.HasRequiredTool(
+                route, villager.Inventory))
+        {
+            // Reuse the autonomous dependency planner. It stages foundation
+            // materials and tools; a normal pickup supplies any missing loose
+            // prerequisite without pretending it fulfils the promise.
+            return TryVillagerCraft(index, villager) ||
+                   TryExecuteVillagerWorldAction(index, villager, tier);
+        }
+        return route switch
+        {
+            VillagerCollectionRoute.TreeLogs =>
+                TryVillagerCutTree(index, villager, tier),
+            VillagerCollectionRoute.TreeSticks =>
+                TryVillagerGatherTreeSticks(index, villager, tier),
+            VillagerCollectionRoute.Forage =>
+                TryVillagerForage(index, villager, tier),
+            VillagerCollectionRoute.Fish =>
+                TryVillagerFish(index, villager, tier),
+            VillagerCollectionRoute.Mine =>
+                TryVillagerMine(index, villager, tier),
+            _ => false
+        };
     }
 
     private bool TryExecuteVillagerPlanDirective(

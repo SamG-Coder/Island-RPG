@@ -4137,6 +4137,37 @@ Require(
     immediateGiveItem == ItemIds.Logs &&
     immediateGiveQuantity == 4,
     "direct hand-over wording must become a quantity-aware give proposal rather than speech-only acceptance");
+Require(
+    VillagerCollectionRouteService.For(ItemIds.Logs) ==
+        VillagerCollectionRoute.TreeLogs &&
+    VillagerCollectionRouteService.For(ItemIds.OakLogs) ==
+        VillagerCollectionRoute.TreeLogs &&
+    VillagerCollectionRouteService.For(ItemIds.Sticks) ==
+        VillagerCollectionRoute.TreeSticks &&
+    VillagerCollectionRouteService.For(ItemIds.PlantFibres) ==
+        VillagerCollectionRoute.Forage &&
+    VillagerCollectionRouteService.For(ItemIds.WildBerries) ==
+        VillagerCollectionRoute.Forage &&
+    VillagerCollectionRouteService.For(ItemIds.RawMinnows) ==
+        VillagerCollectionRoute.Fish &&
+    VillagerCollectionRouteService.For(ItemIds.CopperOre) ==
+        VillagerCollectionRoute.Mine &&
+    VillagerCollectionRouteService.For(ItemIds.SpiralShell) ==
+        VillagerCollectionRoute.Ground,
+    "promised collection must route items to their producing capability instead of unrelated generic gathering");
+Require(
+    !VillagerCollectionRouteService.HasRequiredTool(
+        VillagerCollectionRoute.TreeLogs, new string?[28]) &&
+    VillagerCollectionRouteService.HasRequiredTool(
+        VillagerCollectionRoute.TreeLogs,
+        [ItemIds.StoneAxe, .. new string?[27]]) &&
+    !VillagerCollectionRouteService.HasRequiredTool(
+        VillagerCollectionRoute.Fish, new string?[28]) &&
+    !VillagerCollectionRouteService.HasRequiredTool(
+        VillagerCollectionRoute.Mine, new string?[28]) &&
+    VillagerCollectionRouteService.HasRequiredTool(
+        VillagerCollectionRoute.Forage, new string?[28]),
+    "promised production must identify tool prerequisites while leaving tool-free gathering available");
 const string trailingConfirmationRequest =
     "Edith, please bring me two sticks for the storage chest now. " +
     "Will you gather and give them to me?";
