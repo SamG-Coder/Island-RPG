@@ -93,7 +93,25 @@ internal sealed partial class GameHostWindow
         return TryVillagerEat(index, villager, tier) ||
                TryVillagerWithdrawFood(index, villager) ||
                TryVillagerForage(index, villager, tier) ||
-               TryVillagerFish(index, villager, tier);
+               TryVillagerFish(index, villager, tier) ||
+               TryExploreForUrgentFood(index, villager, tier);
+    }
+
+    private bool TryExploreForUrgentFood(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier)
+    {
+        var preferred = VillagerSettlementProjectService.ExplorationTarget(
+            villager, _worldGameSeconds);
+        var target = WorldLevelNavigation.ReachableExplorationTarget(
+            _worldSeed,
+            new(villager.PositionX, villager.PositionY),
+            preferred,
+            villager.WorldLevel);
+        MoveVillagerForCapability(
+            index, villager, tier, target, VillagerNeed.Food);
+        return true;
     }
 
     private bool TryExecuteVillagerCommittedAction(
@@ -349,12 +367,18 @@ internal sealed partial class GameHostWindow
         if (!VillagerPromisePlanService.PlansFor(villager).Any(step =>
                 step.Action == VillagerPromisePlanAction.Collect))
             return false;
+        var preferred = VillagerSettlementProjectService.ExplorationTarget(
+            villager, _worldGameSeconds);
+        var target = WorldLevelNavigation.ReachableExplorationTarget(
+            _worldSeed,
+            new(villager.PositionX, villager.PositionY),
+            preferred,
+            villager.WorldLevel);
         MoveVillagerForCapability(
             index,
             villager,
             tier,
-            VillagerSettlementProjectService.ExplorationTarget(
-                villager, _worldGameSeconds),
+            target,
             VillagerNeed.Explore);
         return true;
     }

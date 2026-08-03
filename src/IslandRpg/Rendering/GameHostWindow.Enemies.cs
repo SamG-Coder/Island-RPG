@@ -510,33 +510,24 @@ internal sealed partial class GameHostWindow
         out Biome biome,
         out EnemyKind kind)
     {
-        if (_activeWorldLevel == (int)WorldLevel.Underground)
+        if (!EnemySpawnerSiteSelector.TryFind(
+                focus, _worldSeed, _activeWorldLevel, this,
+                static (window, candidate) =>
+                    window.SamplePlayerTerrain(
+                        candidate.X, candidate.Y).Biome,
+                static (window, candidate) =>
+                    window.IsNearShallowWater(candidate),
+                out var site))
         {
-            position = focus + new Vector2(8, 4);
-            biome = Biome.Rock;
-            kind = EnemyKind.CaveSlime;
-            return true;
+            position = default;
+            biome = default;
+            kind = default;
+            return false;
         }
-        var start = Math.Abs(HashCode.Combine(_worldSeed,
-            (int)(focus.X / 16), (int)(focus.Y / 16))) % 16;
-        for (var ring = 7; ring <= 17; ring += 2)
-        for (var step = 0; step < 16; step++)
-        {
-            var angle = (start + step) / 16f * MathF.Tau;
-            var candidate = focus + new Vector2(
-                MathF.Cos(angle), MathF.Sin(angle)) * ring;
-            var terrain = SamplePlayerTerrain(candidate.X, candidate.Y);
-            if (!TrySlimeKind(terrain.Biome, out kind)) continue;
-            if (kind == EnemyKind.WaterSlime &&
-                !IsNearShallowWater(candidate)) continue;
-            position = candidate;
-            biome = terrain.Biome;
-            return true;
-        }
-        position = default;
-        biome = default;
-        kind = default;
-        return false;
+        position = site.Position;
+        biome = site.Biome;
+        kind = site.Kind;
+        return true;
     }
 
     private bool IsNearShallowWater(Vector2 position)
@@ -554,19 +545,6 @@ internal sealed partial class GameHostWindow
                 return true;
         }
         return false;
-    }
-
-    private static bool TrySlimeKind(Biome biome, out EnemyKind kind)
-    {
-        kind = biome switch
-        {
-            Biome.Beach => EnemyKind.WaterSlime,
-            Biome.Grassland or Biome.DryGrass => EnemyKind.GrassSlime,
-            Biome.DesertSand or Biome.CrackedEarth => EnemyKind.SandSlime,
-            _ => default
-        };
-        return biome is Biome.Beach or Biome.Grassland or Biome.DryGrass or
-            Biome.DesertSand or Biome.CrackedEarth;
     }
 
     private ActorVisual? GetEnemyVisual(EnemyState enemy)

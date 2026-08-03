@@ -77,6 +77,35 @@ internal static class WorldLevelNavigation
         return lastReachable;
     }
 
+    public static Vector2 ReachableExplorationTarget(
+        long seed,
+        Vector2 origin,
+        Vector2 preferred,
+        int level,
+        float searchDistance = 8)
+    {
+        var best = ReachableWalkableTarget(
+            seed, origin, preferred, level, maximumRadius: 3);
+        var bestDistanceSquared = Vector2.DistanceSquared(origin, best);
+        var start = (int)(CoordinateHash(
+            seed,
+            (int)MathF.Floor(origin.X),
+            (int)MathF.Floor(origin.Y)) % 16);
+        for (var step = 0; step < 16; step++)
+        {
+            var angle = (start + step) / 16f * MathF.Tau;
+            var destination = origin + new Vector2(
+                MathF.Cos(angle), MathF.Sin(angle)) * searchDistance;
+            var candidate = ReachableWalkableTarget(
+                seed, origin, destination, level, maximumRadius: 3);
+            var distanceSquared = Vector2.DistanceSquared(origin, candidate);
+            if (distanceSquared <= bestDistanceSquared + .0001f) continue;
+            best = candidate;
+            bestDistanceSquared = distanceSquared;
+        }
+        return best;
+    }
+
     public static bool IsWalkable(
         long seed,
         int tileX,

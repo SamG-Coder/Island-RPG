@@ -57,6 +57,96 @@ internal readonly record struct EnemySpawnerUpdate(
     bool StartedRecovery,
     bool SpawnedWave);
 
+internal readonly record struct EnemySpawnerSite(
+    Vector2 Position, Biome Biome, EnemyKind Kind);
+
+internal static class EnemySpawnerSiteSelector
+{
+    public const int MinimumOverworldRadius = 3;
+    public const int MaximumOverworldRadius = 17;
+
+    public static bool TryFind<TContext>(
+        Vector2 focus,
+        long worldSeed,
+        int worldLevel,
+        TContext context,
+        Func<TContext, Vector2, Biome> sampleBiome,
+        Func<TContext, Vector2, bool> isNearShallowWater,
+        out EnemySpawnerSite site)
+    {
+        if (worldLevel == (int)WorldLevel.Underground)
+        {
+            site = new(
+                focus + new Vector2(8, 4), Biome.Rock,
+                EnemyKind.CaveSlime);
+            return true;
+        }
+
+        var hash = unchecked((uint)HashCode.Combine(
+            worldSeed, (int)(focus.X / 16), (int)(focus.Y / 16)));
+        var start = (int)(hash % 16);
+        if (TryKind(sampleBiome(context, focus), out var focusKind) &&
+            TryRings(
+                focus, context, sampleBiome, isNearShallowWater,
+                start * 2, MinimumOverworldRadius, 6, 1, 32,
+                allowWaterAwayFromShallows:
+                    focusKind == EnemyKind.WaterSlime,
+                out site))
+            return true;
+        return TryRings(
+            focus, context, sampleBiome, isNearShallowWater,
+            start, 7, MaximumOverworldRadius, 2, 16,
+            allowWaterAwayFromShallows: false, out site);
+    }
+
+    private static bool TryRings<TContext>(
+        Vector2 focus,
+        TContext context,
+        Func<TContext, Vector2, Biome> sampleBiome,
+        Func<TContext, Vector2, bool> isNearShallowWater,
+        int start,
+        int minimumRadius,
+        int maximumRadius,
+        int radiusStep,
+        int angleSteps,
+        bool allowWaterAwayFromShallows,
+        out EnemySpawnerSite site)
+    {
+        for (var ring = minimumRadius;
+             ring <= maximumRadius;
+             ring += radiusStep)
+        for (var step = 0; step < angleSteps; step++)
+        {
+            var angle = (start + step) / (float)angleSteps * MathF.Tau;
+            var candidate = focus + new Vector2(
+                MathF.Cos(angle), MathF.Sin(angle)) * ring;
+            var biome = sampleBiome(context, candidate);
+            if (!TryKind(biome, out var kind)) continue;
+            if (kind == EnemyKind.WaterSlime &&
+                !allowWaterAwayFromShallows &&
+                !isNearShallowWater(context, candidate)) continue;
+            site = new(candidate, biome, kind);
+            return true;
+        }
+
+        site = default;
+        return false;
+    }
+
+    private static bool TryKind(Biome biome, out EnemyKind kind)
+    {
+        kind = biome switch
+        {
+            Biome.Beach => EnemyKind.WaterSlime,
+            Biome.Grassland or Biome.DryGrass => EnemyKind.GrassSlime,
+            Biome.DesertSand or Biome.CrackedEarth => EnemyKind.SandSlime,
+            _ => default
+        };
+        return biome is Biome.Beach or Biome.Grassland or Biome.DryGrass or
+            Biome.DesertSand or Biome.CrackedEarth;
+    }
+}
+
 internal static class EnemySpawnerService
 {
     private static readonly EnemyController SlimeController =

@@ -1247,7 +1247,9 @@ internal sealed partial class GameHostWindow
                                 value.Chunk.Vegetation[
                                     item.VegetationIndex].X,
                                 value.Chunk.Vegetation[
-                                    item.VegetationIndex].Y)))),
+                                    item.VegetationIndex].Y),
+                            VegetationReady(
+                                value.Chunk, item.StableKey)))),
                     wantsBerries,
                     requestedKey,
                     requestedVegetationPosition,
@@ -1256,7 +1258,7 @@ internal sealed partial class GameHostWindow
                         TryControlPosition(root, out _));
                 if (vegetationItem is null)
                 {
-                    error = "vegetation_not_found";
+                    error = "vegetation_not_ready_or_not_found";
                     return false;
                 }
                 if (wantsBerries)
@@ -1771,6 +1773,7 @@ internal static class ControlTargetSelection
         bool requireNearbyPosition)
     {
         var eligible = candidates.Where(value =>
+            value.IsReady &&
             (wantsBerries
                 ? value.Item.CanGatherBerries
                 : value.Item.CanGatherFibre));
@@ -1839,7 +1842,8 @@ internal static class ControlCombatCommands
 
 internal readonly record struct ControlVegetationTarget(
     WorldVegetationRenderItem Item,
-    Vector2 Position);
+    Vector2 Position,
+    bool IsReady = true);
 
 internal readonly record struct ControlMiningTarget(
     WorldVegetationRenderItem Item,

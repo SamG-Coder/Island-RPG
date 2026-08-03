@@ -4051,7 +4051,8 @@ var requestedFibre = new WorldVegetationRenderItem(
     CanGatherFibre: true, CanGatherBerries: false);
 var pipeVegetation = new[]
 {
-    new ControlVegetationTarget(distantFibre, new(2.5f, 2.5f)),
+    new ControlVegetationTarget(
+        distantFibre, new(2.5f, 2.5f), IsReady: false),
     new ControlVegetationTarget(requestedFibre, new(20.25f, 20.25f))
 };
 Require(
@@ -4060,10 +4061,10 @@ Require(
         requestedFibre &&
     ControlTargetSelection.Vegetation(
         pipeVegetation, false, "FIBRE-DISTANT", new(20.2f, 20.2f), true) ==
-        distantFibre &&
+        null &&
     ControlTargetSelection.Vegetation(
         pipeVegetation, false, null, new(50, 50), true) is null,
-    "control-pipe vegetation targeting must prefer the requested coordinates, preserve exact-key selection, and reject unrelated distant plants");
+    "control-pipe vegetation targeting must prefer ready requested coordinates and reject depleted or unrelated plants");
 var visuallyNearMiningNode = new WorldVegetationRenderItem(
     2, 60, 60, new(0, 0), "ore-visually-near", "ore", null,
     CanGatherFibre: false, CanGatherBerries: false);
@@ -9434,6 +9435,43 @@ Require(
 var grassSpawner = new EnemySpawnerState(
     Guid.NewGuid(), Vector2.Zero, (int)WorldLevel.Overworld,
     Biome.Grassland, [new(EnemyKind.GrassSlime)], MaximumAlive: 8);
+var narrowBeachSpawnerFound = EnemySpawnerSiteSelector.TryFind(
+    Vector2.Zero, 7319, (int)WorldLevel.Overworld, 0,
+    static (_, position) =>
+        position.Length <= 3.1f
+            ? Biome.Beach
+            : Biome.Tundra,
+    static (_, _) => false,
+    out var narrowBeachSpawner);
+var dryBeachSpawnerFound = EnemySpawnerSiteSelector.TryFind(
+    Vector2.Zero, 7319, (int)WorldLevel.Overworld, 0,
+    static (_, position) =>
+        position.Length is >= 6.9f and <= 7.1f
+            ? Biome.Beach
+            : Biome.Tundra,
+    static (_, _) => false,
+    out _);
+Require(
+    narrowBeachSpawnerFound && !dryBeachSpawnerFound &&
+    narrowBeachSpawner.Kind == EnemyKind.WaterSlime &&
+    narrowBeachSpawner.Biome == Biome.Beach &&
+    Math.Abs(narrowBeachSpawner.Position.Length -
+             EnemySpawnerSiteSelector.MinimumOverworldRadius) < .01f,
+    "enemy spawner discovery must support an active narrow beach without selecting unconfirmed beach pockets from another biome");
+var strandedSearchOrigin = new Vector2(12.5f, 10.5f);
+var strandedSearchTarget = WorldLevelNavigation.ReachableExplorationTarget(
+    7319,
+    strandedSearchOrigin,
+    strandedSearchOrigin + new Vector2(-8, 0),
+    (int)WorldLevel.Overworld);
+Require(
+    Vector2.DistanceSquared(strandedSearchOrigin, strandedSearchTarget) > 1 &&
+    WorldLevelNavigation.IsWalkable(
+        7319,
+        (int)MathF.Floor(strandedSearchTarget.X),
+        (int)MathF.Floor(strandedSearchTarget.Y),
+        (int)WorldLevel.Overworld),
+    "urgent food exploration must choose a meaningful walkable route when the preferred shoreline ray is blocked");
 var distantSpawner = EnemySpawnerService.Update(
     grassSpawner, [],
     [new("player", new Vector2(100, 100), 0, true, 20, true)],
