@@ -63,6 +63,16 @@ internal static class CraftingSkill
 {
     public const int MaximumLevel = SkillService.MaximumLevel;
 
+    public static IReadOnlyList<CraftingIngredient> Outputs(
+        CraftingRecipe recipe) =>
+        recipe.InventorySteps is { Count: > 0 } steps
+            ? steps[^1].Produces
+            : [new(recipe.ResultItemId, 1)];
+
+    public static bool IsReturnedIngredient(
+        CraftingRecipe recipe, string itemId) =>
+        recipe.Ingredients.Any(ingredient => ingredient.Accepts(itemId));
+
     public static readonly IReadOnlyList<CraftingRecipe> Recipes =
     [
         new(

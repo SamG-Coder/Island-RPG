@@ -445,6 +445,27 @@ internal sealed partial class GameHostWindow
             y += 23;
         }
 
+        y += 8;
+        DrawUiText(
+            "You receive",
+            new(details.X + 14, y),
+            new(224, 210, 168, 255));
+        y += 25;
+        foreach (var product in CraftingSkill.Outputs(recipe))
+        {
+            var returned = CraftingSkill.IsReturnedIngredient(
+                recipe, product.ItemId);
+            DrawUiText(
+                $"- {product.Count} x " +
+                ItemCatalog.Get(product.ItemId).Name +
+                (returned ? " (returned)" : ""),
+                new(details.X + 14, y),
+                returned
+                    ? new(154, 190, 218, 255)
+                    : new(175, 207, 132, 255));
+            y += 23;
+        }
+
         if (recipe.RequiredStationItemId is { } stationItemId)
         {
             var available = HasRequiredCraftingStation(recipe);

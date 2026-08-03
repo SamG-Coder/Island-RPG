@@ -160,6 +160,30 @@ Require(
         "not read", out var parsedHistoryScope) &&
     parsedHistoryScope == ChatHistoryScope.Unread,
     "control chat history must exclude debug lines and maintain an independent unread cursor");
+var stateHistoryReader = new ChatHistoryReader();
+var stateUnreadHistory = stateHistoryReader.Read(
+    historyChat.Messages, ChatHistoryScope.Unread);
+Require(
+    stateUnreadHistory.Messages.Count == 13 &&
+    stateUnreadHistory.Messages[^1].Text == "new reply",
+    "state polling must maintain an unread chat cursor independent from explicit chat-history reads");
+using (var publishedMessages = new GameControlPipe(
+           $"world-check-published-{Guid.NewGuid():N}"))
+{
+    publishedMessages.Publish(new
+    {
+        eventType = "player_message",
+        text = "meet me at the shore"
+    });
+    Require(
+        publishedMessages.DrainStatePublished().Single()
+            .GetProperty("text").GetString() == "meet me at the shore" &&
+        publishedMessages.DrainPublished().Single()
+            .GetProperty("eventType").GetString() == "player_message" &&
+        publishedMessages.DrainStatePublished().Length == 0 &&
+        publishedMessages.DrainPublished().Length == 0,
+        "state and events commands must receive independent unread /codex message streams");
+}
 Require(
     ChatCommandRegistry.TryParse(
         "/codex inspect the western shore", out var codexCommand) &&
@@ -7262,6 +7286,18 @@ Require(PlayerInventory.TrySharpenStoneTool(
         resharpenedHammer[0] is null &&
         resharpenedHammer[1] == ItemIds.StoneHammer,
     "using small rocks on a blunt stone hammer must restore it");
+Require(
+    EntityInteractionService.TryAutoSharpenStoneTool(
+        [ItemIds.BluntStoneAxe, ItemIds.SmallRocks, ItemIds.Sticks],
+        ItemIds.BluntStoneAxe,
+        out var autoSharpenedAxe) &&
+    autoSharpenedAxe[0] == ItemIds.StoneAxe &&
+    autoSharpenedAxe[1] is null &&
+    !EntityInteractionService.TryAutoSharpenStoneTool(
+        [ItemIds.BluntStoneAxe, ItemIds.Sticks],
+        ItemIds.BluntStoneAxe,
+        out _),
+    "entity actions must automatically sharpen a blunt stone axe only when small rocks are carried");
 Require(PlayerInventory.BestAxe([ItemIds.StoneAxe])?.Id ==
             ItemIds.StoneAxe &&
         PlayerInventory.BestAxe(
@@ -7287,6 +7323,17 @@ Require(!CraftingService.TryCraft(
     "recipe crafting must fail when any ingredient is missing");
 var mediumRockRecipe = CraftingSkill.Recipes.First(
     recipe => recipe.Id == "medium-rock");
+Require(
+    CraftingSkill.Outputs(mediumRockRecipe).Count == 2 &&
+    CraftingSkill.Outputs(mediumRockRecipe).Any(output =>
+        output.ItemId == ItemIds.LargeRock &&
+        output.Count == 1 &&
+        CraftingSkill.IsReturnedIngredient(
+            mediumRockRecipe, output.ItemId)) &&
+    CraftingSkill.Outputs(mediumRockRecipe).Any(output =>
+        output.ItemId == ItemIds.MediumRock && output.Count == 2) &&
+    CraftingSkill.Outputs(ropeRecipe).Single().ItemId == ItemIds.Rope,
+    "crafting output summaries must expose returned tools and final products");
 Require(CraftingService.TryCraft(
         mediumRockRecipe,
         1,

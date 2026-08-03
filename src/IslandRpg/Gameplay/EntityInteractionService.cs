@@ -485,4 +485,18 @@ internal static class EntityInteractionService
         out string?[] updatedInventory) =>
         PlayerInventory.TryBluntStoneTool(
             inventory, toolItemId, roll, out updatedInventory);
+
+    public static bool TryAutoSharpenStoneTool(
+        string?[]? inventory,
+        string bluntToolItemId,
+        out string?[] updatedInventory)
+    {
+        var normalized = PlayerInventory.Normalize(inventory);
+        var rocksSlot = Array.FindIndex(
+            normalized, item => item == ItemIds.SmallRocks);
+        var toolSlot = Array.FindIndex(
+            normalized, item => item == bluntToolItemId);
+        return PlayerInventory.TrySharpenStoneTool(
+            normalized, rocksSlot, toolSlot, out updatedInventory);
+    }
 }

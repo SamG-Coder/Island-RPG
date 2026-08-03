@@ -13,6 +13,7 @@ internal sealed partial class GameHostWindow
 {
     private GameControlPipe? _gameControlPipe;
     private readonly ChatHistoryReader _controlChatHistory = new();
+    private readonly ChatHistoryReader _controlStateChatHistory = new();
 
     private void ProcessGameControlPipe()
     {
@@ -335,7 +336,8 @@ internal sealed partial class GameHostWindow
                         }));
                         break;
                     case "state":
-                        request.Complete(ControlSnapshot("state"));
+                        request.Complete(ControlSnapshot(
+                            "state", includeUnreadMessages: true));
                         break;
                     case "stop":
                         request.Complete(ControlSnapshot("stopping"));
@@ -424,6 +426,13 @@ internal sealed partial class GameHostWindow
                     ingredient.ItemId,
                     ingredient.Count,
                     ingredient.AlternativeItemIds
+                }),
+                outputs = CraftingSkill.Outputs(recipe).Select(product => new
+                {
+                    product.ItemId,
+                    product.Count,
+                    returned = CraftingSkill.IsReturnedIngredient(
+                        recipe, product.ItemId)
                 }),
                 recipe.RequiredStationItemId
             })
@@ -1473,11 +1482,51 @@ internal sealed partial class GameHostWindow
             ChatMessageStyle.Debug);
     }
 
-    private string ControlSnapshot(string eventType) =>
-        JsonSerializer.Serialize(new
+    private string ControlSnapshot(
+        string eventType,
+        bool includeUnreadMessages = false)
+    {
+        object[]? unreadMessages = null;
+        if (includeUnreadMessages)
+        {
+            var chat = _controlStateChatHistory.Read(
+                _chatUi.Messages, ChatHistoryScope.Unread);
+            var messages = new List<object>(chat.Messages.Count + 4);
+            messages.AddRange(chat.Messages.Select(message => (object)new
+            {
+                source = "chat",
+                message.Sequence,
+                text = message.Text,
+                style = message.Style.ToString()
+            }));
+            if (_gameControlPipe is not null)
+                messages.AddRange(
+                    _gameControlPipe.DrainStatePublished().Select(
+                        message => (object)new
+                        {
+                            source = "control_event",
+                            eventType = message.TryGetProperty(
+                                "eventType", out var type)
+                                ? type.GetString()
+                                : null,
+                            text = message.TryGetProperty(
+                                "text", out var text)
+                                ? text.GetString()
+                                : null,
+                            gameSeconds = message.TryGetProperty(
+                                "gameSeconds", out var time) &&
+                                time.TryGetDouble(out var seconds)
+                                ? seconds
+                                : (double?)null
+                        }));
+            unreadMessages = messages.ToArray();
+        }
+
+        return JsonSerializer.Serialize(new
         {
             ok = true,
             eventType,
+            unreadMessages,
             screen = _screen.ToString(),
             gameSeconds = _worldGameSeconds,
             aiBusy = _npcAiSpeechTask is { IsCompleted: false },
@@ -1627,6 +1676,7 @@ internal sealed partial class GameHostWindow
                 conversation = villager.ConversationHistory?.TakeLast(6)
             })
         });
+    }
 
     private string[] ControlUiBlockers()
     {
@@ -1720,6 +1770,7 @@ internal sealed class GameControlPipe : IDisposable
     private readonly string _name;
     private readonly ConcurrentQueue<Request> _requests = new();
     private readonly ConcurrentQueue<string> _published = new();
+    private readonly ConcurrentQueue<string> _statePublished = new();
     private readonly CancellationTokenSource _stop = new();
     private readonly Task _server;
 
@@ -1732,13 +1783,28 @@ internal sealed class GameControlPipe : IDisposable
     public bool TryDequeue(out Request request) =>
         _requests.TryDequeue(out request!);
 
-    public void Publish(object message) =>
-        _published.Enqueue(JsonSerializer.Serialize(message));
+    public void Publish(object message)
+    {
+        var json = JsonSerializer.Serialize(message);
+        _published.Enqueue(json);
+        _statePublished.Enqueue(json);
+    }
 
     public JsonElement[] DrainPublished()
     {
         var result = new List<JsonElement>();
         while (_published.TryDequeue(out var message))
+        {
+            using var document = JsonDocument.Parse(message);
+            result.Add(document.RootElement.Clone());
+        }
+        return result.ToArray();
+    }
+
+    public JsonElement[] DrainStatePublished()
+    {
+        var result = new List<JsonElement>();
+        while (_statePublished.TryDequeue(out var message))
         {
             using var document = JsonDocument.Parse(message);
             result.Add(document.RootElement.Clone());

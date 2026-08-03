@@ -2212,6 +2212,21 @@ internal sealed partial class GameHostWindow : GameWindow
         if (!_worldChunks.TryGetValue(coordinate, out var gpu)) return;
         var source = gpu.Chunk.Trees.FirstOrDefault(tree => tree.X == x && tree.Y == y);
         if (source is null) return;
+        if (EntityInteractionService.TryAutoSharpenStoneTool(
+                _activePlayer?.Inventory,
+                ItemIds.BluntStoneAxe,
+                out var sharpenedInventory))
+        {
+            _activePlayer = _activePlayer! with
+            {
+                Inventory = sharpenedInventory,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            _saves.SavePlayer(_activePlayer);
+            _chatUi.AddMessage(
+                "You use small rocks to sharpen your blunt stone axe.",
+                ChatMessageStyle.Action);
+        }
         if (!PlayerInventory.HasAxe(_activePlayer?.Inventory))
         {
             var hasBluntAxe =
@@ -2515,6 +2530,21 @@ internal sealed partial class GameHostWindow : GameWindow
                 tree => tree.Id == _activeTreeId.Value);
             if (index < 0) continue;
             var instance = gpu.Chunk.TreeInstances[index];
+            if (EntityInteractionService.TryAutoSharpenStoneTool(
+                    _activePlayer?.Inventory,
+                    ItemIds.BluntStoneAxe,
+                    out var automaticallySharpenedInventory))
+            {
+                _activePlayer = _activePlayer! with
+                {
+                    Inventory = automaticallySharpenedInventory,
+                    UpdatedUtc = DateTime.UtcNow
+                };
+                _saves.SavePlayer(_activePlayer);
+                _chatUi.AddMessage(
+                    "You use small rocks to sharpen your blunt stone axe.",
+                    ChatMessageStyle.Action);
+            }
             var axe = PlayerInventory.BestAxe(_activePlayer?.Inventory);
             if (axe is null)
             {
@@ -2532,19 +2562,37 @@ internal sealed partial class GameHostWindow : GameWindow
                     Random.Shared.NextSingle(),
                     out var bluntedInventory))
             {
+                var sharpened =
+                    EntityInteractionService.TryAutoSharpenStoneTool(
+                        bluntedInventory,
+                        ItemIds.BluntStoneAxe,
+                        out var resharpenedInventory);
                 _activePlayer = _activePlayer! with
                 {
-                    Inventory = bluntedInventory,
+                    Inventory = sharpened
+                        ? resharpenedInventory
+                        : bluntedInventory,
                     UpdatedUtc = DateTime.UtcNow
                 };
                 _saves.SavePlayer(_activePlayer);
-                _chatUi.AddMessage(
-                    "Your stone axe becomes blunt. Use small rocks on it to sharpen it.",
-                    ChatMessageStyle.Warning);
-                AddBluntToolMonologue(ItemIds.StoneAxe);
-                _activeTreeId = null;
-                _player.Stop();
-                return;
+                if (sharpened)
+                {
+                    _chatUi.AddMessage(
+                        "Your stone axe becomes blunt, so you sharpen it " +
+                        "with small rocks and keep chopping.",
+                        ChatMessageStyle.Action);
+                }
+                else
+                {
+                    _chatUi.AddMessage(
+                        "Your stone axe becomes blunt. Use small rocks on " +
+                        "it to sharpen it.",
+                        ChatMessageStyle.Warning);
+                    AddBluntToolMonologue(ItemIds.StoneAxe);
+                    _activeTreeId = null;
+                    _player.Stop();
+                    return;
+                }
             }
             var experience = _activePlayer?.WoodcuttingExperience ?? 0;
             var strikeResult = EntityInteractionService.StrikeResource(new(

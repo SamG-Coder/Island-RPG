@@ -1168,6 +1168,18 @@ internal sealed partial class GameHostWindow
         int index, VillagerState villager,
         VillagerSimulationTier tier)
     {
+        if (EntityInteractionService.TryAutoSharpenStoneTool(
+                villager.Inventory,
+                ItemIds.BluntStoneAxe,
+                out var automaticallySharpenedInventory))
+        {
+            villager = villager with
+            {
+                Inventory = automaticallySharpenedInventory
+            };
+            _villagers[index] = villager;
+            _villagersDirty = true;
+        }
         var axe = PlayerInventory.BestAxe(villager.Inventory);
         if (axe is null || PlayerInventory.IsFull(villager.Inventory))
             return false;
@@ -1252,14 +1264,29 @@ internal sealed partial class GameHostWindow
                         Random.Shared.NextSingle(),
                         out var bluntedInventory))
                 {
-                    _villagers[actorIndex] = actor with
+                    if (EntityInteractionService.TryAutoSharpenStoneTool(
+                            bluntedInventory,
+                            ItemIds.BluntStoneAxe,
+                            out var resharpenedInventory))
                     {
-                        Inventory = bluntedInventory
-                    };
-                    _villagerWork.ReleaseTarget(
-                        reservationKey, actor.Id);
-                    _villagersDirty = true;
-                    return new(intent, false, "tool_blunted");
+                        actor = actor with
+                        {
+                            Inventory = resharpenedInventory
+                        };
+                        _villagers[actorIndex] = actor;
+                        _villagersDirty = true;
+                    }
+                    else
+                    {
+                        _villagers[actorIndex] = actor with
+                        {
+                            Inventory = bluntedInventory
+                        };
+                        _villagerWork.ReleaseTarget(
+                            reservationKey, actor.Id);
+                        _villagersDirty = true;
+                        return new(intent, false, "tool_blunted");
+                    }
                 }
                 var strike = EntityInteractionService.StrikeResource(new(
                     EntityResourceAction.Woodcut,
