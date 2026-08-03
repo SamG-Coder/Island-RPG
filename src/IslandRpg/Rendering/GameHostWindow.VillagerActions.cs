@@ -710,31 +710,8 @@ internal sealed partial class GameHostWindow
         if ((!requested && !needsSticks) ||
             PlayerInventory.IsFull(villager.Inventory))
             return false;
-        var position = new Vector2(villager.PositionX, villager.PositionY);
-        (GpuWorldChunk Gpu, WorldTreeInstance Tree)? best = null;
-        var bestDistance = 24f * 24f;
-        foreach (var gpu in _worldChunks.Values)
-        {
-            if (!IsActiveSimulationChunk(gpu)) continue;
-            foreach (var tree in gpu.Chunk.TreeInstances)
-            {
-                if (tree.State != TreeLifecycleState.Standing ||
-                    tree.SticksRemaining <= 0 ||
-                    !VillagerLocationMemoryService.CanVisit(
-                        villager,
-                        new(tree.X + .5f, tree.Y + .5f),
-                        _worldGameSeconds) ||
-                    !_villagerWork.IsAvailable(
-                        TreeReservationKey(tree.Id),
-                        villager.Id, _worldGameSeconds))
-                    continue;
-                var distance = Vector2.DistanceSquared(
-                    position, new(tree.X + .5f, tree.Y + .5f));
-                if (distance >= bestDistance) continue;
-                bestDistance = distance;
-                best = (gpu, tree);
-            }
-        }
+        var best = FindNearestVillagerTree(
+            villager, requireSticks: true, out var bestDistance);
         if (best is null) return false;
         villager = VillagerLocationMemoryService.Remember(
             villager,
@@ -1232,30 +1209,8 @@ internal sealed partial class GameHostWindow
                 villager, VillagerWorkRole.Wood) &&
             !RequestedVillagerAction(villager, "cut_tree", "gather"))
             return false;
-        var position = new Vector2(villager.PositionX, villager.PositionY);
-        (GpuWorldChunk Gpu, WorldTreeInstance Tree)? best = null;
-        var bestDistance = 24f * 24f;
-        foreach (var gpu in _worldChunks.Values)
-        {
-            if (!IsActiveSimulationChunk(gpu)) continue;
-            foreach (var tree in gpu.Chunk.TreeInstances)
-            {
-                if (tree.State != TreeLifecycleState.Standing ||
-                    !VillagerLocationMemoryService.CanVisit(
-                        villager,
-                        new(tree.X + .5f, tree.Y + .5f),
-                        _worldGameSeconds) ||
-                    !_villagerWork.IsAvailable(
-                        TreeReservationKey(tree.Id),
-                        villager.Id, _worldGameSeconds))
-                    continue;
-                var distance = Vector2.DistanceSquared(
-                    position, new(tree.X + .5f, tree.Y + .5f));
-                if (distance >= bestDistance) continue;
-                bestDistance = distance;
-                best = (gpu, tree);
-            }
-        }
+        var best = FindNearestVillagerTree(
+            villager, requireSticks: false, out var bestDistance);
         if (best is null) return false;
         villager = VillagerLocationMemoryService.Remember(
             villager,
@@ -1381,6 +1336,56 @@ internal sealed partial class GameHostWindow
             () => actionGpu.Chunk.TreeInstances.Any(value =>
                 value.Id == treeId &&
                 value.State == TreeLifecycleState.Standing));
+    }
+
+    private (GpuWorldChunk Gpu, WorldTreeInstance Tree)?
+        FindNearestVillagerTree(
+            VillagerState villager,
+            bool requireSticks,
+            out float bestDistance)
+    {
+        var position = new Vector2(villager.PositionX, villager.PositionY);
+        (GpuWorldChunk Gpu, IslandTree Source)? best = null;
+        bestDistance = 24f * 24f;
+        foreach (var gpu in _worldChunks.Values)
+        {
+            if (!IsActiveSimulationChunk(gpu)) continue;
+            foreach (var source in gpu.Chunk.Trees)
+            {
+                var instance = TreeInteractionAvailability.InstanceAt(
+                    gpu.Chunk.TreeInstances, source.X, source.Y);
+                if (instance is { State: not TreeLifecycleState.Standing } ||
+                    requireSticks &&
+                    !TreeInteractionAvailability.CanGatherSticks(
+                        gpu.Chunk.TreeInstances, source.X, source.Y) ||
+                    instance is not null &&
+                    !_villagerWork.IsAvailable(
+                        TreeReservationKey(instance.Id),
+                        villager.Id, _worldGameSeconds) ||
+                    !VillagerLocationMemoryService.CanVisit(
+                        villager,
+                        new(source.X + .5f, source.Y + .5f),
+                        _worldGameSeconds))
+                    continue;
+                var distance = Vector2.DistanceSquared(
+                    position, new(source.X + .5f, source.Y + .5f));
+                if (distance >= bestDistance) continue;
+                bestDistance = distance;
+                best = (gpu, source);
+            }
+        }
+        if (best is null) return null;
+        var tree = EnsureTreeInstance(
+            best.Value.Gpu,
+            best.Value.Source,
+            initializeSticks: requireSticks,
+            out _);
+        if (requireSticks && tree.SticksRemaining <= 0 ||
+            !_villagerWork.IsAvailable(
+                TreeReservationKey(tree.Id),
+                villager.Id, _worldGameSeconds))
+            return null;
+        return (best.Value.Gpu, tree);
     }
 
     private bool TryVillagerMine(

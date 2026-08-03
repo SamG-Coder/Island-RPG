@@ -4137,6 +4137,20 @@ Require(
     immediateGiveItem == ItemIds.Logs &&
     immediateGiveQuantity == 4,
     "direct hand-over wording must become a quantity-aware give proposal rather than speech-only acceptance");
+const string trailingConfirmationRequest =
+    "Edith, please bring me two sticks for the storage chest now. " +
+    "Will you gather and give them to me?";
+Require(
+    VillagerCommitmentService.TryResolveAiItemProposal(
+        trailingConfirmationRequest,
+        "gather", ItemIds.Sticks, 1,
+        out var trailingConfirmationKind,
+        out var trailingConfirmationItem,
+        out var trailingConfirmationQuantity) &&
+    trailingConfirmationKind == VillagerPromiseKind.GiveItem &&
+    trailingConfirmationItem == ItemIds.Sticks &&
+    trailingConfirmationQuantity == 2,
+    "an item-less confirmation clause must retain the concrete item, quantity and delivery intent from the preceding request");
 var immediateGiveAcceptance = VillagerCommitmentService.TryAccept(
     villagerSpawnA[0] with
     {
@@ -8897,6 +8911,23 @@ try
         TreeInteractionAvailability.StateAt(treeStates, 8, 7) ==
             TreeLifecycleState.Stump,
         "tree actions must distinguish untouched and standing trees from persisted stumps");
+    Require(
+        TreeInteractionAvailability.CanGatherSticks(
+            Array.Empty<WorldTreeInstance>(), 12, 7),
+        "NPCs must consider an untouched generated tree when seeking sticks");
+    var exhaustedTree = availableTree with
+    {
+        Id = Guid.NewGuid(),
+        X = 16,
+        SticksRemaining = 0,
+        InitialStickCount = 2
+    };
+    Require(
+        !TreeInteractionAvailability.CanGatherSticks(
+            [exhaustedTree], 16, 7) &&
+        TreeInteractionAvailability.CanGatherSticks(
+            [availableTree], 4, 7),
+        "NPC stick targeting must reject exhausted trees while retaining unrolled standing trees");
     var testAssetRoot = Path.Combine(root, "test-assets");
     var testCatalog = TestAssetLoader.LoadAll(
         testAssetRoot,

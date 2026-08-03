@@ -206,6 +206,19 @@ internal static class VillagerCommitmentService
         if (!ContainsCollectionRequest(request) &&
             (!includeTransferVerbs || !ContainsTransferRequest(request)))
             return false;
+        if (!ItemLanguageService.TryResolveMention(request, out var item))
+        {
+            // A trailing confirmation such as "will you gather and give
+            // them to me?" can be the last request clause while the concrete
+            // item and quantity live in the preceding sentence. Preserve the
+            // bounded proposal instead of accepting speech with no plan.
+            request = BoundRequestedClause(normalized);
+            if ((!ContainsCollectionRequest(request) &&
+                 (!includeTransferVerbs ||
+                  !ContainsTransferRequest(request))) ||
+                !ItemLanguageService.TryResolveMention(request, out item))
+                return false;
+        }
         foreach (var token in request.Split(
                      [' ', ',', '.', '?', '!'],
                      StringSplitOptions.RemoveEmptyEntries))
@@ -214,8 +227,6 @@ internal static class VillagerCommitmentService
                 quantity = Math.Clamp(parsed, 1, 100);
                 break;
             }
-        if (!ItemLanguageService.TryResolveMention(request, out var item))
-            return false;
         itemId = item.Id;
         return true;
     }

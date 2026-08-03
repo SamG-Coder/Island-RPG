@@ -2270,26 +2270,15 @@ internal sealed partial class GameHostWindow : GameWindow
             return;
         }
 
-        var instanceIndex = gpu.Chunk.TreeInstances.FindIndex(
-            tree => tree.X == x && tree.Y == y);
-        WorldTreeInstance instance;
-        if (instanceIndex < 0)
+        var instance = EnsureTreeInstance(
+            gpu, source, initializeSticks: false, out var created);
+        if (created)
         {
-            var maximumHealth = TreeMaximumHealth(source.GraphicName);
-            instance = new(
-                Guid.NewGuid(), x, y, source.GraphicName,
-                maximumHealth, maximumHealth, TreeLifecycleState.Standing);
-            gpu.Chunk.TreeInstances.Add(instance);
-            QueueChunkSave(gpu.Chunk);
             _chatUi.AddMessage(
                 $"You begin cutting the {TreeDisplayName(source.GraphicName)}.",
                 ChatMessageStyle.Action);
         }
-        else
-        {
-            instance = gpu.Chunk.TreeInstances[instanceIndex];
-            if (instance.State == TreeLifecycleState.Stump) return;
-        }
+        else if (instance.State == TreeLifecycleState.Stump) return;
 
         _activeTreeId = instance.Id;
         _lastTreeStrike = 0;
@@ -2310,53 +2299,14 @@ internal sealed partial class GameHostWindow : GameWindow
             tree => tree.X == x && tree.Y == y);
         if (source is null) return;
 
-        var index = gpu.Chunk.TreeInstances.FindIndex(
-            tree => tree.X == x && tree.Y == y);
-        WorldTreeInstance instance;
-        if (index < 0)
+        var instance = EnsureTreeInstance(
+            gpu, source, initializeSticks: true, out _);
+        if (instance.State == TreeLifecycleState.Stump)
         {
-            var maximumHealth = TreeMaximumHealth(source.GraphicName);
-            var stickCount = RollTreeStickCount(maximumHealth);
-            instance = new(
-                Guid.NewGuid(), x, y, source.GraphicName,
-                maximumHealth, maximumHealth,
-                TreeLifecycleState.Standing,
-                stickCount, stickCount);
-            gpu.Chunk.TreeInstances.Add(instance);
-            index = gpu.Chunk.TreeInstances.Count - 1;
-            QueueChunkSave(gpu.Chunk);
-        }
-        else
-        {
-            instance = gpu.Chunk.TreeInstances[index];
-            if (instance.State == TreeLifecycleState.Stump)
-            {
-                ReportBlockedAction(
-                    "gather-from-stump",
-                    "There are no branches to gather from this stump.");
-                return;
-            }
-            if (instance.SticksRemaining < 0)
-            {
-                var stickCount =
-                    RollTreeStickCount(instance.MaxHealth);
-                instance = instance with
-                {
-                    SticksRemaining = stickCount,
-                    InitialStickCount = stickCount
-                };
-                gpu.Chunk.TreeInstances[index] = instance;
-                QueueChunkSave(gpu.Chunk);
-            }
-            else if (instance.InitialStickCount < 0)
-            {
-                instance = instance with
-                {
-                    InitialStickCount = instance.SticksRemaining
-                };
-                gpu.Chunk.TreeInstances[index] = instance;
-                QueueChunkSave(gpu.Chunk);
-            }
+            ReportBlockedAction(
+                "gather-from-stump",
+                "There are no branches to gather from this stump.");
+            return;
         }
 
         if (instance.SticksRemaining == 0)
@@ -2387,6 +2337,58 @@ internal sealed partial class GameHostWindow : GameWindow
         for (var roll = 0; roll < rolls; roll++)
             sticks += Random.Shared.Next(2);
         return Math.Min(sticks, 3);
+    }
+
+    private WorldTreeInstance EnsureTreeInstance(
+        GpuWorldChunk gpu,
+        IslandTree source,
+        bool initializeSticks,
+        out bool created)
+    {
+        var index = gpu.Chunk.TreeInstances.FindIndex(
+            tree => tree.X == source.X && tree.Y == source.Y);
+        created = index < 0;
+        var changed = created;
+        WorldTreeInstance instance;
+        if (created)
+        {
+            var maximumHealth = TreeMaximumHealth(source.GraphicName);
+            var stickCount = initializeSticks
+                ? RollTreeStickCount(maximumHealth)
+                : -1;
+            instance = new(
+                Guid.NewGuid(), source.X, source.Y, source.GraphicName,
+                maximumHealth, maximumHealth,
+                TreeLifecycleState.Standing,
+                stickCount, stickCount);
+            gpu.Chunk.TreeInstances.Add(instance);
+            index = gpu.Chunk.TreeInstances.Count - 1;
+        }
+        else
+        {
+            instance = gpu.Chunk.TreeInstances[index];
+            if (initializeSticks && instance.SticksRemaining < 0)
+            {
+                var stickCount = RollTreeStickCount(instance.MaxHealth);
+                instance = instance with
+                {
+                    SticksRemaining = stickCount,
+                    InitialStickCount = stickCount
+                };
+                changed = true;
+            }
+            else if (initializeSticks && instance.InitialStickCount < 0)
+            {
+                instance = instance with
+                {
+                    InitialStickCount = instance.SticksRemaining
+                };
+                changed = true;
+            }
+            if (changed) gpu.Chunk.TreeInstances[index] = instance;
+        }
+        if (changed) QueueChunkSave(gpu.Chunk);
+        return instance;
     }
 
     internal void UpdateActiveTreeStickGather()
