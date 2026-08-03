@@ -3992,6 +3992,42 @@ Require(
         "Would you gather fibre for me?",
         "gather", ItemIds.Logs, 1, out _, out _, out _),
     "only Ollama's structured executable proposal may enter the NPC brain, and its item must validate against the player's words");
+const string observedImmediateGiveRequest =
+    "Conrad, we need ten planks. You have several logs. " +
+    "Will you give me four logs now so I can start building?";
+Require(
+    VillagerCommitmentService.TryResolveAiItemProposal(
+        observedImmediateGiveRequest,
+        "give", ItemIds.Logs, 4,
+        out var immediateGiveKind,
+        out var immediateGiveItem,
+        out var immediateGiveQuantity) &&
+    immediateGiveKind == VillagerPromiseKind.GiveItem &&
+    immediateGiveItem == ItemIds.Logs &&
+    immediateGiveQuantity == 4,
+    "direct hand-over wording must become a quantity-aware give proposal rather than speech-only acceptance");
+var immediateGiveAcceptance = VillagerCommitmentService.TryAccept(
+    villagerSpawnA[0], "requester", immediateGiveKind,
+    immediateGiveItem, immediateGiveQuantity, 275);
+var immediateGivePlan = immediateGiveAcceptance.Promise is { } givePromise
+    ? VillagerPromisePlanService.CompileAiDirective(
+        VillagerCommitmentService.AddPromise(
+            villagerSpawnA[0], givePromise),
+        "give", immediateGiveItem, immediateGiveQuantity,
+        "requester", 4, 5, 0, 275, 0)
+    : villagerSpawnA[0];
+var immediateGiveDirective =
+    VillagerPromisePlanService.CurrentDirective(immediateGivePlan);
+Require(
+    immediateGiveAcceptance.Accepted &&
+    immediateGiveDirective is
+    {
+        Action: VillagerPromisePlanAction.Deliver,
+        ItemId: ItemIds.Logs,
+        RemainingQuantity: 4,
+        TargetActorId: "requester"
+    },
+    "an accepted immediate give request must enter the controller as a deliver opcode targeting the requester");
 const string observedSplitResponsibilityRequest =
     "Stephen, please gather three large rocks and meet me at this spot " +
     "in one hour. I will gather plant fibre while you do that. Do you agree?";

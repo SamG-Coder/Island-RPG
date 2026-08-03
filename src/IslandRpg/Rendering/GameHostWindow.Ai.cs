@@ -861,9 +861,13 @@ internal sealed partial class GameHostWindow
             // The model's accepted decision is authoritative for immediate
             // controller work. A formal promise can still be declined by its
             // social limits, but the NPC must not say yes and then do nothing.
+            var directiveAction = proposalKind ==
+                                  VillagerPromiseKind.GiveItem
+                ? "give"
+                : "gather";
             villager = VillagerPromisePlanService.CompileAiDirective(
                 villager,
-                "gather",
+                directiveAction,
                 proposalItemId,
                 proposalQuantity,
                 pendingRequest.PlayerId,

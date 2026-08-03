@@ -145,13 +145,23 @@ internal static class VillagerCommitmentService
     public static bool TryParseGatherRequest(
         string text,
         out string itemId,
+        out int quantity) =>
+        TryParseItemRequest(
+            text, includeTransferVerbs: false,
+            out itemId, out quantity);
+
+    private static bool TryParseItemRequest(
+        string text,
+        bool includeTransferVerbs,
+        out string itemId,
         out int quantity)
     {
         itemId = "";
         quantity = 1;
         var normalized = text.Trim().ToLowerInvariant();
         var request = RequestedActionClause(normalized);
-        if (!ContainsCollectionRequest(request))
+        if (!ContainsCollectionRequest(request) &&
+            (!includeTransferVerbs || !ContainsTransferRequest(request)))
             return false;
         foreach (var token in request.Split(
                      [' ', ',', '.', '?', '!'],
@@ -172,6 +182,13 @@ internal static class VillagerCommitmentService
         {
             "gather", "collect", "bring", "fetch", "find", "harvest",
             "pick up", "look for", "search for", "get"
+        }.Any(verb => text.Contains(verb, StringComparison.Ordinal));
+
+    private static bool ContainsTransferRequest(string text) =>
+        new[]
+        {
+            "give", "hand over", "share", "spare", "pass", "offer",
+            "lend", "provide", "donate"
         }.Any(verb => text.Contains(verb, StringComparison.Ordinal));
 
     private static bool TryParseQuantity(string token, out int quantity)
@@ -241,8 +258,10 @@ internal static class VillagerCommitmentService
         if (action is not ("gather" or "give" or "gather_sticks" or
             "gather_berries" or "gather_fibre" or "meet" or "clarify"))
             return false;
-        if (!TryParseGatherRequest(
-                proposalText, out var requestedItemId,
+        if (!TryParseItemRequest(
+                proposalText,
+                includeTransferVerbs: action == "give",
+                out var requestedItemId,
                 out var requestedQuantity))
             return false;
         // Smaller local models sometimes select `meet` when a request contains
