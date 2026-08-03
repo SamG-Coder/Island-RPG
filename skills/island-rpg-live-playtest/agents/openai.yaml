@@ -1,0 +1,4 @@
+interface:
+  display_name: "Island RPG Live Playtest"
+  short_description: "Play, diagnose, fix, and evolve Island RPG"
+  default_prompt: "Use $island-rpg-live-playtest to play Island RPG live, fix verified bugs, and add one small feature."

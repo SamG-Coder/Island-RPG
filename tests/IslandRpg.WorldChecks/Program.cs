@@ -9082,6 +9082,15 @@ Require(
     grainFood.HungerRestored < beanFood.HungerRestored &&
     beanFood.HungerRestored < rootFood.HungerRestored,
     "all harvested crops must provide ordered survival food effects");
+Require(
+    SurvivalService.TryFoodEffect(ItemIds.Seaweed, out var seaweedFood) &&
+    seaweedFood.HungerRestored == 6 &&
+    seaweedFood.HealthRestored == 0 &&
+    VillagerLocationMemoryService.LocationTypeForItem(ItemIds.Seaweed) ==
+        VillagerLocationType.FoodSource &&
+    ItemContainerState.Category(ItemCatalog.Get(ItemIds.Seaweed)) ==
+        ItemContainerCategory.Food,
+    "fresh shoreline seaweed must be a modest shared food source");
 var plantedCrop = CropService.Plant(
     ItemIds.BeanSeeds, 4.5f, 8.5f, 1_000, "farmer");
 Require(

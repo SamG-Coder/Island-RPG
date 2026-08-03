@@ -31,6 +31,7 @@ internal static class SurvivalService
             ItemIds.WildGrain => new(12, 1, 30),
             ItemIds.Beans => new(14, 2, 40),
             ItemIds.EdibleRoots => new(16, 2, 45),
+            ItemIds.Seaweed => new(6, 0, 12),
             ItemIds.CookedMinnows => new(18, 4, 60),
             ItemIds.CookedRiverPerch => new(24, 6, 85),
             ItemIds.CookedSilverHerring => new(29, 8, 110),
