@@ -239,7 +239,7 @@ internal static class VillagerCommitmentService
         itemId = "";
         quantity = Math.Clamp(modelQuantity, 1, 100);
         if (action is not ("gather" or "give" or "gather_sticks" or
-            "gather_berries" or "gather_fibre" or "meet"))
+            "gather_berries" or "gather_fibre" or "meet" or "clarify"))
             return false;
         if (!TryParseGatherRequest(
                 proposalText, out var requestedItemId,
@@ -248,7 +248,7 @@ internal static class VillagerCommitmentService
         // Smaller local models sometimes select `meet` when a request contains
         // both collection and rendezvous instructions. The player's explicit
         // collection clause remains the authoritative executable commitment.
-        if (action == "meet")
+        if (action is "meet" or "clarify")
         {
             itemId = requestedItemId;
             quantity = requestedQuantity;

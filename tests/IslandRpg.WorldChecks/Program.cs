@@ -3936,6 +3936,28 @@ Require(
     informalProposalItem == ItemIds.LargeRock &&
     informalProposalQuantity == 3,
     "an NPC task followed by 'while I' player work must not bind the player's item to the NPC promise");
+Require(
+    VillagerCommitmentService.TryResolveAiItemProposal(
+        "Yvette, please gather one wild berry for me now. Do you agree?",
+        "clarify", "", 1,
+        out var clarifiedKind,
+        out var clarifiedItem,
+        out var clarifiedQuantity) &&
+    clarifiedKind == VillagerPromiseKind.GatherItem &&
+    clarifiedItem == ItemIds.WildBerries &&
+    clarifiedQuantity == 1,
+    "an accepting model reply mislabeled as clarify must still execute the player's concrete item request");
+var clarifiedAcceptance = VillagerCommitmentService.TryAccept(
+    villagerSpawnA[0],
+    "requester",
+    clarifiedKind,
+    clarifiedItem,
+    clarifiedQuantity,
+    300);
+Require(
+    clarifiedAcceptance.Accepted &&
+    clarifiedAcceptance.Promise is not null,
+    "a resolved concrete berry request must be eligible for an executable villager commitment");
 var distantFibre = new WorldVegetationRenderItem(
     0, 2, 2, new(2.5f, 2.5f), "fibre-distant", "plant", null,
     CanGatherFibre: true, CanGatherBerries: false);
@@ -4035,13 +4057,53 @@ var opcodeMappings = new (string Action, VillagerPromisePlanAction Opcode)[]
     ("attack", VillagerPromisePlanAction.AttackTarget),
     ("flee", VillagerPromisePlanAction.FleeFromTarget),
     ("rest", VillagerPromisePlanAction.Rest),
-    ("seek_food", VillagerPromisePlanAction.Eat),
+    ("seek_food", VillagerPromisePlanAction.SeekFood),
     ("cut_tree", VillagerPromisePlanAction.CutTree),
     ("mine", VillagerPromisePlanAction.Mine),
     ("fish", VillagerPromisePlanAction.Fish),
     ("cook", VillagerPromisePlanAction.Cook),
     ("dig", VillagerPromisePlanAction.Dig)
 };
+
+var beginnerFish = new WorldFish(
+    6, 0, WorldFishSpecies.ShoreMinnows,
+    "FISHS_NN", 0, "fish:beginner");
+var advancedFish = new WorldFish(
+    1, 0, WorldFishSpecies.OceanMackerel,
+    "FISHS_NN", 0, "fish:advanced");
+var selectedBeginnerFish = FishingTargetSelection.Select(
+    [advancedFish, beginnerFish], null, 1, 1);
+var rejectedAdvancedFish = FishingTargetSelection.Select(
+    [advancedFish, beginnerFish], advancedFish.StableKey, 1, 1);
+Require(
+    selectedBeginnerFish.Fish == beginnerFish &&
+    rejectedAdvancedFish.Failure ==
+        FishingTargetFailure.FishingLevelRequired &&
+    rejectedAdvancedFish.Requirement?.RequiredLevel == 13 &&
+    FishingTargetSelection.Select(
+        [beginnerFish], null, 1, null).Failure ==
+        FishingTargetFailure.FishingNetNotFound,
+    "automatic fishing must skip inaccessible nearby fish while exact targets report their skill or equipment requirement");
+
+var seekFoodPlan = VillagerPromisePlanService.CompileAiDirective(
+    villagerSpawnA[0] with { ActionPlan = null },
+    "seek_food", "", 1, "requester", null, null,
+    (int)WorldLevel.Overworld, 600, 0);
+Require(
+    VillagerPromisePlanService.PlansFor(seekFoodPlan).Single().Action ==
+        VillagerPromisePlanAction.SeekFood &&
+    VillagerPromisePlanService.CurrentPlanDescription(
+        seekFoodPlan, 600) == "Seeking food nearby." &&
+    VillagerPromisePlanService.CurrentDirective(
+        VillagerCommitmentService.RecordAcquiredItem(
+            seekFoodPlan, ItemIds.WildBerries)) is null,
+    "accepted seek-food dialogue must remain observable and complete only after the NPC physically acquires edible food");
+Require(
+    VillagerPromisePlanService.CurrentDirective(
+        VillagerCommitmentService.RecordAcquiredItem(
+            seekFoodPlan, ItemIds.PlantFibres)) is
+        { Action: VillagerPromisePlanAction.SeekFood },
+    "non-food acquisitions must not falsely complete an accepted seek-food directive");
 foreach (var mapping in opcodeMappings)
 {
     var planned = VillagerPromisePlanService.CompileAiDirective(

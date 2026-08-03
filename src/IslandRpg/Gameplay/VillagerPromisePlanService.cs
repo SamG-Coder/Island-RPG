@@ -23,7 +23,8 @@ internal enum VillagerPromisePlanAction : byte
     Mine,
     Fish,
     Cook,
-    Dig
+    Dig,
+    SeekFood
 }
 
 internal sealed record VillagerPromisePlanStep(
@@ -49,8 +50,7 @@ internal static class VillagerPromisePlanService
     public static IReadOnlyList<VillagerPromisePlanStep> PlansFor(
         VillagerState villager)
     {
-        if (villager.Health <= 0 || villager.Promises is not { Count: > 0 })
-            return [];
+        if (villager.Health <= 0) return [];
         return villager.ActionPlan ?? BuildPlans(villager);
     }
 
@@ -140,11 +140,18 @@ internal static class VillagerPromisePlanService
         for (var index = 0; index < plan.Count && remaining > 0;)
         {
             var step = plan[index];
+            var matchesSeekFood =
+                step.Action == VillagerPromisePlanAction.SeekFood &&
+                ItemCatalog.TryGet(itemId, out _) &&
+                SurvivalService.TryFoodEffect(itemId, out var food) &&
+                food.HungerRestored > 0;
             if (step.PromiseId != Guid.Empty ||
-                step.Action != VillagerPromisePlanAction.Collect ||
-                step.ItemId is not { } plannedItem ||
-                !VillagerSettlementProjectService.MatchesRequirement(
-                    itemId, plannedItem))
+                step.Action is not (VillagerPromisePlanAction.Collect or
+                    VillagerPromisePlanAction.SeekFood) ||
+                !matchesSeekFood &&
+                (step.ItemId is not { } plannedItem ||
+                 !VillagerSettlementProjectService.MatchesRequirement(
+                     itemId, plannedItem)))
             {
                 index++;
                 continue;
@@ -170,7 +177,8 @@ internal static class VillagerPromisePlanService
             "explore" => VillagerPromisePlanAction.ExploreArea,
             "seek_shelter" => VillagerPromisePlanAction.MoveTo,
             "rest" => VillagerPromisePlanAction.Rest,
-            "seek_food" or "take_food" => VillagerPromisePlanAction.Eat,
+            "seek_food" => VillagerPromisePlanAction.SeekFood,
+            "take_food" => VillagerPromisePlanAction.Eat,
             "craft" => VillagerPromisePlanAction.CraftItem,
             "build" or "help_build" or "light_fire" => VillagerPromisePlanAction.BuildObject,
             "cut_tree" => VillagerPromisePlanAction.CutTree,
@@ -316,6 +324,9 @@ internal static class VillagerPromisePlanService
         if (collect?.ItemId is { } itemId)
             return $"Collecting {collect.RemainingQuantity} " +
                    $"{ItemCatalog.Get(itemId).Name} for a promise.";
+        if (plans.Any(step =>
+                step.Action == VillagerPromisePlanAction.SeekFood))
+            return "Seeking food nearby.";
         return plans.Any(step =>
             step.Action == VillagerPromisePlanAction.Deliver)
             ? "Delivering the items promised."

@@ -197,6 +197,25 @@ internal sealed partial class GameHostWindow
             case VillagerPromisePlanAction.Eat:
                 started = TryVillagerEat(index, villager, tier);
                 break;
+            case VillagerPromisePlanAction.SeekFood:
+                if (TryVillagerEat(index, villager, tier))
+                {
+                    CompleteStartedPlanStep(index, step);
+                    return true;
+                }
+                started = TryVillagerForage(index, villager, tier) ||
+                          TryVillagerFish(index, villager, tier) ||
+                          TryVillagerWithdrawFood(index, villager);
+                if (!started)
+                {
+                    MoveVillagerForCapability(
+                        index, villager, tier,
+                        VillagerSettlementProjectService.ExplorationTarget(
+                            villager, _worldGameSeconds),
+                        VillagerNeed.Food);
+                    return true;
+                }
+                return true;
             case VillagerPromisePlanAction.CraftItem:
                 started = TryVillagerCraft(index, villager);
                 break;

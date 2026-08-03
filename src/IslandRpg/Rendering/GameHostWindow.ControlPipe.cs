@@ -205,6 +205,15 @@ internal sealed partial class GameHostWindow
                     case "inventory":
                         request.Complete(ControlInventory());
                         break;
+                    case "container":
+                        request.Complete(ControlOpenContainer());
+                        break;
+                    case "withdraw":
+                        request.Complete(ControlWithdraw(root));
+                        break;
+                    case "withdraw_all":
+                        request.Complete(ControlWithdrawAll());
+                        break;
                     case "recipes":
                         request.Complete(ControlRecipes());
                         break;
@@ -261,6 +270,17 @@ internal sealed partial class GameHostWindow
                                         "Report world, level, position and loaded objects"
                                 },
                                 new { command = "inventory" },
+                                new
+                                {
+                                    command = "container",
+                                    description = "Inspect the open storage or loot container"
+                                },
+                                new
+                                {
+                                    command = "withdraw",
+                                    arguments = "slot, quantity?"
+                                },
+                                new { command = "withdraw_all" },
                                 new { command = "recipes" },
                                 new
                                 {
@@ -996,7 +1016,7 @@ internal sealed partial class GameHostWindow
                     "key", out var fishKeyElement)
                     ? fishKeyElement.GetString()
                     : null;
-                var fish = _worldChunks.Values
+                var fishCandidates = _worldChunks.Values
                     .Where(value =>
                         value.Chunk.Coordinate.Level == _activeWorldLevel)
                     .SelectMany(value => value.FishRenderItems)
@@ -1006,20 +1026,21 @@ internal sealed partial class GameHostWindow
                              fishKey, StringComparison.Ordinal)))
                     .OrderBy(value => Vector2.DistanceSquared(
                         value.World, _player.Position))
-                    .Select(value => value.Fish)
-                    .FirstOrDefault();
-                if (fish is null)
+                    .Select(value => value.Fish);
+                var fishingNet = PlayerInventory.BestFishingNet(
+                    _activePlayer.Inventory);
+                var fishingTarget = FishingTargetSelection.Select(
+                    fishCandidates,
+                    fishKey,
+                    FishingSkill.LevelForExperience(
+                        _activePlayer.FishingExperience),
+                    fishingNet?.FishingPower);
+                if (!fishingTarget.Success)
                 {
-                    error = "fish_not_found";
+                    error = ControlFishingError(fishingTarget);
                     return false;
                 }
-                if (PlayerInventory.BestFishingNet(
-                        _activePlayer.Inventory) is null)
-                {
-                    error = "fishing_net_not_found";
-                    return false;
-                }
-                QueueFishing(fish);
+                QueueFishing(fishingTarget.Fish!);
                 return true;
             case "cook":
                 if (!TryResolveControlGroundObject(
@@ -1122,6 +1143,12 @@ internal sealed partial class GameHostWindow
                     error = "ground_object_not_found";
                     return false;
                 }
+                if (WorldItemContainerService.IsContainer(
+                        groundObject.ItemId))
+                {
+                    QueueWorldStorage(groundObject);
+                    return true;
+                }
                 _worldActions.QueueGroundObjectPickup(groundObject);
                 return true;
             case "gather_fibres":
@@ -1220,6 +1247,68 @@ internal sealed partial class GameHostWindow
             default:
                 return false;
         }
+    }
+
+    private static string ControlFishingError(FishingTargetResult result) =>
+        result.Failure switch
+        {
+            FishingTargetFailure.FishingNetNotFound =>
+                "fishing_net_not_found",
+            FishingTargetFailure.FishingLevelRequired =>
+                $"fishing_level_required:{result.Requirement!.RequiredLevel}:" +
+                result.Requirement.Species,
+            FishingTargetFailure.FishingNetTooWeak =>
+                $"fishing_net_power_required:" +
+                $"{result.Requirement!.RequiredNetPower}:" +
+                result.Requirement.Species,
+            _ => "fish_not_found"
+        };
+
+    private string ControlOpenContainer()
+    {
+        if (_itemContainerWindow.Container is not { } container)
+            return Error("container_not_open");
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            eventType = "container",
+            id = container.Definition.Id,
+            container.Definition.Title,
+            access = container.Definition.Access.ToString(),
+            items = container.Items.Select((itemId, slot) => new
+            {
+                slot,
+                itemId,
+                quantity = container.Quantities.ElementAtOrDefault(slot)
+            }).Where(value => value.itemId is not null)
+        });
+    }
+
+    private string ControlWithdraw(JsonElement root)
+    {
+        if (_itemContainerWindow.Container is not { } container)
+            return Error("container_not_open");
+        if (!root.TryGetProperty("slot", out var slotElement) ||
+            !slotElement.TryGetInt32(out var slot) ||
+            (uint)slot >= (uint)container.Items.Length)
+            return Error("invalid_container_slot");
+        var quantity = root.TryGetProperty("quantity", out var quantityElement) &&
+                       quantityElement.TryGetInt32(out var requested)
+            ? Math.Max(1, requested)
+            : 1;
+        return WithdrawFromOpenContainer(slot, quantity)
+            ? ControlSnapshot("container_item_withdrawn")
+            : Error("container_withdraw_failed");
+    }
+
+    private string ControlWithdrawAll()
+    {
+        if (_itemContainerWindow.Container is null)
+            return Error("container_not_open");
+        var moved = WithdrawAllFromOpenContainer();
+        return moved > 0
+            ? ControlSnapshot("container_items_withdrawn")
+            : Error("container_withdraw_failed");
     }
 
     private bool TryResolveControlInventorySlotByTag(

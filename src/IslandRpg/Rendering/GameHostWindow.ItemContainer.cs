@@ -229,11 +229,11 @@ internal sealed partial class GameHostWindow
             SaveContainerInventory(inventory);
     }
 
-    private void WithdrawFromOpenContainer(int slot, int maximum)
+    private bool WithdrawFromOpenContainer(int slot, int maximum)
     {
         if (_activePlayer is null ||
             _itemContainerWindow.Container is not { } container)
-            return;
+            return false;
         var inventory = ActivePlayerInventory();
         var available = container.Quantities.ElementAtOrDefault(slot);
         var quantity = Math.Min(available, maximum);
@@ -242,7 +242,7 @@ internal sealed partial class GameHostWindow
             !inventory.CanAdd(itemId, quantity) ||
             !container.TryTake(slot, quantity, out var takenItemId) ||
             takenItemId is null)
-            return;
+            return false;
         if (!inventory.TryAdd(takenItemId, quantity))
             throw new InvalidOperationException(
                 "Player inventory changed after withdrawal validation.");
@@ -255,6 +255,22 @@ internal sealed partial class GameHostWindow
             _emptyLootBagFadeStarts.TryAdd(objectId, _clock);
             CloseItemContainer();
         }
+        return true;
+    }
+
+    private int WithdrawAllFromOpenContainer()
+    {
+        if (_itemContainerWindow.Container is not { } container)
+            return 0;
+        var moved = 0;
+        for (var slot = 0; slot < container.Items.Length; slot++)
+        {
+            var quantity = container.Quantities.ElementAtOrDefault(slot);
+            if (quantity > 0 && WithdrawFromOpenContainer(slot, quantity))
+                moved += quantity;
+            if (!_itemContainerWindow.Visible) break;
+        }
+        return moved;
     }
 
     private void SaveContainerInventory(InventoryContainer inventory)

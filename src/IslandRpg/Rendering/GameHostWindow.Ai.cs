@@ -808,6 +808,16 @@ internal sealed partial class GameHostWindow
         PendingVillagerRequest? pendingRequest = null)
     {
         var villager = _villagers[villagerIndex];
+        if (pendingRequest is null && _activePlayer is not null)
+        {
+            var latestPlayerTurn = villager.ConversationHistory?
+                .LastOrDefault(turn => turn.SpeakerId == _activePlayer.Id);
+            if (latestPlayerTurn is not null)
+                pendingRequest = new(
+                    villager.Id,
+                    _activePlayer.Id,
+                    latestPlayerTurn.Text);
+        }
         villager = villager with
         {
             LastDeliberation = new(
@@ -845,11 +855,23 @@ internal sealed partial class GameHostWindow
                 proposalQuantity,
                 _worldGameSeconds);
             if (acceptance.Accepted && acceptance.Promise is { } promise)
-            {
                 villager = VillagerCommitmentService.AddPromise(
                     villager, promise);
-                acceptedPendingRequest = true;
-            }
+            // The model's accepted decision is authoritative for immediate
+            // controller work. A formal promise can still be declined by its
+            // social limits, but the NPC must not say yes and then do nothing.
+            villager = VillagerPromisePlanService.CompileAiDirective(
+                villager,
+                "gather",
+                proposalItemId,
+                proposalQuantity,
+                pendingRequest.PlayerId,
+                null,
+                null,
+                villager.WorldLevel,
+                _worldGameSeconds,
+                0);
+            acceptedPendingRequest = true;
         }
         if (permitsAction && _activePlayer is not null)
         {
@@ -1066,7 +1088,8 @@ internal sealed partial class GameHostWindow
                 interpretation.DelayMinutes * 60d);
         if (interpretation.Decision == "accept" &&
             !interpretation.FreeformThought &&
-            !acceptedPendingRequest &&
+            (!acceptedPendingRequest ||
+             interpretation.Action == "seek_food") &&
             _activePlayer is not null &&
             !(interpretation.Action == "meet" &&
               villager.Promises?.Any(promise =>
