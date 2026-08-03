@@ -7180,6 +7180,20 @@ Require(
     LootBagService.FadeOpacity(10, 10 + LootBagService.FadeSeconds) == 0 &&
     LootBagService.FadeFinished(10, 10 + LootBagService.FadeSeconds),
     "taking the final loot item must empty the bag and drive its bounded fade lifecycle");
+var lootReceipt = new LootReceiptItem[]
+{
+    new(ItemIds.SlimeGel, 3),
+    new(ItemIds.SaltCrystals, 1)
+};
+Require(
+    LootReceiptService.Summary(lootReceipt) ==
+        "Looted 3\u00d7 slime gel and 1\u00d7 salt crystals." &&
+    LootReceiptService.DiscoveryHint(ItemIds.SlimeGel) ==
+        "Slime gel can replace rope in selected recipes." &&
+    LootReceiptService.DiscoveryHint(ItemIds.SaltCrystals) ==
+        "Salt crystals can preserve cooked fish." &&
+    LootReceiptService.DiscoveryHint(ItemIds.Logs) is null,
+    "loot receipts must summarize rewards and expose concise hints only for special combat materials");
 var villagerTransferContainer = new ItemContainerState(
     new(
         Guid.NewGuid(), "Villager chest", 2, 1,

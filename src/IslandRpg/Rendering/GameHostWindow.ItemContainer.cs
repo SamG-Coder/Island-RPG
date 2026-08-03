@@ -42,6 +42,9 @@ internal sealed partial class GameHostWindow
     private int _itemContainerContextSlot = -1;
     private Guid? _openWorldStorageId;
     private readonly Dictionary<Guid, double> _emptyLootBagFadeStarts = [];
+    // Lazily initialized so an already-running window can acquire this state
+    // safely when the feature is applied through Hot Reload.
+    private HashSet<string>? _lootDiscoveryHintsShown;
 
     private void OpenItemContainer(
         ItemContainerState container,
@@ -229,12 +232,16 @@ internal sealed partial class GameHostWindow
             SaveContainerInventory(inventory);
     }
 
-    private bool WithdrawFromOpenContainer(int slot, int maximum)
+    private bool WithdrawFromOpenContainer(
+        int slot,
+        int maximum,
+        bool announceLoot = true)
     {
         if (_activePlayer is null ||
             _itemContainerWindow.Container is not { } container)
             return false;
         var inventory = ActivePlayerInventory();
+        var isLootBag = IsOpenLootBag();
         var available = container.Quantities.ElementAtOrDefault(slot);
         var quantity = Math.Min(available, maximum);
         var itemId = container.Items.ElementAtOrDefault(slot);
@@ -247,6 +254,8 @@ internal sealed partial class GameHostWindow
             throw new InvalidOperationException(
                 "Player inventory changed after withdrawal validation.");
         SaveContainerInventory(inventory);
+        if (announceLoot && isLootBag)
+            AnnounceLoot([new(takenItemId, quantity)]);
         if (container.IsEmpty &&
             _openWorldStorageId is { } objectId &&
             FindGroundObject(objectId) is { } worldObject &&
@@ -262,15 +271,45 @@ internal sealed partial class GameHostWindow
     {
         if (_itemContainerWindow.Container is not { } container)
             return 0;
+        var isLootBag = IsOpenLootBag();
+        List<LootReceiptItem>? receipt = isLootBag ? [] : null;
         var moved = 0;
         for (var slot = 0; slot < container.Items.Length; slot++)
         {
             var quantity = container.Quantities.ElementAtOrDefault(slot);
-            if (quantity > 0 && WithdrawFromOpenContainer(slot, quantity))
+            var itemId = container.Items.ElementAtOrDefault(slot);
+            if (quantity > 0 && itemId is not null &&
+                WithdrawFromOpenContainer(
+                    slot, quantity, announceLoot: false))
+            {
                 moved += quantity;
+                receipt?.Add(new(itemId, quantity));
+            }
             if (!_itemContainerWindow.Visible) break;
         }
+        if (receipt is { Count: > 0 })
+            AnnounceLoot(receipt);
         return moved;
+    }
+
+    private bool IsOpenLootBag() =>
+        _openWorldStorageId is { } objectId &&
+        FindGroundObject(objectId) is { } worldObject &&
+        LootBagService.IsLootBag(worldObject.ItemId);
+
+    private void AnnounceLoot(IReadOnlyList<LootReceiptItem> receipt)
+    {
+        _chatUi.AddMessage(
+            LootReceiptService.Summary(receipt),
+            ChatMessageStyle.Action);
+        foreach (var item in receipt)
+        {
+            if (!(_lootDiscoveryHintsShown ??= []).Add(item.ItemId) ||
+                LootReceiptService.DiscoveryHint(item.ItemId) is not
+                    { } hint)
+                continue;
+            _chatUi.AddMessage(hint, ChatMessageStyle.Normal);
+        }
     }
 
     private void SaveContainerInventory(InventoryContainer inventory)
