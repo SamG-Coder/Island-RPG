@@ -2426,7 +2426,8 @@ internal sealed partial class GameHostWindow
                 _player.Position);
             return true;
         }
-        var response = FallbackNpcReply(target, message);
+        var response = FallbackNpcReply(
+            target, message, _activePlayer?.Id);
         ShowVillagerSpeech(
             nearestIndex,
             response,

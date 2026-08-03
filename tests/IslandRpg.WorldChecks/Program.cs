@@ -1170,6 +1170,27 @@ Require(
     "AI settings must default and migrate retired defaults to Gemma4:12B without replacing explicit custom model overrides");
 Require(NpcAiService.AvailabilityProbeTimeout >= TimeSpan.FromSeconds(45),
     "AI availability checks must allow large local models to cold-load");
+Require(
+    NpcAiService.ConfusesSelfWithSpeaker(
+        "You have a steady memory, Alina.", "Alina") &&
+    NpcAiService.ConfusesSelfWithSpeaker(
+        "You remember me, Alina.", "Alina") &&
+    !NpcAiService.ConfusesSelfWithSpeaker(
+        "I remember you, Rowan.", "Alina") &&
+    !NpcAiService.ConfusesSelfWithSpeaker(
+        "I am Alina.", "Alina"),
+    "NPC dialogue validation must reject second-person replies that address the NPC by its own name without rejecting valid identity statements");
+Require(
+    NpcAiService.AnswersSpeakerNameQuestion(
+        "Your name is Rowan.", "What name did I tell you?", "Rowan") &&
+    !NpcAiService.AnswersSpeakerNameQuestion(
+        "I am not certain which name you mean, Rowan.",
+        "What name did I tell you?", "Rowan") &&
+    !NpcAiService.AnswersSpeakerNameQuestion(
+        "I remember you.", "Do you remember my name?", "Rowan") &&
+    NpcAiService.AnswersSpeakerNameQuestion(
+        "I do not know.", "Do you remember my name?", "Unknown survivor"),
+    "NPC name-question validation must require a known speaker name without inventing one for strangers");
 Require(OllamaRequestPolicy.KeepAlive == "30m",
     "all Ollama requests must share the 30-minute residency policy");
 await NpcAiScenarioChecks.RunAsync();
@@ -3649,6 +3670,12 @@ Require(
         gameSeconds: unansweredIntroduction.NextSocialGameSeconds - 1)
         .Intent == VillagerSocialIntent.None,
     "an unanswered introduction must remember the attempt without inventing a name or repeatedly asking before the retry window");
+Require(
+    GameHostWindow.FallbackNpcReply(
+        unansweredIntroduction,
+        "What is my name?",
+        stranger.Id) == "You haven't told me your name yet.",
+    "NPC fallback dialogue must not invent a player's name before an introduction");
 var longPipeDialogue = new string('x', 220);
 Require(
     VillagerSimulation.RecordDialogueTurn(
@@ -3674,6 +3701,10 @@ Require(
         } &&
     VillagerSimulation.PerceivedName(
         curiousVillager, stranger.Id) == "Sam" &&
+    GameHostWindow.FallbackNpcReply(
+        curiousVillager,
+        "What name did I tell you?",
+        stranger.Id) == "You told me your name is Sam." &&
     curiousVillager.Memories?.Any(value =>
         value.Kind == "social-knowledge" &&
         value.SubjectId == stranger.Id) == true &&
@@ -4033,6 +4064,30 @@ Require(
     ControlTargetSelection.Vegetation(
         pipeVegetation, false, null, new(50, 50), true) is null,
     "control-pipe vegetation targeting must prefer the requested coordinates, preserve exact-key selection, and reject unrelated distant plants");
+var visuallyNearMiningNode = new WorldVegetationRenderItem(
+    2, 60, 60, new(0, 0), "ore-visually-near", "ore", null,
+    CanGatherFibre: false, CanGatherBerries: false);
+var tileNearMiningNode = new WorldVegetationRenderItem(
+    3, 5, 5, new(9000, 9000), "ore-tile-near", "ore", null,
+    CanGatherFibre: false, CanGatherBerries: false);
+var pipeMiningNodes = new[]
+{
+    new ControlMiningTarget(
+        visuallyNearMiningNode, new(60.5f, 60.5f), true),
+    new ControlMiningTarget(
+        tileNearMiningNode, new(5.5f, 5.5f), true),
+    new ControlMiningTarget(
+        requestedFibre, new(5.25f, 5.25f), false)
+};
+Require(
+    ControlTargetSelection.Mining(
+        pipeMiningNodes, null, new(5, 5), false) == tileNearMiningNode &&
+    ControlTargetSelection.Mining(
+        pipeMiningNodes, "ORE-VISUALLY-NEAR", new(5, 5), false) ==
+        visuallyNearMiningNode &&
+    ControlTargetSelection.Mining(
+        pipeMiningNodes, null, new(20, 20), true) is null,
+    "control-pipe mining targeting must use tile positions rather than projected render coordinates, preserve exact-key selection, and reject distant nodes");
 Require(
     ControlCombatCommands.TryParseStance(
         "accurate", out var accuratePipeStance) &&

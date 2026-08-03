@@ -217,7 +217,7 @@ internal sealed partial class GameHostWindow
         _chatUi.AddMessage(
             value.Definition.RewardItemId is null
                 ? $"You break apart the {value.Definition.DisplayName}."
-                : $"You mine some {ItemCatalog.Get(value.Definition.RewardItemId).Caption.ToLowerInvariant()}.",
+                : $"You mine some {ItemCatalog.Get(value.Definition.RewardItemId).Name.ToLowerInvariant()}.",
             ChatMessageStyle.Action);
         StopMining();
     }

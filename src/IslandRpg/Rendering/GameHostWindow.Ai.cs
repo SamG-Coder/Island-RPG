@@ -787,7 +787,8 @@ internal sealed partial class GameHostWindow
             nearbyWorld);
         _npcAiSpeechVillagerIndex = villagerIndex;
         _npcAiSpeechFallback =
-            FallbackNpcReply(listener, message);
+            FallbackNpcReply(
+                listener, message, _activePlayer.Id);
         _pendingVillagerRequest = new(
             listener.Id,
             _activePlayer.Id,
@@ -1132,7 +1133,8 @@ internal sealed partial class GameHostWindow
 
     internal static string FallbackNpcReply(
         VillagerState listener,
-        string message)
+        string message,
+        string? speakerId = null)
     {
         var text = message.Trim();
         var lower = text.ToLowerInvariant();
@@ -1142,6 +1144,16 @@ internal sealed partial class GameHostWindow
         if (lower.Contains("your name") ||
             lower.Contains("who are you"))
             return $"My name is {listener.Name}.";
+        if (NpcAiService.IsSpeakerNameQuestion(text))
+        {
+            var knownName = speakerId is null
+                ? null
+                : VillagerSimulation.PerceivedName(
+                    listener, speakerId, "");
+            return string.IsNullOrWhiteSpace(knownName)
+                ? "You haven't told me your name yet."
+                : $"You told me your name is {knownName}.";
+        }
         if (lower is "hello" or "hi" or "hey" ||
             lower.StartsWith("hello ") ||
             lower.StartsWith("hey "))

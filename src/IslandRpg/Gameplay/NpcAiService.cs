@@ -293,6 +293,12 @@ internal sealed class NpcAiService : IDisposable
                 "Convert speech into a safe NPC interpretation. " +
                 HistoricalKnowledgePolicy.PromptRule + " " +
                 "People are actor IDs only; never assume anyone is the player. " +
+                "speakerId/speakerName is the person who just spoke. " +
+                "listenerId/listenerName is you, the NPC producing the reply. " +
+                "Never address yourself as 'you' or by listenerName. If you use " +
+                "a name to address the speaker, use speakerName. " +
+                "If asked what name the speaker gave, answer with speakerName " +
+                "when it is known. " +
                 "Resolve 'you' to the addressed listener, names from nearbyActors, " +
                 "and general statements to a hint. Do not invent items or actions. " +
                 "Respect biography, tool knowledge, memories, and hoursOnIsland; " +
@@ -400,6 +406,9 @@ internal sealed class NpcAiService : IDisposable
             system =
                 "You are the addressed island survivor. Reply to the newest " +
                 HistoricalKnowledgePolicy.PromptRule + " " +
+                "speakerName is the other person who spoke; listenerName is " +
+                "you. Never address yourself as 'you' or by listenerName. If " +
+                "you address the other person by name, use speakerName. " +
                 "speaker in one short, natural first-person sentence. Use only " +
                 "facts in the compact context brain: personal history, arrival " +
                 "memory, known goals, remembered facts, and recentConversation. " +
@@ -445,6 +454,11 @@ internal sealed class NpcAiService : IDisposable
                             reply ?? "", context) &&
                         !ClaimsAnotherActorsIdentity(
                             reply ?? "", context) &&
+                        !ConfusesSelfWithSpeaker(
+                            reply ?? "", context.ListenerName) &&
+                        AnswersSpeakerNameQuestion(
+                            reply ?? "", context.Text,
+                            context.SpeakerName) &&
                         ReplyMatchesSpeechIntent(
                             reply ?? "", context.Text)
                 ? reply
@@ -679,6 +693,11 @@ internal sealed class NpcAiService : IDisposable
         if (RepeatsRecentReply(reply, context))
             reply = "";
         if (ClaimsAnotherActorsIdentity(reply, context))
+            reply = "";
+        if (ConfusesSelfWithSpeaker(reply, context.ListenerName))
+            reply = "";
+        if (!AnswersSpeakerNameQuestion(
+                reply, context.Text, context.SpeakerName))
             reply = "";
         if (!ReplyMatchesSpeechIntent(reply, context.Text))
             reply = "";
@@ -977,6 +996,51 @@ internal sealed class NpcAiService : IDisposable
                    $"i am {name}", StringComparison.Ordinal) ||
                normalizedReply.Contains(
                    $"my name is {name}", StringComparison.Ordinal);
+    }
+
+    internal static bool ConfusesSelfWithSpeaker(
+        string reply, string listenerName)
+    {
+        if (string.IsNullOrWhiteSpace(reply) ||
+            string.IsNullOrWhiteSpace(listenerName))
+            return false;
+        var words = reply.Split(
+            [' ', '\t', '\r', '\n', ',', '.', '!', '?', ';', ':'],
+            StringSplitOptions.RemoveEmptyEntries |
+            StringSplitOptions.TrimEntries);
+        var namesSelf = words.Any(word => word.Equals(
+            listenerName, StringComparison.OrdinalIgnoreCase));
+        var usesSecondPerson = words.Any(word =>
+            word.Equals("you", StringComparison.OrdinalIgnoreCase) ||
+            word.Equals("your", StringComparison.OrdinalIgnoreCase) ||
+            word.Equals("yours", StringComparison.OrdinalIgnoreCase) ||
+            word.Equals("yourself", StringComparison.OrdinalIgnoreCase));
+        return namesSelf && usesSecondPerson;
+    }
+
+    internal static bool AnswersSpeakerNameQuestion(
+        string reply, string speech, string speakerName)
+    {
+        if (!IsSpeakerNameQuestion(speech) ||
+            string.IsNullOrWhiteSpace(speakerName) ||
+            speakerName.StartsWith(
+                "Unknown", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (!reply.Contains(
+                speakerName, StringComparison.OrdinalIgnoreCase))
+            return false;
+        return !ContainsAny(
+            reply,
+            "not sure", "not certain", "don't know", "do not know",
+            "cannot remember", "can't remember");
+    }
+
+    internal static bool IsSpeakerNameQuestion(string speech)
+    {
+        var lower = speech.ToLowerInvariant();
+        return lower.Contains("my name") ||
+               lower.Contains("name did i") ||
+               lower.Contains("name i told");
     }
 
     private static bool ContainsAny(

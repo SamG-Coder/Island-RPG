@@ -764,21 +764,29 @@ internal sealed partial class GameHostWindow
             miningNodes = _worldChunks.Values
                 .Where(value =>
                     value.Chunk.Coordinate.Level == _activeWorldLevel)
-                .SelectMany(value => value.VegetationRenderItems)
-                .Where(value => value.VegetationIndex >= 0 &&
-                    FindMiningNode(value.StableKey) is not null)
+                .SelectMany(value => value.VegetationRenderItems
+                    .Where(item => item.VegetationIndex >= 0)
+                    .Select(item => new
+                    {
+                        Item = item,
+                        Node = value.Chunk.Vegetation[
+                            item.VegetationIndex]
+                    }))
+                .Where(value => MiningNodeCatalog.TryGet(
+                    value.Node, out _))
                 .Where(value => Vector2.DistanceSquared(
-                    value.World, origin) <= radiusSquared)
+                    new(value.Node.X, value.Node.Y), origin) <= radiusSquared)
                 .OrderBy(value => Vector2.DistanceSquared(
-                    value.World, origin))
+                    new(value.Node.X, value.Node.Y), origin))
                 .Take(32)
                 .Select(value => new
                 {
-                    key = value.StableKey,
-                    x = value.World.X,
-                    y = value.World.Y,
+                    key = value.Item.StableKey,
+                    x = value.Node.X,
+                    y = value.Node.Y,
                     action = "mine",
-                    distance = Vector2.Distance(value.World, origin)
+                    distance = Vector2.Distance(
+                        new(value.Node.X, value.Node.Y), origin)
                 }),
             villagers = _villagers
                 .Where(value => value.Health > 0 &&
@@ -1123,18 +1131,31 @@ internal sealed partial class GameHostWindow
                     "key", out var miningKeyElement)
                     ? miningKeyElement.GetString()
                     : null;
-                var miningNode = _worldChunks.Values
+                Vector2? requestedMiningPosition =
+                    TryControlPosition(root, out var miningPosition)
+                        ? miningPosition
+                        : _player.Position;
+                var miningNode = ControlTargetSelection.Mining(
+                    _worldChunks.Values
                     .Where(value =>
                         value.Chunk.Coordinate.Level == _activeWorldLevel)
-                    .SelectMany(value => value.VegetationRenderItems)
-                    .Where(value => value.VegetationIndex >= 0 &&
-                        (string.IsNullOrWhiteSpace(miningKey) ||
-                         value.StableKey.Equals(
-                             miningKey, StringComparison.Ordinal)))
-                    .OrderBy(value => Vector2.DistanceSquared(
-                        value.World, _player.Position))
-                    .FirstOrDefault(value =>
-                        FindMiningNode(value.StableKey) is not null);
+                    .SelectMany(value => value.VegetationRenderItems
+                        .Where(item => item.VegetationIndex >= 0)
+                        .Select(item => new ControlMiningTarget(
+                            item,
+                            new(
+                                value.Chunk.Vegetation[
+                                    item.VegetationIndex].X,
+                                value.Chunk.Vegetation[
+                                    item.VegetationIndex].Y),
+                            MiningNodeCatalog.TryGet(
+                                value.Chunk.Vegetation[
+                                    item.VegetationIndex], out _)))),
+                    miningKey,
+                    requestedMiningPosition,
+                    requireNearbyPosition:
+                        string.IsNullOrWhiteSpace(miningKey) &&
+                        TryControlPosition(root, out _));
                 if (miningNode is null)
                 {
                     error = "mining_node_not_found";
@@ -1784,6 +1805,28 @@ internal static class ControlTargetSelection
                 .FirstOrDefault()
             : candidates.FirstOrDefault();
     }
+
+    public static WorldVegetationRenderItem? Mining(
+        IEnumerable<ControlMiningTarget> candidates,
+        string? stableKey,
+        Vector2? position,
+        bool requireNearbyPosition)
+    {
+        var eligible = candidates.Where(value => value.IsMineable);
+        if (!string.IsNullOrWhiteSpace(stableKey))
+            return eligible.FirstOrDefault(value =>
+                value.Item.StableKey.Equals(
+                    stableKey, StringComparison.OrdinalIgnoreCase)).Item;
+        if (position is not { } origin)
+            return eligible.FirstOrDefault().Item;
+        if (requireNearbyPosition)
+            eligible = eligible.Where(value =>
+                Vector2.DistanceSquared(value.Position, origin) <=
+                CoordinateTolerance * CoordinateTolerance);
+        return eligible.OrderBy(value =>
+                Vector2.DistanceSquared(value.Position, origin))
+            .FirstOrDefault().Item;
+    }
 }
 
 internal static class ControlCombatCommands
@@ -1797,6 +1840,11 @@ internal static class ControlCombatCommands
 internal readonly record struct ControlVegetationTarget(
     WorldVegetationRenderItem Item,
     Vector2 Position);
+
+internal readonly record struct ControlMiningTarget(
+    WorldVegetationRenderItem Item,
+    Vector2 Position,
+    bool IsMineable);
 
 internal static class ControlModalCommands
 {
