@@ -149,6 +149,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly WorldRenderQueue _worldRenderQueue = new();
     private readonly ShaderUniformCache _shaderUniforms = new();
     private readonly UiColorBatch _uiColorBatch = new();
+    private readonly UiPillRenderer _uiPillRenderer = new();
     private readonly PreviewMode _mode;
     private long _worldSeed;
     private readonly GameSaveRepository _saves = new();
@@ -546,6 +547,7 @@ internal sealed partial class GameHostWindow : GameWindow
             IntPtr.Zero,
             BufferUsageHint.StreamDraw);
         _uiColorBatch.Initialize();
+        _uiPillRenderer.Initialize();
         CreateSceneTarget();
         PrepareLoadingScreen();
         PrepareGameUi();
@@ -3350,6 +3352,7 @@ internal sealed partial class GameHostWindow : GameWindow
         UpdateSmoothZoom(e.Time);
         _fontRenderer?.BeginFrame(ClientSize.X, ClientSize.Y);
         _uiColorBatch.BeginFrame(ClientSize.X, ClientSize.Y);
+        _uiPillRenderer.BeginFrame(ClientSize.X, ClientSize.Y);
         _performanceMetrics.RecordFrame(e.Time);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFramebuffer);
         GL.Viewport(
@@ -4324,6 +4327,7 @@ internal sealed partial class GameHostWindow : GameWindow
         RenderDigSiteHealthBar(scene);
         RenderPlayerWorldHealthBar(scene);
         RenderCombatTargetHealthBar(scene);
+        RenderFishingFeedback(scene);
         RenderOverheadSpeech(scene);
         RenderVillagerOverheadSpeech(scene);
         RenderMinimap();
@@ -8503,6 +8507,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _gameControlPipe = null;
         _npcAi.Dispose();
         _uiColorBatch.Dispose();
+        _uiPillRenderer.Dispose();
         _soundEffects?.Dispose();
         _musicPlayer?.Dispose();
         CancelWorldLevelWork(clearMinimap: true);

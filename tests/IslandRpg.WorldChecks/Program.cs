@@ -7834,6 +7834,14 @@ Require(origin.Fish.All(fish =>
         var tile = origin.Tiles[tileY * WorldChunk.Size + tileX];
         if (!WorldFishGenerator.IsValidHabitat(fish.Species, tile))
             return false;
+        var shoreDistance = WorldFishGenerator.DistanceFromShore(
+            seed,
+            (int)MathF.Floor(fish.X),
+            (int)MathF.Floor(fish.Y));
+        if (fish.Species == WorldFishSpecies.ShoreMinnows)
+            return shoreDistance is >=
+                    WorldFishGenerator.MinimumBeginnerShoreDistance and <=
+                    WorldFishGenerator.MaximumBeginnerShoreDistance;
         for (var offsetY = -2; offsetY <= 2; offsetY++)
         for (var offsetX = -2; offsetX <= 2; offsetX++)
             if (InfiniteWorldGenerator.SampleTile(
@@ -7844,7 +7852,28 @@ Require(origin.Fish.All(fish =>
                 return false;
         return true;
     }),
-    "fish must use suitable water and maintain two tiles of sand clearance");
+    "advanced fish must keep sand clearance while beginner minnows remain within casting distance of shore");
+var guaranteedBeginnerChunk = Enumerable.Range(-4, 9)
+    .SelectMany(chunkY => Enumerable.Range(-4, 9)
+        .Select(chunkX => InfiniteWorldGenerator.Generate(
+            seed, new(chunkX, chunkY))))
+    .FirstOrDefault(chunk => chunk.Tiles.Any(tile =>
+        tile.Biome is Biome.DeepWater or Biome.ShallowWater or
+            Biome.RiverWater or Biome.MangroveShallows &&
+        WorldFishGenerator.DistanceFromShore(
+            seed, tile.X, tile.Y) is >=
+                WorldFishGenerator.MinimumBeginnerShoreDistance and <=
+                WorldFishGenerator.MaximumBeginnerShoreDistance));
+Require(
+    guaranteedBeginnerChunk is not null &&
+    guaranteedBeginnerChunk.Fish.Any(fish =>
+        fish.Species == WorldFishSpecies.ShoreMinnows &&
+        WorldFishGenerator.DistanceFromShore(
+            seed,
+            (int)MathF.Floor(fish.X),
+            (int)MathF.Floor(fish.Y)) <=
+        WorldFishGenerator.MaximumBeginnerShoreDistance),
+    "a chunk containing suitable shoreline shallows must guarantee beginner fish within casting distance");
 var animationFish = new WorldFish(
     0, 0, WorldFishSpecies.ShoreMinnows,
     "FISHS_NN", 3, "fish:test");
@@ -7866,6 +7895,35 @@ Require(WorldFishPresentation.BaseHitTest(
         !WorldFishPresentation.BaseHitTest(
             new(130, 100), new(100, 100), 1),
     "fish hover must use a compact rectangle around the water-level base");
+Require(
+    FishingSkill.CatchChance(WorldFishSpecies.ShoreMinnows, 1, 1) >= .72f &&
+    FishingSkill.CatchChance(WorldFishSpecies.ShoreMinnows, 20, 3) <= .95f &&
+    FishingSkill.CatchChance(WorldFishSpecies.ShoreMinnows, 20, 3) >
+    FishingSkill.CatchChance(WorldFishSpecies.ShoreMinnows, 1, 1),
+    "fishing catch chance must remain bounded while rewarding skill and stronger nets");
+var fishingFeedback = new EntityFeedbackState();
+fishingFeedback.ShowLabel("fish:test", "Miss", false, 10);
+Require(
+    fishingFeedback.TryGet("fish:test", out var missedFishFeedback) &&
+    missedFishFeedback.Label == "Miss" &&
+    !missedFishFeedback.LabelSuccess &&
+    !fishingFeedback.HealthVisible("fish:test", 10),
+    "fishing outcomes must reuse entity feedback without showing a health bar");
+fishingFeedback.ShowLabel("fish:test", "Caught", true, 11);
+Require(
+    fishingFeedback.TryGet("fish:test", out var caughtFishFeedback) &&
+    caughtFishFeedback.Label == "Caught" &&
+    caughtFishFeedback.LabelSuccess,
+    "fishing feedback must distinguish a green catch from a blue miss");
+var zeroDamageFeedback = new EntityFeedbackState();
+zeroDamageFeedback.ShowImpact("enemy:test", 0, true, 12);
+Require(
+    zeroDamageFeedback.TryGet(
+        "enemy:test", out var zeroDamageImpact) &&
+    zeroDamageImpact.Label == "Miss" &&
+    !zeroDamageImpact.Hit &&
+    zeroDamageFeedback.HealthVisible("enemy:test", 12),
+    "every zero-damage impact must render as a blue Miss instead of the number zero");
 Require(origin.Vegetation.All(item =>
             !item.CanBecomeInstance ||
             item.Kind is WorldVegetationKind.BerryBush or

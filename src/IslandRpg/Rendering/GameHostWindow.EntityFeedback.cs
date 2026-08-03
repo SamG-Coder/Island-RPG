@@ -15,6 +15,7 @@ internal sealed partial class GameHostWindow
     private static string MiningFeedbackKey(string key) => $"mining:{key}";
     private static string GroundFeedbackKey(Guid id) => $"ground:{id:N}";
     private static string DigFeedbackKey(Guid id) => $"dig:{id:N}";
+    private static string FishFeedbackKey(string key) => $"fish:{key}";
 
     private void ShowEntityImpact(
         string targetKey, int damage, bool hit) =>
@@ -81,28 +82,48 @@ internal sealed partial class GameHostWindow
             (bounds.Top + (bounds.Bottom - bounds.Top) * .42f) * sceneScale;
         const int fullRadius = 12;
         var radius = Math.Max(3, (int)MathF.Round(fullRadius * entrance));
+        var displayText = feedback.Label ?? feedback.Damage.ToString();
+        var contentHalfWidth = Math.Max(
+            radius,
+            (int)MathF.Ceiling((MeasureUiText(displayText) + 12) * .5f));
+        var halfWidth = Math.Max(
+            radius,
+            (int)MathF.Round(contentHalfWidth * entrance));
         DrawEntitySplatBadge(
-            centerX, centerY, radius, feedback.Hit, fade);
+            centerX, centerY, halfWidth, radius,
+            feedback.Label is null ? feedback.Hit : feedback.LabelSuccess,
+            fade,
+            feedback.Label is not null);
         var textBounds = new Vector4(
-            centerX - radius, centerY - radius - 2,
-            radius * 2, radius * 2);
+            centerX - halfWidth, centerY - radius - 2,
+            halfWidth * 2, radius * 2);
         DrawCenteredUiText(
-            feedback.Damage.ToString(),
+            displayText,
             new(textBounds.X + 1, textBounds.Y + 1,
                 textBounds.Z, textBounds.W),
             new FSColor(28, 10, 7, (int)(235 * fade)));
         DrawCenteredUiText(
-            feedback.Damage.ToString(), textBounds,
-            new FSColor(255, 246, 218, (int)(255 * fade)));
+            displayText, textBounds,
+            new FSColor(255, 255, 255, (int)(255 * fade)));
     }
 
     private void DrawEntitySplatBadge(
-        float centerX, float centerY, int radius, bool hit, float fade)
+        float centerX, float centerY, int halfWidth, int radius,
+        bool hit, float fade,
+        bool outcome = false)
     {
-        var edge = hit
+        var edge = outcome && hit
+            ? new Vector4(.018f, .22f, .045f, fade)
+            : outcome
+                ? new Vector4(.045f, .16f, .52f, fade)
+                : hit
             ? new Vector4(.48f, .025f, .015f, fade)
             : new Vector4(.045f, .16f, .52f, fade);
-        var face = hit
+        var face = outcome && hit
+            ? new Vector4(.025f, .38f, .075f, fade)
+            : outcome
+                ? new Vector4(.06f, .28f, .74f, fade)
+                : hit
             ? new Vector4(.78f, .055f, .030f, fade)
             : new Vector4(.06f, .28f, .74f, fade);
         var point = Math.Max(2, radius / 4);
@@ -110,22 +131,24 @@ internal sealed partial class GameHostWindow
             centerX - point / 2f, centerY - radius - 1,
             point, radius * 2 + 2), edge);
         DrawUiColor(new(
-            centerX - radius - 1, centerY - point / 2f,
-            radius * 2 + 2, point), edge);
-        var diagonalOffset = radius * .68f;
+            centerX - halfWidth - 1, centerY - point / 2f,
+            halfWidth * 2 + 2, point), edge);
+        var diagonalX = Math.Max(radius * .68f, halfWidth - radius * .32f);
+        var diagonalY = radius * .68f;
         var diagonalSize = Math.Max(2, point);
         foreach (var (x, y) in new[]
                  {
-                     (-diagonalOffset, -diagonalOffset),
-                     (diagonalOffset, -diagonalOffset),
-                     (-diagonalOffset, diagonalOffset),
-                     (diagonalOffset, diagonalOffset)
+                     (-diagonalX, -diagonalY),
+                     (diagonalX, -diagonalY),
+                     (-diagonalX, diagonalY),
+                     (diagonalX, diagonalY)
                  })
             DrawUiColor(new(
                 centerX + x - diagonalSize / 2f,
                 centerY + y - diagonalSize / 2f,
                 diagonalSize, diagonalSize), edge);
-        DrawUiCircle(centerX, centerY, radius, edge);
-        DrawUiCircle(centerX, centerY, Math.Max(1, radius - 2), face);
+        _uiColorBatch.Flush();
+        _uiPillRenderer.Draw(
+            centerX, centerY, halfWidth, radius, edge, face);
     }
 }

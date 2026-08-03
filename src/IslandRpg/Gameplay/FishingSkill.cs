@@ -64,6 +64,15 @@ internal static class FishingSkill
     public static float CycleSeconds(float baseSeconds, int netPower) =>
         baseSeconds / (1f + (Math.Max(1, netPower) - 1) * .18f);
 
+    public static float CatchChance(
+        WorldFishSpecies species, int level, int netPower)
+    {
+        var profile = Profile(species);
+        var levelBonus = Math.Max(0, level - profile.RequiredLevel) * .015f;
+        var netBonus = Math.Max(0, netPower - profile.RequiredNetPower) * .08f;
+        return Math.Clamp(.72f + levelBonus + netBonus, .72f, .95f);
+    }
+
     public static SkillExperienceChange AwardExperience(
         int currentExperience, WorldFishSpecies species) =>
         SkillService.AwardExperience(

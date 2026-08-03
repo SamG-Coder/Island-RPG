@@ -5,7 +5,9 @@ internal readonly record struct EntityFeedback(
     double HealthVisibleUntil,
     int Damage = 0,
     bool Hit = false,
-    double ImpactAt = double.NegativeInfinity);
+    double ImpactAt = double.NegativeInfinity,
+    string? Label = null,
+    bool LabelSuccess = false);
 
 /// <summary>
 /// Actor-neutral presentation state for any damageable world entity.
@@ -33,13 +35,32 @@ internal sealed class EntityFeedbackState
     public void ShowImpact(
         string targetKey, int damage, bool hit, double clock)
     {
+        var missed = damage <= 0;
         ShowHealth(targetKey, clock);
         var current = _entries[targetKey];
         _entries[targetKey] = current with
         {
             Damage = Math.Max(0, damage),
-            Hit = hit,
-            ImpactAt = clock
+            Hit = hit && !missed,
+            ImpactAt = clock,
+            Label = missed ? "Miss" : null,
+            LabelSuccess = false
+        };
+        LatestImpactTargetKey = targetKey;
+    }
+
+    public void ShowLabel(
+        string targetKey, string label, bool success, double clock)
+    {
+        if (string.IsNullOrWhiteSpace(targetKey) ||
+            string.IsNullOrWhiteSpace(label)) return;
+        var current = _entries.GetValueOrDefault(targetKey);
+        _entries[targetKey] = current with
+        {
+            TargetKey = targetKey,
+            ImpactAt = clock,
+            Label = label,
+            LabelSuccess = success
         };
         LatestImpactTargetKey = targetKey;
     }

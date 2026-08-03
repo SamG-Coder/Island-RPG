@@ -258,6 +258,17 @@ internal sealed partial class GameHostWindow
     {
         if (_activePlayer is null) return false;
         var profile = FishingSkill.Profile(fish.Species);
+        var netPower = PlayerInventory.BestFishingNet(
+            _activePlayer.Inventory)?.FishingPower ?? 1;
+        var level = FishingSkill.LevelForExperience(
+            _activePlayer.FishingExperience);
+        if (Random.Shared.NextSingle() >
+            FishingSkill.CatchChance(fish.Species, level, netPower))
+        {
+            _entityFeedback.ShowLabel(
+                FishFeedbackKey(fish.StableKey), "Miss", false, _clock);
+            return true;
+        }
         var inventory = ActivePlayerInventory();
         if (!inventory.TryAdd(profile.ItemId))
         {
@@ -292,6 +303,8 @@ internal sealed partial class GameHostWindow
         chunk.Chunk.FishRemaining[fish.StableKey] = remaining;
         QueueChunkSave(chunk.Chunk);
         var name = ItemCatalog.Get(profile.ItemId).Name;
+        _entityFeedback.ShowLabel(
+            FishFeedbackKey(fish.StableKey), "Caught", true, _clock);
         _chatUi.AddMessage(
             FishingSkill.InventoryMessage(name),
             ChatMessageStyle.Experience);
@@ -315,6 +328,29 @@ internal sealed partial class GameHostWindow
         _activeFishKey = null;
         _player?.Stop();
         CenterFishingBoatRider();
+    }
+
+    private void RenderFishingFeedback(Vector4 scene)
+    {
+        if (_entityFeedback.LatestImpactTargetKey is not { } targetKey ||
+            !targetKey.StartsWith("fish:", StringComparison.Ordinal))
+            return;
+        var stableKey = targetKey["fish:".Length..];
+        var cached = _worldChunks.Values
+            .Where(value =>
+                value.Chunk.Coordinate.Level == _activeWorldLevel)
+            .SelectMany(value => value.FishRenderItems)
+            .FirstOrDefault(value =>
+                value.Fish.StableKey.Equals(
+                    stableKey, StringComparison.Ordinal));
+        if (cached.Fish is null) return;
+        var atlasKey = WorldFishAnimation.AtlasKey(cached.Fish, _clock);
+        if (!_treeAtlas.TryGetValue(atlasKey, out var atlas)) return;
+        DrawEntityFeedback(
+            scene,
+            SpriteBounds(atlas.Frame, cached.World),
+            1,
+            targetKey);
     }
 
     private WorldFish? FindFish(string stableKey) =>

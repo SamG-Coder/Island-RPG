@@ -29,6 +29,8 @@ internal sealed record WorldFishProfile(
 internal static class WorldFishGenerator
 {
     public const int MaximumPerChunk = 12;
+    public const int MinimumBeginnerShoreDistance = 1;
+    public const int MaximumBeginnerShoreDistance = 3;
 
     public static readonly WorldFishProfile[] Profiles =
     [
@@ -77,7 +79,9 @@ internal static class WorldFishGenerator
 
     public static bool IsValidHabitat(
         WorldFishSpecies species, IslandTile tile) =>
-        Chance(species, tile) > 0;
+        Chance(species, tile) > 0 ||
+        species == WorldFishSpecies.ShoreMinnows &&
+        tile.Biome == Biome.DeepWater;
 
     public static WorldFish[] Generate(
         long seed, IReadOnlyList<IslandTile> tiles)
@@ -85,16 +89,34 @@ internal static class WorldFishGenerator
         var tileLookup = tiles.ToDictionary(
             tile => (tile.X, tile.Y));
         var candidates = new List<(float Priority, WorldFish Fish)>();
+        var beginnerCandidates = new List<(int Distance, float Priority, WorldFish Fish)>();
         foreach (var tile in tiles)
         {
-            if (!IsWater(tile.Biome) ||
-                HasNearbySand(
-                    seed, tile.X, tile.Y, tileLookup))
+            if (!IsWater(tile.Biome))
                 continue;
+            var shoreDistance = DistanceFromShore(
+                seed, tile.X, tile.Y, tileLookup,
+                MaximumBeginnerShoreDistance);
+            if (shoreDistance is >= MinimumBeginnerShoreDistance and
+                    <= MaximumBeginnerShoreDistance)
+            {
+                var beginner = CreateFish(
+                    seed, tile, Profile(WorldFishSpecies.ShoreMinnows));
+                beginnerCandidates.Add((
+                    shoreDistance,
+                    Hash(seed, tile.X, tile.Y, 5189),
+                    beginner));
+            }
+            var hasNearbySand = shoreDistance <= 2;
             var available = Profiles
                 .Select(profile =>
                     (Profile: profile, Chance: Chance(profile.Species, tile)))
-                .Where(candidate => candidate.Chance > 0)
+                .Where(candidate => candidate.Chance > 0 &&
+                    (candidate.Profile.Species ==
+                        WorldFishSpecies.ShoreMinnows
+                        ? shoreDistance is >= MinimumBeginnerShoreDistance and
+                            <= MaximumBeginnerShoreDistance
+                        : !hasNearbySand))
                 .ToArray();
             if (available.Length == 0) continue;
 
@@ -111,26 +133,68 @@ internal static class WorldFishGenerator
                 break;
             }
 
-            var x = tile.X + .16f +
-                    Hash(seed, tile.X, tile.Y, 5113) * .68f;
-            var y = tile.Y + .16f +
-                    Hash(seed, tile.X, tile.Y, 5119) * .68f;
-            var offset = (int)(
-                Hash(seed, tile.X, tile.Y, 5147) *
-                selected.FrameCount) % selected.FrameCount;
             candidates.Add((
                 Hash(seed, tile.X, tile.Y, 5167),
-                new(
-                    x, y, selected.Species, selected.GraphicName,
-                    offset,
-                    $"fish:{tile.X}:{tile.Y}:{(int)selected.Species}")));
+                CreateFish(seed, tile, selected)));
         }
 
-        return candidates
+        var selectedFish = candidates
             .OrderBy(candidate => candidate.Priority)
             .Take(MaximumPerChunk)
             .Select(candidate => candidate.Fish)
-            .ToArray();
+            .ToList();
+        if (beginnerCandidates.Count > 0 &&
+            selectedFish.All(fish =>
+                fish.Species != WorldFishSpecies.ShoreMinnows))
+        {
+            var guaranteed = beginnerCandidates
+                .OrderBy(candidate => candidate.Distance)
+                .ThenBy(candidate => candidate.Priority)
+                .First().Fish;
+            if (selectedFish.Count >= MaximumPerChunk)
+                selectedFish.RemoveAt(selectedFish.Count - 1);
+            selectedFish.Add(guaranteed);
+        }
+        return selectedFish.ToArray();
+    }
+
+    public static int DistanceFromShore(
+        long seed,
+        int x,
+        int y,
+        IReadOnlyDictionary<(int X, int Y), IslandTile>? tiles = null,
+        int maximumDistance = MaximumBeginnerShoreDistance)
+    {
+        for (var distance = 1; distance <= maximumDistance; distance++)
+        for (var offsetY = -distance; offsetY <= distance; offsetY++)
+        for (var offsetX = -distance; offsetX <= distance; offsetX++)
+        {
+            if (Math.Max(Math.Abs(offsetX), Math.Abs(offsetY)) != distance)
+                continue;
+            var coordinate = (x + offsetX, y + offsetY);
+            var biome = tiles is not null &&
+                        tiles.TryGetValue(coordinate, out var local)
+                ? local.Biome
+                : InfiniteWorldGenerator.SampleTile(
+                    seed, coordinate.Item1, coordinate.Item2).Biome;
+            if (biome is Biome.Beach or Biome.DesertSand)
+                return distance;
+        }
+        return int.MaxValue;
+    }
+
+    private static WorldFish CreateFish(
+        long seed, IslandTile tile, WorldFishProfile profile)
+    {
+        var x = tile.X + .16f +
+                Hash(seed, tile.X, tile.Y, 5113) * .68f;
+        var y = tile.Y + .16f +
+                Hash(seed, tile.X, tile.Y, 5119) * .68f;
+        var offset = (int)(Hash(seed, tile.X, tile.Y, 5147) *
+            profile.FrameCount) % profile.FrameCount;
+        return new(
+            x, y, profile.Species, profile.GraphicName, offset,
+            $"fish:{tile.X}:{tile.Y}:{(int)profile.Species}");
     }
 
     private static float Chance(
@@ -160,28 +224,6 @@ internal static class WorldFishGenerator
                      tile.Biome == Biome.DeepWater => .012f,
             _ => 0
         };
-
-    private static bool HasNearbySand(
-        long seed,
-        int x,
-        int y,
-        IReadOnlyDictionary<(int X, int Y), IslandTile> tiles)
-    {
-        const int clearance = 2;
-        for (var offsetY = -clearance; offsetY <= clearance; offsetY++)
-        for (var offsetX = -clearance; offsetX <= clearance; offsetX++)
-        {
-            var coordinate = (x + offsetX, y + offsetY);
-            var biome = tiles.TryGetValue(coordinate, out var local)
-                ? local.Biome
-                : InfiniteWorldGenerator.SampleTile(
-                    seed, coordinate.Item1, coordinate.Item2).Biome;
-            if (biome is
-                Biome.Beach or Biome.DesertSand)
-                return true;
-        }
-        return false;
-    }
 
     private static bool IsWater(Biome biome) =>
         biome is Biome.DeepWater or Biome.ShallowWater or
