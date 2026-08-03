@@ -543,7 +543,7 @@ internal static class CraftingSkill
             ]),
         new(
             "workbench", ItemIds.Workbench,
-            CraftingCategory.Furniture, 3, 75,
+            CraftingCategory.Furniture, 3, 76,
             [
                 new(ItemIds.Plank, 4),
                 new(ItemIds.Sticks, 2)

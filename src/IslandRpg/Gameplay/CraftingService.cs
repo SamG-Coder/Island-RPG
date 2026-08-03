@@ -54,7 +54,10 @@ internal static class CraftingService
                 if (!updated.TryTake(ingredient.Accepts, ingredient.Count))
                     return CraftResult.MissingResources;
             foreach (var product in step.Produces)
-                if (!updated.TryAdd(product.ItemId, product.Count))
+                if (!(ItemCatalog.TryGet(product.ItemId, out _)
+                        ? updated.TryAdd(product.ItemId, product.Count)
+                        : updated.TryAddTransient(
+                            product.ItemId, product.Count)))
                     return CraftResult.InventoryFull;
         }
         return CraftResult.Success;

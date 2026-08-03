@@ -69,6 +69,22 @@ internal sealed class InventoryContainer
         return true;
     }
 
+    /// <summary>
+    /// Reserves ordinary slots for an internal, short-lived crafting product.
+    /// These values may exist only inside an atomic crafting transaction and
+    /// must be consumed before the successful inventory is committed.
+    /// </summary>
+    internal bool TryAddTransient(string itemId, int quantity = 1)
+    {
+        if (quantity <= 0) return true;
+        if (ItemCatalog.TryGet(itemId, out _)) return false;
+        var empty = EmptySlots(null).Take(quantity).ToArray();
+        if (empty.Length != quantity) return false;
+        foreach (var slot in empty)
+            _slots[slot] = new(itemId, 1);
+        return true;
+    }
+
     public bool TryAddAtPreferredSlot(
         string itemId, int preferredSlot, int quantity = 1)
     {

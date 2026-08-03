@@ -5892,6 +5892,18 @@ Require(CraftingSkill.Availability(
             [ItemIds.SharpenedRock, ItemIds.MediumRock, ItemIds.Sticks]) ==
         RecipeAvailability.Ready,
     "the level-one stone pickaxe must still require all of its resources");
+var pickaxeContainer = PlayerInventory.CreateContainer();
+Require(
+    pickaxeContainer.TryAdd(ItemIds.SharpenedRock) &&
+    pickaxeContainer.TryAdd(ItemIds.MediumRock) &&
+    pickaxeContainer.TryAdd(ItemIds.Sticks) &&
+    CraftingService.TryCraftDetailed(
+        pickaxeRecipe, 1, pickaxeContainer,
+        out var craftedPickaxeContainer) ==
+    CraftingService.CraftResult.Success &&
+    craftedPickaxeContainer.Count(ItemIds.StonePickaxe) == 1 &&
+    craftedPickaxeContainer.ItemCount == 1,
+    "container-based crafting must allow transient recipe products without exposing or persisting them as catalog items");
 var workbenchRecipe = CraftingSkill.Recipes.Single(
     recipe => recipe.ResultItemId == ItemIds.Workbench);
 var storageChestRecipe = CraftingSkill.Recipes.Single(
@@ -5901,7 +5913,7 @@ Require(
     "the wooden storage chest must unlock at Crafting level four");
 Require(workbenchRecipe.Category == CraftingCategory.Furniture &&
         workbenchRecipe.RequiredLevel == 3 &&
-        workbenchRecipe.Experience == 75 &&
+        workbenchRecipe.Experience == 76 &&
         workbenchRecipe.Ingredients.SequenceEqual(
         [
             new CraftingIngredient(ItemIds.Plank, 4),
@@ -5919,6 +5931,14 @@ Require(workbenchRecipe.Category == CraftingCategory.Furniture &&
                 ItemIds.StoneHammer
             ]) == RecipeAvailability.Ready,
     "the workbench must be a level-three Furniture recipe made with a stone hammer");
+const int preWorkbenchQuestCraftingExperience = 449;
+Require(
+    CraftingSkill.AwardExperience(
+        preWorkbenchQuestCraftingExperience,
+        workbenchRecipe,
+        [ItemIds.StoneHammer]).Level >=
+    storageChestRecipe.RequiredLevel,
+    "the intended early quest crafts plus the workbench must unlock the level-four storage chest without a duplicate filler craft");
 Require(CraftingSkill.Availability(
             workbenchRecipe, 3,
             [
