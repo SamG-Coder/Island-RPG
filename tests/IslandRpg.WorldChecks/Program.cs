@@ -7925,10 +7925,24 @@ entity.Update(.5f);
 Require(entity.Action == EntityAction.Move && entity.Position.X > 1,
     "moving entity should advance toward its target");
 var walkingAnimationTime = entity.ActionTime;
+var replacementPathPosition = entity.Position;
 entity.PrepareForPathRequest();
 Require(entity.Action == EntityAction.Move &&
-        entity.ActionTime == walkingAnimationTime,
-    "requesting a replacement path while walking must preserve the active walk cycle");
+        entity.ActionTime == walkingAnimationTime &&
+        entity.Target == replacementPathPosition,
+    "requesting a replacement path must discard the superseded route without restarting the walk cycle");
+entity.Update(.1f);
+Require(
+    entity.Position == replacementPathPosition,
+    "an actor must not continue away from the captured start while a replacement path is pending");
+var densePathEntity = new WorldEntity(Vector2.Zero);
+densePathEntity.FollowPath(
+    [new(.1f, 0), new(.2f, 0), new(.3f, 0)]);
+densePathEntity.Update(.2f);
+Require(
+    densePathEntity.Position == new Vector2(.3f, 0) &&
+    densePathEntity.Action == EntityAction.Idle,
+    "movement must spend its full frame budget across dense quarter-cell waypoints");
 entity.SetGender(EntityGender.Female);
 Require(entity.Gender == EntityGender.Female,
     "entity gender should switch without replacing the entity");

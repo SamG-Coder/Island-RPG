@@ -124,8 +124,11 @@ internal sealed class WorldEntity
 
     public void PrepareForPathRequest()
     {
-        // Repathing while already moving must not bounce through Idle. Keeping
-        // Move active preserves the walk cycle until the replacement arrives.
+        // A replacement route is calculated from the current position. Do not
+        // continue along the superseded route while that asynchronous request
+        // is pending, or the completed path will begin behind the actor.
+        _path.Clear();
+        Target = Position;
         if (Action != EntityAction.Move)
             Stop();
     }
@@ -216,21 +219,29 @@ internal sealed class WorldEntity
     {
         ActionTime += elapsed;
         if (Action != EntityAction.Move) return;
-        var displacement = Target - Position;
-        var distance = displacement.Length;
-        if (distance <= ArrivalDistance)
+        var remainingMovement = MoveSpeed *
+            Math.Clamp(TerrainSpeedMultiplier, .35f, 1f) * elapsed;
+        while (Action == EntityAction.Move)
         {
-            Position = Target;
-            if (_path.Count > 0)
-                Target = _path.Dequeue();
-            else
+            var displacement = Target - Position;
+            var distance = displacement.Length;
+            if (distance <= ArrivalDistance)
+            {
+                Position = Target;
+                if (_path.Count > 0)
+                {
+                    Target = _path.Dequeue();
+                    continue;
+                }
                 SetAction(EntityAction.Idle);
-            return;
+                break;
+            }
+            if (remainingMovement <= 0) break;
+            Facing = displacement / distance;
+            var step = Math.Min(distance, remainingMovement);
+            Position += Facing * step;
+            remainingMovement -= step;
         }
-        Facing = displacement / distance;
-        Position += Facing * Math.Min(
-            distance,
-            MoveSpeed * Math.Clamp(TerrainSpeedMultiplier, .35f, 1f) * elapsed);
     }
 
     private void SetAction(EntityAction action)

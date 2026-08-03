@@ -43,6 +43,8 @@ internal static class GridPathfinder
             ? new CaveHydrologyField.SamplingContext(seed)
             : null;
         var caveDensity = new Dictionary<(int X, int Y), float>();
+        var passability = new Dictionary<(int X, int Y), bool>();
+        var heights = new Dictionary<(int X, int Y), int>();
         float Density(int x, int y)
         {
             if (caveDensity.TryGetValue((x, y), out var density))
@@ -52,6 +54,23 @@ internal static class GridPathfinder
             caveDensity[(x, y)] = density;
             return density;
         }
+        bool CanPass(int x, int y)
+        {
+            if (passability.TryGetValue((x, y), out var value))
+                return value;
+            value = Passable(
+                seed, x, y, worldLevel, Density, obstacles);
+            passability[(x, y)] = value;
+            return value;
+        }
+        int CellHeight(int x, int y)
+        {
+            if (heights.TryGetValue((x, y), out var value))
+                return value;
+            value = Height(seed, x, y, worldLevel, Density);
+            heights[(x, y)] = value;
+            return value;
+        }
         var exactTarget = PassablePoint(
             seed, requestedTarget, worldLevel, caveContext, obstacles);
         var goal = ResolveGoal(
@@ -59,8 +78,7 @@ internal static class GridPathfinder
             requestedGoal,
             requestedTarget,
             worldLevel,
-            Density,
-            obstacles);
+            CanPass);
         if (goal is null)
             return [];
         var resolvedGoal = goal.Value;
@@ -78,21 +96,15 @@ internal static class GridPathfinder
             foreach (var neighbour in Neighbours)
             {
                 var next = (current.X + neighbour.X, current.Y + neighbour.Y);
-                if (!Passable(
-                        seed, next.Item1, next.Item2, worldLevel, Density,
-                        obstacles))
+                if (!CanPass(next.Item1, next.Item2))
                     continue;
                 if (neighbour.X != 0 && neighbour.Y != 0 &&
-                    (!Passable(
-                         seed, current.X + neighbour.X, current.Y,
-                         worldLevel, Density, obstacles) ||
-                     !Passable(
-                         seed, current.X, current.Y + neighbour.Y,
-                         worldLevel, Density, obstacles)))
+                    (!CanPass(current.X + neighbour.X, current.Y) ||
+                     !CanPass(current.X, current.Y + neighbour.Y)))
                     continue;
                 var slope = Math.Abs(
-                    Height(seed, next.Item1, next.Item2, worldLevel, Density) -
-                    Height(seed, current.X, current.Y, worldLevel, Density));
+                    CellHeight(next.Item1, next.Item2) -
+                    CellHeight(current.X, current.Y));
                 if (slope > 4) continue;
                 var nextCost = costs[current] +
                                neighbour.Cost * WorldPlacementGrid.CellSize +
@@ -100,10 +112,12 @@ internal static class GridPathfinder
                 if (costs.TryGetValue(next, out var previous) && previous <= nextCost) continue;
                 costs[next] = nextCost;
                 cameFrom[next] = current;
+                var deltaX = Math.Abs(resolvedGoal.Item1 - next.Item1);
+                var deltaY = Math.Abs(resolvedGoal.Item2 - next.Item2);
+                var diagonal = Math.Min(deltaX, deltaY);
+                var straight = Math.Max(deltaX, deltaY) - diagonal;
                 var heuristic =
-                    Math.Max(
-                        Math.Abs(resolvedGoal.Item1 - next.Item1),
-                        Math.Abs(resolvedGoal.Item2 - next.Item2)) *
+                    (diagonal * 1.41421356f + straight) *
                     WorldPlacementGrid.CellSize;
                 frontier.Enqueue(next, nextCost + heuristic);
             }
@@ -136,8 +150,7 @@ internal static class GridPathfinder
         (int X, int Y) requestedGoal,
         Vector2 requestedTarget,
         int worldLevel,
-        Func<int, int, float> density,
-        IReadOnlyList<NavigationObstacle>? obstacles)
+        Func<int, int, bool> passable)
     {
         const int searchRadius = 12;
         (int X, int Y)? nearest = null;
@@ -148,9 +161,7 @@ internal static class GridPathfinder
             var candidate = (
                 requestedGoal.X + x,
                 requestedGoal.Y + y);
-            if (!Passable(
-                    seed, candidate.Item1, candidate.Item2,
-                    worldLevel, density, obstacles))
+            if (!passable(candidate.Item1, candidate.Item2))
                 continue;
             var center = WorldPlacementGrid.CellCenter(
                 candidate.Item1, candidate.Item2);
