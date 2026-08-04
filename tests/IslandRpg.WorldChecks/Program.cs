@@ -2858,6 +2858,36 @@ Require(
     woodenWallDefinition.GroundContactWidth > 0 &&
     woodenWallDefinition.GroundContactDepth > 0,
     "wooden walls must select a stable AoE direction and expose collision from their planned stage");
+PlaceableObjectCatalog.TryGet(
+    ItemIds.WoodenWall, out var adjacencyWallDefinition);
+Require(
+    !PlaceableObjectCatalog.Overlaps(
+        adjacencyWallDefinition!,
+        new Vector2(10.5f, 10.5f),
+        adjacencyWallDefinition,
+        new Vector2(11.5f, 11.5f),
+        padding: 0) &&
+    PlaceableObjectCatalog.Overlaps(
+        adjacencyWallDefinition,
+        new Vector2(10.5f, 10.5f),
+        adjacencyWallDefinition,
+        new Vector2(11.25f, 11.25f),
+        padding: 0),
+    "single-tile foundations must permit exact diagonal tile adjacency while still rejecting genuine overlap");
+Require(
+    BuildingTerrainPlacement.IsSupported(
+        footprintTileCount: 1,
+        lowestHeight: 0,
+        highestHeight: 20) &&
+    BuildingTerrainPlacement.IsSupported(
+        footprintTileCount: 2,
+        lowestHeight: 4,
+        highestHeight: 6) &&
+    !BuildingTerrainPlacement.IsSupported(
+        footprintTileCount: 2,
+        lowestHeight: 4,
+        highestHeight: 7),
+    "single-tile buildings must permit any terrain plane while multi-tile buildings continue requiring level ground");
 var wallStoredPosition = new Vector2(12.5f, 8.5f);
 PlaceableObjectCatalog.TryGet(
     ItemIds.WoodenWall, out var wallInteractionDefinition);

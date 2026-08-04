@@ -258,7 +258,11 @@ internal sealed partial class GameHostWindow
                     Math.Max(tile.South, tile.West)));
         }
 
-        if (highestHeight - lowestHeight > 2)
+        var footprintTileCount =
+            (maximumX - minimumX + 1) *
+            (maximumY - minimumY + 1);
+        if (!BuildingTerrainPlacement.IsSupported(
+                footprintTileCount, lowestHeight, highestHeight))
         {
             reason = "The full footprint must be on level ground.";
             return false;
@@ -302,7 +306,9 @@ internal sealed partial class GameHostWindow
                 {
                     if (PlaceableObjectCatalog.Overlaps(
                             definition, target,
-                            existingDefinition, existingCenter))
+                            existingDefinition, existingCenter,
+                            PlaceableObjectCatalog.PlacementPadding(
+                                definition, existingDefinition)))
                     {
                         reason = "Another object is blocking the footprint.";
                         return false;

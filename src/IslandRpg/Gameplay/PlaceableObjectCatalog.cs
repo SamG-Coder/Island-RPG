@@ -288,6 +288,14 @@ internal static class PlaceableObjectCatalog
             (first.FootprintDepth + second.FootprintDepth) * .5f +
             padding;
 
+    public static float PlacementPadding(
+        PlaceableObjectDefinition first,
+        PlaceableObjectDefinition second) =>
+        first.FootprintWidth <= 1 && first.FootprintDepth <= 1 &&
+        second.FootprintWidth <= 1 && second.FootprintDepth <= 1
+            ? 0
+            : .08f;
+
     public static bool ContainsPoint(
         PlaceableObjectDefinition definition,
         Vector2 center,
@@ -300,4 +308,13 @@ internal static class PlaceableObjectCatalog
 
     private static float SnapAxis(float value, float size)
         => WorldPlacementGrid.SnapWithFootprint(value, size);
+}
+
+internal static class BuildingTerrainPlacement
+{
+    public static bool IsSupported(
+        int footprintTileCount,
+        float lowestHeight,
+        float highestHeight) =>
+        footprintTileCount == 1 || highestHeight - lowestHeight <= 2;
 }
