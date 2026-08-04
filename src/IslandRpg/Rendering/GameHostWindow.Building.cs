@@ -10,6 +10,8 @@ internal sealed partial class GameHostWindow
 {
     private bool _buildingPanelOpen;
     private bool _buildingPanelLeftWasDown;
+    private BuildingBrowserCategory? _buildingBrowserCategory;
+    private int _buildingBrowserScrollRow;
     private Guid? _activePlayerConstructionId;
     private int _lastPlayerConstructionStrike;
     private readonly Queue<Guid> _playerConstructionQueue = [];
@@ -22,6 +24,26 @@ internal sealed partial class GameHostWindow
     private sealed record WallPlacementPreviewNode(
         Vector2 Target, bool Valid, int Frame);
 
+    private enum BuildingBrowserCategory
+    {
+        Defences
+    }
+
+    private sealed record BuildingBrowserEntry(
+        BuildingBrowserCategory Category,
+        string Name,
+        string Description,
+        CraftingRecipe Recipe);
+
+    private static IReadOnlyList<BuildingBrowserEntry> BuildingBrowserEntries =>
+    [
+        new(
+            BuildingBrowserCategory.Defences,
+            "Wooden wall",
+            "Palisade defence",
+            WoodenWallRecipe)
+    ];
+
     private static CraftingRecipe WoodenWallRecipe =>
         CraftingSkill.Recipes.First(value =>
             value.ResultItemId == ItemIds.WoodenWall);
@@ -29,17 +51,43 @@ internal sealed partial class GameHostWindow
     private void ToggleBuildingPanel()
     {
         _buildingPanelOpen = !_buildingPanelOpen;
+        if (_buildingPanelOpen)
+        {
+            _buildingBrowserCategory = null;
+            _buildingBrowserScrollRow = 0;
+        }
         CancelPlaceableObjectPlacement();
     }
 
     private Vector4 BuildingPanelBounds()
     {
-        var button = _gameUi.BuildButton.Bounds;
-        return new(button.X - 278, button.Y - 278, 330, 270);
+        var inventory = _gameUi.Panel.Bounds;
+        const float gap = 6;
+        var right = inventory.X - gap;
+        var width = MathF.Min(440, right - SceneClientBounds().X - 8);
+        return new(right - width, inventory.Y, width, inventory.W);
     }
 
-    private static Vector4 BuildingWallButtonBounds(Vector4 panel) =>
-        new(panel.X + 14, panel.Y + 48, panel.Z - 28, 158);
+    private const int BuildingGridColumns = 5;
+    private const int BuildingGridRows = 3;
+    private const float BuildingGridGap = 8;
+    private const float BuildingTileHeight = 72;
+
+    private static Vector4 BuildingGridBounds(Vector4 panel) =>
+        new(panel.X + 12, panel.Y + 45, panel.Z - 24, panel.W - 57);
+
+    private static Vector4 BuildingGridTileBounds(Vector4 panel, int index)
+    {
+        var grid = BuildingGridBounds(panel);
+        var width = (grid.Z - (BuildingGridColumns - 1) * BuildingGridGap) /
+                    BuildingGridColumns;
+        return new(
+            grid.X + index % BuildingGridColumns * (width + BuildingGridGap),
+            grid.Y + index / BuildingGridColumns *
+            (BuildingTileHeight + BuildingGridGap),
+            width,
+            BuildingTileHeight);
+    }
 
     private void UpdateBuildingPanelInput(Vector2 pointer, bool leftDown)
     {
@@ -48,10 +96,78 @@ internal sealed partial class GameHostWindow
             _buildingPanelLeftWasDown = leftDown;
             return;
         }
-        if (leftDown && !_buildingPanelLeftWasDown &&
-            BuildingWallButtonBounds(BuildingPanelBounds()).Contains(pointer))
-            BeginPlayerBuildingPlacement(WoodenWallRecipe);
+        if (leftDown && !_buildingPanelLeftWasDown)
+        {
+            var panel = BuildingPanelBounds();
+            if (_buildingBrowserCategory is null)
+            {
+                var categories = AvailableBuildingCategories();
+                for (var index = 0; index < categories.Count; index++)
+                {
+                    if (!BuildingGridTileBounds(panel, index).Contains(pointer))
+                        continue;
+                    _buildingBrowserCategory = categories[index];
+                    _buildingBrowserScrollRow = 0;
+                    break;
+                }
+            }
+            else
+            {
+                if (BuildingGridTileBounds(panel, 0).Contains(pointer))
+                {
+                    _buildingBrowserCategory = null;
+                    _buildingBrowserScrollRow = 0;
+                }
+                else
+                {
+                    var entries = VisibleBuildingEntries();
+                    for (var index = 0; index < entries.Count; index++)
+                    {
+                        if (!BuildingGridTileBounds(panel, index + 1)
+                                .Contains(pointer))
+                            continue;
+                        BeginPlayerBuildingPlacement(entries[index].Recipe);
+                        break;
+                    }
+                }
+            }
+        }
         _buildingPanelLeftWasDown = leftDown;
+    }
+
+    private static IReadOnlyList<BuildingBrowserCategory>
+        AvailableBuildingCategories() => BuildingBrowserEntries
+            .Select(value => value.Category)
+            .Distinct()
+            .ToArray();
+
+    private IReadOnlyList<BuildingBrowserEntry> VisibleBuildingEntries()
+    {
+        if (_buildingBrowserCategory is not { } category) return [];
+        var entries = BuildingBrowserEntries
+            .Where(value => value.Category == category)
+            .ToArray();
+        var first = _buildingBrowserScrollRow * BuildingGridColumns;
+        var capacity = BuildingGridColumns * BuildingGridRows - 1;
+        return entries.Skip(first).Take(capacity).ToArray();
+    }
+
+    private bool ScrollBuildingBrowser(Vector2 pointer, float offset)
+    {
+        if (!_buildingPanelOpen ||
+            _buildingBrowserCategory is not { } category ||
+            !BuildingPanelBounds().Contains(pointer))
+            return false;
+        var count = BuildingBrowserEntries.Count(value =>
+            value.Category == category);
+        var visibleSlots = BuildingGridColumns * BuildingGridRows - 1;
+        var maximumScrollRow = Math.Max(0,
+            (count - visibleSlots + BuildingGridColumns - 1) /
+            BuildingGridColumns);
+        _buildingBrowserScrollRow = Math.Clamp(
+            _buildingBrowserScrollRow - Math.Sign(offset),
+            0, maximumScrollRow);
+        return true;
     }
 
     private void BeginPlayerBuildingPlacement(CraftingRecipe recipe)
@@ -470,44 +586,81 @@ internal sealed partial class GameHostWindow
     {
         if (!_buildingPanelOpen) return;
         var panel = BuildingPanelBounds();
-        DrawUiColor(panel, new(.055f, .047f, .031f, .96f));
         DrawAoEPanelBorder(panel);
-        DrawCenteredUiText(
-            "CONSTRUCTION", new(panel.X, panel.Y + 10, panel.Z, 27),
-            new(232, 219, 177, 255));
-        var option = BuildingWallButtonBounds(panel);
-        var hovered = option.Contains(MouseState.Position);
-        DrawUiColor(option, hovered
-            ? new(.19f, .15f, .075f, .97f)
-            : new(.105f, .09f, .052f, .97f));
-        DrawPanelOutline(option, hovered ? 2 : 1, hovered
+        DrawPanelCaption(
+            _buildingBrowserCategory is null
+                ? "Construction"
+                : $"Construction · {_buildingBrowserCategory}",
+            panel);
+
+        if (_buildingBrowserCategory is null)
+        {
+            var categories = AvailableBuildingCategories();
+            for (var index = 0; index < categories.Count; index++)
+                DrawBuildingBrowserTile(
+                    BuildingGridTileBounds(panel, index),
+                    categories[index].ToString(),
+                    "Building category", drawWallIcon: true);
+            return;
+        }
+
+        DrawBuildingBrowserTile(
+            BuildingGridTileBounds(panel, 0), "Back", "Categories",
+            drawWallIcon: false);
+        var entries = VisibleBuildingEntries();
+        for (var index = 0; index < entries.Count; index++)
+        {
+            var entry = entries[index];
+            DrawBuildingBrowserTile(
+                BuildingGridTileBounds(panel, index + 1),
+                entry.Name, entry.Description, drawWallIcon: true);
+        }
+        DrawBuildingBrowserScrollbar(panel);
+    }
+
+    private void DrawBuildingBrowserScrollbar(Vector4 panel)
+    {
+        if (_buildingBrowserCategory is not { } category) return;
+        var count = BuildingBrowserEntries.Count(value =>
+            value.Category == category);
+        var visibleSlots = BuildingGridColumns * BuildingGridRows - 1;
+        var maximumScrollRow = Math.Max(0,
+            (count - visibleSlots + BuildingGridColumns - 1) /
+            BuildingGridColumns);
+        if (maximumScrollRow == 0) return;
+        var grid = BuildingGridBounds(panel);
+        var track = new Vector4(grid.X + grid.Z + 3, grid.Y, 4, grid.W);
+        DrawUiColor(track, new(.05f, .043f, .03f, .9f));
+        var thumbHeight = MathF.Max(18, track.W / (maximumScrollRow + 1));
+        var progress = _buildingBrowserScrollRow / (float)maximumScrollRow;
+        var thumb = new Vector4(
+            track.X, track.Y + (track.W - thumbHeight) * progress,
+            track.Z, thumbHeight);
+        DrawUiColor(thumb, new(.62f, .48f, .19f, 1));
+    }
+
+    private void DrawBuildingBrowserTile(
+        Vector4 bounds, string name, string description, bool drawWallIcon)
+    {
+        var hovered = bounds.Contains(MouseState.Position);
+        DrawUiColor(bounds, hovered
+            ? new(.055f, .047f, .030f, .76f)
+            : new(.012f, .011f, .009f, .58f));
+        DrawPanelOutline(bounds, hovered ? 2 : 1, hovered
             ? new(.78f, .59f, .22f, 1)
             : new(.49f, .38f, .17f, 1));
-        var icon = new Vector4(
-            option.X + 10, option.Y + 10, 136, option.W - 20);
-        DrawUiColor(icon, new(.035f, .032f, .024f, .9f));
-        DrawPanelOutline(icon, 1, new(.29f, .24f, .14f, 1));
-        DrawWoodenWallBuildIcon(icon);
-        var textX = option.X + 160;
-        DrawUiText(
-            "Wooden wall", new(textX, option.Y + 18),
-            new(236, 222, 178, 255));
-        DrawUiText(
-            "Palisade defence", new(textX, option.Y + 45),
-            new(165, 155, 127, 255));
-        DrawUiText(
-            "1 log", new(textX, option.Y + 79),
-            new(214, 196, 149, 255));
-        DrawUiText(
-            "Crafting level 1", new(textX, option.Y + 103),
-            new(193, 181, 145, 255));
-        DrawUiText(
-            "Hammer required", new(textX, option.Y + 127),
-            new(193, 181, 145, 255));
+        var icon = new Vector4(bounds.X + 5, bounds.Y + 4, bounds.Z - 10, 42);
+        if (drawWallIcon)
+            DrawWoodenWallBuildIcon(icon);
+        else
+            DrawCenteredUiText("<", icon, new(232, 219, 177, 255));
         DrawCenteredUiText(
-            "Click start, preview route, click to place",
-            new(panel.X + 10, panel.Y + 220, panel.Z - 20, 30),
-            new(181, 170, 139, 255));
+            name, new(bounds.X + 2, bounds.Y + 47, bounds.Z - 4, 17),
+            new(236, 222, 178, 255));
+        if (hovered)
+            DrawUiHoverTooltip(
+                name == "Back" ? "Back" : $"{name} · {description}",
+                bounds);
     }
 
     private void DrawWoodenWallBuildIcon(Vector4 bounds)

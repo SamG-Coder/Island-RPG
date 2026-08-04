@@ -3299,6 +3299,9 @@ internal sealed partial class GameHostWindow : GameWindow
             return;
         }
         if (_mode == PreviewMode.Game &&
+            ScrollBuildingBrowser(MouseState.Position, e.OffsetY))
+            return;
+        if (_mode == PreviewMode.Game &&
             _modalScreen.Active == ModalScreenKind.QuestJournal)
         {
             ScrollQuestWindow(MouseState.Position, e.OffsetY);
@@ -5883,6 +5886,8 @@ internal sealed partial class GameHostWindow : GameWindow
             (control, label) = (_gameUi.QuestButton, "Quest Journal");
         else if (_gameUi.CraftingButton.Hovered)
             (control, label) = (_gameUi.CraftingButton, "Crafting Recipes");
+        else if (_gameUi.BuildButton.Hovered)
+            (control, label) = (_gameUi.BuildButton, "Construction");
         else if (_gameUi.CombatButton.Hovered)
             (control, label) = (_gameUi.CombatButton, "Combat");
         else if (_gameUi.SkillsButton.Hovered)
@@ -5890,16 +5895,21 @@ internal sealed partial class GameHostWindow : GameWindow
         else if (_gameUi.InventoryButton.Hovered)
             (control, label) = (_gameUi.InventoryButton, "Inventory");
         if (control is null || label is null) return;
+        DrawUiHoverTooltip(label, control.Bounds);
+    }
+
+    private void DrawUiHoverTooltip(string label, Vector4 anchor)
+    {
         var textWidth = MeasureUiText(label);
         var width = MathF.Ceiling(textWidth) + 20;
         var bounds = new Vector4(
             Math.Clamp(
                 MathF.Round(
-                    control.Bounds.X +
-                    (control.Bounds.Z - width) * .5f),
+                    anchor.X +
+                    (anchor.Z - width) * .5f),
                 4,
                 Math.Max(4, ClientSize.X - width - 4)),
-            control.Bounds.Y - 33,
+            anchor.Y - 33,
             width,
             27);
         DrawUiColor(bounds, new(.026f, .024f, .020f, .97f));
