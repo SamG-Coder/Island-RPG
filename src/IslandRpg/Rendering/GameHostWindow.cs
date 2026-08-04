@@ -6431,7 +6431,7 @@ internal sealed partial class GameHostWindow : GameWindow
             else if (GateCatalog.IsGate(item.Object.ItemId))
             {
                 itemAtlasKey = GateVisuals.Resolve(item.Object);
-                shadowAtlasKey = null;
+                shadowAtlasKey = GateVisuals.ResolveShadow(item.Object);
             }
             else
             {

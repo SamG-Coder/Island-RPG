@@ -216,7 +216,7 @@ internal sealed partial class GameHostWindow
         if (GateCatalog.IsGate(value.ItemId))
         {
             atlasKey = GateVisuals.Resolve(value);
-            shadowKey = null;
+            shadowKey = GateVisuals.ResolveShadow(value);
             texture = _treeAtlasTexture;
             if (_treeAtlas.TryGetValue(atlasKey, out var gateAtlas))
             {

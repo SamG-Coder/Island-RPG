@@ -7,10 +7,16 @@ internal sealed record GateDefinition(
     int Tier,
     string GateGraphicName,
     short GateGraphicId,
+    string GateShadowGraphicName,
+    short GateShadowGraphicId,
     string? SideWallGraphicName,
     short SideWallGraphicId,
+    string? SideWallShadowGraphicName,
+    short SideWallShadowGraphicId,
     string ConstructionGraphicName,
     short ConstructionGraphicId,
+    string? ConstructionShadowGraphicName,
+    short ConstructionShadowGraphicId,
     int MaximumHealth,
     int RequiredLevel,
     int RockCost);
@@ -67,13 +73,15 @@ internal static class GateCatalog
             : throw new KeyNotFoundException($"Unknown gate: {itemId}");
 
     public static IReadOnlyCollection<string> RequiredGraphics =>
-        All.SelectMany(value => value.SideWallGraphicName is null
-                ? new[] { value.GateGraphicName, value.ConstructionGraphicName }
-                : new[]
-                {
-                    value.GateGraphicName, value.SideWallGraphicName,
-                    value.ConstructionGraphicName
-                })
+        All.SelectMany(value => new[]
+            {
+                value.GateGraphicName,
+                value.GateShadowGraphicName,
+                value.SideWallGraphicName,
+                value.SideWallShadowGraphicName,
+                value.ConstructionGraphicName,
+                value.ConstructionShadowGraphicName
+            }.Where(name => name is not null).Select(name => name!))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
     public static IReadOnlyList<CraftingRecipe> Recipes => All.Select(value =>
@@ -85,15 +93,32 @@ internal static class GateCatalog
             ["Mark the gate footprint.", "Raise and secure the gate."],
             RequiredTools: [new(ItemTag.Hammer, "hammer")])).ToArray();
 
-    private static GateDefinition Create(GateSource value, int tier) => new(
-        $"gate_{value.GateId}",
-        $"{value.Architecture} {(tier == 2 ? "stone gate" : "fortified gate")}",
-        value.Architecture, tier,
-        $"GTAA{tier}NN{value.Suffix}", value.GateId,
-        value.SideWallId == 0 ? null : $"GTAC{tier}NN{value.Suffix}",
-        value.SideWallId,
-        $"GTAX{tier}CN{value.Suffix}", value.ConstructionId,
-        tier == 2 ? 500 : 750,
-        tier == 2 ? 7 : 10,
-        tier == 2 ? 4 : 6);
+    private static GateDefinition Create(GateSource value, int tier)
+    {
+        var standard = value.GateId < 3000;
+        var palisade = value.GateId == 8185;
+        var gateShadowId = (short)(value.GateId - (standard ? 8 : 2));
+        var sideShadowId = value.SideWallId == 0
+            ? (short)0
+            : (short)(value.SideWallId - (standard ? 8 : 2));
+        var constructionShadowId = palisade
+            ? (short)0
+            : (short)(value.ConstructionId - (standard ? 4 : 1));
+        return new(
+            $"gate_{value.GateId}",
+            $"{value.Architecture} {(tier == 2 ? "stone gate" : "fortified gate")}",
+            value.Architecture, tier,
+            $"GTAA{tier}NN{value.Suffix}", value.GateId,
+            $"GTAA{tier}N0{value.Suffix}", gateShadowId,
+            value.SideWallId == 0 ? null : $"GTAC{tier}NN{value.Suffix}",
+            value.SideWallId,
+            value.SideWallId == 0 ? null : $"GTAC{tier}N0{value.Suffix}",
+            sideShadowId,
+            $"GTAX{tier}CN{value.Suffix}", value.ConstructionId,
+            constructionShadowId == 0 ? null : $"GTAX{tier}C0{value.Suffix}",
+            constructionShadowId,
+            tier == 2 ? 500 : 750,
+            tier == 2 ? 7 : 10,
+            tier == 2 ? 4 : 6);
+    }
 }

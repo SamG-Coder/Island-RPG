@@ -63,8 +63,8 @@ defence definitions.
 | Fortified palisade | `WALL1N1G` | 1 | Routed wall drag |
 | Stone wall | `WALL2NN{E,F,M,W,X}` | 10 | Routed wall drag |
 | Fortified wall | `WALL3NN{E,F,M,W,X}` | 10 | Routed wall drag |
-| Stone gate | `GTAA2NN*` + `GTAC2NN*`; construction `GTAX2CN*` frames 0–2 | 11 | One three-tile gate entity; authored scaffold progression |
-| Fortified gate | `GTAA3NN*` + `GTAC3NN*`; construction `GTAX3CN*` frames 0–2 | 10 | One three-tile gate entity; authored scaffold progression |
+| Stone gate | `GTAA2NN/N0*` + `GTAC2NN/N0*`; construction `GTAX2CN/C0*` frames 0–2 | 11 | One 1×3 gate entity with matching composite and construction shadows |
+| Fortified gate | `GTAA3NN/N0*` + `GTAC3NN/N0*`; construction `GTAX3CN/C0*` frames 0–2 | 10 | One 1×3 gate entity with matching composite and construction shadows |
 
 The six `X` wall IDs and expansion gate IDs remain ID-qualified in the atlas.
 Each gate is one three-cell asset and one saved world object. Its authored gate

@@ -3112,11 +3112,11 @@ Require(
     GateCatalog.All.All(gate =>
         ItemCatalog.TryGet(gate.ItemId, out _) &&
         PlaceableObjectCatalog.TryGet(gate.ItemId, out var placeable) &&
-        placeable.FootprintWidth == 3 && placeable.FootprintDepth == 1 &&
+        placeable.FootprintWidth == 1 && placeable.FootprintDepth == 3 &&
         CraftingSkill.Recipes.Any(recipe =>
             recipe.ResultItemId == gate.ItemId) &&
         ConstructionService.IsConstructible(gate.ItemId)),
-    "all player-facing stone and fortified gate variants must be registered as three-tile constructible buildings");
+    "all player-facing gates must follow the authored foundation's three-cell isometric axis");
 Require(
     GateCatalog.All.Where(value => value.SideWallGraphicId > 0).All(value =>
         value.SideWallGraphicName is not null) &&
@@ -3133,8 +3133,11 @@ var gateSite = ConstructionService.Begin(new(
 Require(
     GateVisuals.AtlasKey(centralStoneGate.ItemId) == "GATE@2045#0" &&
     GateVisuals.Resolve(gateSite) == "GTAX2CNE@3286#0" &&
+    GateVisuals.ResolveShadow(gateSite) == "GTAX2C0E@3282#0" &&
     GateVisuals.Resolve(ConstructionService.AddWork(gateSite, 250)) ==
         "GTAX2CNE@3286#1" &&
+    GateVisuals.ResolveShadow(ConstructionService.AddWork(gateSite, 250)) ==
+        "GTAX2C0E@3282#1" &&
     GateVisuals.Resolve(ConstructionService.AddWork(gateSite, 400)) ==
         "GTAX2CNE@3286#2",
     "gates must resolve their composite completed key and authored scaffold stages");

@@ -228,9 +228,10 @@ internal static class PlaceableObjectCatalog
         foreach (var gate in GateCatalog.All)
             Definitions[gate.ItemId] = new(
                 gate.ItemId, $"{gate.ItemId}.png",
-                FootprintWidth: 3, FootprintDepth: 1, Height: 3,
+                // GTAX gate foundations run along the world Y isometric axis.
+                FootprintWidth: 1, FootprintDepth: 3, Height: 3,
                 HotspotX: 96, HotspotY: 150,
-                NavigationWidth: 2.7f, NavigationDepth: .85f);
+                NavigationWidth: .85f, NavigationDepth: 2.7f);
     }
 
     public static IReadOnlyCollection<PlaceableObjectDefinition> All =>
