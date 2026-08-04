@@ -5,7 +5,6 @@ namespace IslandRpg.Gameplay;
 internal static class VillagerYellService
 {
     public const float HearingRadius = 24;
-    public const int MaximumResponders = 3;
     public const double CooldownRealSeconds = 8;
 
     public static bool CanYell(VillagerState caller, double gameSeconds) =>
@@ -32,6 +31,32 @@ internal static class VillagerYellService
             new(candidate.PositionX, candidate.PositionY),
             new(caller.PositionX, caller.PositionY)) <=
             HearingRadius * HearingRadius;
+    }
+
+    public static bool ShouldAnswer(
+        VillagerState candidate,
+        VillagerState caller,
+        string aggressorId,
+        in RelationshipState relationship,
+        bool sameSettlement)
+    {
+        if (!CanHearAndRespond(candidate, caller) ||
+            candidate.Boldness < .45f ||
+            candidate.ConflictTargetId is { } existingTarget &&
+            existingTarget != aggressorId)
+            return false;
+        var callerIsLeader = caller.Id == candidate.RecognizedLeaderId;
+        var kind = VillagerRelationshipClassifier.Classify(
+            relationship, callerIsLeader);
+        if (kind is VillagerRelationshipKind.Rival or
+            VillagerRelationshipKind.Enemy or
+            VillagerRelationshipKind.FearedEnemy)
+            return false;
+        return VillagerRelationshipClassifier.WillDefend(
+                   relationship, callerIsLeader) ||
+               sameSettlement &&
+               (callerIsLeader || candidate.Sociability >= .55f ||
+                candidate.Honesty >= .65f);
     }
 }
 

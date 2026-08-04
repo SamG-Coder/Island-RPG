@@ -187,11 +187,11 @@ internal sealed partial class GameHostWindow
             var distance = Vector2.DistanceSquared(
                 new(candidate.PositionX, candidate.PositionY),
                 new(caller.PositionX, caller.PositionY));
-            if (candidate.Boldness < .55f ||
-                !VillagerYellService.CanHearAndRespond(candidate, caller) ||
-                !VillagerRelationshipClassifier.WillDefend(
-                    relationship,
-                    caller.Id == candidate.RecognizedLeaderId))
+            var sameSettlement = caller.SettlementGroupId is not null &&
+                caller.SettlementGroupId == candidate.SettlementGroupId;
+            if (!VillagerYellService.ShouldAnswer(
+                    candidate, caller, aggressor.Id,
+                    relationship, sameSettlement))
                 continue;
             helpers.Add((index, distance));
         }
@@ -201,8 +201,7 @@ internal sealed partial class GameHostWindow
             callerIndex, $"Help! {aggressor.Name} is attacking me!");
         var responderIds = new List<string>();
         foreach (var (helperIndex, _) in helpers
-                     .OrderBy(value => value.Distance)
-                     .Take(VillagerYellService.MaximumResponders))
+                     .OrderBy(value => value.Distance))
         {
             var helper = _villagers[helperIndex];
             if (helper.ConflictTargetId == aggressor.Id) continue;

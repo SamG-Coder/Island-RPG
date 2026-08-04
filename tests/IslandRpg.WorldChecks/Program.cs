@@ -903,7 +903,13 @@ var yellCaller = advancedVillagers[0] with
 };
 var nearYellResponder = yellCaller with
 {
-    Id = "near-yell-responder", PositionX = 23
+    Id = "near-yell-responder", PositionX = 23,
+    Sociability = .8f, Boldness = .7f,
+    SettlementGroupId = "yell-group"
+};
+var groupedYellCaller = yellCaller with
+{
+    SettlementGroupId = "yell-group"
 };
 var farYellResponder = yellCaller with
 {
@@ -918,6 +924,16 @@ Require(Math.Abs(facingAttacker.FacingX) < .001f &&
             farYellResponder, yellCaller) &&
         !VillagerYellService.CanHearAndRespond(
             nearYellResponder with { Hunger = 1 }, yellCaller) &&
+        VillagerYellService.ShouldAnswer(
+            nearYellResponder, groupedYellCaller, "aggressor",
+            default, sameSettlement: true) &&
+        !VillagerYellService.ShouldAnswer(
+            nearYellResponder, groupedYellCaller, "aggressor",
+            new RelationshipState(Trust: -20), sameSettlement: true) &&
+        !VillagerYellService.ShouldAnswer(
+            nearYellResponder with { ConflictTargetId = "someone-else" },
+            groupedYellCaller, "aggressor", default,
+            sameSettlement: true) &&
         !VillagerYellService.CanYell(markedYell, 101) &&
         VillagerYellService.CanYell(
             markedYell, markedYell.NextYellGameSeconds),
