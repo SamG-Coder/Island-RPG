@@ -97,7 +97,10 @@ foreach (var graphic in matches)
         exportedFrames += sprite.Frames.Count;
         Console.WriteLine(
             $"{graphic.Name,-21} SLP {graphic.SlpId,-6} " +
-            $"{sprite.Frames.Count,3} frame(s)");
+            $"{sprite.Frames.Count,3} frame(s): " +
+            string.Join(", ", sprite.Frames.Select((frame, index) =>
+                $"#{index} {frame.Width}x{frame.Height} hotspot " +
+                $"{frame.HotspotX},{frame.HotspotY}")));
     }
     catch (Exception exception)
     {

@@ -1725,10 +1725,10 @@ internal sealed partial class GameHostWindow
             villager.Inventory, slot,
             position.X, position.Y, villager.Id);
         if (!placed.Succeeded || placed.Object is null) return false;
-        var placedObject = placed.Object with
-        {
-            GroupOwnerId = villager.SettlementGroupId
-        };
+        var placedObject = villager.SettlementGroupId is { } groupId
+            ? BuildingOwnershipService.AssignGroup(placed.Object, groupId)
+            : BuildingOwnershipService.AssignIndividual(
+                placed.Object, villager.Id);
         gpu.Chunk.GroundObjects.Add(placedObject);
         _villagers[index] = villager with
         {

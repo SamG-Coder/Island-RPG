@@ -213,6 +213,19 @@ internal sealed partial class GameHostWindow
             frame = null!;
             return false;
         }
+        if (GateCatalog.IsGate(value.ItemId))
+        {
+            atlasKey = GateVisuals.Resolve(value);
+            shadowKey = null;
+            texture = _treeAtlasTexture;
+            if (_treeAtlas.TryGetValue(atlasKey, out var gateAtlas))
+            {
+                frame = gateAtlas.Frame;
+                return texture != 0;
+            }
+            frame = null!;
+            return false;
+        }
         if (!WallCatalog.IsWall(value.ItemId))
             return TryGroundItemVisual(
                 value.ItemId,
@@ -568,12 +581,15 @@ internal sealed partial class GameHostWindow
             return;
         }
         if (HouseCatalog.IsHouse(preview.ItemId) ||
-            DefenceBuildingCatalog.IsDefence(preview.ItemId))
+            DefenceBuildingCatalog.IsDefence(preview.ItemId) ||
+            GateCatalog.IsGate(preview.ItemId))
         {
             var vertices = new List<float>();
             var buildingKey = HouseCatalog.IsHouse(preview.ItemId)
                 ? HouseVisuals.AtlasKey(preview.ItemId)
-                : DefenceBuildingVisuals.AtlasKey(preview.ItemId);
+                : DefenceBuildingCatalog.IsDefence(preview.ItemId)
+                    ? DefenceBuildingVisuals.AtlasKey(preview.ItemId)
+                    : GateVisuals.AtlasKey(preview.ItemId);
             AddAtlasQuad(buildingKey, world, .58f,
                 vertices);
             GL.UseProgram(_program);
@@ -876,6 +892,14 @@ internal sealed partial class GameHostWindow
             frame = null!;
             texture = _treeAtlasTexture;
             atlasKey = DefenceBuildingVisuals.AtlasKey(itemId);
+            shadowKey = null;
+            return false;
+        }
+        if (GateCatalog.IsGate(itemId))
+        {
+            frame = null!;
+            texture = _treeAtlasTexture;
+            atlasKey = GateVisuals.AtlasKey(itemId);
             shadowKey = null;
             return false;
         }

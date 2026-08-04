@@ -170,6 +170,7 @@ internal sealed partial class GameHostWindow
                 if (!PlaceableObjectCatalog.TryGet(
                         groundObject.ItemId, out var definition))
                     continue;
+                if (GateService.IsOpen(groundObject)) continue;
                 if (WallCatalog.IsWall(groundObject.ItemId))
                     obstacles.Add(
                         PlaceableObjectCatalog.WallNavigationObstacle(

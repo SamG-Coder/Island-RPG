@@ -216,6 +216,21 @@ internal static class PlaceableObjectCatalog
                 HotspotY: defence.Kind == DefenceBuildingKind.Castle ? 260 : 150,
                 NavigationWidth: defence.FootprintWidth * .85f,
                 NavigationDepth: defence.FootprintDepth * .85f);
+        foreach (var wall in WallCatalog.All.Where(value =>
+                     value.ItemId.StartsWith(
+                         "wall_variant_", StringComparison.Ordinal)))
+            Definitions[wall.ItemId] = new(
+                wall.ItemId, $"{wall.ItemId}.png",
+                FootprintWidth: 1, FootprintDepth: 1, Height: 2.2f,
+                HotspotX: 48, HotspotY: 96,
+                RenderWidth: 96, RenderHeight: 104,
+                NavigationWidth: 1, NavigationDepth: 1);
+        foreach (var gate in GateCatalog.All)
+            Definitions[gate.ItemId] = new(
+                gate.ItemId, $"{gate.ItemId}.png",
+                FootprintWidth: 3, FootprintDepth: 1, Height: 3,
+                HotspotX: 96, HotspotY: 150,
+                NavigationWidth: 2.7f, NavigationDepth: .85f);
     }
 
     public static IReadOnlyCollection<PlaceableObjectDefinition> All =>

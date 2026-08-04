@@ -54,11 +54,26 @@ include the graphic ID. Castles also include the separately authored African
 `CSTL3NNW@7633` variant. This produces 52 unique, save-stable standalone
 defence definitions.
 
-## Routed defensive assets
+## Wall and gate variants
 
-Gate records are not standalone buildings. The DAT contains four route
-orientations (`GTA*`, `GTB*`, `GTC*`, `GTD*`), four visual families
-(`*A`, `*B`, `*C`, `*X`), two tiers (`2`, `3`), architecture suffixes and
-separate normal/damage layers. They are classified as **routed wall gates** and
-must use a gate route, open/closed collision and neighbour-aware wall joins;
-they must not be exposed as hundreds of independent point-placement entries.
+| Family | Completed DAT graphics | Buildable variants | Placement |
+|---|---|---:|---|
+| Fence | `FENCENNG` | 1 | Routed wall drag |
+| Palisade | `FENCEN1G` | 1 | Routed wall drag |
+| Fortified palisade | `WALL1N1G` | 1 | Routed wall drag |
+| Stone wall | `WALL2NN{E,F,M,W,X}` | 10 | Routed wall drag |
+| Fortified wall | `WALL3NN{E,F,M,W,X}` | 10 | Routed wall drag |
+| Stone gate | `GTAA2NN*` + `GTAC2NN*`; construction `GTAX2CN*` frames 0–2 | 11 | One three-tile gate entity; authored scaffold progression |
+| Fortified gate | `GTAA3NN*` + `GTAC3NN*`; construction `GTAX3CN*` frames 0–2 | 10 | One three-tile gate entity; authored scaffold progression |
+
+The six `X` wall IDs and expansion gate IDs remain ID-qualified in the atlas.
+Each gate is one three-cell asset and one saved world object. Its authored gate
+span is layered with one matching wall section on either side at the offsets
+recorded by the AoE composite layout. Those side sections are visual and
+collision parts of the gate: they are not separately selectable walls, do not
+create extra construction sites and do not have independent health. The
+special palisade expansion gate is already self-contained.
+
+The remaining `GTA*`, `GTB*`, `GTC*` and `GTD*` records are directional,
+open/damaged and component layers of those 21 player-facing gate variants;
+they are not duplicated as fake entries in the build browser.

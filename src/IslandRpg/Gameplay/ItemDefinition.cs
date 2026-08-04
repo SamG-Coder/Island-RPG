@@ -761,6 +761,18 @@ internal static class ItemCatalog
                 null,
                 Droppable: false,
                 Tags: ItemTag.PlaceableObject);
+        foreach (var wall in WallCatalog.All.Where(value =>
+                     value.ItemId.StartsWith(
+                         "wall_variant_", StringComparison.Ordinal)))
+            Items[wall.ItemId] = new(
+                wall.ItemId, wall.Name.ToLowerInvariant(), wall.Name,
+                $"A {wall.Architecture.ToLowerInvariant()} defensive wall.",
+                null, Droppable: false, Tags: ItemTag.PlaceableObject);
+        foreach (var gate in GateCatalog.All)
+            Items[gate.ItemId] = new(
+                gate.ItemId, gate.Name.ToLowerInvariant(), gate.Name,
+                $"A {gate.Architecture.ToLowerInvariant()} defensive gate.",
+                null, Droppable: false, Tags: ItemTag.PlaceableObject);
         foreach (var (id, item) in Items.ToArray())
             if (IsSlimeDropStackable(id))
                 Items[id] = item with { CanStack = true };

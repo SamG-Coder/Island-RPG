@@ -21,36 +21,22 @@ internal static class PalisadeWallVisuals
         $"{ShadowGraphic}@{ShadowGraphicId}#{frame}";
     public static string FrontFrameKey => WallFrame(FrontFrame);
 
-    private sealed record WallVisualDefinition(
-        string Graphic, short GraphicId,
-        string? ShadowGraphic, short ShadowGraphicId,
-        bool UsesStoneConstructionStages);
-
-    private static WallVisualDefinition Definition(string itemId) =>
-        itemId switch
-        {
-            ItemIds.WoodenFence => new(
-                "FENCENNG", 8502, null, 0, false),
-            ItemIds.WoodenWall => new(
-                "FENCEN1G", 8501, "FENCEN0G", 8500, false),
-            ItemIds.FortifiedWoodenWall => new(
-                WallGraphic, WallGraphicId,
-                ShadowGraphic, ShadowGraphicId, false),
-            ItemIds.StoneWall => new(
-                "WALL2NNW", 2024, "WALL2N0W", 2016, true),
-            ItemIds.FortifiedWall => new(
-                "WALL3NNW", 2036, "WALL3N0W", 2028, true),
-            _ => new("FENCEN1G", 8501, "FENCEN0G", 8500, false)
-        };
+    private static WallDefinition Definition(string itemId) =>
+        WallCatalog.Get(itemId);
 
     public static IReadOnlyCollection<string> RequiredGraphics =>
-    [
+    new[]
+    {
         WallGraphic, ShadowGraphic,
         "FENCENNG", "FENCEN1G", "FENCEN0G",
         "WALL2NNW", "WALL2N0W",
         "WALL3NNW", "WALL3N0W",
         "WCON2NNW", "WCON2N0W"
-    ];
+    }.Concat(WallCatalog.All.SelectMany(value =>
+            value.ShadowGraphicName is null
+                ? new[] { value.GraphicName }
+                : new[] { value.GraphicName, value.ShadowGraphicName }))
+        .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
     public static bool IsWallGraphic(string graphicName) =>
         RequiredGraphics.Contains(graphicName, StringComparer.OrdinalIgnoreCase);
@@ -58,7 +44,7 @@ internal static class PalisadeWallVisuals
     public static string WallFrame(string itemId, int frame)
     {
         var definition = Definition(itemId);
-        return $"{definition.Graphic}@{definition.GraphicId}#" +
+        return $"{definition.GraphicName}@{definition.GraphicId}#" +
                Math.Clamp(frame, 0, 4);
     }
 
@@ -74,9 +60,9 @@ internal static class PalisadeWallVisuals
         if (stage == ConstructionStage.Complete)
             return (
                 WallFrame(value.ItemId, frame),
-                definition.ShadowGraphic is null
+                definition.ShadowGraphicName is null
                     ? null
-                    : $"{definition.ShadowGraphic}@" +
+                    : $"{definition.ShadowGraphicName}@" +
                       $"{definition.ShadowGraphicId}#{frame}");
         // Wooden palisades have one authored base per direction and then the
         // completed wall. Later WCON2 stages belong to stone construction.

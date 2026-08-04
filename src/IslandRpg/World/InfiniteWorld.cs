@@ -44,7 +44,9 @@ internal sealed record WorldGroundObject(
     WorldContainerContents? Container = null,
     string? OwnerId = null,
     string? GroupOwnerId = null,
-    int VisualFrame = -1);
+    int VisualFrame = -1,
+    GateAccessState GateState = GateAccessState.Unlocked,
+    string[]? ResidentIds = null);
 internal sealed record WorldContainerContents(
     string?[] Items,
     int[] Quantities,
@@ -761,7 +763,7 @@ internal sealed class WorldChunkStore
     internal const int RegionSize = 8;
     private const int WorldFormatVersion = 5;
     private const int RegionFormatVersion = 1;
-    private const int ChunkPayloadVersion = 26;
+    private const int ChunkPayloadVersion = 27;
     private const int RegionMagic = 0x49525247; // IRRG
     private const int LegacyChunkMagic = 0x49524348; // IRCH
     private const int LegacyChunkVersion = 2;
@@ -1042,6 +1044,16 @@ internal sealed class WorldChunkStore
                                 : "");
                     }
                 writer.Write(groundObject.OwnerId ?? "");
+                writer.Write(groundObject.GroupOwnerId ?? "");
+                writer.Write(groundObject.VisualFrame);
+                writer.Write((byte)groundObject.GateState);
+                var residents = groundObject.ResidentIds ?? [];
+                if (residents.Length > BuildingOwnershipService.MaximumResidents)
+                    throw new InvalidDataException(
+                        "A building has too many residents.");
+                writer.Write(residents.Length);
+                foreach (var residentId in residents)
+                    writer.Write(residentId);
             }
             writer.Write(chunk.FishRemaining.Count);
             foreach (var school in chunk.FishRemaining)
@@ -1249,9 +1261,36 @@ internal sealed class WorldChunkStore
                         {
                             OwnerId = NullIfEmpty(reader.ReadString())
                         };
+                    if (payloadVersion >= 27)
+                    {
+                        var groupOwnerId = NullIfEmpty(reader.ReadString());
+                        var visualFrame = reader.ReadInt32();
+                        var gateState = (GateAccessState)reader.ReadByte();
+                        var residentCount = reader.ReadInt32();
+                        if (!Enum.IsDefined(gateState) ||
+                            residentCount is < 0 or >
+                                BuildingOwnershipService.MaximumResidents)
+                            throw new InvalidDataException(
+                                "Chunk building state is invalid.");
+                        var residents = new string[residentCount];
+                        for (var resident = 0;
+                             resident < residentCount;
+                             resident++)
+                            residents[resident] = reader.ReadString();
+                        groundObject = groundObject with
+                        {
+                            GroupOwnerId = groupOwnerId,
+                            VisualFrame = visualFrame,
+                            GateState = gateState,
+                            ResidentIds = residents
+                        };
+                    }
                     if (string.IsNullOrWhiteSpace(groundObject.ItemId) ||
                         groundObject.ItemId.Length > 64 ||
                         groundObject.OwnerId?.Length > 64 ||
+                        groundObject.GroupOwnerId?.Length > 64 ||
+                        groundObject.ResidentIds?.Any(id =>
+                            string.IsNullOrWhiteSpace(id) || id.Length > 64) == true ||
                         groundObject.FuelItemId?.Length > 64 ||
                         !double.IsFinite(
                             groundObject.LitUntilGameSeconds) ||

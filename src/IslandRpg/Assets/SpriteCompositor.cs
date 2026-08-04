@@ -10,6 +10,30 @@ internal static class SpriteCompositor
         return new(frames);
     }
 
+    public static SpriteFrame LayerFrames(
+        params (SpriteFrame Frame, int OffsetX, int OffsetY)[] layers)
+    {
+        if (layers.Length == 0)
+            throw new ArgumentException("At least one sprite layer is required.");
+        var left = layers.Min(value =>
+            value.OffsetX - value.Frame.HotspotX);
+        var top = layers.Min(value =>
+            value.OffsetY - value.Frame.HotspotY);
+        var right = layers.Max(value =>
+            value.OffsetX + value.Frame.Width - value.Frame.HotspotX);
+        var bottom = layers.Max(value =>
+            value.OffsetY + value.Frame.Height - value.Frame.HotspotY);
+        var width = right - left;
+        var height = bottom - top;
+        var rgba = new byte[checked(width * height * 4)];
+        foreach (var layer in layers)
+            Blit(
+                layer.Frame, rgba, width,
+                layer.OffsetX - layer.Frame.HotspotX - left,
+                layer.OffsetY - layer.Frame.HotspotY - top);
+        return new(width, height, -left, -top, rgba);
+    }
+
     private static SpriteFrame LayerFrame(SpriteFrame back, SpriteFrame front)
     {
         // Frame coordinates are relative to the common ground hotspot.

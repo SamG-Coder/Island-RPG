@@ -3091,6 +3091,94 @@ Require(
         "CSTL3NNE@171#0" &&
     DefenceBuildingVisuals.Resolve(stagedCastle) == "CNST8_NN@123#0",
     "standalone defences must use ID-qualified completed sprites and footprint-classified construction stages");
+Require(
+    WallCatalog.All.Count == 23 &&
+    WallCatalog.All.Count(value => value.Family == WallFamily.Stone) == 10 &&
+    WallCatalog.All.Count(value =>
+        value.Family == WallFamily.FortifiedStone) == 10 &&
+    WallCatalog.All.All(wall =>
+        ItemCatalog.TryGet(wall.ItemId, out _) &&
+        PlaceableObjectCatalog.TryGet(wall.ItemId, out var placeable) &&
+        placeable.FootprintWidth == 1 && placeable.FootprintDepth == 1 &&
+        CraftingSkill.Recipes.Any(recipe =>
+            recipe.ResultItemId == wall.ItemId)),
+    "every wall architecture must remain a one-tile routed build with an item and recipe");
+Require(
+    GateCatalog.All.Count == 21 &&
+    GateCatalog.All.Count(value => value.Tier == 2) == 11 &&
+    GateCatalog.All.Count(value => value.Tier == 3) == 10 &&
+    GateCatalog.All.Select(value => value.ItemId)
+        .Distinct(StringComparer.OrdinalIgnoreCase).Count() == 21 &&
+    GateCatalog.All.All(gate =>
+        ItemCatalog.TryGet(gate.ItemId, out _) &&
+        PlaceableObjectCatalog.TryGet(gate.ItemId, out var placeable) &&
+        placeable.FootprintWidth == 3 && placeable.FootprintDepth == 1 &&
+        CraftingSkill.Recipes.Any(recipe =>
+            recipe.ResultItemId == gate.ItemId) &&
+        ConstructionService.IsConstructible(gate.ItemId)),
+    "all player-facing stone and fortified gate variants must be registered as three-tile constructible buildings");
+Require(
+    GateCatalog.All.Where(value => value.SideWallGraphicId > 0).All(value =>
+        value.SideWallGraphicName is not null) &&
+    GateCatalog.All.Count(value => value.SideWallGraphicId == 0) == 1 &&
+    GateCatalog.All.All(value =>
+        value.ConstructionGraphicName.StartsWith("GTAX", StringComparison.Ordinal) &&
+        value.ConstructionGraphicId > 0),
+    "each gate must own matching side-wall sections where available and an authored three-frame construction graphic");
+var centralStoneGate = GateCatalog.All.First(value =>
+    value.GateGraphicId == 2045);
+var gateSite = ConstructionService.Begin(new(
+    Guid.NewGuid(), centralStoneGate.ItemId, 1, 1,
+    OwnerId: "gate-owner"));
+Require(
+    GateVisuals.AtlasKey(centralStoneGate.ItemId) == "GATE@2045#0" &&
+    GateVisuals.Resolve(gateSite) == "GTAX2CNE@3286#0" &&
+    GateVisuals.Resolve(ConstructionService.AddWork(gateSite, 250)) ==
+        "GTAX2CNE@3286#1" &&
+    GateVisuals.Resolve(ConstructionService.AddWork(gateSite, 400)) ==
+        "GTAX2CNE@3286#2",
+    "gates must resolve their composite completed key and authored scaffold stages");
+var completedGate = gateSite with { Health = gateSite.MaxHealth };
+Require(
+    GateService.TryOpen(completedGate, out var openGate) &&
+    openGate.GateState == GateAccessState.Opened &&
+    GateService.IsOpen(openGate) &&
+    GateVisuals.Resolve(openGate) ==
+        GateVisuals.OpenAtlasKey(openGate.ItemId) &&
+    GateService.TryClose(openGate, out var closedGate) &&
+    closedGate.GateState == GateAccessState.Unlocked &&
+    GateService.TryLock(closedGate, true, out var lockedGate) &&
+    lockedGate.GateState == GateAccessState.Locked &&
+    !GateService.TryOpen(lockedGate, out _) &&
+    !GateService.TryUnlock(lockedGate, false, out _) &&
+    GateService.TryUnlock(lockedGate, true, out var unlockedGate) &&
+    unlockedGate.GateState == GateAccessState.Unlocked,
+    "completed gates must transition through open, unlocked, and owner-controlled locked states");
+var ownershipProbe = BuildingOwnershipService.AssignGroup(
+    completedGate, "group-test");
+var residentHouse = BuildingOwnershipService.SetResidents(
+    new WorldGroundObject(
+        Guid.NewGuid(), HouseCatalog.All[0].ItemId, 1, 1,
+        OwnerId: "house-owner"),
+    ["resident-a", "resident-b", "resident-a"]);
+Require(
+    ownershipProbe.OwnerId is null &&
+    ownershipProbe.GroupOwnerId == "group-test" &&
+    BuildingOwnershipService.CanManage(
+        ownershipProbe, "member",
+        SettlementGroupService.Form(
+            "test", "member", ["member"], Vector2.Zero, 0, 0)) &&
+    residentHouse.ResidentIds?.SequenceEqual(
+        ["resident-a", "resident-b"]) == true,
+    "buildings must have one individual-or-group owner and houses must retain bounded unique residents");
+var compositorPixel = new byte[4 * 4];
+compositorPixel[3] = 255;
+var compositeProbe = SpriteCompositor.LayerFrames(
+    (new SpriteFrame(2, 2, 1, 1, compositorPixel), -1, 0),
+    (new SpriteFrame(2, 2, 1, 1, compositorPixel), 1, 0));
+Require(
+    compositeProbe.Width == 4 && compositeProbe.HotspotX == 2,
+    "offset sprite composition must preserve a shared hotspot for gate component assembly");
 var droppedInteraction = EntityInteractionService.Drop(
     sharedPlacement.Inventory,
     0,
@@ -10071,6 +10159,18 @@ try
     origin.GroundObjects.Add(new(
         Guid.NewGuid(), ItemIds.DigSite, 22.5f, 22.5f,
         Health: 37, MaxHealth: 70));
+    origin.GroundObjects.Add(new(
+        Guid.NewGuid(), centralStoneGate.ItemId, 23.5f, 23.5f,
+        Health: centralStoneGate.MaximumHealth,
+        MaxHealth: centralStoneGate.MaximumHealth,
+        GroupOwnerId: "group-builders",
+        GateState: GateAccessState.Locked));
+    origin.GroundObjects.Add(new(
+        Guid.NewGuid(), HouseCatalog.All[0].ItemId, 24.5f, 24.5f,
+        Health: HouseCatalog.All[0].MaximumHealth,
+        MaxHealth: HouseCatalog.All[0].MaximumHealth,
+        OwnerId: "house-owner",
+        ResidentIds: ["resident-a", "resident-b"]));
     for (var regionY = 0; regionY < WorldChunkStore.RegionSize; regionY++)
     for (var regionX = 0; regionX < WorldChunkStore.RegionSize; regionX++)
         store.Save(CloneAt(origin, new(regionX, regionY)));
@@ -10084,8 +10184,17 @@ try
         "derived fish schools must regenerate when a chunk is loaded");
     Require(origin.TreeInstances.SequenceEqual(loaded.TreeInstances),
         "instantiated tree IDs, health, and lifecycle state must round-trip");
-    Require(origin.GroundObjects.SequenceEqual(loaded.GroundObjects),
-        "ground objects and collected-object removals must round-trip");
+    Require(
+        origin.GroundObjects.Select(value => value with { ResidentIds = null })
+            .SequenceEqual(loaded.GroundObjects.Select(value =>
+                value with { ResidentIds = null })) &&
+        loaded.GroundObjects.Single(value =>
+                value.OwnerId == "house-owner").ResidentIds?
+            .SequenceEqual(["resident-a", "resident-b"]) == true &&
+        loaded.GroundObjects.Single(value =>
+                value.GroupOwnerId == "group-builders").GateState ==
+            GateAccessState.Locked,
+        "ground objects, ownership, residents, gate state, and collected-object removals must round-trip");
     Require(origin.Cliffs.SequenceEqual(loaded.Cliffs), "derived cliff faces must round-trip");
     Require(origin.BiomeWeightsA.SequenceEqual(loaded.BiomeWeightsA),
         "primary biome weights must round-trip");
