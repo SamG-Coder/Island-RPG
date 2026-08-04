@@ -58,6 +58,12 @@ internal sealed partial class GameHostWindow
             ItemIds.StoneWall),
         new(
             BuildingBrowserCategory.Defences,
+            "Fortified wooden wall",
+            "Reinforced timber · 2 logs",
+            BuildingRecipe(ItemIds.FortifiedWoodenWall),
+            ItemIds.FortifiedWoodenWall),
+        new(
+            BuildingBrowserCategory.Defences,
             "Fortified wall",
             "Heavy defence · 5 large rocks",
             BuildingRecipe(ItemIds.FortifiedWall),

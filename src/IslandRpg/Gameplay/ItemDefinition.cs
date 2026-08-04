@@ -175,6 +175,7 @@ internal static class ItemIds
     public const string StorageBarrel = "storage_barrel";
     public const string WoodenFence = "wooden_fence";
     public const string WoodenWall = "wooden_wall";
+    public const string FortifiedWoodenWall = "fortified_wooden_wall";
     public const string StoneWall = "stone_wall";
     public const string FortifiedWall = "fortified_wall";
     public const string CaveHole = "cave_hole";
@@ -695,6 +696,12 @@ internal static class ItemCatalog
                 ItemIds.StoneWall,
                 "stone wall", "Stone wall",
                 "A durable stone defensive wall.",
+                0, Droppable: false,
+                Tags: ItemTag.PlaceableObject),
+            [ItemIds.FortifiedWoodenWall] = new(
+                ItemIds.FortifiedWoodenWall,
+                "fortified wooden wall", "Fortified wood",
+                "A reinforced timber wall with a protected base.",
                 0, Droppable: false,
                 Tags: ItemTag.PlaceableObject),
             [ItemIds.FortifiedWall] = new(

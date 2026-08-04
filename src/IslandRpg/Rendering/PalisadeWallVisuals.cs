@@ -10,8 +10,8 @@ internal static class PalisadeWallVisuals
     // flags, so render the visible layer directly.
     public const string WallGraphic = "WALL1N1G";
     public const string ShadowGraphic = "WALL1N0G";
-    public const short WallGraphicId = 587;
-    public const short ShadowGraphicId = 586;
+    public const short WallGraphicId = 605;
+    public const short ShadowGraphicId = 604;
     // The single post is used for the build icon, hover ghost and wall caps.
     public const int FrontFrame = 2;
 
@@ -30,20 +30,23 @@ internal static class PalisadeWallVisuals
         itemId switch
         {
             ItemIds.WoodenFence => new(
+                "FENCENNG", 8502, null, 0, false),
+            ItemIds.WoodenWall => new(
                 "FENCEN1G", 8501, "FENCEN0G", 8500, false),
+            ItemIds.FortifiedWoodenWall => new(
+                WallGraphic, WallGraphicId,
+                ShadowGraphic, ShadowGraphicId, false),
             ItemIds.StoneWall => new(
                 "WALL2NNW", 2024, "WALL2N0W", 2016, true),
             ItemIds.FortifiedWall => new(
                 "WALL3NNW", 2036, "WALL3N0W", 2028, true),
-            _ => new(
-                WallGraphic, WallGraphicId,
-                ShadowGraphic, ShadowGraphicId, false)
+            _ => new("FENCEN1G", 8501, "FENCEN0G", 8500, false)
         };
 
     public static IReadOnlyCollection<string> RequiredGraphics =>
     [
         WallGraphic, ShadowGraphic,
-        "FENCEN1G", "FENCEN0G",
+        "FENCENNG", "FENCEN1G", "FENCEN0G",
         "WALL2NNW", "WALL2N0W",
         "WALL3NNW", "WALL3N0W",
         "WCON2NNW", "WCON2N0W"

@@ -141,6 +141,18 @@ internal static class PlaceableObjectCatalog
                 RenderHeight: 104,
                 NavigationWidth: 1f,
                 NavigationDepth: 1f),
+            [ItemIds.FortifiedWoodenWall] = new(
+                ItemIds.FortifiedWoodenWall,
+                "fortified-wooden-wall.png",
+                FootprintWidth: 1,
+                FootprintDepth: 1,
+                Height: 1.9f,
+                HotspotX: 48,
+                HotspotY: 86,
+                RenderWidth: 96,
+                RenderHeight: 92,
+                NavigationWidth: 1f,
+                NavigationDepth: 1f),
             [ItemIds.FortifiedWall] = new(
                 ItemIds.FortifiedWall,
                 "fortified-wall.png",

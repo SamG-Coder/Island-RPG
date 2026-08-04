@@ -2931,11 +2931,15 @@ Require(
     "player and NPC builders must approach the nearest wall edge or diagonal corner without entering its blocked tile");
 Require(
     PalisadeWallVisuals.WallGraphic == "WALL1N1G" &&
-    PalisadeWallVisuals.WallGraphicId == 587 &&
+    PalisadeWallVisuals.WallGraphicId == 605 &&
     PalisadeWallVisuals.ShadowGraphic == "WALL1N0G" &&
-    PalisadeWallVisuals.ShadowGraphicId == 586 &&
-    PalisadeWallVisuals.FrontFrameKey == "WALL1N1G@587#2",
-    "wooden walls must use the basic AoE palisade layers rather than the fortified wall or placement flag");
+    PalisadeWallVisuals.ShadowGraphicId == 604 &&
+    PalisadeWallVisuals.FrontFrameKey == "WALL1N1G@605#2" &&
+    PalisadeWallVisuals.FrontFrameKeyFor(ItemIds.WoodenFence) ==
+        "FENCENNG@8502#2" &&
+    PalisadeWallVisuals.FrontFrameKeyFor(ItemIds.WoodenWall) ==
+        "FENCEN1G@8501#2",
+    "fence, wooden wall and fortified wooden wall must map to their distinct authored AoE layers");
 var plannedWallVisual = PalisadeWallVisuals.Resolve(plannedWall.Object!, 3);
 var completedWallVisual = PalisadeWallVisuals.Resolve(finishedWall, 3);
 Require(
@@ -2944,14 +2948,15 @@ Require(
     plannedWallVisual.Shadow?.StartsWith(
         "WCON2N0W#", StringComparison.Ordinal) == true &&
     completedWallVisual.Wall.StartsWith(
-        "WALL1N1G@587#", StringComparison.Ordinal) &&
+        "FENCEN1G@8501#", StringComparison.Ordinal) &&
     completedWallVisual.Shadow?.StartsWith(
-        "WALL1N0G@586#", StringComparison.Ordinal) == true,
+        "FENCEN0G@8500#", StringComparison.Ordinal) == true,
     "unfinished and completed palisades must always resolve persistent world-render atlas layers");
 var wallItemIds = new[]
 {
     ItemIds.WoodenFence,
     ItemIds.WoodenWall,
+    ItemIds.FortifiedWoodenWall,
     ItemIds.StoneWall,
     ItemIds.FortifiedWall
 };
@@ -2978,7 +2983,7 @@ var fortifiedWall = ConstructionService.Begin(new(
     VisualFrame: 4));
 Require(
     PalisadeWallVisuals.FrontFrameKeyFor(ItemIds.WoodenFence) ==
-        "FENCEN1G@8501#2" &&
+        "FENCENNG@8502#2" &&
     PalisadeWallVisuals.IsWallGraphic("FENCEN1G") &&
     PalisadeWallVisuals.IsWallGraphic("WALL2NNW") &&
     PalisadeWallVisuals.IsWallGraphic("WALL3NNW") &&

@@ -15,6 +15,8 @@ internal static class WallCatalog
                 ItemIds.WoodenFence, 70, ItemIds.Sticks),
             [ItemIds.WoodenWall] = new(
                 ItemIds.WoodenWall, 120, ItemIds.Logs),
+            [ItemIds.FortifiedWoodenWall] = new(
+                ItemIds.FortifiedWoodenWall, 190, ItemIds.Logs),
             [ItemIds.StoneWall] = new(
                 ItemIds.StoneWall, 260, ItemIds.LargeRock),
             [ItemIds.FortifiedWall] = new(

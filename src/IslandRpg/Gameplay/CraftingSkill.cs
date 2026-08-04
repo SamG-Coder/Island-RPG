@@ -437,6 +437,15 @@ internal static class CraftingSkill
             ],
             RequiredTools: [new(ItemTag.Hammer, "hammer")]),
         new(
+            "fortified-wooden-wall", ItemIds.FortifiedWoodenWall,
+            CraftingCategory.Furniture, 4, 120,
+            [new(ItemIds.Logs, 2)],
+            [
+                "Raise a close-set timber wall.",
+                "Brace and protect its base with heavy boarding."
+            ],
+            RequiredTools: [new(ItemTag.Hammer, "hammer")]),
+        new(
             "fortified-wall", ItemIds.FortifiedWall,
             CraftingCategory.Furniture, 10, 240,
             [new(ItemIds.LargeRock, 5)],
