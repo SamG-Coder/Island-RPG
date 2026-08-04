@@ -71,7 +71,17 @@ internal sealed partial class GameHostWindow
             "Heavy defence · 5 large rocks",
             BuildingRecipe(ItemIds.FortifiedWall),
             ItemIds.FortifiedWall)
-    }.Concat(HouseCatalog.All.Select(house => new BuildingBrowserEntry(
+    }.Concat(DefenceBuildingCatalog.All.Select(defence =>
+        new BuildingBrowserEntry(
+            BuildingBrowserCategory.Defences,
+            defence.Name,
+            $"{defence.Kind} - {defence.LogCost} logs" +
+            (defence.RockCost > 0
+                ? $" - {defence.RockCost} large rocks"
+                : ""),
+            BuildingRecipe(defence.ItemId),
+            defence.ItemId)))
+    .Concat(HouseCatalog.All.Select(house => new BuildingBrowserEntry(
         BuildingBrowserCategory.Housing,
         HouseTileName(house),
         $"{house.Name} - {house.LogCost} logs" +
@@ -841,8 +851,13 @@ internal sealed partial class GameHostWindow
             DrawWallBuildIcon(bounds, itemId);
             return;
         }
-        if (!HouseCatalog.IsHouse(itemId) || _treeAtlasTexture == 0 ||
-            !_treeAtlas.TryGetValue(HouseVisuals.AtlasKey(itemId), out var house))
+        var buildingKey = HouseCatalog.IsHouse(itemId)
+            ? HouseVisuals.AtlasKey(itemId)
+            : DefenceBuildingCatalog.IsDefence(itemId)
+                ? DefenceBuildingVisuals.AtlasKey(itemId)
+                : null;
+        if (buildingKey is null || _treeAtlasTexture == 0 ||
+            !_treeAtlas.TryGetValue(buildingKey, out var house))
             return;
         var scale = MathF.Min(
             bounds.Z / Math.Max(1, house.Frame.Width),

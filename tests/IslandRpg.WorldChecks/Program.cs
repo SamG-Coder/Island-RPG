@@ -3047,6 +3047,50 @@ Require(
     HouseVisuals.Resolve(completedHouse) ==
         HouseVisuals.AtlasKey(stagedHouseDefinition.ItemId),
     "houses must visibly progress through foundation and scaffold stages before resolving their completed authored sprite");
+Require(
+    DefenceBuildingCatalog.All.Count == 52 &&
+    DefenceBuildingCatalog.All.Select(value => value.ItemId)
+        .Distinct(StringComparer.OrdinalIgnoreCase).Count() == 52 &&
+    DefenceBuildingCatalog.All.Count(value =>
+        value.Kind == DefenceBuildingKind.Castle) == 11 &&
+    DefenceBuildingCatalog.All.Count(value =>
+        value.Kind is DefenceBuildingKind.WatchTower or
+            DefenceBuildingKind.GuardTower or DefenceBuildingKind.Keep or
+            DefenceBuildingKind.BombardTower) == 40 &&
+    DefenceBuildingCatalog.All.All(defence =>
+        ItemCatalog.TryGet(defence.ItemId, out var item) &&
+        item.HasTag(ItemTag.PlaceableObject) &&
+        PlaceableObjectCatalog.TryGet(defence.ItemId, out var placeable) &&
+        placeable.FootprintWidth == defence.FootprintWidth &&
+        placeable.FootprintDepth == defence.FootprintDepth &&
+        CraftingSkill.Recipes.Any(recipe =>
+            recipe.ResultItemId == defence.ItemId) &&
+        ConstructionService.Begin(new(
+            Guid.NewGuid(), defence.ItemId, 1, 1)) is
+        {
+            Health: 1,
+            MaxHealth: > 0
+        }),
+    "all standalone tower, outpost and castle variants must be registered as constructible point-placed defences");
+var watchTower = DefenceBuildingCatalog.All.First(value =>
+    value.GraphicId == 4199);
+var centralCastle = DefenceBuildingCatalog.All.First(value =>
+    value.GraphicId == 171);
+var stagedTower = ConstructionService.Begin(new(
+    Guid.NewGuid(), watchTower.ItemId, 1, 1));
+var stagedCastle = ConstructionService.Begin(new(
+    Guid.NewGuid(), centralCastle.ItemId, 1, 1));
+Require(
+    DefenceBuildingVisuals.AtlasKey(watchTower.ItemId) ==
+        "WCTW1NNGE@4199#0" &&
+    DefenceBuildingVisuals.Resolve(stagedTower) == "CNST1_NN@118#0" &&
+    DefenceBuildingVisuals.Resolve(
+        ConstructionService.AddWork(stagedTower, 150)) ==
+        "CNST1_NN@118#2" &&
+    DefenceBuildingVisuals.AtlasKey(centralCastle.ItemId) ==
+        "CSTL3NNE@171#0" &&
+    DefenceBuildingVisuals.Resolve(stagedCastle) == "CNST8_NN@123#0",
+    "standalone defences must use ID-qualified completed sprites and footprint-classified construction stages");
 var droppedInteraction = EntityInteractionService.Drop(
     sharedPlacement.Inventory,
     0,

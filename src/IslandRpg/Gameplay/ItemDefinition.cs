@@ -751,6 +751,16 @@ internal static class ItemCatalog
                 null,
                 Droppable: false,
                 Tags: ItemTag.PlaceableObject);
+        foreach (var defence in DefenceBuildingCatalog.All)
+            Items[defence.ItemId] = new(
+                defence.ItemId,
+                defence.Name.ToLowerInvariant(),
+                defence.Name,
+                $"A {defence.Architecture.ToLowerInvariant()} " +
+                $"{defence.Kind.ToString().ToLowerInvariant()} defence.",
+                null,
+                Droppable: false,
+                Tags: ItemTag.PlaceableObject);
         foreach (var (id, item) in Items.ToArray())
             if (IsSlimeDropStackable(id))
                 Items[id] = item with { CanStack = true };

@@ -200,6 +200,19 @@ internal sealed partial class GameHostWindow
             frame = null!;
             return false;
         }
+        if (DefenceBuildingCatalog.IsDefence(value.ItemId))
+        {
+            atlasKey = DefenceBuildingVisuals.Resolve(value);
+            shadowKey = null;
+            texture = _treeAtlasTexture;
+            if (_treeAtlas.TryGetValue(atlasKey, out var defenceAtlas))
+            {
+                frame = defenceAtlas.Frame;
+                return texture != 0;
+            }
+            frame = null!;
+            return false;
+        }
         if (!WallCatalog.IsWall(value.ItemId))
             return TryGroundItemVisual(
                 value.ItemId,
@@ -554,10 +567,14 @@ internal sealed partial class GameHostWindow
                 GL.GetUniformLocation(_program, "preserveDarkTint"), 0);
             return;
         }
-        if (HouseCatalog.IsHouse(preview.ItemId))
+        if (HouseCatalog.IsHouse(preview.ItemId) ||
+            DefenceBuildingCatalog.IsDefence(preview.ItemId))
         {
             var vertices = new List<float>();
-            AddAtlasQuad(HouseVisuals.AtlasKey(preview.ItemId), world, .58f,
+            var buildingKey = HouseCatalog.IsHouse(preview.ItemId)
+                ? HouseVisuals.AtlasKey(preview.ItemId)
+                : DefenceBuildingVisuals.AtlasKey(preview.ItemId);
+            AddAtlasQuad(buildingKey, world, .58f,
                 vertices);
             GL.UseProgram(_program);
             GL.Uniform3(
@@ -851,6 +868,14 @@ internal sealed partial class GameHostWindow
             frame = null!;
             texture = _treeAtlasTexture;
             atlasKey = HouseVisuals.AtlasKey(itemId);
+            shadowKey = null;
+            return false;
+        }
+        if (DefenceBuildingCatalog.IsDefence(itemId))
+        {
+            frame = null!;
+            texture = _treeAtlasTexture;
+            atlasKey = DefenceBuildingVisuals.AtlasKey(itemId);
             shadowKey = null;
             return false;
         }

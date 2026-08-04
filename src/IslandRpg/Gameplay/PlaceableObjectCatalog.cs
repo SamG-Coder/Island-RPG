@@ -205,6 +205,17 @@ internal static class PlaceableObjectCatalog
                 RenderHeight: 112,
                 NavigationWidth: 1.65f,
                 NavigationDepth: 1.65f);
+        foreach (var defence in DefenceBuildingCatalog.All)
+            Definitions[defence.ItemId] = new(
+                defence.ItemId,
+                $"{defence.ItemId}.png",
+                FootprintWidth: defence.FootprintWidth,
+                FootprintDepth: defence.FootprintDepth,
+                Height: defence.Kind == DefenceBuildingKind.Castle ? 5 : 3.5f,
+                HotspotX: defence.Kind == DefenceBuildingKind.Castle ? 180 : 64,
+                HotspotY: defence.Kind == DefenceBuildingKind.Castle ? 260 : 150,
+                NavigationWidth: defence.FootprintWidth * .85f,
+                NavigationDepth: defence.FootprintDepth * .85f);
     }
 
     public static IReadOnlyCollection<PlaceableObjectDefinition> All =>

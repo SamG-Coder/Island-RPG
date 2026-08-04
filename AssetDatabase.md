@@ -33,3 +33,32 @@ dotnet run --project tools/IslandRpg.GraphicExport -- `
   --output "TestExport/HouseConstructionStages" `
   --construction-stages
 ```
+
+## Standalone defensive buildings
+
+Standalone defences use point placement, occupy a complete tile footprint and
+are built through the same health-on-hammer-strike controller as houses. Every
+listed architecture is exposed in the Defences browser.
+
+| Family | DAT graphics | Variants | Footprint | Construction | Classification |
+|---|---|---:|---:|---|---|
+| Outpost | `WCTWX1NNG@3223` | 1 | 1 x 1 | `CNST1_NN` | Early wooden observation post |
+| Watch tower | `WCTW1NNG{E,F,I,M,W,X}` | 10 | 1 x 1 | `CNST1_NN` | Basic tower |
+| Guard tower | `WCTW2NNG{E,F,I,M,W,X}` | 10 | 1 x 1 | `CNST1_NN` | Reinforced tower |
+| Keep | `WCTW3NNG{E,F,I,M,W,X}` | 10 | 1 x 1 | `CNST1_NN` | Heavy tower |
+| Bombard tower | `WCTW4NNG{E,F,I,M,W,X}` | 10 | 1 x 1 | `CNST1_NN` | Late heavy tower |
+| Castle | `CSTL3NN{E,F,I,M,W,X}` | 11 | 4 x 4 | `CNST8_NN` | Fortress |
+
+The `X` DAT name is reused by five expansion graphic IDs, so atlas keys always
+include the graphic ID. Castles also include the separately authored African
+`CSTL3NNW@7633` variant. This produces 52 unique, save-stable standalone
+defence definitions.
+
+## Routed defensive assets
+
+Gate records are not standalone buildings. The DAT contains four route
+orientations (`GTA*`, `GTB*`, `GTC*`, `GTD*`), four visual families
+(`*A`, `*B`, `*C`, `*X`), two tiers (`2`, `3`), architecture suffixes and
+separate normal/damage layers. They are classified as **routed wall gates** and
+must use a gate route, open/closed collision and neighbour-aware wall joins;
+they must not be exposed as hundreds of independent point-placement entries.

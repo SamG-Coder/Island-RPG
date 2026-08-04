@@ -604,7 +604,8 @@ internal static class CraftingSkill
             [
                 new(ItemTag.Hammer, "hammer")
             ])
-    }.Concat(HouseCatalog.Recipes).ToArray();
+    }.Concat(HouseCatalog.Recipes)
+        .Concat(DefenceBuildingCatalog.Recipes).ToArray();
 
     private static CraftingRecipe SmithingTool(
         string id, string resultItemId, string toolName,
