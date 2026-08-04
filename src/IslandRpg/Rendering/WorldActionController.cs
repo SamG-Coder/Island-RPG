@@ -207,7 +207,8 @@ internal sealed partial class GameHostWindow
         var requestId = ++window._pathRequestId;
         var worldLevel = window._activeWorldLevel;
         var start = window._player.Position;
-        var obstacles = window.ActiveNavigationObstacles();
+        var obstacles = window.ActiveNavigationObstacles(
+            window._activePlayer?.Id);
         window._pendingPathTask = Task.Run(
             () => new GameHostWindow.PathResult(
                 requestId,
@@ -254,7 +255,8 @@ internal sealed partial class GameHostWindow
         var requestId = ++window._pathRequestId;
         var worldLevel = window._activeWorldLevel;
         var start = window._player.Position;
-        var obstacles = window.ActiveNavigationObstacles();
+        var obstacles = window.ActiveNavigationObstacles(
+            window._activePlayer?.Id);
         window._queuedAction = null;
         window._pendingPathTask = Task.Run(
             () => window.FindActionPath(

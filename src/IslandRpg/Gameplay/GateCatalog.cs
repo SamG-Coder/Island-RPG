@@ -9,6 +9,10 @@ internal sealed record GateDefinition(
     short GateGraphicId,
     string GateShadowGraphicName,
     short GateShadowGraphicId,
+    string OpenGateGraphicName,
+    short OpenGateGraphicId,
+    string OpenGateShadowGraphicName,
+    short OpenGateShadowGraphicId,
     string? SideWallGraphicName,
     short SideWallGraphicId,
     string? SideWallShadowGraphicName,
@@ -77,6 +81,8 @@ internal static class GateCatalog
             {
                 value.GateGraphicName,
                 value.GateShadowGraphicName,
+                value.OpenGateGraphicName,
+                value.OpenGateShadowGraphicName,
                 value.SideWallGraphicName,
                 value.SideWallShadowGraphicName,
                 value.ConstructionGraphicName,
@@ -98,6 +104,10 @@ internal static class GateCatalog
         var standard = value.GateId < 3000;
         var palisade = value.GateId == 8185;
         var gateShadowId = (short)(value.GateId - (standard ? 8 : 2));
+        var openGateId = (short)(value.GateId +
+            (standard ? 24 : palisade ? 3 : 8));
+        var openGateShadowId = (short)(openGateId -
+            (standard ? 8 : 2));
         var sideShadowId = value.SideWallId == 0
             ? (short)0
             : (short)(value.SideWallId - (standard ? 8 : 2));
@@ -110,6 +120,8 @@ internal static class GateCatalog
             value.Architecture, tier,
             $"GTAA{tier}NN{value.Suffix}", value.GateId,
             $"GTAA{tier}N0{value.Suffix}", gateShadowId,
+            $"GTAB{tier}NN{value.Suffix}", openGateId,
+            $"GTAB{tier}N0{value.Suffix}", openGateShadowId,
             value.SideWallId == 0 ? null : $"GTAC{tier}NN{value.Suffix}",
             value.SideWallId,
             value.SideWallId == 0 ? null : $"GTAC{tier}N0{value.Suffix}",

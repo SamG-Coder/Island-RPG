@@ -694,41 +694,6 @@ internal sealed partial class GameHostWindow
         return true;
     }
 
-    private void ChangeGateState(
-        WorldGroundObject gate, GateAccessState requested)
-    {
-        if (_activePlayer is null) return;
-        var location = FindGroundObjectLocation(gate.Id);
-        if (location is null) return;
-        var current = location.Value.Object;
-        var canManage = BuildingOwnershipService.CanManage(
-            current, _activePlayer.Id, _settlementGroup);
-        var changed = requested switch
-        {
-            GateAccessState.Opened =>
-                GateService.TryOpen(current, out var opened) ? opened : null,
-            GateAccessState.Locked =>
-                GateService.TryLock(current, canManage, out var locked)
-                    ? locked : null,
-            _ when current.GateState == GateAccessState.Opened =>
-                GateService.TryClose(current, out var closed) ? closed : null,
-            _ => GateService.TryUnlock(current, canManage, out var unlocked)
-                ? unlocked : null
-        };
-        if (changed is null) return;
-        location.Value.Chunk.GroundObjects[location.Value.Index] = changed;
-        QueueChunkSave(location.Value.Chunk);
-        _chatUi.AddMessage(
-            $"You {changed.GateState switch
-            {
-                GateAccessState.Opened => "open",
-                GateAccessState.Locked => "lock",
-                _ when current.GateState == GateAccessState.Opened => "close",
-                _ => "unlock"
-            }} the {ItemCatalog.Get(gate.ItemId).Name.ToLowerInvariant()}.",
-            ChatMessageStyle.Action);
-    }
-
     private static string DescribeBuildingMaterials(CraftingRecipe recipe) =>
         string.Join(" and ", recipe.Ingredients.Select(ingredient =>
             $"{ingredient.Count} {ItemCatalog.Get(ingredient.ItemId).Name.ToLowerInvariant()}"));

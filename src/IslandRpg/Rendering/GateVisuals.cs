@@ -75,6 +75,10 @@ internal static class GateVisuals
             if (!byId.TryGetValue(gate.GateGraphicId, out var center))
                 continue;
             var centerFrame = center.Sprite.Frames[0];
+            var openCenterFrame = byId.TryGetValue(
+                    gate.OpenGateGraphicId, out var openCenter)
+                ? openCenter.Sprite.Frames[0]
+                : centerFrame;
             SpriteFrame composite;
             if (gate.SideWallGraphicId > 0 &&
                 byId.TryGetValue(gate.SideWallGraphicId, out var sideWall))
@@ -96,11 +100,11 @@ internal static class GateVisuals
                     SpriteCompositor.LayerFrames(
                         (openSideWall.Sprite.Frames[0],
                             SideWallOffsetX, -SideWallOffsetY),
+                        (openCenterFrame, 0, 0),
                         (openSideWall.Sprite.Frames[0],
                             -SideWallOffsetX, SideWallOffsetY))));
             }
-            else result.Add((OpenAtlasKey(gate.ItemId),
-                new SpriteFrame(1, 1, 0, 0, new byte[4])));
+            else result.Add((OpenAtlasKey(gate.ItemId), openCenterFrame));
 
             if (byId.TryGetValue(gate.GateShadowGraphicId, out var gateShadow))
             {
@@ -118,13 +122,22 @@ internal static class GateVisuals
                     result.Add((ShadowAtlasKey(gate.ItemId, open: true),
                         SpriteCompositor.LayerFrames(
                             (side, SideWallOffsetX, -SideWallOffsetY),
+                            (byId.TryGetValue(
+                                    gate.OpenGateShadowGraphicId,
+                                    out var openGateShadow)
+                                ? openGateShadow.Sprite.Frames[0]
+                                : centerShadow, 0, 0),
                             (side, -SideWallOffsetX, SideWallOffsetY))));
                 }
                 else
                 {
                     result.Add((ShadowAtlasKey(gate.ItemId), centerShadow));
                     result.Add((ShadowAtlasKey(gate.ItemId, open: true),
-                        new SpriteFrame(1, 1, 0, 0, new byte[4])));
+                        byId.TryGetValue(
+                            gate.OpenGateShadowGraphicId,
+                            out var openGateShadow)
+                            ? openGateShadow.Sprite.Frames[0]
+                            : centerShadow));
                 }
             }
         }

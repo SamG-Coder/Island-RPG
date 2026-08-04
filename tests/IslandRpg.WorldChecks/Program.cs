@@ -3123,7 +3123,10 @@ Require(
     GateCatalog.All.Count(value => value.SideWallGraphicId == 0) == 1 &&
     GateCatalog.All.All(value =>
         value.ConstructionGraphicName.StartsWith("GTAX", StringComparison.Ordinal) &&
-        value.ConstructionGraphicId > 0),
+        value.ConstructionGraphicId > 0 &&
+        value.OpenGateGraphicName.StartsWith("GTAB", StringComparison.Ordinal) &&
+        value.OpenGateGraphicId > 0 &&
+        value.OpenGateShadowGraphicId > 0),
     "each gate must own matching side-wall sections where available and an authored three-frame construction graphic");
 var centralStoneGate = GateCatalog.All.First(value =>
     value.GateGraphicId == 2045);
@@ -3142,7 +3145,19 @@ Require(
         "GTAX2CNE@3286#2",
     "gates must resolve their composite completed key and authored scaffold stages");
 var completedGate = gateSite with { Health = gateSite.MaxHealth };
+var closedGateObstacles = PlaceableObjectCatalog.GateNavigationObstacles(
+    completedGate, includeMiddle: true);
+var openGateObstacles = PlaceableObjectCatalog.GateNavigationObstacles(
+    completedGate, includeMiddle: false);
 Require(
+    closedGateObstacles.Count == 3 &&
+    openGateObstacles.Count == 2 &&
+    openGateObstacles.All(obstacle =>
+        MathF.Abs(obstacle.Center.Y -
+            PlaceableObjectCatalog.GroundContactCenter(
+                completedGate.ItemId,
+                new(completedGate.X, completedGate.Y)).Y -
+            WorldPlacementGrid.CellSize * 4) >= .99f) &&
     GateService.TryOpen(completedGate, out var openGate) &&
     openGate.GateState == GateAccessState.Opened &&
     GateService.IsOpen(openGate) &&
@@ -3156,7 +3171,7 @@ Require(
     !GateService.TryUnlock(lockedGate, false, out _) &&
     GateService.TryUnlock(lockedGate, true, out var unlockedGate) &&
     unlockedGate.GateState == GateAccessState.Unlocked,
-    "completed gates must transition through open, unlocked, and owner-controlled locked states");
+    "gates must retain side collisions while their authorized middle passage opens");
 var ownershipProbe = BuildingOwnershipService.AssignGroup(
     completedGate, "group-test");
 var residentHouse = BuildingOwnershipService.SetResidents(

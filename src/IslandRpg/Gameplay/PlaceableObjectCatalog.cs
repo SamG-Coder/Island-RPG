@@ -289,6 +289,29 @@ internal static class PlaceableObjectCatalog
         };
     }
 
+    public static IReadOnlyList<NavigationObstacle> GateNavigationObstacles(
+        WorldGroundObject value, bool includeMiddle)
+    {
+        var center = GroundContactCenter(
+            value.ItemId, new(value.X, value.Y)) +
+            new Vector2(
+                WorldPlacementGrid.CellSize * 3,
+                WorldPlacementGrid.CellSize * 4);
+        const float cell = .85f;
+        var result = new List<NavigationObstacle>(includeMiddle ? 3 : 2)
+        {
+            new(center + new Vector2(
+                0,
+                -1 - WorldPlacementGrid.CellSize * 2), cell, cell),
+            new(center + new Vector2(0, 1), cell, cell)
+        };
+        if (includeMiddle)
+            result.Add(new(
+                center + new Vector2(0, -WorldPlacementGrid.CellSize),
+                cell, cell));
+        return result;
+    }
+
     public static Vector2 ClosestInteractionPoint(
         string itemId,
         Vector2 storedPosition,

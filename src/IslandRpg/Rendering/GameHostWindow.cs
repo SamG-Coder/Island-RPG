@@ -1791,26 +1791,6 @@ internal sealed partial class GameHostWindow : GameWindow
                             "Demolish",
                             "Examine"
                         ]
-                    : GateCatalog.IsGate(contextObject.ItemId)
-                        ? contextObject.GateState switch
-                        {
-                            GateAccessState.Opened =>
-                                ["Close", "Walk Here", "Examine"],
-                            GateAccessState.Locked when
-                                _activePlayer is not null &&
-                                BuildingOwnershipService.CanManage(
-                                    contextObject, _activePlayer.Id,
-                                    _settlementGroup) =>
-                                ["Unlock", "Walk Here", "Examine"],
-                            GateAccessState.Locked =>
-                                ["Walk Here", "Examine"],
-                            _ when _activePlayer is not null &&
-                                BuildingOwnershipService.CanManage(
-                                    contextObject, _activePlayer.Id,
-                                    _settlementGroup) =>
-                                ["Open", "Lock", "Walk Here", "Examine"],
-                            _ => ["Open", "Walk Here", "Examine"]
-                        }
                     : contextObject.ItemId == ItemIds.TrainingDummy
                         ? ["Attack", "Walk Here", "Examine"]
                     : CaveEntranceService.IsEntrance(contextObject)
@@ -2036,6 +2016,7 @@ internal sealed partial class GameHostWindow : GameWindow
             ObservationFocusPosition(),
             QueueChunkSave);
         UpdateVillagers(elapsed);
+        UpdateAutomaticGates();
         UpdateEnemies(elapsed);
         if (_moveMarker is not null)
         {
@@ -4783,40 +4764,6 @@ internal sealed partial class GameHostWindow : GameWindow
                     ChatMessageStyle.Normal);
             return;
         }
-        if (GateCatalog.IsGate(groundObject.ItemId))
-        {
-            var canManage = _activePlayer is not null &&
-                BuildingOwnershipService.CanManage(
-                    groundObject, _activePlayer.Id, _settlementGroup);
-            if (groundObject.GateState == GateAccessState.Opened)
-            {
-                if (option == 0) ChangeGateState(
-                    groundObject, GateAccessState.Unlocked);
-                else if (option == 1) QueueWalk(_groundObjectContextWalkTarget);
-                else if (option == 2) ExamineGate(groundObject);
-            }
-            else if (groundObject.GateState == GateAccessState.Locked)
-            {
-                if (canManage && option == 0)
-                    ChangeGateState(groundObject, GateAccessState.Unlocked);
-                else if (option == (canManage ? 1 : 0))
-                    QueueWalk(_groundObjectContextWalkTarget);
-                else if (option == (canManage ? 2 : 1))
-                    ExamineGate(groundObject);
-            }
-            else
-            {
-                if (option == 0) ChangeGateState(
-                    groundObject, GateAccessState.Opened);
-                else if (canManage && option == 1) ChangeGateState(
-                    groundObject, GateAccessState.Locked);
-                else if (option == (canManage ? 2 : 1))
-                    QueueWalk(_groundObjectContextWalkTarget);
-                else if (option == (canManage ? 3 : 2))
-                    ExamineGate(groundObject);
-            }
-            return;
-        }
         if (CaveEntranceService.IsEntrance(groundObject))
         {
             if (option == 0)
@@ -5381,17 +5328,6 @@ internal sealed partial class GameHostWindow : GameWindow
                 TreeFeedbackKey(instance.Id),
                 forceHealth: instance.Id == _activeTreeId);
         }
-    }
-
-    private void ExamineGate(WorldGroundObject gate)
-    {
-        var owner = gate.GroupOwnerId is not null
-            ? $"group {gate.GroupOwnerId}"
-            : gate.OwnerId is not null ? gate.OwnerId : "no one";
-        _chatUi.AddMessage(
-            $"{ItemCatalog.Get(gate.ItemId).Name}: " +
-            $"{gate.GateState.ToString().ToLowerInvariant()}, owned by {owner}.",
-            ChatMessageStyle.Normal);
     }
 
     private void DrawUiButtonCaption(string caption, Vector4 bounds)

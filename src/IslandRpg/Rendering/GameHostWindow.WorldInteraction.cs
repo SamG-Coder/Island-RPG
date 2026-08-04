@@ -149,6 +149,9 @@ internal sealed partial class GameHostWindow
             if (!IsChunkVisible(gpu)) continue;
         foreach (var candidate in gpu.Chunk.GroundObjects)
         {
+            if (GateCatalog.IsGate(candidate.ItemId) &&
+                !ConstructionService.IsConstructionSite(candidate))
+                continue;
             if (!TryGroundObjectVisual(
                     candidate, out var frame, out _, out _, out _))
                 continue;

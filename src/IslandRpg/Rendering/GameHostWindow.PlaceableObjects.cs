@@ -10,6 +10,7 @@ internal sealed partial class GameHostWindow
     private readonly Dictionary<string, SpriteGroundContact>
         _resourceGroundContacts =
             new(StringComparer.OrdinalIgnoreCase);
+    private double _nextAutomaticGateUpdate;
 
     private void BeginPlaceableObjectPlacement(
         int inventorySlot, string itemId)
@@ -129,7 +130,8 @@ internal sealed partial class GameHostWindow
         _placeableObjectPlacement.Active &&
         !IsPointerOverGameUi(MouseState.Position);
 
-    private NavigationObstacle[] ActiveNavigationObstacles()
+    private NavigationObstacle[] ActiveNavigationObstacles(
+        string? actorId = null)
     {
         if (_noClipMode) return [];
         var obstacles = new List<NavigationObstacle>();
@@ -170,8 +172,21 @@ internal sealed partial class GameHostWindow
                 if (!PlaceableObjectCatalog.TryGet(
                         groundObject.ItemId, out var definition))
                     continue;
-                if (GateService.IsOpen(groundObject)) continue;
-                if (WallCatalog.IsWall(groundObject.ItemId))
+                if (GateCatalog.IsGate(groundObject.ItemId))
+                {
+                    var actorCanOpen = actorId is not null &&
+                        !ConstructionService.IsConstructionSite(groundObject) &&
+                        groundObject.GateState != GateAccessState.Locked &&
+                        BuildingOwnershipService.HasOwner(groundObject) &&
+                        BuildingOwnershipService.CanManage(
+                            groundObject, actorId, _settlementGroup);
+                    obstacles.AddRange(
+                        PlaceableObjectCatalog.GateNavigationObstacles(
+                            groundObject,
+                            includeMiddle: !GateService.IsOpen(groundObject) &&
+                                           !actorCanOpen));
+                }
+                else if (WallCatalog.IsWall(groundObject.ItemId))
                     obstacles.Add(
                         PlaceableObjectCatalog.WallNavigationObstacle(
                             groundObject));
@@ -211,6 +226,62 @@ internal sealed partial class GameHostWindow
                 -contact.LateralOffset);
             return new(center, contact.Width, contact.Depth);
         }
+    }
+
+    private void UpdateAutomaticGates()
+    {
+        if (_clock < _nextAutomaticGateUpdate) return;
+        _nextAutomaticGateUpdate = _clock + .1;
+        const float openRadiusSquared = 2.5f * 2.5f;
+        const float closeRadiusSquared = 3.25f * 3.25f;
+        foreach (var gpu in _worldChunks.Values)
+        {
+            if (!IsActiveSimulationChunk(gpu)) continue;
+            for (var index = 0;
+                 index < gpu.Chunk.GroundObjects.Count;
+                 index++)
+            {
+                var gate = gpu.Chunk.GroundObjects[index];
+                if (!GateCatalog.IsGate(gate.ItemId) ||
+                    ConstructionService.IsConstructionSite(gate) ||
+                    gate.GateState == GateAccessState.Locked)
+                    continue;
+                var radiusSquared = GateService.IsOpen(gate)
+                    ? closeRadiusSquared
+                    : openRadiusSquared;
+                var authorizedNearby = AuthorizedActorNear(
+                    gate, gpu.Chunk.Coordinate.Level, radiusSquared);
+                WorldGroundObject updated;
+                var changed = authorizedNearby
+                    ? GateService.TryOpen(gate, out updated)
+                    : GateService.TryClose(gate, out updated);
+                if (!changed) continue;
+                gpu.Chunk.GroundObjects[index] = updated;
+                QueueChunkSave(gpu.Chunk);
+            }
+        }
+    }
+
+    private bool AuthorizedActorNear(
+        WorldGroundObject gate, int worldLevel, float radiusSquared)
+    {
+        var position = new Vector2(gate.X, gate.Y);
+        if (!BuildingOwnershipService.HasOwner(gate)) return false;
+        if (_activePlayer is not null && _player is not null &&
+            _activeWorldLevel == worldLevel &&
+            BuildingOwnershipService.CanManage(
+                gate, _activePlayer.Id, _settlementGroup) &&
+            Vector2.DistanceSquared(_player.Position, position) <=
+                radiusSquared)
+            return true;
+        return _villagers.Any(villager =>
+            villager.Health > 0 &&
+            villager.WorldLevel == worldLevel &&
+            BuildingOwnershipService.CanManage(
+                gate, villager.Id, _settlementGroup) &&
+            Vector2.DistanceSquared(
+                new(villager.PositionX, villager.PositionY), position) <=
+            radiusSquared);
     }
 
     private bool CanPlacePlaceableObjectAt(
