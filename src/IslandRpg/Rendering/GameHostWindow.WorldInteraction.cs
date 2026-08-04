@@ -479,6 +479,30 @@ internal sealed partial class GameHostWindow
                 preserveDarkTint: true);
             return;
         }
+        var world = GroundObjectWorld(new(
+            Guid.Empty, preview.ItemId, preview.Target.X, preview.Target.Y));
+        if (preview.ItemId == ItemIds.WoodenWall)
+        {
+            var wallPreviewKey = PalisadeWallVisuals.FrontFrameKey;
+            var vertices = new List<float>();
+            AddAtlasQuad(wallPreviewKey, world, .58f, vertices);
+            GL.UseProgram(_program);
+            GL.Uniform3(
+                GL.GetUniformLocation(_program, "tint"),
+                preview.Valid
+                    ? new Vector3(.28f, 1f, .34f)
+                    : new Vector3(1f, .22f, .18f));
+            GL.Uniform1(
+                GL.GetUniformLocation(_program, "tintAmount"), .72f);
+            GL.Uniform1(
+                GL.GetUniformLocation(_program, "preserveDarkTint"), 1);
+            DrawTreeBatch(vertices);
+            GL.Uniform1(
+                GL.GetUniformLocation(_program, "tintAmount"), 0f);
+            GL.Uniform1(
+                GL.GetUniformLocation(_program, "preserveDarkTint"), 0);
+            return;
+        }
         if (!TryGroundItemVisual(
                 preview.ItemId,
                 out var frame,
@@ -487,8 +511,6 @@ internal sealed partial class GameHostWindow
                 out var shadowKey))
             return;
 
-        var world = GroundObjectWorld(new(
-            Guid.Empty, preview.ItemId, preview.Target.X, preview.Target.Y));
         if (shadowKey is not null &&
             _treeAtlas.ContainsKey(shadowKey))
         {
@@ -694,6 +716,11 @@ internal sealed partial class GameHostWindow
         }
 
         gpu.Chunk.GroundObjects.Add(placed);
+        if (ConstructionService.IsConstructionSite(placed))
+        {
+            _activePlayerConstructionId = placed.Id;
+            _player.WorkAt(new Vector2(placed.X, placed.Y));
+        }
         _activePlayer = _activePlayer with
         {
             Inventory = inventory.ItemIds(),
@@ -751,9 +778,9 @@ internal sealed partial class GameHostWindow
         {
             frame = null!;
             texture = _treeAtlasTexture;
-            atlasKey = "WALL1NNG";
+            atlasKey = PalisadeWallVisuals.FrontFrameKey;
             shadowKey = null;
-            return true;
+            return false;
         }
         if (itemId == ItemIds.CaveHole &&
             _activeWorldLevel == (int)WorldLevel.Underground)

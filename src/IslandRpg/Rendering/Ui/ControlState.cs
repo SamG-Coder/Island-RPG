@@ -74,6 +74,7 @@ internal sealed class GameUiControlState
     public TabControlState CombatButton { get; } = new(GameUiPanel.Combat);
     public TabControlState InventoryButton { get; } = new(GameUiPanel.Inventory);
     public ActionControlState CraftingButton { get; } = new();
+    public ActionControlState BuildButton { get; } = new();
     public ActionControlState QuestButton { get; } = new();
     public ActionControlState DisembarkButton { get; } = new();
     public PanelControlState Panel { get; } = new();
@@ -88,6 +89,7 @@ internal sealed class GameUiControlState
             SkillsButton,
             CombatButton,
             CraftingButton,
+            BuildButton,
             QuestButton,
             DisembarkButton,
             Panel
@@ -125,10 +127,17 @@ internal sealed class GameUiControlState
             InventoryButton.Bounds.Y,
             ButtonWidth,
             ButtonHeight);
-        QuestButton.Bounds = new(
+        BuildButton.Bounds = new(
             Math.Max(
                 viewport.X,
                 CraftingButton.Bounds.X - ButtonWidth - ControlGap),
+            InventoryButton.Bounds.Y,
+            ButtonWidth,
+            ButtonHeight);
+        QuestButton.Bounds = new(
+            Math.Max(
+                viewport.X,
+                BuildButton.Bounds.X - ButtonWidth - ControlGap),
             InventoryButton.Bounds.Y,
             ButtonWidth,
             ButtonHeight);

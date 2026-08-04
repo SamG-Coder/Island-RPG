@@ -34,7 +34,9 @@ internal static class VillagerSettlementProjectService
         IReadOnlyList<VillagerState> villagers,
         IReadOnlySet<string> placedItems,
         string? leaderId = null,
-        double gameSeconds = 0)
+        double gameSeconds = 0,
+        bool defensivePriority = false,
+        Vector2? defensiveWorksite = null)
     {
         var living = villagers.Where(value =>
             value.Health > 0 && !value.IndependentByChoice).ToArray();
@@ -45,7 +47,12 @@ internal static class VillagerSettlementProjectService
             .ToArray();
         string projectItemId;
         IReadOnlyList<VillagerProjectRequirement> requirements;
-        if (!placedItems.Contains(ItemIds.Campfire))
+        if (defensivePriority)
+        {
+            projectItemId = ItemIds.WoodenWall;
+            requirements = RequirementsFor(projectItemId);
+        }
+        else if (!placedItems.Contains(ItemIds.Campfire))
         {
             projectItemId = ItemIds.Campfire;
             requirements = RequirementsFor(projectItemId);
@@ -69,6 +76,10 @@ internal static class VillagerSettlementProjectService
         var incumbentAssignment = living
             .Select(value => value.ProjectAssignment)
             .Where(value => value?.ProjectItemId == projectItemId)
+            .Where(value => defensiveWorksite is null ||
+                Vector2.DistanceSquared(
+                    new(value!.WorksiteX, value.WorksiteY),
+                    defensiveWorksite.Value) < .25f)
             .FirstOrDefault();
         var incumbentBuilder = incumbentAssignment is null
             ? null
@@ -96,7 +107,8 @@ internal static class VillagerSettlementProjectService
                          value.Id == builder.RecognizedLeaderId) ?? builder;
         var incumbent = incumbentAssignment;
         var worksite = incumbent is null
-            ? new Vector2(leader.PositionX, leader.PositionY)
+            ? defensiveWorksite ?? new Vector2(
+                leader.PositionX, leader.PositionY)
             : new Vector2(incumbent.WorksiteX, incumbent.WorksiteY);
         var worksiteLevel = incumbent?.WorksiteLevel ?? leader.WorldLevel;
         var stableAssignments = participants
@@ -261,6 +273,33 @@ internal static class VillagerSettlementProjectService
         var angle = (hash & 0xffff) / 65535f * MathF.Tau;
         return worksite + new Vector2(
             MathF.Cos(angle), MathF.Sin(angle)) * .8f;
+    }
+
+    public static IReadOnlyList<Vector2> DefensivePerimeter(Vector2 camp)
+    {
+        const float radius = 3f;
+        return
+        [
+            camp + new Vector2(-radius, -radius),
+            camp + new Vector2(0, -radius),
+            camp + new Vector2(radius, -radius),
+            camp + new Vector2(radius, 0),
+            camp + new Vector2(radius, radius),
+            camp + new Vector2(0, radius),
+            camp + new Vector2(-radius, radius),
+            camp + new Vector2(-radius, 0)
+        ];
+    }
+
+    public static Vector2? NextDefensiveWorksite(
+        Vector2 camp,
+        IReadOnlyList<Vector2> completedSites)
+    {
+        foreach (var site in DefensivePerimeter(camp))
+            if (!completedSites.Any(completed =>
+                    Vector2.DistanceSquared(site, completed) <= 1f))
+                return site;
+        return null;
     }
 
     private static VillagerSettlementProjectPlan Assign(

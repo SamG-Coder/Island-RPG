@@ -20,7 +20,9 @@ internal sealed record SettlementGroupState(
     IReadOnlyList<SettlementCampResponse>? CampResponses = null,
     SettlementJusticeCase? ActiveJusticeCase = null,
     SettlementExclusionState? Exclusion = null,
-    SocialIncidentAftermathState? ActiveAftermath = null)
+    SocialIncidentAftermathState? ActiveAftermath = null,
+    int ReconnaissanceRound = 0,
+    bool CoordinatedReconnaissance = false)
 {
     [JsonIgnore]
     public Vector2 Camp => new(CampX, CampY);
@@ -49,7 +51,11 @@ internal sealed record SettlementScoutAssignment(
     float TargetY,
     int Sector,
     bool Reached = false,
-    bool Reported = false);
+    bool Reported = false,
+    float? WaypointX = null,
+    float? WaypointY = null,
+    int LegsCompleted = 0,
+    bool Returning = false);
 
 internal sealed record SettlementScoutReport(
     string ScoutId,

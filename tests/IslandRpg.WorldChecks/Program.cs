@@ -2279,6 +2279,22 @@ Require(workbenchProject?.ProjectItemId == ItemIds.Workbench &&
                 StringComparer.OrdinalIgnoreCase))?.ProjectItemId ==
             ItemIds.WoodenWall,
     "settlement projects must progress from campfire through required workbench infrastructure, storage and a defensive wall");
+Require(
+    VillagerSettlementProjectService.Plan(
+        projectVillagers,
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+        defensivePriority: true)?.ProjectItemId == ItemIds.WoodenWall,
+    "serious unresolved attacks must prioritize a defensive wall without waiting for optional camp infrastructure");
+var perimeterSites = VillagerSettlementProjectService.DefensivePerimeter(
+    new Vector2(10, 20));
+Require(perimeterSites.Count == 8 &&
+        perimeterSites.Distinct().Count() == perimeterSites.Count &&
+        VillagerSettlementProjectService.NextDefensiveWorksite(
+            new Vector2(10, 20), perimeterSites.Take(7).ToArray()) ==
+        perimeterSites[7] &&
+        VillagerSettlementProjectService.NextDefensiveWorksite(
+            new Vector2(10, 20), perimeterSites) is null,
+    "defensive wall projects must advance through a bounded eight-segment perimeter and finish once every site is occupied");
 var assignedProjectVillager = projectVillagers[0] with
 {
     ProjectAssignment = new(
@@ -2842,6 +2858,13 @@ Require(
     woodenWallDefinition.GroundContactWidth > 0 &&
     woodenWallDefinition.GroundContactDepth > 0,
     "wooden walls must select a stable AoE direction and expose collision from their planned stage");
+Require(
+    PalisadeWallVisuals.WallGraphic == "WALL1N1G" &&
+    PalisadeWallVisuals.WallGraphicId == 587 &&
+    PalisadeWallVisuals.ShadowGraphic == "WALL1N0G" &&
+    PalisadeWallVisuals.ShadowGraphicId == 586 &&
+    PalisadeWallVisuals.FrontFrameKey == "WALL1N1G@587#3",
+    "wooden walls must use the basic AoE palisade layers rather than the fortified wall or placement flag");
 var droppedInteraction = EntityInteractionService.Drop(
     sharedPlacement.Inventory,
     0,
@@ -2960,15 +2983,136 @@ var openingGroup = SettlementOpeningService.AssignScouts(
     target => target);
 Require(
     openingGroup.OpeningStage == SettlementOpeningStage.Reconnaissance &&
-    openingGroup.ScoutAssignments is { Count: 4 } &&
+    openingGroup.ScoutAssignments is { Count: 6 } &&
     openingGroup.ScoutAssignments.Select(value => value.Sector)
-        .Distinct().Count() == 4 &&
+        .Distinct().Count() == 6 &&
     Vector2.DistanceSquared(
         new(openingGroup.ScoutAssignments[0].TargetX,
             openingGroup.ScoutAssignments[0].TargetY),
         new(openingGroup.ScoutAssignments[1].TargetX,
-            openingGroup.ScoutAssignments[1].TargetY)) > 20 * 20,
-    "opening coordination must assign capable scouts to distinct outward sectors before projects begin");
+            openingGroup.ScoutAssignments[1].TargetY)) > 20 * 20 &&
+    openingGroup.ScoutAssignments.Any(value =>
+        value.ScoutId == "group-leader"),
+    "opening coordination must send every capable survivor, including the leader, to a distinct outward sector before projects begin");
+var legStart = WorldLevelNavigation.NearestWalkable(
+    8841,
+    new Vector2(4.5f, 4.5f),
+    Vector2.Zero,
+    (int)WorldLevel.Overworld);
+var explorationLeg = VillagerExplorationService.NextLeg(
+    8841,
+    legStart,
+    legStart + new Vector2(40, 0),
+    (int)WorldLevel.Overworld);
+Require(
+    WorldLevelNavigation.IsWalkable(
+        8841,
+        (int)MathF.Floor(explorationLeg.X),
+        (int)MathF.Floor(explorationLeg.Y),
+        (int)WorldLevel.Overworld) &&
+    Vector2.Dot(
+        explorationLeg - legStart,
+        Vector2.UnitX) >= 0 &&
+    Vector2.DistanceSquared(legStart, explorationLeg) <=
+        (VillagerExplorationService.LegDistance + 1) *
+        (VillagerExplorationService.LegDistance + 1),
+    "exploration must advance through a short forward route leg rather than assigning a remote target or reversing direction");
+var routedLeg = VillagerExplorationService.LegFromRoute(
+    Vector2.Zero,
+    Enumerable.Range(1, 40)
+        .Select(index => new Vector2(index * .25f, index * .1f))
+        .ToArray());
+Require(
+    routedLeg.Length >= VillagerExplorationService.LegDistance &&
+    routedLeg.Length < VillagerExplorationService.LegDistance + .5f,
+    "an asynchronously calculated route must be consumed as a bounded exploration leg");
+var incrementalGroup = openingGroup with
+{
+    ScoutAssignments = [openingGroup.ScoutAssignments![0]],
+    ScoutReports = null
+};
+var incrementalScoutId = incrementalGroup.ScoutAssignments![0].ScoutId;
+var incrementalReport = new SettlementScoutReport(
+    incrementalScoutId, 0, 0,
+    Water: false, Food: false, Wood: true, Stone: true,
+    Danger: false, DefensibleGround: false,
+    CampScore: 20, GameSeconds: 650);
+var naturalScoutReport = SettlementScoutDialogueService.NaturalReport(
+    incrementalReport with
+    {
+        PositionX = 12,
+        Food = true,
+        Wood = false,
+        Stone = true
+    },
+    Vector2.Zero);
+Require(
+    naturalScoutReport.Contains("east of here") &&
+    naturalScoutReport.Contains("food") &&
+    naturalScoutReport.Contains("workable stone") &&
+    !naturalScoutReport.Contains("food found") &&
+    !naturalScoutReport.Contains("wood not found"),
+    "scout dialogue fallback must express structured findings naturally for Ollama rather than reciting boolean fields");
+var wreckPersona = VillagerSimulation.DefaultPersona(0);
+var caravanPersona = WorldOpeningScenarioService.ApplyArrival(
+    wreckPersona, islandStart: false);
+Require(
+    WorldOpeningScenarioService.ApplyArrival(
+        wreckPersona, islandStart: true) == wreckPersona &&
+    caravanPersona.BackgroundStory.Contains(
+        "merchant caravan", StringComparison.OrdinalIgnoreCase) &&
+    caravanPersona.ArrivalMemory.Contains(
+        "raiders", StringComparison.OrdinalIgnoreCase) &&
+    !caravanPersona.ArrivalMemory.Contains(
+        "wreck", StringComparison.OrdinalIgnoreCase),
+    "inland openings must replace shipwreck history with a caravan-ambush background while island starts retain it");
+Require(
+    CaravanSupplyService.Barrels.Count == 3 &&
+    CaravanSupplyService.Barrels.SelectMany(value => value).All(value =>
+        value.Quantity > 0 && ItemCatalog.TryGet(value.ItemId, out _)) &&
+    CaravanSupplyService.Barrels[0].Any(value =>
+        value.ItemId == ItemIds.StoneAxe) &&
+    CaravanSupplyService.Barrels[1].Any(value =>
+        value.ItemId == ItemIds.Logs) &&
+    CaravanSupplyService.Barrels[2].Any(value =>
+        value.ItemId == ItemIds.CookedMinnows),
+    "caravan starts must provide valid bounded tool, resource and food barrel manifests");
+for (var leg = 0;
+     leg < VillagerExplorationService.OpeningScoutLegs - 1;
+     leg++)
+{
+    incrementalGroup = SettlementOpeningService.RecordScoutObservation(
+        incrementalGroup,
+        incrementalReport with
+        {
+            ScoutId = incrementalScoutId,
+            PositionX = leg,
+            Food = false,
+            CampScore = 20 + leg
+        });
+}
+Require(
+    incrementalGroup.ScoutAssignments![0].LegsCompleted ==
+        VillagerExplorationService.OpeningScoutLegs - 1 &&
+    !incrementalGroup.ScoutAssignments[0].Returning &&
+    incrementalGroup.ScoutReports![0].CampScore ==
+        20 + VillagerExplorationService.OpeningScoutLegs - 2,
+    "a scout must observe and retain the best site over several incremental legs before returning");
+incrementalGroup = SettlementOpeningService.RecordScoutObservation(
+    incrementalGroup,
+    incrementalReport with
+    {
+        ScoutId = incrementalScoutId,
+        PositionX = 4,
+        Food = false,
+        CampScore = 10
+    });
+Require(
+    incrementalGroup.ScoutAssignments![0].Returning &&
+    incrementalGroup.ScoutAssignments[0].Reached &&
+    incrementalGroup.ScoutReports![0].CampScore ==
+        20 + VillagerExplorationService.OpeningScoutLegs - 2,
+    "a scout must return after the bounded search while preserving the best observed candidate rather than only the final stop");
 var campDecisionWithPlayer = SettlementOpeningService.DecideCamp(
     openingGroup with
     {
@@ -3017,8 +3161,32 @@ openingGroup = SettlementOpeningService.MarkReported(
     openingGroup, "group-scout-2");
 Require(
     openingGroup.OpeningStage == SettlementOpeningStage.ComparingCamps &&
-    SettlementOpeningService.BestCamp(openingGroup) == promisingReport,
+    SettlementOpeningService.BestCamp(openingGroup) == promisingReport &&
+    SettlementOpeningService.BestViableCamp(openingGroup) == promisingReport,
     "a returned scout report must advance the group to candidate-camp comparison");
+var unsuitableOpening = openingGroup with
+{
+    ScoutReports =
+    [
+        promisingReport with
+        {
+            Food = false,
+            Wood = false,
+            CampScore = 200
+        }
+    ]
+};
+var extendedReconnaissance = SettlementOpeningService
+    .ContinueReconnaissance(unsuitableOpening);
+Require(
+    SettlementOpeningService.BestViableCamp(unsuitableOpening) is null &&
+    extendedReconnaissance.OpeningStage ==
+        SettlementOpeningStage.Reconnaissance &&
+    extendedReconnaissance.ReconnaissanceRound == 1 &&
+    extendedReconnaissance.CoordinatedReconnaissance &&
+    extendedReconnaissance.ScoutAssignments is null &&
+    extendedReconnaissance.ScoutReports is null,
+    "a high-scoring site without the minimum food, wood and stone package must trigger a coordinated reconnaissance round");
 openingGroup = openingGroup with
 {
     MemberIds = ["group-leader", "group-builder", "group-scout"]
@@ -3039,13 +3207,13 @@ Require(
     SettlementOpeningService.CompleteMove(decidedOpeningGroup).OpeningStage ==
         SettlementOpeningStage.CacheReady,
     "the group must respond to the selected camp, migrate, then establish its shared cache");
-var dangerousOpening = openingGroup with
+var contestedOpening = openingGroup with
 {
     ScoutReports =
     [
         promisingReport with
         {
-            Danger = true,
+            Danger = false,
             Water = false,
             CampScore = 5
         }
@@ -3060,7 +3228,7 @@ var dissenter = groupMember with
     ]
 };
 var dividedGroup = SettlementOpeningService.DecideCamp(
-    dangerousOpening,
+    contestedOpening,
     [groupMember with { Id = "group-leader" }, dissenter,
         groupMember with { Id = "group-scout" }]);
 Require(
@@ -3068,7 +3236,7 @@ Require(
         value.VillagerId == dissenter.Id &&
         value.Response == SettlementCampResponseKind.Leave) == true &&
     !dividedGroup.MemberIds.Contains(dissenter.Id, StringComparer.Ordinal),
-    "strong distrust and a dangerous camp must allow a bold member to leave the initial group");
+    "strong distrust and a low-quality but minimally viable camp must allow a bold member to leave the initial group");
 var cacheFibres = Enumerable.Range(0, 3)
     .Select(index => SettlementGroupService.ClaimForGroup(
         new(
@@ -7391,7 +7559,7 @@ Require(
         workbenchRecipes,
         CraftingSkill.RecipesFor(
             CraftingCategory.All, ItemIds.Workbench)) &&
-    workbenchRecipes.Count == 6 &&
+    workbenchRecipes.Count == 5 &&
     workbenchRecipes.All(recipe =>
         recipe.RequiredStationItemId == ItemIds.Workbench) &&
     bloomeryRecipes.Count == 2 &&
@@ -7401,6 +7569,13 @@ Require(
     anvilRecipes.All(recipe =>
         recipe.RequiredStationItemId == ItemIds.SmithingAnvil),
     "station recipe views must be cached and contain only recipes for the station used");
+var woodenWallRecipe = CraftingSkill.Recipes.First(value =>
+    value.ResultItemId == ItemIds.WoodenWall);
+Require(
+    woodenWallRecipe.RequiredLevel == 1 &&
+    woodenWallRecipe.RequiredStationItemId is null &&
+    woodenWallRecipe.Ingredients is [{ ItemId: ItemIds.Logs, Count: 5 }],
+    "player wall construction must be available at Crafting level 1 without a workbench and still consume five logs");
 Require(
     new[] { ItemIds.StorageChest, ItemIds.StorageBarrel }
         .Select(itemId => CraftingSkill.Recipes.Single(recipe =>
@@ -7600,14 +7775,16 @@ Require(
     gameUi.CraftingButton.Bounds.Z >
     gameUi.CraftingButton.Bounds.W &&
     gameUi.QuestButton.Bounds.X +
-    gameUi.QuestButton.Bounds.Z <
+    gameUi.QuestButton.Bounds.Z < gameUi.BuildButton.Bounds.X &&
+    gameUi.BuildButton.Bounds.X + gameUi.BuildButton.Bounds.Z <
     gameUi.CraftingButton.Bounds.X &&
-    gameUi.CraftingButton.Bounds.X +
-    gameUi.CraftingButton.Bounds.Z <
+    gameUi.CraftingButton.Bounds.X + gameUi.CraftingButton.Bounds.Z <
     gameUi.CombatButton.Bounds.X,
-    "the bottom toolbar must expose wider, non-overlapping quest and crafting actions");
+    "the bottom toolbar must expose non-overlapping quest, build and crafting actions");
 var questToolbarClicked = false;
+var buildToolbarClicked = false;
 gameUi.QuestButton.Clicked += () => questToolbarClicked = true;
+gameUi.BuildButton.Clicked += () => buildToolbarClicked = true;
 var skillsButtonCenter = new Vector2(
     gameUi.SkillsButton.Bounds.X +
     gameUi.SkillsButton.Bounds.Z * .5f,
@@ -7622,8 +7799,13 @@ var questButtonCenter = new Vector2(
     gameUi.QuestButton.Bounds.W * .5f);
 gameUi.UpdatePointer(questButtonCenter, leftDown: true);
 gameUi.UpdatePointer(questButtonCenter, leftDown: false);
+var buildButtonCenter = new Vector2(
+    gameUi.BuildButton.Bounds.X + gameUi.BuildButton.Bounds.Z * .5f,
+    gameUi.BuildButton.Bounds.Y + gameUi.BuildButton.Bounds.W * .5f);
+gameUi.UpdatePointer(buildButtonCenter, leftDown: true);
+gameUi.UpdatePointer(buildButtonCenter, leftDown: false);
 Require(
-    questToolbarClicked &&
+    questToolbarClicked && buildToolbarClicked &&
     gameUi.ActivePanel == GameUiPanel.Skills,
     "quest and crafting actions must activate without closing the selected gameplay panel");
 var skillBack = SkillPanelLayout.BackButtonBounds(gameUi.Panel.Bounds);
@@ -10100,11 +10282,14 @@ try
             VillagerSimulation.DefaultPersona(0),
             VillagerSimulation.DefaultPersona(1)
         ],
-        aiModelOverride: "gemma4:12b");
+        aiModelOverride: "gemma4:12b",
+        skipOpeningCouncil: true,
+        islandStart: true);
     Require(aiWorld.AiNpcsEnabled && aiWorld.AiNpcCount == 2 &&
             aiWorld.AiNpcPersonas?.Count == 2 &&
-            aiWorld.AiModelOverride == "gemma4:12b",
-        "AI NPC world options and model override must be stored on the world profile");
+            aiWorld.AiModelOverride == "gemma4:12b" &&
+            aiWorld.SkipOpeningCouncil && aiWorld.IslandStart,
+        "AI NPC world options, model override, council-skip and opening mode must be stored on the world profile");
     var clampedAiWorld = saves.CreateWorld(
         "Crowded Realm", 6789, player.Id,
         aiNpcsEnabled: true, aiNpcCount: 99);

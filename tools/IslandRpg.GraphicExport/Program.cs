@@ -12,7 +12,9 @@ var datPath = Path.Combine(common, "dat", "empires2_x2_p1.dat");
 if (!File.Exists(datPath))
     throw new FileNotFoundException("The Age2HD DAT file was not found.", datPath);
 
-var matches = GenieDatReader.FindAllGraphics(datPath)
+var allGraphics = GenieDatReader.FindAllGraphics(datPath);
+var graphicsById = allGraphics.ToDictionary(graphic => graphic.GraphicId);
+var matches = allGraphics
     .Where(graphic =>
         options.ExactNames.Contains(graphic.Name) ||
         options.Queries.Any(query =>
@@ -30,6 +32,16 @@ var exportedGraphics = 0;
 var exportedFrames = 0;
 foreach (var graphic in matches)
 {
+    var deltas = GenieDatReader.FindGraphicDeltas(datPath, graphic.Name);
+    if (deltas.Count > 0)
+        Console.WriteLine($"{graphic.Name,-21} deltas: " + string.Join(", ",
+            deltas.Select(delta =>
+            {
+                var name = graphicsById.TryGetValue(delta.GraphicId, out var referenced)
+                    ? referenced.Name
+                    : "missing";
+                return $"{delta.GraphicId}:{name}@{delta.OffsetX},{delta.OffsetY}/{delta.DisplayAngle}";
+            })));
     var slpPath = ResolveSlp(common, graphic.SlpId);
     if (slpPath is null)
     {
@@ -44,8 +56,12 @@ foreach (var graphic in matches)
         var palettePath = Age2PaletteResolver.Resolve(install, slpPath).Path;
         var sprite = SlpDecoder.Decode(
             slpPath, JascPalette.Load(palettePath));
-        var graphicFolder = Path.Combine(
-            outputRoot, SafeName(graphic.Name));
+        var duplicateName = matches.Count(value =>
+            value.Name.Equals(graphic.Name, StringComparison.OrdinalIgnoreCase)) > 1;
+        var folderName = duplicateName
+            ? $"{SafeName(graphic.Name)}_{graphic.GraphicId}"
+            : SafeName(graphic.Name);
+        var graphicFolder = Path.Combine(outputRoot, folderName);
         Directory.CreateDirectory(graphicFolder);
         for (var index = 0; index < sprite.Frames.Count; index++)
         {

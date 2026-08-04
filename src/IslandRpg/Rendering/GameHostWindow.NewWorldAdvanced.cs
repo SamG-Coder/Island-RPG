@@ -11,6 +11,8 @@ internal sealed partial class GameHostWindow
         _observeMode is not null || _activeWorld?.ObserveWorld == true;
     private readonly ToggleControlState _newWorldObserveToggle = new(
         "Observe world", "Free camera; no player participation");
+    private readonly ToggleControlState _newWorldSkipCouncilToggle = new(
+        "Skip opening council", "Choose temporary leadership immediately");
     private readonly TextBoxControlState _newWorldSharedStoryTextBox =
         new() { MaximumLength = 320 };
     private readonly TextBoxControlState _newWorldAiModelOverrideTextBox =
@@ -68,6 +70,11 @@ internal sealed partial class GameHostWindow
             _newWorldObserveToggle.ToggleAt(pointer);
             return;
         }
+        if (_newWorldSkipCouncilToggle.Bounds.Contains(pointer))
+        {
+            _newWorldSkipCouncilToggle.ToggleAt(pointer);
+            return;
+        }
         if (AdvancedDoneButtonBounds().Contains(pointer) ||
             BackButtonBounds().Contains(pointer))
         {
@@ -119,10 +126,16 @@ internal sealed partial class GameHostWindow
             new(content.X + 16, content.Y + content.W - 68, content.Z - 32, 18),
             new FSColor(145, 138, 117, 255));
         _newWorldObserveToggle.Layout(
-            new(content.X + 16, content.Y + content.W - 48, 300, 42), 0);
+            new(content.X + 16, content.Y + content.W - 48, 280, 42), 0);
         _newWorldObserveToggle.Hovered =
             _newWorldObserveToggle.HitTest(MouseState.Position);
         DrawToggleControl(_newWorldObserveToggle);
+        _newWorldSkipCouncilToggle.Layout(
+            new(content.X + content.Z / 2 + 8,
+                content.Y + content.W - 48, 310, 42), 0);
+        _newWorldSkipCouncilToggle.Hovered =
+            _newWorldSkipCouncilToggle.HitTest(MouseState.Position);
+        DrawToggleControl(_newWorldSkipCouncilToggle);
 
         DrawMenuButton(BackButtonBounds(), "Back");
         DrawMenuButton(AdvancedDoneButtonBounds(), "Done");

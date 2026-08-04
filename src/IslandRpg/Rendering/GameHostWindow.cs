@@ -524,6 +524,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _chatUi.MessageAdded += ObserveChatMessage;
         _gameUi.CraftingButton.Clicked += () =>
             OpenCraftingWindow();
+        _gameUi.BuildButton.Clicked += ToggleBuildingPanel;
         _gameUi.QuestButton.Clicked += () =>
             OpenQuestWindow();
         _gameUi.DisembarkButton.Clicked +=
@@ -629,7 +630,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 names.Add(name);
             foreach (var name in new[]
             {
-                "WALL1NNG", "WALL1N0G",
+                PalisadeWallVisuals.WallGraphic,
+                PalisadeWallVisuals.ShadowGraphic,
                 "WCON2NNW", "WCON2N0W"
             })
                 names.Add(name);
@@ -733,7 +735,8 @@ internal sealed partial class GameHostWindow : GameWindow
                     .Concat(WorldFishGenerator.RequiredGraphicNames)
                     .Concat(UndergroundResourceGenerator.RequiredGraphicNames)
                     .Concat([
-                        "WALL1NNG", "WALL1N0G",
+                        PalisadeWallVisuals.WallGraphic,
+                        PalisadeWallVisuals.ShadowGraphic,
                         "WCON2NNW", "WCON2N0W"
                     ])
                     .ToHashSet(StringComparer.OrdinalIgnoreCase)
@@ -1310,7 +1313,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 spawn,
                 player,
                 0),
-            [], false, "", [], "");
+            [], false, "", [], "", false,
+            ShouldPlayOpeningCinematic(seed, spawn));
     }
 
     private void CompleteNewWorldCreation(
@@ -1319,8 +1323,15 @@ internal sealed partial class GameHostWindow : GameWindow
         bool observeWorld,
         string sharedStory,
         IReadOnlyList<NewWorldSurvivorSetup> setups,
-        string modelOverride)
+        string modelOverride,
+        bool skipOpeningCouncil,
+        bool islandStart)
     {
+        var openingStory = !islandStart &&
+                           string.IsNullOrWhiteSpace(sharedStory)
+            ? "A merchant caravan was attacked by raiders before dawn. " +
+              "The survivors awoke beside scattered supply barrels."
+            : sharedStory;
         var world = _saves.CreateWorld(
             pending.Name,
             pending.Seed,
@@ -1329,9 +1340,11 @@ internal sealed partial class GameHostWindow : GameWindow
             pending.Population,
             personas,
             observeWorld,
-            sharedStory,
+            openingStory,
             setups,
-            modelOverride);
+            modelOverride,
+            skipOpeningCouncil,
+            islandStart);
         _saves.SaveWorldPlayer(
             world.Id,
             new(
@@ -2049,6 +2062,7 @@ internal sealed partial class GameHostWindow : GameWindow
         UpdateCraftingWindowInput(MouseState.Position, leftDown);
         UpdateSkillsPanelInput(MouseState.Position, leftDown);
         UpdateCombatPanelInput(MouseState.Position, leftDown);
+        UpdateBuildingPanelInput(MouseState.Position, leftDown);
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
         if (_gameUi.ActivePanel == GameUiPanel.Inventory)
             UpdateInventoryInteraction(
@@ -2072,6 +2086,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private bool IsPointerOverGameUi(Vector2 mouse) =>
         _gameUi.BlocksWorldInput(mouse) ||
+        BuildingPanelBounds().Contains(mouse) && _buildingPanelOpen ||
         _chatUi.BlocksWorldInput(mouse) ||
         _commandHints.HitTest(mouse) ||
         _inventoryContext.HitTest(mouse) ||
@@ -4439,6 +4454,7 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawAoEUiTile(_gameUi.SkillsButton);
         DrawAoEUiTile(_gameUi.InventoryButton);
         DrawAoEUiTile(_gameUi.CraftingButton);
+        DrawAoEUiTile(_gameUi.BuildButton);
         DrawAoEUiTile(_gameUi.QuestButton);
         if (_gameUi.DisembarkButton.Visible)
             DrawAoEUiTile(_gameUi.DisembarkButton);
@@ -4450,10 +4466,14 @@ internal sealed partial class GameHostWindow : GameWindow
             0, CenteredIconBounds(_gameUi.InventoryButton.Bounds));
         DrawToolbarActionIcon(
             1, CenteredIconBounds(_gameUi.CraftingButton.Bounds));
+        DrawCenteredUiText(
+            "Build", _gameUi.BuildButton.Bounds,
+            new(232, 219, 177, 255));
         DrawToolbarActionIcon(
             0, CenteredIconBounds(_gameUi.QuestButton.Bounds));
         if (_gameUi.DisembarkButton.Visible)
             DrawDisembarkIcon(_gameUi.DisembarkButton.Bounds);
+        RenderBuildingPanel();
         RenderToolbarActionTooltip();
         RenderInventoryContextMenu();
         _uiOpacity = 1;
@@ -6241,8 +6261,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 var stage = ConstructionService.Stage(item.Object);
                 if (stage == ConstructionStage.Complete)
                 {
-                    itemAtlasKey = $"WALL1NNG#{angle * 9 + 4}";
-                    shadowAtlasKey = $"WALL1N0G#{angle}";
+                    itemAtlasKey = PalisadeWallVisuals.WallFrame(angle);
+                    shadowAtlasKey = PalisadeWallVisuals.ShadowFrame(angle);
                 }
                 else
                 {
@@ -7509,18 +7529,24 @@ internal sealed partial class GameHostWindow : GameWindow
             for (var frameIndex = 0; frameIndex < frames.Count; frameIndex++)
             {
                 var frame = frames[frameIndex];
-                var key = cliff || stump || vegetation ||
-                          undergroundResource || treeVariants || fish ||
-                          constructionWall
+                var framed = cliff || stump || vegetation ||
+                             undergroundResource || treeVariants || fish ||
+                             constructionWall;
+                var key = constructionWall
+                    ? $"{asset.Definition.Name}@{asset.Definition.GraphicId}#{frameIndex}"
+                    : framed
+                        ? $"{asset.Definition.Name}#{frameIndex}"
+                        : asset.Definition.Name;
+                var alias = constructionWall
                     ? $"{asset.Definition.Name}#{frameIndex}"
-                    : asset.Definition.Name;
+                    : (cliff || stump || vegetation ||
+                       undergroundResource || treeVariants || fish) &&
+                      frameIndex == 0
+                        ? asset.Definition.Name
+                        : null;
                 Place(
                     key,
-                    (cliff || stump || vegetation ||
-                     undergroundResource || treeVariants || fish) &&
-                    frameIndex == 0
-                        ? asset.Definition.Name
-                        : null,
+                    alias,
                     frame);
             }
         }

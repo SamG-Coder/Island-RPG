@@ -6,6 +6,17 @@ namespace IslandRpg.Rendering;
 
 internal sealed partial class GameHostWindow
 {
+    private readonly Dictionary<string, Task<SettlementScoutPathResult>>
+        _settlementScoutPathTasks = [];
+    private CancellationTokenSource _settlementScoutPathCancellation = new();
+    private sealed record SettlementScoutPathResult(
+        string ScoutId,
+        Vector2 Start,
+        Vector2 SectorTarget,
+        int WorldLevel,
+        IReadOnlyList<Vector2> Path);
+    private string? _pendingSettlementScoutReportId;
+
     private bool UpdateSettlementOpening()
     {
         if (_settlementGroup is not { } group ||
@@ -25,16 +36,20 @@ internal sealed partial class GameHostWindow
                         group.WorldLevel,
                         maximumRadius: 8));
                 SaveSettlementOpening(group);
-                SpeakSettlementLeader(
-                    "Before we choose our camp, scout different ground. Find water, food, wood, stone, danger, and somewhere defensible.");
+                SpeakSettlementLeader(group.CoordinatedReconnaissance
+                    ? "We found no complete site alone. Stay together now and search the same ground until we find timber, food, and stone."
+                    : "Before we choose our camp, scout different ground. Find water, food, wood, stone, danger, and somewhere defensible.");
                 ObserveLog("settlement_reconnaissance_requested", group.LeaderId,
                     new { Assignments = group.ScoutAssignments });
+                return true;
             }
+            if (SettlementSpeechActive(group.LeaderId)) return true;
             UpdateSettlementScouts(group);
             return true;
         }
         if (group.OpeningStage == SettlementOpeningStage.ComparingCamps)
         {
+            if (SettlementSpeechActive(group.LeaderId)) return true;
             if (group.CampResponses is null)
             {
                 SaveSettlementOpening(group with { CampResponses = [] });
@@ -43,6 +58,20 @@ internal sealed partial class GameHostWindow
                 {
                     Candidates = group.ScoutReports
                 });
+                return true;
+            }
+            if (SettlementOpeningService.BestViableCamp(group) is null)
+            {
+                var continued = SettlementOpeningService
+                    .ContinueReconnaissance(group);
+                SaveSettlementOpening(continued);
+                SpeakSettlementLeader(
+                    "None of those places has the food, wood, and stone " +
+                    "needed to establish camp safely. Search farther out.");
+                ObserveLog(
+                    "settlement_reconnaissance_extended",
+                    group.LeaderId,
+                    new { continued.ReconnaissanceRound });
                 return true;
             }
             var decided = SettlementOpeningService.DecideCamp(
@@ -101,8 +130,39 @@ internal sealed partial class GameHostWindow
         return false;
     }
 
+    private bool SettlementSpeechActive(string speakerId) =>
+        _npcAiDialogueTask is not null ||
+        ConversationFloorBusy ||
+        _villagerSpeechBubbles.TryGetValue(speakerId, out var bubble) &&
+        bubble.ExpiresAt > _clock;
+
     private void UpdateSettlementScouts(SettlementGroupState group)
     {
+        if (_pendingSettlementScoutReportId is { } pendingReportId)
+        {
+            var speechActive = _villagerSpeechBubbles.TryGetValue(
+                pendingReportId, out var bubble) &&
+                bubble.ExpiresAt > _clock;
+            if (_npcAiDialogueTask is not null || speechActive ||
+                ConversationFloorBusy)
+                return;
+            var pendingIndex = _villagers.FindIndex(value =>
+                value.Id == pendingReportId && value.Health > 0);
+            if (pendingIndex >= 0)
+            {
+                var reporter = _villagers[pendingIndex];
+                group = SettlementGroupService.ReportDiscoveries(
+                    group, reporter);
+                group = SettlementOpeningService.MarkReported(
+                    group, reporter.Id);
+                SaveSettlementOpening(group);
+                ObserveLog("settlement_scout_reported", reporter.Id,
+                    group.ScoutReports?.FirstOrDefault(value =>
+                        value.ScoutId == reporter.Id));
+            }
+            _pendingSettlementScoutReportId = null;
+            return;
+        }
         foreach (var assignment in group.ScoutAssignments ?? [])
         {
             var index = _villagers.FindIndex(value =>
@@ -119,9 +179,43 @@ internal sealed partial class GameHostWindow
             if (VillagerIntentPriorityService.HasUrgentOverride(scout))
                 continue;
             var position = new Vector2(scout.PositionX, scout.PositionY);
-            var target = new Vector2(assignment.TargetX, assignment.TargetY);
-            if (!assignment.Reached)
+            var sectorTarget = new Vector2(
+                assignment.TargetX, assignment.TargetY);
+            if (!assignment.Returning)
             {
+                if (assignment.WaypointX is not { } waypointX ||
+                    assignment.WaypointY is not { } waypointY)
+                {
+                    if (!TryGetSettlementScoutWaypoint(
+                            scout, position, sectorTarget,
+                            out var waypoint))
+                        continue;
+                    if (!VillagerExplorationService.MadeProgress(
+                            position, waypoint))
+                    {
+                        var blocked = AssessSettlementScout(scout, position);
+                        group = SettlementOpeningService
+                            .RecordScoutObservation(group, blocked);
+                        SaveSettlementOpening(group);
+                        ObserveLog(
+                            "settlement_scout_route_blocked",
+                            scout.Id,
+                            new { Position = position, Sector = sectorTarget });
+                        continue;
+                    }
+                    group = SettlementOpeningService.SetScoutWaypoint(
+                        group, scout.Id, waypoint);
+                    SaveSettlementOpening(group);
+                    ObserveLog("settlement_scout_leg_planned", scout.Id, new
+                    {
+                        From = position,
+                        Waypoint = waypoint,
+                        Sector = sectorTarget,
+                        assignment.LegsCompleted
+                    });
+                    continue;
+                }
+                var target = new Vector2(waypointX, waypointY);
                 if (Vector2.DistanceSquared(position, target) >
                     SettlementOpeningService.ArrivalRadius *
                     SettlementOpeningService.ArrivalRadius)
@@ -130,10 +224,16 @@ internal sealed partial class GameHostWindow
                         index, scout, target, VillagerNeed.Explore);
                     continue;
                 }
-                var report = AssessSettlementScout(scout, target);
-                group = SettlementOpeningService.RecordReport(group, report);
+                var report = AssessSettlementScout(scout, position);
+                group = SettlementOpeningService.RecordScoutObservation(
+                    group, report);
                 SaveSettlementOpening(group);
-                ObserveLog("settlement_scout_sector_reached", scout.Id, report);
+                ObserveLog("settlement_scout_leg_observed", scout.Id, new
+                {
+                    Report = report,
+                    Leg = assignment.LegsCompleted + 1
+                });
+                continue;
             }
             if (Vector2.DistanceSquared(position, group.Camp) >
                 SettlementOpeningService.ArrivalRadius *
@@ -146,21 +246,103 @@ internal sealed partial class GameHostWindow
             var completed = (group.ScoutAssignments ?? []).First(value =>
                 value.ScoutId == scout.Id);
             if (completed.Reported) continue;
+            if (_npcAiDialogueTask is not null) continue;
             var scoutReport = group.ScoutReports!.First(value =>
                 value.ScoutId == scout.Id);
-            SpeakSettlementMember(scout.Id, ScoutReportText(scoutReport));
-            group = SettlementGroupService.ReportDiscoveries(group, scout);
-            group = SettlementOpeningService.MarkReported(group, scout.Id);
-            SaveSettlementOpening(group);
-            ObserveLog("settlement_scout_reported", scout.Id, scoutReport);
+            var listener = _villagers.FirstOrDefault(value =>
+                               value.Id == group.LeaderId &&
+                               value.Id != scout.Id) ??
+                           _villagers.FirstOrDefault(value =>
+                               value.Health > 0 && value.Id != scout.Id);
+            var reportMeaning = SettlementScoutDialogueService.NaturalReport(
+                scoutReport, group.Camp);
+            if (listener is null)
+                SpeakSettlementMember(scout.Id, reportMeaning);
+            else
+                SpeakVillagerDialogue(
+                    scout,
+                    listener.Id,
+                    listener.Name,
+                    VillagerSocialIntent.AskSurvival,
+                    reportMeaning,
+                    allowNpcReply: false);
+            _pendingSettlementScoutReportId = scout.Id;
             return;
         }
+    }
+
+    private bool TryGetSettlementScoutWaypoint(
+        VillagerState scout,
+        Vector2 position,
+        Vector2 sectorTarget,
+        out Vector2 waypoint)
+    {
+        waypoint = position;
+        if (_settlementScoutPathTasks.TryGetValue(
+                scout.Id, out var pending))
+        {
+            if (!pending.IsCompleted) return false;
+            _settlementScoutPathTasks.Remove(scout.Id);
+            if (pending.IsCompletedSuccessfully)
+            {
+                var result = pending.Result;
+                var stale = result.WorldLevel != scout.WorldLevel ||
+                    Vector2.DistanceSquared(
+                        result.SectorTarget, sectorTarget) > .5f * .5f ||
+                    Vector2.DistanceSquared(
+                        result.Start, position) > 2.5f * 2.5f;
+                if (!stale)
+                {
+                    waypoint = VillagerExplorationService.LegFromRoute(
+                        position, result.Path);
+                    if (!VillagerExplorationService.MadeProgress(
+                            position, waypoint))
+                        waypoint = VillagerExplorationService.NextLeg(
+                            _worldSeed,
+                            position,
+                            sectorTarget,
+                            scout.WorldLevel);
+                    return true;
+                }
+            }
+        }
+
+        var actorId = scout.Id;
+        var start = position;
+        var target = sectorTarget;
+        var level = scout.WorldLevel;
+        var seed = _worldSeed;
+        var token = _settlementScoutPathCancellation.Token;
+        _settlementScoutPathTasks[actorId] = Task.Run(
+            () => new SettlementScoutPathResult(
+                actorId,
+                start,
+                target,
+                level,
+                GridPathfinder.Find(
+                    seed,
+                    start,
+                    target,
+                    maximumVisited: 8192,
+                    cancellationToken: token,
+                    worldLevel: level)),
+            token);
+        return false;
+    }
+
+    private void ResetSettlementScoutPaths()
+    {
+        _settlementScoutPathCancellation.Cancel();
+        _settlementScoutPathCancellation.Dispose();
+        _settlementScoutPathCancellation = new();
+        _settlementScoutPathTasks.Clear();
+        _pendingSettlementScoutReportId = null;
     }
 
     private SettlementScoutReport AssessSettlementScout(
         VillagerState scout, Vector2 position)
     {
-        const float radius = 9;
+        const float radius = 14;
         var memories = scout.LocationMemories ?? [];
         bool HasMemory(VillagerLocationType type) => memories.Any(value =>
             value.Type == type && value.WorldLevel == scout.WorldLevel &&
@@ -173,19 +355,35 @@ internal sealed partial class GameHostWindow
             .Where(value => Vector2.DistanceSquared(
                 new(value.X, value.Y), position) <= radius * radius)
             .ToArray();
+        var nearbyChunks = _worldChunks.Values
+            .Where(IsActiveSimulationChunk)
+            .ToArray();
+        var foodSources = nearbyChunks
+            .SelectMany(value => value.Chunk.Vegetation)
+            .Count(value =>
+                value.Kind == WorldVegetationKind.BerryBush &&
+                Vector2.DistanceSquared(
+                    new(value.X, value.Y), position) <= radius * radius);
+        var standingTrees = nearbyChunks
+            .SelectMany(value => value.Chunk.Trees)
+            .Count(value => Vector2.DistanceSquared(
+                new(value.X + .5f, value.Y + .5f), position) <=
+                radius * radius);
         var food = HasMemory(VillagerLocationType.FoodSource) ||
-                   nearbyItems.Any(value =>
-                       SurvivalService.TryFoodEffect(value.ItemId, out _));
+                   foodSources >= 2 ||
+                   nearbyItems.Count(value =>
+                       SurvivalService.TryFoodEffect(value.ItemId, out _)) >= 2;
         var wood = HasMemory(VillagerLocationType.WoodSource) ||
-                   nearbyItems.Any(value => ItemCatalog.TryGet(
+                   standingTrees >= 1 ||
+                   nearbyItems.Count(value => ItemCatalog.TryGet(
                        value.ItemId, out var item) &&
                        (item.HasTag(ItemTag.Log) ||
-                        item.HasTag(ItemTag.WoodcuttingMaterial)));
-        var stone = nearbyItems.Any(value =>
+                        item.HasTag(ItemTag.WoodcuttingMaterial))) >= 4;
+        var stone = nearbyItems.Count(value =>
             value.ItemId is ItemIds.LargeRock or ItemIds.MediumRock or
                 ItemIds.SmallRocks || ItemCatalog.TryGet(
                 value.ItemId, out var item) &&
-                item.HasTag(ItemTag.MiningMaterial));
+                item.HasTag(ItemTag.MiningMaterial)) >= 3;
         var water = false;
         for (var y = -6; y <= 6 && !water; y += 3)
         for (var x = -6; x <= 6 && !water; x += 3)
@@ -290,15 +488,6 @@ internal sealed partial class GameHostWindow
         if (index >= 0) ShowVillagerSpeech(
             index, text,
             new(_villagers[index].PositionX, _villagers[index].PositionY));
-    }
-
-    private static string ScoutReportText(SettlementScoutReport report)
-    {
-        return $"My sector: water {Found(report.Water)}, " +
-               $"food {Found(report.Food)}, wood {Found(report.Wood)}, " +
-               $"stone {Found(report.Stone)}, " +
-               $"defensible ground {Found(report.DefensibleGround)}, " +
-               $"danger {Found(report.Danger)}.";
     }
 
     private static string CompareCampReports(SettlementGroupState group)

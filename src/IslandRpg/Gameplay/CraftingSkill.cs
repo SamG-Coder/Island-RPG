@@ -410,15 +410,14 @@ internal static class CraftingSkill
             RequiredStationItemId: ItemIds.Workbench),
         new(
             "wooden-wall", ItemIds.WoodenWall,
-            CraftingCategory.Furniture, 4, 90,
+            CraftingCategory.Furniture, 1, 90,
             [new(ItemIds.Logs, 5)],
             [
                 "Trim five logs into stout wall timbers.",
                 "Mark the wall footprint before raising the frame.",
                 "Build the timbers up until the wall is secure."
             ],
-            RequiredTools: [new(ItemTag.Hammer, "hammer")],
-            RequiredStationItemId: ItemIds.Workbench),
+            RequiredTools: [new(ItemTag.Hammer, "hammer")]),
         new(
             "iron-pickaxe", ItemIds.IronPickaxe,
             CraftingCategory.Tools, 12, 180,

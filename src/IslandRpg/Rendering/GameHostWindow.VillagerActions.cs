@@ -504,9 +504,36 @@ internal sealed partial class GameHostWindow
                 TryVillagerPlaceObject(index, villager) ||
                 TryVillagerPlaceOrTendCampfire(index, villager),
             VillagerWorkRole.Exploration =>
-                TryVillagerMine(index, villager, tier),
+                TryVillagerMine(index, villager, tier) ||
+                TryVillagerExplore(index, villager, tier),
             _ => false
         };
+    }
+
+    private bool TryVillagerExplore(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier)
+    {
+        var position = new Vector2(villager.PositionX, villager.PositionY);
+        var preferred = VillagerSettlementProjectService
+            .ContinuingExplorationTarget(villager, _worldGameSeconds);
+        var waypoint = VillagerExplorationService.NextLeg(
+            _worldSeed,
+            position,
+            preferred,
+            villager.WorldLevel);
+        if (!VillagerExplorationService.MadeProgress(position, waypoint))
+            return false;
+        MoveVillagerForCapability(
+            index, villager, tier, waypoint, VillagerNeed.Explore);
+        ObserveLog("villager_exploration_leg_planned", villager.Id, new
+        {
+            From = position,
+            Waypoint = waypoint,
+            Preferred = preferred
+        });
+        return true;
     }
 
     private bool TryVillagerPlantCrop(int index, VillagerState villager)

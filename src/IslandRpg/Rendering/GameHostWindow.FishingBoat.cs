@@ -61,7 +61,7 @@ internal sealed partial class GameHostWindow
         _fishingBoatDisembarkTargeting = false;
         _fishingBoatRiderOffset = Vector2.Zero;
         _fishingBoatRiderTargetOffset = Vector2.Zero;
-        if (_player is null)
+        if (_player is null || _activeWorld?.IslandStart != true)
         {
             _fishingBoat = null;
             _fishingBoatBoarded = false;

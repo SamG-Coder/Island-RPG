@@ -16,6 +16,12 @@ internal sealed record GenieGraphic(
     byte MirroringMode,
     byte Layer = 0);
 
+internal sealed record GenieGraphicDelta(
+    short GraphicId,
+    short OffsetX,
+    short OffsetY,
+    short DisplayAngle);
+
 internal static class GenieDatReader
 {
     // Source graphic records use fixed-length name fields. Reading a named record
@@ -70,6 +76,34 @@ internal static class GenieDatReader
             byId.TryAdd(graphic.GraphicId, graphic);
         }
         return byId.Values.OrderBy(graphic => graphic.GraphicId).ToArray();
+    }
+
+    public static IReadOnlyList<GenieGraphicDelta> FindGraphicDeltas(
+        string datPath, string requestedName)
+    {
+        var data = Decompress(datPath);
+        var needle = Encoding.ASCII.GetBytes(requestedName);
+        for (var offset = 0; offset <= data.Length - FixedRecordLength; offset++)
+        {
+            if (!data.AsSpan(offset, needle.Length).SequenceEqual(needle)) continue;
+            if (needle.Length < NameLength && data[offset + needle.Length] != 0) continue;
+            if (!TryReadGraphic(data, offset, requestedName, out _)) continue;
+
+            var count = U16(data, offset + 52);
+            var result = new GenieGraphicDelta[count];
+            for (var index = 0; index < count; index++)
+            {
+                var deltaOffset = offset + FixedRecordLength + index * 8;
+                result[index] = new(
+                    I16(data, deltaOffset),
+                    I16(data, deltaOffset + 2),
+                    I16(data, deltaOffset + 4),
+                    I16(data, deltaOffset + 6));
+            }
+            return result;
+        }
+        throw new KeyNotFoundException(
+            $"Graphic '{requestedName}' was not found in the DAT data.");
     }
 
     private static GenieGraphic FindGraphic(byte[] data, string requestedName)

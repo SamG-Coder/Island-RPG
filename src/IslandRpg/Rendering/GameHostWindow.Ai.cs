@@ -59,7 +59,9 @@ internal sealed partial class GameHostWindow
         int Population,
         bool ObserveWorld = false,
         string SharedStory = "",
-        string ModelOverride = "");
+        string ModelOverride = "",
+        bool SkipOpeningCouncil = false,
+        bool IslandStart = false);
 
     private void BeginNpcAiCheck(bool useActiveWorld = false)
     {
@@ -92,7 +94,9 @@ internal sealed partial class GameHostWindow
             name, seed, spawn, player, population,
             _newWorldObserveToggle.IsChecked,
             _newWorldSharedStoryTextBox.Text.Trim(),
-            _newWorldAiModelOverrideTextBox.Text.Trim());
+            _newWorldAiModelOverrideTextBox.Text.Trim(),
+            _newWorldSkipCouncilToggle.IsChecked,
+            ShouldPlayOpeningCinematic(seed, spawn));
         _frontendError =
             "Creating survivor histories and personalities...";
         _npcPersonaGenerationTask =
@@ -105,7 +109,8 @@ internal sealed partial class GameHostWindow
                         string.IsNullOrWhiteSpace(_newWorldNpcNameTextBoxes[index].Text)
                             ? VillagerSimulation.NamesForPopulation(population)[index]
                             : _newWorldNpcNameTextBoxes[index].Text.Trim())
-                    .ToArray());
+                    .ToArray(),
+                _pendingNewWorldCreation.IslandStart);
     }
 
     private void UpdateAiWorldCreation()
@@ -121,6 +126,10 @@ internal sealed partial class GameHostWindow
         personas ??= Enumerable.Range(0, pending.Population)
             .Select(VillagerSimulation.DefaultPersona)
             .ToArray();
+        personas = personas.Select(value =>
+                WorldOpeningScenarioService.ApplyArrival(
+                    value, pending.IslandStart))
+            .ToArray();
         _pendingNewWorldCreation = null;
         _npcPersonaGenerationTask = null;
         var setups = BuildNewWorldSetups(personas);
@@ -130,7 +139,9 @@ internal sealed partial class GameHostWindow
             pending.ObserveWorld,
             pending.SharedStory,
             setups,
-            pending.ModelOverride);
+            pending.ModelOverride,
+            pending.SkipOpeningCouncil,
+            pending.IslandStart);
     }
 
     private void InitializeNpcAiSettingsFields(

@@ -33,10 +33,48 @@ internal sealed partial class GameHostWindow
     private OpeningPlayback? _openingIncidentCurrent;
     private double _openingIncidentDeadline;
     private double _nextOpeningShoreDamageAt;
+    private Vector2? _pendingCaravanSuppliesCenter;
+    private bool _caravanSuppliesSpawned;
+
+    private void InitializeCaravanArrival(
+        IReadOnlyList<VillagerState> arrivals,
+        Vector2 center)
+    {
+        _openingIncidentQueue.Clear();
+        _openingIncidentOutcomes.Clear();
+        _openingIncidentCurrent = null;
+        InitializeCaravanSupplies(center);
+        for (var index = 0; index < arrivals.Count; index++)
+        {
+            var arrival = arrivals[index];
+            var radial = VillagerGroupConversationService.CircleOffset(
+                arrival.Id, index, arrivals.Count);
+            var desired = center + new Vector2(radial.X, radial.Y) * 2.4f;
+            var position = WorldLevelNavigation.ReachableWalkableTarget(
+                _worldSeed, center, desired, arrival.WorldLevel,
+                maximumRadius: 4);
+            _villagers.Add(arrival with
+            {
+                PositionX = position.X,
+                PositionY = position.Y,
+                Action = EntityAction.Idle,
+                Activity = VillagerActivity.Idle,
+                NextDecisionGameSeconds = _worldGameSeconds
+            });
+        }
+    }
+
+    private void InitializeCaravanSupplies(Vector2 center)
+    {
+        _pendingCaravanSuppliesCenter = center;
+        _caravanSuppliesSpawned = false;
+    }
 
     private void InitializeOpeningIncident(
         IReadOnlyList<VillagerState> arrivals, Vector2 center)
     {
+        _pendingCaravanSuppliesCenter = null;
+        _caravanSuppliesSpawned = false;
         _openingIncidentQueue.Clear();
         _openingIncidentOutcomes.Clear();
         _openingIncidentCurrent = null;
@@ -108,6 +146,7 @@ internal sealed partial class GameHostWindow
 
     private bool UpdateOpeningIncident()
     {
+        EnsureCaravanSupplies();
         if (_openingIncidentCurrent is null &&
             !_openingIncidentQueue.TryDequeue(out _openingIncidentCurrent))
             return false;
@@ -179,6 +218,62 @@ internal sealed partial class GameHostWindow
         }
         FinishOpeningIncident(true, "performed");
         return _openingIncidentQueue.Count > 0;
+    }
+
+    private void EnsureCaravanSupplies()
+    {
+        if (_caravanSuppliesSpawned ||
+            _pendingCaravanSuppliesCenter is not { } center)
+            return;
+        var existing = _worldChunks.Values
+            .SelectMany(value => value.Chunk.GroundObjects)
+            .Count(value =>
+                value.ItemId == ItemIds.StorageBarrel &&
+                Vector2.DistanceSquared(
+                    new(value.X, value.Y), center) <= 5 * 5);
+        if (existing >= CaravanSupplyService.Barrels.Count)
+        {
+            _caravanSuppliesSpawned = true;
+            _pendingCaravanSuppliesCenter = null;
+            return;
+        }
+        var offsets = new[]
+        {
+            new Vector2(-1.4f, .6f),
+            new Vector2(0, 1.2f),
+            new Vector2(1.4f, .6f)
+        };
+        var placements = new List<(GpuWorldChunk Gpu, Vector2 Position)>(3);
+        foreach (var offset in offsets)
+        {
+            var position = WorldLevelNavigation.ReachableWalkableTarget(
+                _worldSeed, center, center + offset,
+                (int)WorldLevel.Overworld, maximumRadius: 3);
+            if (!TryGetDropTerrain(
+                    (int)MathF.Floor(position.X),
+                    (int)MathF.Floor(position.Y),
+                    out var gpu, out _))
+                return;
+            placements.Add((gpu, position));
+        }
+        for (var index = 0; index < placements.Count; index++)
+        {
+            var id = Guid.NewGuid();
+            var storage = new WorldGroundObject(
+                id, ItemIds.StorageBarrel,
+                placements[index].Position.X,
+                placements[index].Position.Y);
+            var container = StorageContainerService.Open(storage);
+            foreach (var stack in CaravanSupplyService.Barrels[index])
+                if (!container.TryAdd(stack.ItemId, stack.Quantity))
+                    throw new InvalidOperationException(
+                        $"Caravan barrel could not store {stack.ItemId}.");
+            placements[index].Gpu.Chunk.GroundObjects.Add(
+                StorageContainerService.Save(storage, container));
+            QueueChunkSave(placements[index].Gpu.Chunk);
+        }
+        _caravanSuppliesSpawned = true;
+        _pendingCaravanSuppliesCenter = null;
     }
 
     private void DirectOpeningParticipants(

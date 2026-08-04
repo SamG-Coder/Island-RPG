@@ -18,7 +18,9 @@ internal sealed record WorldProfile(
     bool ObserveWorld = false,
     string SharedStory = "",
     IReadOnlyList<NewWorldSurvivorSetup>? AiNpcSetups = null,
-    string AiModelOverride = "");
+    string AiModelOverride = "",
+    bool SkipOpeningCouncil = false,
+    bool IslandStart = false);
 
 internal sealed record PlayerProfile(
     string Id,
@@ -162,7 +164,9 @@ internal sealed class GameSaveRepository
         bool observeWorld = false,
         string sharedStory = "",
         IReadOnlyList<NewWorldSurvivorSetup>? aiNpcSetups = null,
-        string aiModelOverride = "")
+        string aiModelOverride = "",
+        bool skipOpeningCouncil = false,
+        bool islandStart = false)
     {
         var now = DateTime.UtcNow;
         var id = UniqueId(WorldsRoot, name);
@@ -180,7 +184,9 @@ internal sealed class GameSaveRepository
             AiNpcSetups: aiNpcSetups?.Take(aiNpcCount).ToArray(),
             AiModelOverride: aiNpcsEnabled
                 ? aiModelOverride.Trim()
-                : "");
+                : "",
+            SkipOpeningCouncil: aiNpcsEnabled && skipOpeningCouncil,
+            IslandStart: islandStart);
         SaveWorld(profile);
         return profile;
     }

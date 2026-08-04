@@ -171,9 +171,9 @@ internal sealed partial class GameHostWindow
             MouseState.IsButtonDown(MouseButton.Right));
     }
 
-    private void TryCraftRecipe(CraftingRecipe recipe)
+    private bool TryCraftRecipe(CraftingRecipe recipe)
     {
-        if (_activePlayer is null) return;
+        if (_activePlayer is null) return false;
         var level = CraftingSkill.LevelForExperience(
             _activePlayer.CraftingExperience);
         var beforeInventory = ActivePlayerInventory();
@@ -183,7 +183,7 @@ internal sealed partial class GameHostWindow
         if (availability == RecipeAvailability.Locked)
         {
             CanCraftRecipe(recipe.Id);
-            return;
+            return false;
         }
         if (availability == RecipeAvailability.MissingResources)
         {
@@ -191,7 +191,7 @@ internal sealed partial class GameHostWindow
                 $"crafting-missing-{recipe.Id}",
                 $"You do not have the materials to make " +
                 $"{ItemCatalog.Get(recipe.ResultItemId).Name}.");
-            return;
+            return false;
         }
         if (availability == RecipeAvailability.MissingStation)
         {
@@ -201,14 +201,14 @@ internal sealed partial class GameHostWindow
                 $"crafting-station-{recipe.Id}",
                 $"Stand near a placed {station} to make " +
                 $"{ItemCatalog.Get(recipe.ResultItemId).Name}.");
-            return;
+            return false;
         }
         if (availability == RecipeAvailability.InventoryFull)
         {
             ReportBlockedAction(
                 $"crafting-inventory-full-{recipe.Id}",
                 "You do not have enough inventory space for every crafting step.");
-            return;
+            return false;
         }
         var craftResult = CraftingService.TryCraftDetailed(
             recipe, level, beforeInventory, out var inventory,
@@ -218,14 +218,15 @@ internal sealed partial class GameHostWindow
             ReportBlockedAction(
                 $"crafting-inventory-full-{recipe.Id}",
                 "You do not have enough inventory space for every crafting step.");
-            return;
+            return false;
         }
-        if (craftResult != CraftingService.CraftResult.Success) return;
+        if (craftResult != CraftingService.CraftResult.Success) return false;
         SaveActivePlayerInventory(inventory);
         _chatUi.AddMessage(
             $"You craft {ItemCatalog.Get(recipe.ResultItemId).Name}.",
             ChatMessageStyle.Action);
         CompletePlayerCraft(recipe.Id, beforeInventory, inventory);
+        return true;
     }
 
     private RecipeAvailability RecipeAvailabilityFor(

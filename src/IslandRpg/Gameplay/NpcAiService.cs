@@ -586,10 +586,11 @@ internal sealed class NpcAiService : IDisposable
     public async Task<IReadOnlyList<VillagerPersona>?>
         GeneratePersonasAsync(
             NpcAiSettings settings,
-            string worldName,
-            long worldSeed,
-            IReadOnlyList<string> names,
-            CancellationToken cancellationToken = default)
+        string worldName,
+        long worldSeed,
+        IReadOnlyList<string> names,
+        bool islandStart = true,
+        CancellationToken cancellationToken = default)
     {
         if (!settings.Enabled || names.Count == 0 ||
             !TryBaseUri(settings.BaseUrl, out var baseUri))
@@ -608,9 +609,9 @@ internal sealed class NpcAiService : IDisposable
             system =
                 "Create distinct grounded survivors for a social survival game. " +
                 HistoricalKnowledgePolicy.PromptRule + " " +
-                "It is day 1, 03:00: each person has just awakened after an unknown " +
-                "wreck and cannot know later island events. Give each a concise " +
-                "pre-island history, temperament, former trade, uncertain arrival " +
+                $"It is day 1, 03:00: {WorldOpeningScenarioService.PersonaTimeline(islandStart)}. " +
+                "Each person cannot know later events. Give each a concise " +
+                "earlier history, temperament, former trade, uncertain arrival " +
                 "memory, and reason to learn about other survivors. knownToolIds may " +
                 "only use stone_axe, stone_hammer, stone_pickaxe, stone_shovel, or " +
                 "stone_knife. Use the supplied sex and choose priorTrade verbatim from " +
@@ -620,7 +621,8 @@ internal sealed class NpcAiService : IDisposable
             {
                 worldName,
                 worldSeed,
-                timeline = "Day 1, 03:00; newly awake on an unknown island",
+                timeline = WorldOpeningScenarioService.PersonaTimeline(
+                    islandStart),
                 people = names.Select((personName, index) => new
                 {
                     name = personName,
@@ -644,12 +646,14 @@ internal sealed class NpcAiService : IDisposable
             using var response = await _http.SendAsync(
                 request, timeout.Token);
             if (!response.IsSuccessStatusCode)
-                return DefaultPersonas(names.Count, worldSeed);
+                return ScenarioPersonas(
+                    names.Count, worldSeed, islandStart);
             var generated = await response.Content
                 .ReadFromJsonAsync<OllamaGenerate>(
                     JsonOptions, timeout.Token);
             if (string.IsNullOrWhiteSpace(generated?.Response))
-                return DefaultPersonas(names.Count, worldSeed);
+                return ScenarioPersonas(
+                    names.Count, worldSeed, islandStart);
             var cast = JsonSerializer.Deserialize<NpcCast>(
                 generated.Response, JsonOptions);
             var people = cast?.People ?? [];
@@ -660,15 +664,28 @@ internal sealed class NpcAiService : IDisposable
                         people[index], index, genders[index], worldSeed)
                     : VillagerSimulation.DefaultPersona(
                         index, genders[index]);
-            return result;
+            return result.Select(value =>
+                    WorldOpeningScenarioService.ApplyArrival(
+                        value, islandStart))
+                .ToArray();
         }
         catch (Exception exception) when (
             exception is OperationCanceledException or
                 HttpRequestException or JsonException)
         {
-            return DefaultPersonas(names.Count, worldSeed);
+            return ScenarioPersonas(
+                names.Count, worldSeed, islandStart);
         }
     }
+
+    private static IReadOnlyList<VillagerPersona> ScenarioPersonas(
+        int count,
+        long worldSeed,
+        bool islandStart) =>
+        DefaultPersonas(count, worldSeed)
+            .Select(value => WorldOpeningScenarioService.ApplyArrival(
+                value, islandStart))
+            .ToArray();
 
     public void Dispose()
     {

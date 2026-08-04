@@ -50,6 +50,7 @@ internal sealed partial class GameHostWindow
     private void LoadVillagers(Vector2 spawn)
     {
         ResetEnemies();
+        ResetSettlementScoutPaths();
         _villagers.Clear();
         _villagerSpeechBubbles.Clear();
         _observedVillagerId = null;
@@ -70,6 +71,13 @@ internal sealed partial class GameHostWindow
         _nextVillagerRoleAssignment = 0;
         _entityFeedback.Clear();
         if (_activeWorld is null) return;
+        if (_activeWorld.IslandStart)
+        {
+            _pendingCaravanSuppliesCenter = null;
+            _caravanSuppliesSpawned = false;
+        }
+        else
+            InitializeCaravanSupplies(spawn);
         _settlementGroup = _saves.LoadSettlementGroup(_activeWorld.Id);
         _villagerDeaths = _saves.LoadVillagerDeaths(_activeWorld.Id);
         if (!_activeWorld.AiNpcsEnabled ||
@@ -114,25 +122,38 @@ internal sealed partial class GameHostWindow
                     population: _activeWorld.AiNpcCount,
                     personas: _activeWorld.AiNpcPersonas,
                     setups: _activeWorld.AiNpcSetups);
-            InitializeOpeningIncident(arrivals, spawn);
-            ObserveLog("opening_wreck_incident", null, new
+            if (_activeWorld.IslandStart)
             {
-                Era = "1200 AD",
-                EndsAtGameSeconds = _worldGameSeconds +
-                    VillagerOpeningIncidentService.IncidentRealSeconds *
-                    VillagerSimulation.GameSecondsPerRealSecond,
-                Injured = _openingIncidentOutcomes.Values.Where(value =>
-                        value.Health < AdventureService.BaseMaximumHealth)
-                    .Select(value => new { value.Id, value.Health }).ToArray(),
-                Accounts = VillagerOpeningIncidentService.Accounts(
-                        _openingIncidentOutcomes.Values.ToArray())
-                    .Select(value => new
-                    {
-                        value.SpeakerId,
-                        value.Purpose,
-                        DeterministicMeaning = value.Text
-                    }).ToArray()
-            });
+                InitializeOpeningIncident(arrivals, spawn);
+                ObserveLog("opening_wreck_incident", null, new
+                {
+                    Era = "1200 AD",
+                    EndsAtGameSeconds = _worldGameSeconds +
+                        VillagerOpeningIncidentService.IncidentRealSeconds *
+                        VillagerSimulation.GameSecondsPerRealSecond,
+                    Injured = _openingIncidentOutcomes.Values.Where(value =>
+                            value.Health < AdventureService.BaseMaximumHealth)
+                        .Select(value => new { value.Id, value.Health }).ToArray(),
+                    Accounts = VillagerOpeningIncidentService.Accounts(
+                            _openingIncidentOutcomes.Values.ToArray())
+                        .Select(value => new
+                        {
+                            value.SpeakerId,
+                            value.Purpose,
+                            DeterministicMeaning = value.Text
+                        }).ToArray()
+                });
+            }
+            else
+            {
+                InitializeCaravanArrival(arrivals, spawn);
+                ObserveLog("opening_caravan_ambush", null, new
+                {
+                    Era = "1200 AD",
+                    Survivors = arrivals.Select(value => value.Id).ToArray(),
+                    SupplyBarrels = CaravanSupplyService.Barrels.Count
+                });
+            }
             _villagersDirty = true;
         }
         if (_settlementGroup is { } loadedGroup)
@@ -683,19 +704,36 @@ internal sealed partial class GameHostWindow
 
     private void UpdateSettlementProjectAssignments()
     {
-        var placedItems = _worldChunks.Values
+        var groundObjects = _worldChunks.Values
             .Where(IsActiveSimulationChunk)
             .SelectMany(value => value.Chunk.GroundObjects)
+            .ToArray();
+        var placedItems = groundObjects
             .Select(value => value.ItemId)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var leaderId = _villagers.FirstOrDefault(value =>
             value.Health > 0 && value.RecognizedLeaderId is not null)?
             .RecognizedLeaderId;
+        var seriousThreat = _settlementGroup?.ActiveJusticeCase is
+        {
+            Resolved: false,
+            Severity: >= SettlementViolenceSeverity.GrievousAssault
+        };
+        var defensiveWorksite = seriousThreat && _settlementGroup is not null
+            ? VillagerSettlementProjectService.NextDefensiveWorksite(
+                _settlementGroup.Camp,
+                groundObjects.Where(value =>
+                        value.ItemId == ItemIds.WoodenWall)
+                    .Select(value => new Vector2(value.X, value.Y))
+                    .ToArray())
+            : null;
         var plan = VillagerSettlementProjectService.Plan(
-            _villagers, placedItems, leaderId, _worldGameSeconds);
+            _villagers, placedItems, leaderId, _worldGameSeconds,
+            defensiveWorksite is not null, defensiveWorksite);
         if (plan is not null && !_villagers.Any(value =>
                 value.ProjectAssignment?.ProjectItemId ==
-                plan.ProjectItemId))
+                plan.ProjectItemId) &&
+            plan.ProjectItemId != ItemIds.WoodenWall)
             plan = plan with
             {
                 Worksite = FindProjectWorksite(
@@ -703,7 +741,9 @@ internal sealed partial class GameHostWindow
             };
         var key = plan is null
             ? null
-            : $"{plan.ProjectItemId}:{plan.BuilderId}";
+            : $"{plan.ProjectItemId}:{plan.BuilderId}:" +
+              $"{MathF.Round(plan.Worksite.X, 1)}:" +
+              $"{MathF.Round(plan.Worksite.Y, 1)}";
         if (key != _settlementProjectKey)
             _completedProjectContributions.Clear();
         for (var index = 0; index < _villagers.Count; index++)
@@ -859,6 +899,28 @@ internal sealed partial class GameHostWindow
             var result = VillagerLeadershipService.HoldCouncil(living);
             if (result is null) return false;
             _settlementCouncilResult = result;
+            if (_activeWorld?.SkipOpeningCouncil == true)
+            {
+                _settlementCouncilLines.Clear();
+                _settlementCouncilPoint = new(
+                    living.Average(value => value.PositionX),
+                    living.Average(value => value.PositionY));
+                _settlementCouncilPositions.Clear();
+                foreach (var villager in living)
+                    _settlementCouncilPositions[villager.Id] = new(
+                        villager.PositionX, villager.PositionY);
+                _settlementCouncilGatherUntil = _worldGameSeconds;
+                _settlementCouncilDeadline = _clock + 1;
+                _settlementCouncilTimedOut = false;
+                _nextSettlementCouncilLineAt = _clock;
+                ObserveLog("settlement_council_skipped", result.LeaderId, new
+                {
+                    result.Contested,
+                    result.Votes
+                });
+                _villagersDirty = true;
+                return true;
+            }
             _settlementCouncilLines = new(
                 VillagerGroupConversationService.OpeningCouncil(
                     living, result));
@@ -1046,8 +1108,11 @@ internal sealed partial class GameHostWindow
         var leader = _villagers.First(value =>
             value.Id == resultToApply.LeaderId);
         var previousGroup = _settlementGroup;
-        var departures = IndependentSurvivorPolicy.LeadershipDepartures(
-            living, resultToApply);
+        IReadOnlySet<string> departures =
+            _activeWorld?.SkipOpeningCouncil == true
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : IndependentSurvivorPolicy.LeadershipDepartures(
+                living, resultToApply);
         foreach (var departureId in departures)
             ApplyLeadershipDeparture(departureId, leader.Id);
         var livingVillagerIds = _villagers

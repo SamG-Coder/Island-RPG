@@ -469,6 +469,7 @@ internal sealed partial class GameHostWindow
         window.UpdateActiveTreeStickGather();
         window.UpdateGroundObjectPickup();
         window.UpdateGroundObjectDrop();
+        window.UpdatePlayerConstruction();
         window.UpdateCampfireFuelPickup();
         window.UpdateCooking();
         window.UpdatePotCooking();

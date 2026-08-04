@@ -61,6 +61,10 @@ internal sealed partial class GameHostWindow
                                     0,
                                     VillagerSimulation.MaximumPopulation)
                                 : 0;
+                        var skipCouncil = root.TryGetProperty(
+                            "skipCouncil", out var skipCouncilElement) &&
+                            skipCouncilElement.ValueKind is
+                                JsonValueKind.True;
                         var newPlayer = _saves.CreatePlayer(
                             characterName, gender, skinTone: 2, teamColor: 0);
                         _selectedPlayer = newPlayer;
@@ -70,7 +74,8 @@ internal sealed partial class GameHostWindow
                             new(
                                 worldName, newSeed, newSpawn,
                                 newPlayer, Population: npcCount),
-                            [], false, "", [], "");
+                            [], false, "", [], "", skipCouncil,
+                            ShouldPlayOpeningCinematic(newSeed, newSpawn));
                         request.Complete(ControlSnapshot("new_game_started"));
                         break;
                     case "load_latest":
@@ -290,7 +295,7 @@ internal sealed partial class GameHostWindow
                                 {
                                     command = "new_game",
                                     arguments =
-                                        "character, world, gender?, seed?, npcCount?"
+                                        "character, world, gender?, seed?, npcCount?, skipCouncil?"
                                 },
                                 new { command = "screenshot" },
                                 new { command = "skip_cinematic" },
