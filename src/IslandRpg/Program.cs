@@ -118,6 +118,11 @@ try
         Console.WriteLine($"Age2HD: {install}");
 
     var datPath = Path.Combine(install, "resources", "_common", "dat", "empires2_x2_p1.dat");
+    // Gate collision, placement clearance and compound attachment offsets
+    // are authored in AoE's unit records. Load them once rather than deriving
+    // gameplay geometry from transparent/colored pixels in the SLP frames.
+    if (!useTestAssets && File.Exists(datPath))
+        GateCatalog.LoadGeometry(datPath);
     if (options.Catalog)
     {
         AssetCatalog assetCatalog;

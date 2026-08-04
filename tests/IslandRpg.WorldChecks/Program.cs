@@ -3150,6 +3150,36 @@ Require(
         "GATE@2045#r1",
     "gates must resolve their composite completed key and authored scaffold stages");
 var completedGate = gateSite with { Health = gateSite.MaxHealth };
+var syntheticDat = new byte[1200];
+const int syntheticUnitStart = 100;
+const int syntheticNameOffset = 270;
+const int syntheticNextUnitStart = 575;
+BitConverter.GetBytes((ushort)6).CopyTo(syntheticDat, syntheticUnitStart);
+BitConverter.GetBytes((short)487).CopyTo(syntheticDat, syntheticUnitStart + 2);
+BitConverter.GetBytes((short)39).CopyTo(syntheticDat, syntheticUnitStart + 8);
+BitConverter.GetBytes(2f).CopyTo(syntheticDat, syntheticUnitStart + 26);
+BitConverter.GetBytes(.5f).CopyTo(syntheticDat, syntheticUnitStart + 30);
+BitConverter.GetBytes(2f).CopyTo(syntheticDat, syntheticUnitStart + 61);
+BitConverter.GetBytes(.5f).CopyTo(syntheticDat, syntheticUnitStart + 65);
+"GTAX2\0"u8.CopyTo(syntheticDat.AsSpan(syntheticNameOffset));
+BitConverter.GetBytes((ushort)6).CopyTo(syntheticDat, syntheticNextUnitStart);
+BitConverter.GetBytes((short)488).CopyTo(syntheticDat, syntheticNextUnitStart + 2);
+BitConverter.GetBytes(2f).CopyTo(syntheticDat, syntheticNextUnitStart + 26);
+BitConverter.GetBytes(.5f).CopyTo(syntheticDat, syntheticNextUnitStart + 30);
+var syntheticAnnexStart = syntheticNextUnitStart - 66;
+BitConverter.GetBytes((short)-1).CopyTo(syntheticDat, syntheticAnnexStart);
+BitConverter.GetBytes(-1.5f).CopyTo(syntheticDat, syntheticAnnexStart + 2);
+BitConverter.GetBytes((short)-1).CopyTo(syntheticDat, syntheticAnnexStart + 10);
+BitConverter.GetBytes(1.5f).CopyTo(syntheticDat, syntheticAnnexStart + 12);
+var parsedGateUnits = GenieUnitMetadataReader.ReadHdUnits(
+    syntheticDat, new Dictionary<short, string> { [487] = "GTAX2" });
+Require(
+    parsedGateUnits.TryGetValue(487, out var parsedGateUnit) &&
+    parsedGateUnit.CollisionRadius == new Vector2(2, .5f) &&
+    parsedGateUnit.PlacementClearance == new Vector2(2, .5f) &&
+    parsedGateUnit.Annexes[0].Offset == new Vector2(-1.5f, 0) &&
+    parsedGateUnit.Annexes[1].Offset == new Vector2(1.5f, 0),
+    "the runtime DAT parser must read gate collision, clearance and annex offsets without inspecting sprite pixels");
 var closedGateObstacles = PlaceableObjectCatalog.GateNavigationObstacles(
     completedGate, includeMiddle: true);
 var openGateObstacles = PlaceableObjectCatalog.GateNavigationObstacles(
@@ -3183,11 +3213,7 @@ Require(
             closedGateObstacles[1].Center) -
         closedGateObstacles[0].Width - .001f &&
     openGateObstacles.All(obstacle =>
-        MathF.Abs(obstacle.Center.Y -
-            PlaceableObjectCatalog.GroundContactCenter(
-                completedGate.ItemId,
-                new(completedGate.X, completedGate.Y)).Y -
-            WorldPlacementGrid.CellSize * 4) >= .99f) &&
+        MathF.Abs(obstacle.Center.Y - completedGate.Y) < .001f) &&
     GateService.TryOpen(completedGate, out var openGate) &&
     openGate.GateState == GateAccessState.Opened &&
     GateService.IsOpen(openGate) &&

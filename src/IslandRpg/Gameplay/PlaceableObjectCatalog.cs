@@ -250,10 +250,12 @@ internal static class PlaceableObjectCatalog
         foreach (var gate in GateCatalog.All)
             Definitions[gate.ItemId] = new(
                 gate.ItemId, $"{gate.ItemId}.png",
-                // GTAX gate foundations run along the world Y isometric axis.
-                FootprintWidth: 1, FootprintDepth: 3, Height: 3,
+                // The fallback matches GTAX's 2.0 x .5 DAT clearance radii.
+                // Runtime placement uses GateCatalog.Geometry so GTB/C/D
+                // receive their own authored orientation dimensions.
+                FootprintWidth: 4, FootprintDepth: 1, Height: 3,
                 HotspotX: 96, HotspotY: 150,
-                NavigationWidth: .85f, NavigationDepth: 2.7f,
+                NavigationWidth: 4, NavigationDepth: 1,
                 RotationCount: 4);
     }
 
@@ -274,6 +276,17 @@ internal static class PlaceableObjectCatalog
         TryGet(itemId, out var definition)
             ? definition.NormalizeRotation(rotation)
             : 0;
+
+    public static (float Width, float Depth) PlacementFootprint(
+        PlaceableObjectDefinition definition,
+        int rotation)
+    {
+        if (!GateCatalog.IsGate(definition.ItemId))
+            return definition.Footprint(rotation);
+        var gate = GateCatalog.Get(definition.ItemId);
+        var size = GateCatalog.Geometry(gate, rotation).PlacementSize;
+        return (size.X, size.Y);
+    }
 
     public static float ProjectedFrontOffsetPixels(string itemId) =>
         TryGet(itemId, out var definition)
@@ -327,58 +340,58 @@ internal static class PlaceableObjectCatalog
         WorldGroundObject value, bool includeMiddle)
     {
         var rotation = NormalizeRotation(value.ItemId, value.VisualFrame);
-        var center = GroundContactCenter(
-            value.ItemId, new(value.X, value.Y)) +
-            RotateQuarter(new Vector2(
-                WorldPlacementGrid.CellSize * 3,
-                WorldPlacementGrid.CellSize * 4), rotation) +
-            GateCollisionAlignment(rotation);
-        const float cell = .85f;
-        var axis = GateCollisionAxis(rotation);
-        var collisionRotation = GateCollisionRotation(rotation);
+        var gate = GateCatalog.Get(value.ItemId);
+        var geometry = GateCatalog.Geometry(gate, rotation);
+        var size = geometry.CollisionRadius * 2;
+        var center = new Vector2(value.X, value.Y);
+        var (axis, length, depth, collisionRotation) =
+            GateCollisionLayout(rotation, size);
+        var endLength = Math.Min(depth, length * .25f);
+        var endOffset = (length - endLength) * .5f;
         var firstCenter = center + axis *
-            (-1 - WorldPlacementGrid.CellSize * 2);
-        var secondCenter = center + axis;
+            -endOffset;
+        var secondCenter = center + axis * endOffset;
         var result = new List<NavigationObstacle>(includeMiddle ? 3 : 2)
         {
-            new(firstCenter, cell, cell, collisionRotation),
-            new(secondCenter, cell, cell, collisionRotation)
+            new(firstCenter, endLength, depth, collisionRotation),
+            new(secondCenter, endLength, depth, collisionRotation)
         };
         if (includeMiddle)
         {
-            // Fill the complete span between both tower collisions. Keeping
-            // this as a separate obstacle lets an opened gate remove only
-            // the passage while both towers remain solid.
-            var distance = Vector2.Distance(firstCenter, secondCenter);
+            // AoE stores one full collision radius for the closed building.
+            // Splitting that authored span into two ends and a middle lets
+            // an opened gate remove only its passage without inventing a
+            // second footprint from sprite pixels.
             result.Add(new(
-                (firstCenter + secondCenter) * .5f,
-                Math.Max(WorldPlacementGrid.CellSize, distance - cell),
-                cell,
+                center,
+                Math.Max(WorldPlacementGrid.CellSize,
+                    length - endLength * 2),
+                depth,
                 collisionRotation));
         }
         return result;
     }
 
-    private static Vector2 GateCollisionAxis(int rotation) =>
-        (rotation & 3) switch
+    private static (Vector2 Axis, float Length, float Depth, float Rotation)
+        GateCollisionLayout(int rotation, Vector2 size)
+    {
+        if (size.X > size.Y + .001f)
+            return (Vector2.UnitX, size.X, size.Y, 0);
+        if (size.Y > size.X + .001f)
+            return (Vector2.UnitY, size.Y, size.X, MathF.PI * .5f);
+
+        // The C/D gate records use a square collision radius. Preserve the
+        // DAT size while orienting its openable span with the visual gate.
+        var axis = (rotation & 3) switch
         {
-            // GTAX and GTBX follow the two ordinary world-grid axes.
-            1 => new(-1, 0),
-            // The remaining AoE orientations cross both world axes. These
-            // project as horizontal and vertical structures on screen.
             2 => new(1, -1),
             3 => new(1, 1),
-            _ => new(0, 1)
+            _ => Vector2.UnitX
         };
-
-    private static float GateCollisionRotation(int rotation) =>
-        (rotation & 3) switch
-        {
-            0 => MathF.PI * .5f,
-            2 => -MathF.PI * .25f,
-            3 => MathF.PI * .25f,
-            _ => 0
-        };
+        axis.Normalize();
+        return (axis, size.X, size.Y,
+            MathF.Atan2(axis.Y, axis.X));
+    }
 
     public static IReadOnlyList<NavigationObstacle> NavigationObstacles(
         WorldGroundObject value, bool includeGateMiddle = true)
@@ -409,13 +422,6 @@ internal static class PlaceableObjectCatalog
             _ => value
         };
 
-    private static Vector2 GateCollisionAlignment(int rotation) =>
-        rotation == 1
-            // The GTB artwork's authored ground contact sits six small
-            // navigation cells down-right of its shared placement anchor.
-            ? new Vector2(WorldPlacementGrid.CellSize * 6, 0)
-            : Vector2.Zero;
-
     public static Vector2 ClosestInteractionPoint(
         string itemId,
         Vector2 storedPosition,
@@ -439,9 +445,14 @@ internal static class PlaceableObjectCatalog
             return [storedPosition];
 
         var center = GroundContactCenter(itemId, storedPosition);
-        var contact = definition.GroundContact(rotation);
-        var halfWidth = contact.Width * .5f + clearance;
-        var halfDepth = contact.Depth * .5f + clearance;
+        var contact = GateCatalog.IsGate(itemId)
+            ? GateCatalog.Geometry(
+                GateCatalog.Get(itemId), rotation).CollisionSize
+            : new Vector2(
+                definition.GroundContact(rotation).Width,
+                definition.GroundContact(rotation).Depth);
+        var halfWidth = contact.X * .5f + clearance;
+        var halfDepth = contact.Y * .5f + clearance;
         var relative = actorPosition - center;
         var outsideX = MathF.Abs(relative.X) > halfWidth;
         var outsideY = MathF.Abs(relative.Y) > halfDepth;
@@ -506,8 +517,8 @@ internal static class PlaceableObjectCatalog
         int secondRotation,
         float padding = .08f) =>
         Overlaps(
-            first.Footprint(firstRotation), firstCenter,
-            second.Footprint(secondRotation), secondCenter,
+            PlacementFootprint(first, firstRotation), firstCenter,
+            PlacementFootprint(second, secondRotation), secondCenter,
             padding);
 
     public static bool Overlaps(
@@ -544,7 +555,7 @@ internal static class PlaceableObjectCatalog
         float padding = 0,
         int rotation = 0)
     {
-        var footprint = definition.Footprint(rotation);
+        var footprint = PlacementFootprint(definition, rotation);
         return
         MathF.Abs(point.X - center.X) <
             footprint.Width * .5f + padding &&

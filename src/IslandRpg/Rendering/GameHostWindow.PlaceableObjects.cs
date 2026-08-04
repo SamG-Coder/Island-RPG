@@ -315,7 +315,8 @@ internal sealed partial class GameHostWindow
         target = _activeBuildingRecipe is not null
             ? PlaceableObjectCatalog.SnapBuildingToTile(target)
             : PlaceableObjectCatalog.SnapToGrid(itemId, target);
-        var footprint = definition.Footprint(rotation);
+        var footprint = PlaceableObjectCatalog.PlacementFootprint(
+            definition, rotation);
         var minimumX = (int)MathF.Floor(
             target.X - footprint.Width * .5f + .001f);
         var maximumX = (int)MathF.Ceiling(
