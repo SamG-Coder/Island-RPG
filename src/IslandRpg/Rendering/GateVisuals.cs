@@ -22,15 +22,20 @@ internal static class GateVisuals
 
     public static string OpenAtlasKey(string itemId, int rotation = 0) =>
         $"GATE@{GateCatalog.Get(itemId).GateGraphicId}#" +
-        (Normalize(rotation) == 0 ? "open" : $"r{Normalize(rotation)}-open");
+        (Normalize(rotation) == 0
+            ? "open"
+            : $"r{Normalize(rotation)}-open");
 
     public static string ShadowAtlasKey(
-        string itemId, bool open = false, int rotation = 0) =>
-        $"GATE@{GateCatalog.Get(itemId).GateGraphicId}#" +
-        (Normalize(rotation) == 0
-            ? open ? "open-shadow" : "shadow"
-            : $"r{Normalize(rotation)}-" +
-              (open ? "open-shadow" : "shadow"));
+        string itemId, bool open = false, int rotation = 0)
+    {
+        var gate = GateCatalog.Get(itemId);
+        return $"GATE@{gate.GateGraphicId}#" +
+               (Normalize(rotation) == 0
+                   ? open ? "open-shadow" : "shadow"
+                   : $"r{Normalize(rotation)}-" +
+                     (open ? "open-shadow" : "shadow"));
+    }
 
     public static string Resolve(WorldGroundObject value)
     {
@@ -96,10 +101,9 @@ internal static class GateVisuals
                 var anchors = MetadataAnchors(gate, rotation);
                 // Bake the whole gate into one frame in isometric depth order:
                 // far/top end, gate span, then near/bottom end.
-                composite = SpriteCompositor.LayerFrames(
-                    (sideWallFrame, anchors.Far.X, anchors.Far.Y),
-                    (centerFrame, 0, 0),
-                    (sideWallFrame, anchors.Near.X, anchors.Near.Y));
+                composite = LayerGate(
+                    centerFrame, sideWallFrame, anchors,
+                    centerFirst: Normalize(rotation) == 2);
             }
             else composite = centerFrame;
             result.Add((AtlasKey(gate.ItemId, rotation), composite));
@@ -109,10 +113,9 @@ internal static class GateVisuals
                 var sideFrame = openSideWall.Sprite.Frames[0];
                 var anchors = MetadataAnchors(gate, rotation);
                 result.Add((OpenAtlasKey(gate.ItemId, rotation),
-                    SpriteCompositor.LayerFrames(
-                        (sideFrame, anchors.Far.X, anchors.Far.Y),
-                        (openCenterFrame, 0, 0),
-                        (sideFrame, anchors.Near.X, anchors.Near.Y))));
+                    LayerGate(
+                        openCenterFrame, sideFrame, anchors,
+                        centerFirst: Normalize(rotation) == 2)));
             }
             else result.Add((OpenAtlasKey(gate.ItemId, rotation), openCenterFrame));
 
@@ -126,20 +129,19 @@ internal static class GateVisuals
                     var side = sideShadow.Sprite.Frames[0];
                     var anchors = MetadataAnchors(gate, rotation);
                     result.Add((ShadowAtlasKey(gate.ItemId, rotation: rotation),
-                        SpriteCompositor.LayerFrames(
-                            (side, anchors.Far.X, anchors.Far.Y),
-                            (centerShadow, 0, 0),
-                            (side, anchors.Near.X, anchors.Near.Y))));
+                        LayerGate(
+                            centerShadow, side, anchors,
+                            centerFirst: Normalize(rotation) == 2)));
                     result.Add((ShadowAtlasKey(
                         gate.ItemId, open: true, rotation: rotation),
-                        SpriteCompositor.LayerFrames(
-                            (side, anchors.Far.X, anchors.Far.Y),
-                            (byId.TryGetValue(
+                        LayerGate(
+                            byId.TryGetValue(
                                     orientation.OpenGateShadowGraphicId,
                                     out var openGateShadow)
                                 ? openGateShadow.Sprite.Frames[0]
-                                : centerShadow, 0, 0),
-                            (side, anchors.Near.X, anchors.Near.Y))));
+                                : centerShadow,
+                            side, anchors,
+                            centerFirst: Normalize(rotation) == 2)));
                 }
                 else
                 {
@@ -156,6 +158,21 @@ internal static class GateVisuals
         }
         return result;
     }
+
+    private static SpriteFrame LayerGate(
+        SpriteFrame center,
+        SpriteFrame side,
+        GateAnchors anchors,
+        bool centerFirst) =>
+        centerFirst
+            ? SpriteCompositor.LayerFrames(
+                (center, 0, 0),
+                (side, anchors.Far.X, anchors.Far.Y),
+                (side, anchors.Near.X, anchors.Near.Y))
+            : SpriteCompositor.LayerFrames(
+                (side, anchors.Far.X, anchors.Far.Y),
+                (center, 0, 0),
+                (side, anchors.Near.X, anchors.Near.Y));
 
     private static int Normalize(int rotation) =>
         rotation < 0 ? 0 : rotation % 4;

@@ -3104,23 +3104,25 @@ Require(
             recipe.ResultItemId == wall.ItemId)),
     "every wall architecture must remain a one-tile routed build with an item and recipe");
 Require(
-    GateCatalog.All.Count == 21 &&
-    GateCatalog.All.Count(value => value.Tier == 2) == 11 &&
-    GateCatalog.All.Count(value => value.Tier == 3) == 10 &&
+    GateCatalog.All.Count == 1 &&
+    GateCatalog.All[0].GateGraphicId == 8185 &&
+    GateCatalog.All[0].Name == "Wooden gate" &&
+    GateCatalog.All[0].RequiredLevel == 1 &&
     GateCatalog.All.Select(value => value.ItemId)
-        .Distinct(StringComparer.OrdinalIgnoreCase).Count() == 21 &&
+        .Distinct(StringComparer.OrdinalIgnoreCase).Count() ==
+            GateCatalog.All.Count &&
     GateCatalog.All.All(gate =>
         ItemCatalog.TryGet(gate.ItemId, out _) &&
         PlaceableObjectCatalog.TryGet(gate.ItemId, out var placeable) &&
-        placeable.FootprintWidth == 1 && placeable.FootprintDepth == 3 &&
+        placeable.FootprintWidth == 4 && placeable.FootprintDepth == 1 &&
         CraftingSkill.Recipes.Any(recipe =>
             recipe.ResultItemId == gate.ItemId) &&
         ConstructionService.IsConstructible(gate.ItemId)),
-    "all player-facing gates must follow the authored foundation's three-cell isometric axis");
+    "only the tier-one wooden gate must be player-facing while its DAT-sized footprint remains available");
 Require(
-    GateCatalog.All.Where(value => value.SideWallGraphicId > 0).All(value =>
-        value.SideWallGraphicName is not null) &&
-    GateCatalog.All.Count(value => value.SideWallGraphicId == 0) == 1 &&
+    GateCatalog.All.All(value =>
+        value.SideWallGraphicId == 6506 &&
+        value.SideWallGraphicName == "SGAC1NN") &&
     GateCatalog.All.All(value =>
         value.ConstructionGraphicName.StartsWith("GTAX", StringComparison.Ordinal) &&
         value.ConstructionGraphicId > 0 &&
@@ -3128,27 +3130,51 @@ Require(
         value.OpenGateGraphicId > 0 &&
         value.OpenGateShadowGraphicId > 0),
     "each gate must own matching side-wall sections where available and an authored three-frame construction graphic");
-var centralStoneGate = GateCatalog.All.First(value =>
-    value.GateGraphicId == 2045);
+var centralStoneGate = GateCatalog.All.Single();
+var woodenGateOrientations = Enumerable.Range(0, 4)
+    .Select(rotation => GateCatalog.Orientation(
+        centralStoneGate, rotation)).ToArray();
+Require(
+    woodenGateOrientations.Select(value => value.GateGraphicId)
+        .SequenceEqual(new short[] { 8191, 8185, 8197, 8203 }) &&
+    woodenGateOrientations.Select(value => value.OpenGateGraphicId)
+        .SequenceEqual(new short[] { 8194, 8188, 8200, 8206 }) &&
+    woodenGateOrientations.Select(value => value.GateShadowGraphicId)
+        .SequenceEqual(new short[] { 8189, 8183, 8195, 8201 }) &&
+    woodenGateOrientations.Select(value => value.OpenGateShadowGraphicId)
+        .SequenceEqual(new short[] { 8192, 8186, 8198, 8204 }) &&
+    woodenGateOrientations.Select(value => value.ConstructionGraphicId)
+        .SequenceEqual(new short[] { 8180, 8179, 8181, 8182 }) &&
+    woodenGateOrientations.All(value =>
+        value.SideWallGraphicId > 0 &&
+        value.SideWallShadowGraphicId > 0) &&
+    woodenGateOrientations.Select(value => value.SideWallGraphicId)
+        .SequenceEqual(new short[] { 6506, 6527, 6548, 6569 }) &&
+    woodenGateOrientations.Select(value => value.SideWallShadowGraphicId)
+        .SequenceEqual(new short[] { 6504, 6525, 6546, 6567 }),
+    "the Forgotten wooden gate must use its explicit four-orientation family with palisade endpoint sections");
 var gateSite = ConstructionService.Begin(new(
     Guid.NewGuid(), centralStoneGate.ItemId, 1, 1,
     OwnerId: "gate-owner"));
 var rotatedGateSite = gateSite with { VisualFrame = 1 };
 Require(
-    GateVisuals.AtlasKey(centralStoneGate.ItemId) == "GATE@2045#0" &&
-    GateVisuals.Resolve(gateSite) == "GTAX2CNE@3286#0" &&
-    GateVisuals.ResolveShadow(gateSite) == "GTAX2C0E@3282#0" &&
+    GateVisuals.AtlasKey(centralStoneGate.ItemId) == "GATE@8185#0" &&
+    GateVisuals.Resolve(gateSite) == "GTBX2CNX@8180#0" &&
+    GateVisuals.ResolveShadow(gateSite) is null &&
     GateVisuals.Resolve(ConstructionService.AddWork(gateSite, 250)) ==
-        "GTAX2CNE@3286#1" &&
-    GateVisuals.ResolveShadow(ConstructionService.AddWork(gateSite, 250)) ==
-        "GTAX2C0E@3282#1" &&
+        "GTBX2CNX@8180#1" &&
+    GateVisuals.ResolveShadow(ConstructionService.AddWork(gateSite, 250)) is null &&
     GateVisuals.Resolve(ConstructionService.AddWork(gateSite, 400)) ==
-        "GTAX2CNE@3286#2" &&
+        "GTBX2CNX@8180#2" &&
     PlaceableObjectCatalog.RotationCount(centralStoneGate.ItemId) == 4 &&
-    GateVisuals.Resolve(rotatedGateSite) == "GTBX2CNE@3302#0" &&
+    GateVisuals.Resolve(rotatedGateSite) == "GTAX2CNX@8179#0" &&
     GateVisuals.AtlasKey(centralStoneGate.ItemId, 1) ==
-        "GATE@2045#r1",
-    "gates must resolve their composite completed key and authored scaffold stages");
+        "GATE@8185#r1" &&
+    GateVisuals.OpenAtlasKey(centralStoneGate.ItemId, 2) ==
+        "GATE@8185#r2-open" &&
+    GateVisuals.ShadowAtlasKey(centralStoneGate.ItemId, rotation: 3) ==
+        "GATE@8185#r3-shadow",
+    "the wooden gate must resolve its completed composite and authored scaffold stages");
 var completedGate = gateSite with { Health = gateSite.MaxHealth };
 var syntheticDat = new byte[1200];
 const int syntheticUnitStart = 100;
@@ -3186,6 +3212,9 @@ var openGateObstacles = PlaceableObjectCatalog.GateNavigationObstacles(
     completedGate, includeMiddle: false);
 var horizontalGateObstacles =
     PlaceableObjectCatalog.GateNavigationObstacles(
+        completedGate with { VisualFrame = 2 }, includeMiddle: true);
+var openHorizontalGateObstacles =
+    PlaceableObjectCatalog.GateNavigationObstacles(
         completedGate with { VisualFrame = 2 }, includeMiddle: false);
 var verticalGateObstacles =
     PlaceableObjectCatalog.GateNavigationObstacles(
@@ -3197,10 +3226,15 @@ Require(
         completedGate, includeGateMiddle: true).Count == 3 &&
     PlaceableObjectCatalog.NavigationObstacles(
         completedGate, includeGateMiddle: false).Count == 2 &&
-    horizontalGateObstacles.Count == 2 &&
-    MathF.Sign(horizontalGateObstacles[1].Center.X -
+    horizontalGateObstacles.Count == 4 &&
+    openHorizontalGateObstacles.Count == 2 &&
+    horizontalGateObstacles[0].Width == 1 &&
+    horizontalGateObstacles[1].Width == 1.42f &&
+    horizontalGateObstacles[2].Width == 1.42f &&
+    horizontalGateObstacles[3].Width == 1 &&
+    MathF.Sign(horizontalGateObstacles[3].Center.X -
                horizontalGateObstacles[0].Center.X) !=
-    MathF.Sign(horizontalGateObstacles[1].Center.Y -
+    MathF.Sign(horizontalGateObstacles[3].Center.Y -
                horizontalGateObstacles[0].Center.Y) &&
     verticalGateObstacles.Count == 2 &&
     MathF.Sign(verticalGateObstacles[1].Center.X -
@@ -3213,7 +3247,10 @@ Require(
             closedGateObstacles[1].Center) -
         closedGateObstacles[0].Width - .001f &&
     openGateObstacles.All(obstacle =>
-        MathF.Abs(obstacle.Center.Y - completedGate.Y) < .001f) &&
+        MathF.Abs(obstacle.Center.Y -
+                  (completedGate.Y +
+                   PlaceableObjectCatalog.ProjectedFrontOffsetPixels(
+                       completedGate.ItemId) / 48f)) < .001f) &&
     GateService.TryOpen(completedGate, out var openGate) &&
     openGate.GateState == GateAccessState.Opened &&
     GateService.IsOpen(openGate) &&

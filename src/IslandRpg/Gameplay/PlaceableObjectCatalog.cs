@@ -325,6 +325,12 @@ internal static class PlaceableObjectCatalog
         var frame = value.VisualFrame is >= 0 and < 5
             ? value.VisualFrame
             : ConstructionService.Angle(value);
+        return WallNavigationObstacleAt(center, frame);
+    }
+
+    private static NavigationObstacle WallNavigationObstacleAt(
+        Vector2 center, int frame)
+    {
         return frame switch
         {
             // Screen-horizontal and screen-vertical wall artwork spans a
@@ -343,7 +349,10 @@ internal static class PlaceableObjectCatalog
         var gate = GateCatalog.Get(value.ItemId);
         var geometry = GateCatalog.Geometry(gate, rotation);
         var size = geometry.CollisionRadius * 2;
-        var center = new Vector2(value.X, value.Y);
+        var center = GateRenderedGroundCenter(value);
+        if (rotation == 2)
+            return FrontWoodenGateNavigationObstacles(
+                center, includeMiddle);
         var (axis, length, depth, collisionRotation) =
             GateCollisionLayout(rotation, size);
         var endLength = Math.Min(depth, length * .25f);
@@ -368,6 +377,40 @@ internal static class PlaceableObjectCatalog
                     length - endLength * 2),
                 depth,
                 collisionRotation));
+        }
+        return result;
+    }
+
+    private static Vector2 GateRenderedGroundCenter(WorldGroundObject value)
+    {
+        // GroundObjectWorld renders placeable sprites at their authored front
+        // edge by adding ProjectedFrontOffsetPixels. Gate collision is made
+        // from several independently placed parts, so starting those parts at
+        // the persisted entity centre leaves every obstacle behind the bases
+        // visible on screen. Convert that exact render offset back into world
+        // coordinates before applying the gate's tower/annex offsets.
+        var frontOffset = ProjectedFrontOffsetPixels(value.ItemId) / 48f;
+        return new Vector2(value.X + frontOffset, value.Y + frontOffset);
+    }
+
+    private static IReadOnlyList<NavigationObstacle>
+        FrontWoodenGateNavigationObstacles(
+            Vector2 center, bool includeMiddle)
+    {
+        var axis = Vector2.Normalize(new Vector2(1, -1));
+        var result = new List<NavigationObstacle>(includeMiddle ? 4 : 2)
+        {
+            // Reuse the exact wall collision mapping: frame 2 is the single
+            // wooden tower and frame 3 is a screen-horizontal wooden wall.
+            WallNavigationObstacleAt(center - axis * 1.5f, 2),
+            WallNavigationObstacleAt(center + axis * 1.5f, 2)
+        };
+        if (includeMiddle)
+        {
+            result.Insert(1,
+                WallNavigationObstacleAt(center - axis * .5f, 3));
+            result.Insert(2,
+                WallNavigationObstacleAt(center + axis * .5f, 3));
         }
         return result;
     }

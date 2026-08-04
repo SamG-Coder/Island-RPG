@@ -26,7 +26,7 @@ internal sealed record GateDefinition(
     short ConstructionShadowGraphicId,
     int MaximumHealth,
     int RequiredLevel,
-    int RockCost);
+    int LogCost);
 
 internal sealed record GateOrientationDefinition(
     string GateGraphicName, short GateGraphicId,
@@ -82,9 +82,36 @@ internal static class GateCatalog
         new("Expansion VI", "X", 10779, 10795, 10802)
     ];
 
+    // Forgotten ships the palisade gate as a complete four-orientation
+    // family. These are explicit DAT graphic ids, not offsets inferred from
+    // the later stone-gate layout. A completed placement adds the authored
+    // single palisade wall frame at each DAT endpoint.
+    private static readonly GateOrientationDefinition[] WoodenFamily =
+    [
+        WoodenOrientation(
+            "B", 8191, 8189, 8194, 8192,
+            "SGAC1NN", 6506, "SGAC1N0", 6504,
+            "GTBX2CNX", 8180),
+        WoodenOrientation(
+            "A", 8185, 8183, 8188, 8186,
+            "SGBC1NN", 6527, "SGBC1N0", 6525,
+            "GTAX2CNX", 8179),
+        WoodenOrientation(
+            "C", 8197, 8195, 8200, 8198,
+            "SGCC1NN", 6548, "SGCC1N0", 6546,
+            "GTCX2CNX", 8181),
+        WoodenOrientation(
+            "D", 8203, 8201, 8206, 8204,
+            "SGDC1NN", 6569, "SGDC1N0", 6567,
+            "GTDX2CNX", 8182)
+    ];
+
+    // Keep the first gate pass deliberately narrow. AoE names the palisade
+    // graphics as tier 2 (GT*A2), but it is our tier-one wooden gate. Stone
+    // and fortified families remain catalogued above for later re-enabling.
     public static readonly IReadOnlyList<GateDefinition> All =
-        Stone.Select(value => Create(value, 2))
-            .Concat(Fortified.Select(value => Create(value, 3)))
+        Stone.Where(value => value.GateId == 8185)
+            .Select(value => Create(value, 2))
             .ToArray();
 
     private static readonly IReadOnlyDictionary<string, GateDefinition>
@@ -138,29 +165,23 @@ internal static class GateCatalog
     public static GateOrientationDefinition Orientation(
         GateDefinition gate, int rotation)
     {
-        rotation = rotation < 0 ? 0 : rotation % 4;
+        rotation = NormalizeRotation(rotation);
+        if (gate.GateGraphicId == 8185)
+            return WoodenFamily[rotation];
         var standard = gate.GateGraphicId < 3000;
-        var palisade = gate.GateGraphicId == 8185;
         var closedOffset = standard
             ? new[] { 0, 72, 1560, 1656 }[rotation]
-            : palisade
-                ? rotation * 6
-                : rotation * 32;
+            : rotation * 32;
         var constructionOffset = standard
             ? new[] { 0, 16, 387, 483 }[rotation]
-            : palisade
-                ? rotation
-                : rotation * 32;
+            : rotation * 32;
         var closedId = (short)(gate.GateGraphicId + closedOffset);
-        var openId = (short)(closedId + (standard ? 24 : palisade ? 3 : 8));
-        var sideId = palisade
-            ? (short)0
-            : (short)(closedId + (standard ? 48 : 16));
+        var openId = (short)(closedId + (standard ? 24 : 8));
+        var sideId = (short)(closedId + (standard ? 48 : 16));
         var shadowDelta = standard ? 8 : 2;
         var constructionId = (short)(gate.ConstructionGraphicId + constructionOffset);
-        var constructionShadowId = palisade
-            ? (short)0
-            : (short)(constructionId - (standard ? 4 : 1));
+        var constructionShadowId =
+            (short)(constructionId - (standard ? 4 : 1));
         var family = (char)('A' + rotation);
         var suffix = gate.GateGraphicName[^1];
         var tier = gate.Tier;
@@ -176,6 +197,27 @@ internal static class GateCatalog
             constructionShadowId == 0 ? null : $"GT{family}X{tier}C0{suffix}",
             constructionShadowId);
     }
+
+    private static GateOrientationDefinition WoodenOrientation(
+        string family,
+        short closedId,
+        short closedShadowId,
+        short openId,
+        short openShadowId,
+        string sideName,
+        short sideId,
+        string sideShadowName,
+        short sideShadowId,
+        string constructionName,
+        short constructionId) =>
+        new(
+            $"GT{family}A2NNX", closedId,
+            $"GT{family}A2N0X", closedShadowId,
+            $"GT{family}B2NNX", openId,
+            $"GT{family}B2N0X", openShadowId,
+            sideName, sideId, sideShadowName, sideShadowId,
+            constructionName, constructionId,
+            null, 0);
 
     private static int NormalizeRotation(int rotation) =>
         rotation < 0 ? 0 : rotation % 4;
@@ -221,7 +263,7 @@ internal static class GateCatalog
             $"build-{value.ItemId}", value.ItemId,
             CraftingCategory.Furniture, value.RequiredLevel,
             100 + value.RequiredLevel * 20,
-            [new(ItemIds.LargeRock, value.RockCost)],
+            [new(ItemIds.Logs, value.LogCost)],
             ["Mark the gate footprint.", "Raise and secure the gate."],
             RequiredTools: [new(ItemTag.Hammer, "hammer")])).ToArray();
 
@@ -242,7 +284,7 @@ internal static class GateCatalog
             : (short)(value.ConstructionId - (standard ? 4 : 1));
         return new(
             $"gate_{value.GateId}",
-            $"{value.Architecture} {(tier == 2 ? "stone gate" : "fortified gate")}",
+            "Wooden gate",
             value.Architecture, tier,
             $"GTAA{tier}NN{value.Suffix}", value.GateId,
             $"GTAA{tier}N0{value.Suffix}", gateShadowId,
@@ -255,8 +297,8 @@ internal static class GateCatalog
             $"GTAX{tier}CN{value.Suffix}", value.ConstructionId,
             constructionShadowId == 0 ? null : $"GTAX{tier}C0{value.Suffix}",
             constructionShadowId,
-            tier == 2 ? 500 : 750,
-            tier == 2 ? 7 : 10,
-            tier == 2 ? 4 : 6);
+            350,
+            1,
+            4);
     }
 }
