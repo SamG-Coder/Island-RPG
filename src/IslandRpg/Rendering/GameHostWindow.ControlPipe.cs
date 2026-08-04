@@ -552,12 +552,18 @@ internal sealed partial class GameHostWindow
             if (!float.IsFinite(end.X) || !float.IsFinite(end.Y))
                 return Error("invalid_position");
 
-            _activeBuildingRecipe = WoodenWallRecipe;
+            var itemId = root.TryGetProperty("item", out var itemElement)
+                ? itemElement.GetString()?.Trim().ToLowerInvariant()
+                : ItemIds.WoodenWall;
+            if (itemId is null || !WallCatalog.IsWall(itemId))
+                return Error("wall_type_not_found");
+            var recipe = BuildingRecipe(itemId);
+            _activeBuildingRecipe = recipe;
             _wallPlacementAnchor =
                 PlaceableObjectCatalog.SnapBuildingToTile(start);
             UpdateWallPlacementPreview(end);
             var greenCount = _wallPlacementPreview.Count(value => value.Valid);
-            var placed = ConfirmWallPlacement(WoodenWallRecipe);
+            var placed = ConfirmWallPlacement(recipe);
             _activeBuildingRecipe = null;
             _wallPlacementAnchor = null;
             _wallPlacementPreview.Clear();

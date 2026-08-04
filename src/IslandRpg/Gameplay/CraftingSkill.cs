@@ -419,6 +419,33 @@ internal static class CraftingSkill
             ],
             RequiredTools: [new(ItemTag.Hammer, "hammer")]),
         new(
+            "wooden-fence", ItemIds.WoodenFence,
+            CraftingCategory.Furniture, 1, 45,
+            [new(ItemIds.Sticks, 3)],
+            [
+                "Mark the boundary line.",
+                "Bind sharpened stakes into a light fence."
+            ],
+            RequiredTools: [new(ItemTag.Hammer, "hammer")]),
+        new(
+            "stone-wall", ItemIds.StoneWall,
+            CraftingCategory.Furniture, 6, 150,
+            [new(ItemIds.LargeRock, 3)],
+            [
+                "Set broad stones into a stable foundation.",
+                "Raise and secure the defensive wall."
+            ],
+            RequiredTools: [new(ItemTag.Hammer, "hammer")]),
+        new(
+            "fortified-wall", ItemIds.FortifiedWall,
+            CraftingCategory.Furniture, 10, 240,
+            [new(ItemIds.LargeRock, 5)],
+            [
+                "Lay a deep reinforced stone foundation.",
+                "Raise the thick defensive courses and battlements."
+            ],
+            RequiredTools: [new(ItemTag.Hammer, "hammer")]),
+        new(
             "iron-pickaxe", ItemIds.IronPickaxe,
             CraftingCategory.Tools, 12, 180,
             [

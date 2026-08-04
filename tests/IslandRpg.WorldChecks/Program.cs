@@ -2948,6 +2948,49 @@ Require(
     completedWallVisual.Shadow?.StartsWith(
         "WALL1N0G@586#", StringComparison.Ordinal) == true,
     "unfinished and completed palisades must always resolve persistent world-render atlas layers");
+var wallItemIds = new[]
+{
+    ItemIds.WoodenFence,
+    ItemIds.WoodenWall,
+    ItemIds.StoneWall,
+    ItemIds.FortifiedWall
+};
+Require(
+    wallItemIds.All(WallCatalog.IsWall) &&
+    wallItemIds.All(itemId =>
+        PlaceableObjectCatalog.TryGet(itemId, out _)) &&
+    wallItemIds.All(itemId => CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == itemId)) &&
+    wallItemIds.Select(itemId =>
+            ConstructionService.Begin(new(
+                Guid.NewGuid(), itemId, 1, 1)))
+        .All(value =>
+            value.Health == 1 &&
+            value.MaxHealth == WallCatalog.Get(value.ItemId).MaximumHealth &&
+            ConstructionService.DemolitionRefund(value) ==
+            WallCatalog.Get(value.ItemId).RefundItemId),
+    "every fence and wall must share recipes, placement definitions, construction health and demolition refunds");
+var stoneWall = ConstructionService.Begin(new(
+    Guid.NewGuid(), ItemIds.StoneWall, 1, 1,
+    VisualFrame: 3));
+var fortifiedWall = ConstructionService.Begin(new(
+    Guid.NewGuid(), ItemIds.FortifiedWall, 1, 1,
+    VisualFrame: 4));
+Require(
+    PalisadeWallVisuals.FrontFrameKeyFor(ItemIds.WoodenFence) ==
+        "FENCEN1G@8501#2" &&
+    PalisadeWallVisuals.IsWallGraphic("FENCEN1G") &&
+    PalisadeWallVisuals.IsWallGraphic("WALL2NNW") &&
+    PalisadeWallVisuals.IsWallGraphic("WALL3NNW") &&
+    PalisadeWallVisuals.Resolve(
+        stoneWall with { Health = stoneWall.MaxHealth }, 3).Wall ==
+        "WALL2NNW@2024#3" &&
+    PalisadeWallVisuals.Resolve(
+        fortifiedWall with { Health = fortifiedWall.MaxHealth }, 4).Wall ==
+        "WALL3NNW@2036#4" &&
+    PalisadeWallVisuals.Resolve(stoneWall, 3).Wall.StartsWith(
+        "WCON2NNW#", StringComparison.Ordinal),
+    "fences, stone walls and fortified walls must resolve their authored AoE directional and construction frames");
 var droppedInteraction = EntityInteractionService.Drop(
     sharedPlacement.Inventory,
     0,

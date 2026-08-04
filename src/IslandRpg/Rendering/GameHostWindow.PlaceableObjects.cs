@@ -35,7 +35,8 @@ internal sealed partial class GameHostWindow
             _placeableObjectPlacement.ItemId is not { } itemId)
             return false;
 
-        if (_activeBuildingRecipe?.ResultItemId == ItemIds.WoodenWall)
+        if (_activeBuildingRecipe is { } buildingRecipe &&
+            WallCatalog.IsWall(buildingRecipe.ResultItemId))
             return UpdateWallPlacementInput(leftDown, rightDown);
 
         var slot = _placeableObjectPlacement.InventorySlot;
@@ -163,7 +164,7 @@ internal sealed partial class GameHostWindow
                 if (!PlaceableObjectCatalog.TryGet(
                         groundObject.ItemId, out var definition))
                     continue;
-                if (groundObject.ItemId == ItemIds.WoodenWall)
+                if (WallCatalog.IsWall(groundObject.ItemId))
                     obstacles.Add(
                         PlaceableObjectCatalog.WallNavigationObstacle(
                             groundObject));

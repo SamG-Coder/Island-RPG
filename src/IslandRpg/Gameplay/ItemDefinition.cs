@@ -173,7 +173,10 @@ internal static class ItemIds
     public const string CookingPot = "cooking_pot";
     public const string StorageChest = "storage_chest";
     public const string StorageBarrel = "storage_barrel";
+    public const string WoodenFence = "wooden_fence";
     public const string WoodenWall = "wooden_wall";
+    public const string StoneWall = "stone_wall";
+    public const string FortifiedWall = "fortified_wall";
     public const string CaveHole = "cave_hole";
     public const string CaveEntrance = "cave_entrance";
     public const string DigSite = "dig_site";
@@ -680,6 +683,24 @@ internal static class ItemCatalog
                 ItemIds.WoodenWall,
                 "wooden wall", "Wooden wall",
                 "A defensive timber wall. It must be built after placement.",
+                0, Droppable: false,
+                Tags: ItemTag.PlaceableObject),
+            [ItemIds.WoodenFence] = new(
+                ItemIds.WoodenFence,
+                "wooden fence", "Wooden fence",
+                "A light timber boundary. It must be built after placement.",
+                0, Droppable: false,
+                Tags: ItemTag.PlaceableObject),
+            [ItemIds.StoneWall] = new(
+                ItemIds.StoneWall,
+                "stone wall", "Stone wall",
+                "A durable stone defensive wall.",
+                0, Droppable: false,
+                Tags: ItemTag.PlaceableObject),
+            [ItemIds.FortifiedWall] = new(
+                ItemIds.FortifiedWall,
+                "fortified wall", "Fortified wall",
+                "A heavily reinforced stone defensive wall.",
                 0, Droppable: false,
                 Tags: ItemTag.PlaceableObject),
             [ItemIds.TrainingDummy] = new(

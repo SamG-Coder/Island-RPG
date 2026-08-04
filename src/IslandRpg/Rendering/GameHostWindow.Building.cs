@@ -33,20 +33,42 @@ internal sealed partial class GameHostWindow
         BuildingBrowserCategory Category,
         string Name,
         string Description,
-        CraftingRecipe Recipe);
+        CraftingRecipe Recipe,
+        string ItemId);
 
     private static IReadOnlyList<BuildingBrowserEntry> BuildingBrowserEntries =>
     [
         new(
             BuildingBrowserCategory.Defences,
+            "Wooden fence",
+            "Light boundary · 3 sticks",
+            BuildingRecipe(ItemIds.WoodenFence),
+            ItemIds.WoodenFence),
+        new(
+            BuildingBrowserCategory.Defences,
             "Wooden wall",
-            "Palisade defence",
-            WoodenWallRecipe)
+            "Palisade defence · 1 log",
+            BuildingRecipe(ItemIds.WoodenWall),
+            ItemIds.WoodenWall),
+        new(
+            BuildingBrowserCategory.Defences,
+            "Stone wall",
+            "Strong defence · 3 large rocks",
+            BuildingRecipe(ItemIds.StoneWall),
+            ItemIds.StoneWall),
+        new(
+            BuildingBrowserCategory.Defences,
+            "Fortified wall",
+            "Heavy defence · 5 large rocks",
+            BuildingRecipe(ItemIds.FortifiedWall),
+            ItemIds.FortifiedWall)
     ];
 
+    private static CraftingRecipe BuildingRecipe(string itemId) =>
+        CraftingSkill.Recipes.First(value => value.ResultItemId == itemId);
+
     private static CraftingRecipe WoodenWallRecipe =>
-        CraftingSkill.Recipes.First(value =>
-            value.ResultItemId == ItemIds.WoodenWall);
+        BuildingRecipe(ItemIds.WoodenWall);
 
     private void ToggleBuildingPanel()
     {
@@ -278,7 +300,7 @@ internal sealed partial class GameHostWindow
     private bool UpdateWallPlacementInput(bool leftDown, bool rightDown)
     {
         if (_activeBuildingRecipe is not { } recipe ||
-            recipe.ResultItemId != ItemIds.WoodenWall)
+            !WallCatalog.IsWall(recipe.ResultItemId))
             return false;
         if (_buildingPlacementAwaitingRelease)
         {
@@ -392,7 +414,8 @@ internal sealed partial class GameHostWindow
             RecordQuestEvent(new(
                 QuestEventType.BuildObject, recipe.ResultItemId));
         _chatUi.AddMessage(
-            $"You mark out {placed.Count} palisade wall " +
+            $"You mark out {placed.Count} " +
+            $"{ItemCatalog.Get(recipe.ResultItemId).Name} " +
             $"{(placed.Count == 1 ? "foundation" : "foundations")}.",
             ChatMessageStyle.Action);
         QueuePlayerConstructionSequence(
@@ -408,10 +431,12 @@ internal sealed partial class GameHostWindow
         foreach (var node in _wallPlacementPreview)
         {
             var world = GroundObjectWorld(new(
-                Guid.Empty, ItemIds.WoodenWall,
+                Guid.Empty, _activeBuildingRecipe!.ResultItemId,
                 node.Target.X, node.Target.Y));
             AddAtlasQuad(
-                PalisadeWallVisuals.WallFrame(node.Frame), world, .58f,
+                PalisadeWallVisuals.WallFrame(
+                    _activeBuildingRecipe.ResultItemId, node.Frame),
+                world, .58f,
                 node.Valid ? green : red);
         }
         DrawTinted(green, new(.28f, 1f, .34f));
@@ -600,20 +625,20 @@ internal sealed partial class GameHostWindow
                 DrawBuildingBrowserTile(
                     BuildingGridTileBounds(panel, index),
                     categories[index].ToString(),
-                    "Building category", drawWallIcon: true);
+                    "Building category", ItemIds.WoodenWall);
             return;
         }
 
         DrawBuildingBrowserTile(
             BuildingGridTileBounds(panel, 0), "Back", "Categories",
-            drawWallIcon: false);
+            itemId: null);
         var entries = VisibleBuildingEntries();
         for (var index = 0; index < entries.Count; index++)
         {
             var entry = entries[index];
             DrawBuildingBrowserTile(
                 BuildingGridTileBounds(panel, index + 1),
-                entry.Name, entry.Description, drawWallIcon: true);
+                entry.Name, entry.Description, entry.ItemId);
         }
         DrawBuildingBrowserScrollbar(panel);
     }
@@ -640,7 +665,7 @@ internal sealed partial class GameHostWindow
     }
 
     private void DrawBuildingBrowserTile(
-        Vector4 bounds, string name, string description, bool drawWallIcon)
+        Vector4 bounds, string name, string description, string? itemId)
     {
         var hovered = bounds.Contains(MouseState.Position);
         DrawUiColor(bounds, hovered
@@ -650,8 +675,8 @@ internal sealed partial class GameHostWindow
             ? new(.78f, .59f, .22f, 1)
             : new(.49f, .38f, .17f, 1));
         var icon = new Vector4(bounds.X + 5, bounds.Y + 4, bounds.Z - 10, 42);
-        if (drawWallIcon)
-            DrawWoodenWallBuildIcon(icon);
+        if (itemId is not null)
+            DrawWallBuildIcon(icon, itemId);
         else
             DrawCenteredUiText("<", icon, new(232, 219, 177, 255));
         DrawCenteredUiText(
@@ -663,9 +688,9 @@ internal sealed partial class GameHostWindow
                 bounds);
     }
 
-    private void DrawWoodenWallBuildIcon(Vector4 bounds)
+    private void DrawWallBuildIcon(Vector4 bounds, string itemId)
     {
-        var frontWallKey = PalisadeWallVisuals.FrontFrameKey;
+        var frontWallKey = PalisadeWallVisuals.FrontFrameKeyFor(itemId);
         if (!_treeAtlas.TryGetValue(frontWallKey, out var wall) ||
             _treeAtlasTexture == 0)
             return;

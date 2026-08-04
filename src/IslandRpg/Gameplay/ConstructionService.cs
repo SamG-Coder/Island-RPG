@@ -16,7 +16,7 @@ internal static class ConstructionService
     public const int WoodenWallMaximumHealth = 120;
 
     public static bool IsConstructible(string itemId) =>
-        itemId == ItemIds.WoodenWall;
+        WallCatalog.IsWall(itemId);
 
     public static bool IsConstructionSite(WorldGroundObject value) =>
         IsConstructible(value.ItemId) &&
@@ -29,7 +29,7 @@ internal static class ConstructionService
             : value with
             {
                 Health = 1,
-                MaxHealth = WoodenWallMaximumHealth
+                MaxHealth = WallCatalog.Get(value.ItemId).MaximumHealth
             };
 
     public static WorldGroundObject AddWork(
@@ -43,8 +43,8 @@ internal static class ConstructionService
     }
 
     public static string? DemolitionRefund(WorldGroundObject value) =>
-        IsConstructionSite(value) && value.ItemId == ItemIds.WoodenWall
-            ? ItemIds.Logs
+        IsConstructionSite(value) && WallCatalog.IsWall(value.ItemId)
+            ? WallCatalog.Get(value.ItemId).RefundItemId
             : null;
 
     public static ConstructionStage Stage(WorldGroundObject value)

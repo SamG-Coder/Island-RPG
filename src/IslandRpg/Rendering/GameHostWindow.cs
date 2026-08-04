@@ -631,12 +631,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 "COGX_1H", "SHIP_3BF", "COGXX_DN"
             })
                 names.Add(name);
-            foreach (var name in new[]
-            {
-                PalisadeWallVisuals.WallGraphic,
-                PalisadeWallVisuals.ShadowGraphic,
-                "WCON2NNW", "WCON2N0W"
-            })
+            foreach (var name in PalisadeWallVisuals.RequiredGraphics)
                 names.Add(name);
         }
 
@@ -737,11 +732,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     .Concat(WorldVegetationGenerator.RequiredGraphicNames)
                     .Concat(WorldFishGenerator.RequiredGraphicNames)
                     .Concat(UndergroundResourceGenerator.RequiredGraphicNames)
-                    .Concat([
-                        PalisadeWallVisuals.WallGraphic,
-                        PalisadeWallVisuals.ShadowGraphic,
-                        "WCON2NNW", "WCON2N0W"
-                    ])
+                    .Concat(PalisadeWallVisuals.RequiredGraphics)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase)
                 : _island?.Trees
                     .SelectMany(tree => new[] { tree.GraphicName, tree.GraphicName[..^2] + "N0" })
@@ -6325,11 +6316,14 @@ internal sealed partial class GameHostWindow : GameWindow
 
         var wallCells = visibleChunks
             .SelectMany(gpu => gpu.Chunk.GroundObjects)
-            .Where(value => value.ItemId == ItemIds.WoodenWall)
-            .Select(value => (
-                (int)MathF.Floor(value.X),
-                (int)MathF.Floor(value.Y)))
-            .ToHashSet();
+            .Where(value => WallCatalog.IsWall(value.ItemId))
+            .GroupBy(value => value.ItemId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(value => (
+                    (int)MathF.Floor(value.X),
+                    (int)MathF.Floor(value.Y))).ToHashSet(),
+                StringComparer.OrdinalIgnoreCase);
         if (renderGroundObjectsAndFish)
         foreach (var item in visibleChunks
                      .SelectMany(gpu => gpu.Chunk.GroundObjects.Select(
@@ -6337,12 +6331,13 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             string itemAtlasKey;
             string? shadowAtlasKey;
-            if (item.Object.ItemId == ItemIds.WoodenWall)
+            if (WallCatalog.IsWall(item.Object.ItemId))
             {
                 var frame = item.Object.VisualFrame is >= 0 and < 5
                     ? item.Object.VisualFrame
                     : WallPlacementPlanner.FrameForNeighbors(
-                        new(item.Object.X, item.Object.Y), wallCells);
+                        new(item.Object.X, item.Object.Y),
+                        wallCells[item.Object.ItemId]);
                 (itemAtlasKey, shadowAtlasKey) =
                     PalisadeWallVisuals.Resolve(item.Object, frame);
             }
@@ -7606,11 +7601,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 asset.Definition.Name);
             var fish = WorldFishGenerator.IsFishGraphic(
                 asset.Definition.Name);
-            var constructionWall =
-                asset.Definition.Name.StartsWith(
-                    "WALL1", StringComparison.OrdinalIgnoreCase) ||
-                asset.Definition.Name.StartsWith(
-                    "WCON2", StringComparison.OrdinalIgnoreCase);
+            var constructionWall = PalisadeWallVisuals.IsWallGraphic(
+                asset.Definition.Name);
             var frames = cliff || stump || vegetation ||
                          undergroundResource || treeVariants || fish ||
                          constructionWall

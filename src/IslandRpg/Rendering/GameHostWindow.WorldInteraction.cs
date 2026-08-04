@@ -187,7 +187,7 @@ internal sealed partial class GameHostWindow
         out string atlasKey,
         out string? shadowKey)
     {
-        if (value.ItemId != ItemIds.WoodenWall)
+        if (!WallCatalog.IsWall(value.ItemId))
             return TryGroundItemVisual(
                 value.ItemId,
                 out frame, out texture, out atlasKey, out shadowKey);
@@ -514,9 +514,10 @@ internal sealed partial class GameHostWindow
         }
         var world = GroundObjectWorld(new(
             Guid.Empty, preview.ItemId, preview.Target.X, preview.Target.Y));
-        if (preview.ItemId == ItemIds.WoodenWall)
+        if (WallCatalog.IsWall(preview.ItemId))
         {
-            var wallPreviewKey = PalisadeWallVisuals.FrontFrameKey;
+            var wallPreviewKey =
+                PalisadeWallVisuals.FrontFrameKeyFor(preview.ItemId);
             var vertices = new List<float>();
             AddAtlasQuad(wallPreviewKey, world, .58f, vertices);
             GL.UseProgram(_program);
@@ -812,11 +813,11 @@ internal sealed partial class GameHostWindow
         out string atlasKey,
         out string? shadowKey)
     {
-        if (itemId == ItemIds.WoodenWall)
+        if (WallCatalog.IsWall(itemId))
         {
             frame = null!;
             texture = _treeAtlasTexture;
-            atlasKey = PalisadeWallVisuals.FrontFrameKey;
+            atlasKey = PalisadeWallVisuals.FrontFrameKeyFor(itemId);
             shadowKey = null;
             return false;
         }
