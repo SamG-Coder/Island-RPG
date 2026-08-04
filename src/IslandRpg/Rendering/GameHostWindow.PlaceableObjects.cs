@@ -2,6 +2,7 @@ using IslandRpg.Gameplay;
 using IslandRpg.Rendering.Ui;
 using IslandRpg.World;
 using OpenTK.Mathematics;
+using OpenTK.Windowing.GraphicsLibraryFramework;
 
 namespace IslandRpg.Rendering;
 
@@ -45,6 +46,8 @@ internal sealed partial class GameHostWindow
         if (_activeBuildingRecipe is { } buildingRecipe &&
             WallCatalog.IsWall(buildingRecipe.ResultItemId))
             return UpdateWallPlacementInput(leftDown, rightDown);
+
+        UpdateBuildingPlacementRotation(itemId);
 
         var slot = _placeableObjectPlacement.InventorySlot;
         if (_placeableObjectPlacement.ConsumesInventoryItem &&
@@ -105,20 +108,36 @@ internal sealed partial class GameHostWindow
             ? PlaceableObjectCatalog.SnapBuildingToTile(terrainTarget)
             : PlaceableObjectCatalog.SnapToGrid(itemId, terrainTarget);
         var valid = CanPlacePlaceableObjectAt(
-            itemId, target, out _, out _);
+            itemId, target, out _, out _, _buildingPlacementRotation);
         if (_activeBuildingRecipe is { } recipe)
             valid &= CanAffordBuilding(recipe);
         _groundDropPreview = new(
             inventorySlot,
             itemId,
             target,
-            valid);
+            valid,
+            Rotation: _buildingPlacementRotation);
+    }
+
+    private void UpdateBuildingPlacementRotation(string itemId)
+    {
+        var count = PlaceableObjectCatalog.RotationCount(itemId);
+        if (_activeBuildingRecipe is null || count <= 1) return;
+        var delta = KeyboardState.IsKeyPressed(Keys.Left) ? -1
+            : KeyboardState.IsKeyPressed(Keys.Right) ? 1
+            : 0;
+        if (delta == 0) return;
+        _buildingPlacementRotation =
+            PlaceableObjectCatalog.NormalizeRotation(
+                itemId, _buildingPlacementRotation + delta);
+        _groundDropPreview = null;
     }
 
     private void CancelPlaceableObjectPlacement()
     {
         _placeableObjectPlacement.Cancel();
         _activeBuildingRecipe = null;
+        _buildingPlacementRotation = 0;
         _buildingPlacementAwaitingRelease = false;
         _wallPlacementAnchor = null;
         _wallDragOrientation = null;
@@ -288,7 +307,8 @@ internal sealed partial class GameHostWindow
         string itemId,
         Vector2 target,
         out GpuWorldChunk gpu,
-        out string reason)
+        out string reason,
+        int rotation = 0)
     {
         gpu = null!;
         if (!PlaceableObjectCatalog.TryGet(
@@ -301,14 +321,15 @@ internal sealed partial class GameHostWindow
         target = _activeBuildingRecipe is not null
             ? PlaceableObjectCatalog.SnapBuildingToTile(target)
             : PlaceableObjectCatalog.SnapToGrid(itemId, target);
+        var footprint = definition.Footprint(rotation);
         var minimumX = (int)MathF.Floor(
-            target.X - definition.FootprintWidth * .5f + .001f);
+            target.X - footprint.Width * .5f + .001f);
         var maximumX = (int)MathF.Ceiling(
-            target.X + definition.FootprintWidth * .5f - .001f) - 1;
+            target.X + footprint.Width * .5f - .001f) - 1;
         var minimumY = (int)MathF.Floor(
-            target.Y - definition.FootprintDepth * .5f + .001f);
+            target.Y - footprint.Depth * .5f + .001f);
         var maximumY = (int)MathF.Ceiling(
-            target.Y + definition.FootprintDepth * .5f - .001f) - 1;
+            target.Y + footprint.Depth * .5f - .001f) - 1;
         var lowestHeight = float.MaxValue;
         var highestHeight = float.MinValue;
 

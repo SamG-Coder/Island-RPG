@@ -18,6 +18,7 @@ internal sealed partial class GameHostWindow
     private int _lastPlayerConstructionStrike;
     private readonly Queue<Guid> _playerConstructionQueue = [];
     private CraftingRecipe? _activeBuildingRecipe;
+    private int _buildingPlacementRotation;
     private bool _buildingPlacementAwaitingRelease;
     private Vector2? _wallPlacementAnchor;
     private WallDragOrientation? _wallDragOrientation;
@@ -372,6 +373,7 @@ internal sealed partial class GameHostWindow
         }
         _buildingPanelOpen = false;
         _activeBuildingRecipe = recipe;
+        _buildingPlacementRotation = 0;
         _placeableObjectPlacement.BeginConstruction(recipe.ResultItemId);
         _buildingPlacementAwaitingRelease = true;
         _wallPlacementAnchor = null;
@@ -381,7 +383,11 @@ internal sealed partial class GameHostWindow
         _chatUi.AddMessage(
             $"Click once to start the {ItemCatalog.Get(recipe.ResultItemId).Name}, " +
             "move to preview its route, then click again to place it. " +
-            "Resources are used only when you place the foundation. Right-click to cancel.",
+            "Resources are used only when you place the foundation. " +
+            (PlaceableObjectCatalog.RotationCount(recipe.ResultItemId) > 1
+                ? "Use Left/Right Arrow to rotate. "
+                : string.Empty) +
+            "Right-click to cancel.",
             ChatMessageStyle.Action);
     }
 
@@ -660,7 +666,8 @@ internal sealed partial class GameHostWindow
     {
         if (_activePlayer is null) return false;
         if (!CanPlacePlaceableObjectAt(
-                preview.ItemId, preview.Target, out var gpu, out var reason))
+                preview.ItemId, preview.Target, out var gpu, out var reason,
+                preview.Rotation))
         {
             ReportBlockedAction("building-location-blocked", reason);
             return false;
@@ -678,6 +685,7 @@ internal sealed partial class GameHostWindow
         var placed = ConstructionService.Begin(new(
             Guid.NewGuid(), preview.ItemId,
             preview.Target.X, preview.Target.Y,
+            VisualFrame: preview.Rotation,
             OwnerId: _activePlayer.Id,
             ResidentIds: HouseCatalog.IsHouse(preview.ItemId)
                 ? [_activePlayer.Id]

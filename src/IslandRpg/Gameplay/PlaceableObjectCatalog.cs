@@ -15,13 +15,35 @@ internal sealed record PlaceableObjectDefinition(
     int RenderHeight = 0,
     bool ChromaKeyMagenta = false,
     float NavigationWidth = 0,
-    float NavigationDepth = 0)
+    float NavigationDepth = 0,
+    int RotationCount = 1)
 {
     public float GroundContactWidth =>
         NavigationWidth > 0 ? NavigationWidth : FootprintWidth;
 
     public float GroundContactDepth =>
         NavigationDepth > 0 ? NavigationDepth : FootprintDepth;
+
+    public int NormalizeRotation(int rotation) =>
+        RotationCount <= 1 || rotation < 0
+            ? 0
+            : rotation % RotationCount;
+
+    public (float Width, float Depth) Footprint(int rotation)
+    {
+        var normalized = NormalizeRotation(rotation);
+        return normalized % 2 == 0
+            ? (FootprintWidth, FootprintDepth)
+            : (FootprintDepth, FootprintWidth);
+    }
+
+    public (float Width, float Depth) GroundContact(int rotation)
+    {
+        var normalized = NormalizeRotation(rotation);
+        return normalized % 2 == 0
+            ? (GroundContactWidth, GroundContactDepth)
+            : (GroundContactDepth, GroundContactWidth);
+    }
 }
 
 internal static class PlaceableObjectCatalog
@@ -231,7 +253,8 @@ internal static class PlaceableObjectCatalog
                 // GTAX gate foundations run along the world Y isometric axis.
                 FootprintWidth: 1, FootprintDepth: 3, Height: 3,
                 HotspotX: 96, HotspotY: 150,
-                NavigationWidth: .85f, NavigationDepth: 2.7f);
+                NavigationWidth: .85f, NavigationDepth: 2.7f,
+                RotationCount: 4);
     }
 
     public static IReadOnlyCollection<PlaceableObjectDefinition> All =>
@@ -243,6 +266,14 @@ internal static class PlaceableObjectCatalog
 
     public static bool IsPlaceable(string itemId) =>
         Definitions.ContainsKey(itemId);
+
+    public static int RotationCount(string itemId) =>
+        TryGet(itemId, out var definition) ? definition.RotationCount : 1;
+
+    public static int NormalizeRotation(string itemId, int rotation) =>
+        TryGet(itemId, out var definition)
+            ? definition.NormalizeRotation(rotation)
+            : 0;
 
     public static float ProjectedFrontOffsetPixels(string itemId) =>
         TryGet(itemId, out var definition)
@@ -292,25 +323,43 @@ internal static class PlaceableObjectCatalog
     public static IReadOnlyList<NavigationObstacle> GateNavigationObstacles(
         WorldGroundObject value, bool includeMiddle)
     {
+        var rotation = NormalizeRotation(value.ItemId, value.VisualFrame);
         var center = GroundContactCenter(
             value.ItemId, new(value.X, value.Y)) +
-            new Vector2(
+            RotateQuarter(new Vector2(
                 WorldPlacementGrid.CellSize * 3,
-                WorldPlacementGrid.CellSize * 4);
+                WorldPlacementGrid.CellSize * 4), rotation) +
+            GateCollisionAlignment(rotation);
         const float cell = .85f;
         var result = new List<NavigationObstacle>(includeMiddle ? 3 : 2)
         {
-            new(center + new Vector2(
-                0,
-                -1 - WorldPlacementGrid.CellSize * 2), cell, cell),
-            new(center + new Vector2(0, 1), cell, cell)
+            new(center + RotateQuarter(new Vector2(
+                0, -1 - WorldPlacementGrid.CellSize * 2), rotation), cell, cell),
+            new(center + RotateQuarter(new Vector2(0, 1), rotation), cell, cell)
         };
         if (includeMiddle)
             result.Add(new(
-                center + new Vector2(0, -WorldPlacementGrid.CellSize),
+                center + RotateQuarter(
+                    new Vector2(0, -WorldPlacementGrid.CellSize), rotation),
                 cell, cell));
         return result;
     }
+
+    private static Vector2 RotateQuarter(Vector2 value, int rotation) =>
+        (rotation & 3) switch
+        {
+            1 => new(-value.Y, value.X),
+            2 => new(-value.X, -value.Y),
+            3 => new(value.Y, -value.X),
+            _ => value
+        };
+
+    private static Vector2 GateCollisionAlignment(int rotation) =>
+        rotation == 1
+            // The GTB artwork's authored ground contact sits six small
+            // navigation cells down-right of its shared placement anchor.
+            ? new Vector2(WorldPlacementGrid.CellSize * 6, 0)
+            : Vector2.Zero;
 
     public static Vector2 ClosestInteractionPoint(
         string itemId,

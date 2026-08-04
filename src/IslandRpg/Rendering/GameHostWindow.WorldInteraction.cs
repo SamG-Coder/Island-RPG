@@ -17,7 +17,8 @@ internal sealed partial class GameHostWindow
         string ItemId,
         Vector2 Target,
         bool Valid,
-        Guid? TargetObjectId = null);
+        Guid? TargetObjectId = null,
+        int Rotation = 0);
 
     private sealed record ActiveGroundDrop(
         int InventorySlot,
@@ -149,7 +150,7 @@ internal sealed partial class GameHostWindow
             if (!IsChunkVisible(gpu)) continue;
         foreach (var candidate in gpu.Chunk.GroundObjects)
         {
-            if (GateCatalog.IsGate(candidate.ItemId) &&
+            if (ConstructionService.IsConstructible(candidate.ItemId) &&
                 !ConstructionService.IsConstructionSite(candidate))
                 continue;
             if (!TryGroundObjectVisual(
@@ -592,7 +593,8 @@ internal sealed partial class GameHostWindow
                 ? HouseVisuals.AtlasKey(preview.ItemId)
                 : DefenceBuildingCatalog.IsDefence(preview.ItemId)
                     ? DefenceBuildingVisuals.AtlasKey(preview.ItemId)
-                    : GateVisuals.AtlasKey(preview.ItemId);
+                    : GateVisuals.AtlasKey(
+                        preview.ItemId, preview.Rotation);
             AddAtlasQuad(buildingKey, world, .58f,
                 vertices);
             GL.UseProgram(_program);

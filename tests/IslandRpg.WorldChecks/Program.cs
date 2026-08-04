@@ -3133,6 +3133,7 @@ var centralStoneGate = GateCatalog.All.First(value =>
 var gateSite = ConstructionService.Begin(new(
     Guid.NewGuid(), centralStoneGate.ItemId, 1, 1,
     OwnerId: "gate-owner"));
+var rotatedGateSite = gateSite with { VisualFrame = 1 };
 Require(
     GateVisuals.AtlasKey(centralStoneGate.ItemId) == "GATE@2045#0" &&
     GateVisuals.Resolve(gateSite) == "GTAX2CNE@3286#0" &&
@@ -3142,7 +3143,11 @@ Require(
     GateVisuals.ResolveShadow(ConstructionService.AddWork(gateSite, 250)) ==
         "GTAX2C0E@3282#1" &&
     GateVisuals.Resolve(ConstructionService.AddWork(gateSite, 400)) ==
-        "GTAX2CNE@3286#2",
+        "GTAX2CNE@3286#2" &&
+    PlaceableObjectCatalog.RotationCount(centralStoneGate.ItemId) == 4 &&
+    GateVisuals.Resolve(rotatedGateSite) == "GTBX2CNE@3302#0" &&
+    GateVisuals.AtlasKey(centralStoneGate.ItemId, 1) ==
+        "GATE@2045#r1",
     "gates must resolve their composite completed key and authored scaffold stages");
 var completedGate = gateSite with { Health = gateSite.MaxHealth };
 var closedGateObstacles = PlaceableObjectCatalog.GateNavigationObstacles(

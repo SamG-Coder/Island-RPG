@@ -7605,7 +7605,11 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void PrepareTreeAtlas()
     {
-        const int atlasWidth = 2048;
+        GL.GetInteger(GetPName.MaxTextureSize, out var maximumTextureSize);
+        // A narrow atlas becomes extremely tall as construction variants are
+        // added. Use a wider page so neither dimension approaches the GPU's
+        // per-texture limit. This is independent of available VRAM.
+        var atlasWidth = Math.Min(8192, maximumTextureSize);
         const int padding = 1;
         var placements = new List<(
             string Key, string? Alias, SpriteFrame Frame, int X, int Y)>();
@@ -7637,6 +7641,14 @@ internal sealed partial class GameHostWindow : GameWindow
                 asset.Definition.Name);
             var constructionGate = GateVisuals.IsGateGraphic(
                 asset.Definition.Name);
+            // Completed gate components are composited below into a single
+            // draw-ready frame. Packing their raw parts as well duplicates
+            // hundreds of large sprites and can overflow the shared atlas.
+            // Only authored construction (GT?X) frames are used directly.
+            if (constructionGate &&
+                (asset.Definition.Name.Length < 4 ||
+                 asset.Definition.Name[3] != 'X'))
+                continue;
             var frames = cliff || stump || vegetation ||
                          undergroundResource || treeVariants || fish ||
                          constructionWall || constructionHouse ||
@@ -7852,6 +7864,10 @@ internal sealed partial class GameHostWindow : GameWindow
         var requiredHeight = y + rowHeight + padding;
         var atlasHeight = 1;
         while (atlasHeight < requiredHeight) atlasHeight *= 2;
+        if (atlasHeight > maximumTextureSize)
+            throw new InvalidOperationException(
+                $"The world sprite atlas requires {atlasWidth}x{atlasHeight}, " +
+                $"but this GPU supports at most {maximumTextureSize}px per dimension.");
         var rgba = new byte[atlasWidth * atlasHeight * 4];
         foreach (var placement in placements)
         {
@@ -8541,6 +8557,13 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.BindTexture(TextureTarget.Texture2D, texture);
         GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, width, height, 0,
             PixelFormat.Rgba, PixelType.UnsignedByte, rgba);
+        var uploadError = GL.GetError();
+        if (uploadError != OpenTK.Graphics.OpenGL4.ErrorCode.NoError)
+        {
+            GL.DeleteTexture(texture);
+            throw new InvalidOperationException(
+                $"OpenGL rejected a {width}x{height} texture upload: {uploadError}.");
+        }
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);

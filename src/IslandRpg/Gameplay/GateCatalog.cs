@@ -25,6 +25,16 @@ internal sealed record GateDefinition(
     int RequiredLevel,
     int RockCost);
 
+internal sealed record GateOrientationDefinition(
+    string GateGraphicName, short GateGraphicId,
+    string GateShadowGraphicName, short GateShadowGraphicId,
+    string OpenGateGraphicName, short OpenGateGraphicId,
+    string OpenGateShadowGraphicName, short OpenGateShadowGraphicId,
+    string? SideWallGraphicName, short SideWallGraphicId,
+    string? SideWallShadowGraphicName, short SideWallShadowGraphicId,
+    string ConstructionGraphicName, short ConstructionGraphicId,
+    string? ConstructionShadowGraphicName, short ConstructionShadowGraphicId);
+
 internal static class GateCatalog
 {
     private sealed record GateSource(
@@ -76,18 +86,62 @@ internal static class GateCatalog
             ? value
             : throw new KeyNotFoundException($"Unknown gate: {itemId}");
 
+    public static GateOrientationDefinition Orientation(
+        GateDefinition gate, int rotation)
+    {
+        rotation = rotation < 0 ? 0 : rotation % 4;
+        var standard = gate.GateGraphicId < 3000;
+        var palisade = gate.GateGraphicId == 8185;
+        var closedOffset = standard
+            ? new[] { 0, 72, 1560, 1656 }[rotation]
+            : palisade
+                ? rotation * 6
+                : rotation * 32;
+        var constructionOffset = standard
+            ? new[] { 0, 16, 387, 483 }[rotation]
+            : palisade
+                ? rotation
+                : rotation * 32;
+        var closedId = (short)(gate.GateGraphicId + closedOffset);
+        var openId = (short)(closedId + (standard ? 24 : palisade ? 3 : 8));
+        var sideId = palisade
+            ? (short)0
+            : (short)(closedId + (standard ? 48 : 16));
+        var shadowDelta = standard ? 8 : 2;
+        var constructionId = (short)(gate.ConstructionGraphicId + constructionOffset);
+        var constructionShadowId = palisade
+            ? (short)0
+            : (short)(constructionId - (standard ? 4 : 1));
+        var family = (char)('A' + rotation);
+        var suffix = gate.GateGraphicName[^1];
+        var tier = gate.Tier;
+        return new(
+            $"GT{family}A{tier}NN{suffix}", closedId,
+            $"GT{family}A{tier}N0{suffix}", (short)(closedId - shadowDelta),
+            $"GT{family}B{tier}NN{suffix}", openId,
+            $"GT{family}B{tier}N0{suffix}", (short)(openId - shadowDelta),
+            sideId == 0 ? null : $"GT{family}C{tier}NN{suffix}", sideId,
+            sideId == 0 ? null : $"GT{family}C{tier}N0{suffix}",
+            sideId == 0 ? (short)0 : (short)(sideId - shadowDelta),
+            $"GT{family}X{tier}CN{suffix}", constructionId,
+            constructionShadowId == 0 ? null : $"GT{family}X{tier}C0{suffix}",
+            constructionShadowId);
+    }
+
     public static IReadOnlyCollection<string> RequiredGraphics =>
-        All.SelectMany(value => new[]
+        All.SelectMany(value => Enumerable.Range(0, 4)
+            .Select(rotation => Orientation(value, rotation))
+            .SelectMany(orientation => new[]
             {
-                value.GateGraphicName,
-                value.GateShadowGraphicName,
-                value.OpenGateGraphicName,
-                value.OpenGateShadowGraphicName,
-                value.SideWallGraphicName,
-                value.SideWallShadowGraphicName,
-                value.ConstructionGraphicName,
-                value.ConstructionShadowGraphicName
-            }.Where(name => name is not null).Select(name => name!))
+                orientation.GateGraphicName,
+                orientation.GateShadowGraphicName,
+                orientation.OpenGateGraphicName,
+                orientation.OpenGateShadowGraphicName,
+                orientation.SideWallGraphicName,
+                orientation.SideWallShadowGraphicName,
+                orientation.ConstructionGraphicName,
+                orientation.ConstructionShadowGraphicName
+            }.Where(name => name is not null).Select(name => name!)))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
     public static IReadOnlyList<CraftingRecipe> Recipes => All.Select(value =>
