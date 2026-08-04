@@ -1,4 +1,5 @@
 using OpenTK.Mathematics;
+using IslandRpg.World;
 
 namespace IslandRpg.Gameplay;
 
@@ -177,14 +178,44 @@ internal static class PlaceableObjectCatalog
         return storedPosition + new Vector2(forward, forward);
     }
 
+    public static NavigationObstacle WallNavigationObstacle(
+        WorldGroundObject value)
+    {
+        var center = GroundContactCenter(
+            value.ItemId, new(value.X, value.Y)) +
+            new Vector2(
+                WorldPlacementGrid.CellSize,
+                WorldPlacementGrid.CellSize);
+        var frame = value.VisualFrame is >= 0 and < 5
+            ? value.VisualFrame
+            : ConstructionService.Angle(value);
+        return frame switch
+        {
+            3 => new(center, 1f, .75f),
+            4 => new(center, .75f, 1f),
+            _ => new(center, 1f, 1f)
+        };
+    }
+
     public static Vector2 ClosestInteractionPoint(
         string itemId,
         Vector2 storedPosition,
         Vector2 actorPosition,
         float clearance = .32f)
     {
+        var points = InteractionPoints(
+            itemId, storedPosition, actorPosition, clearance);
+        return points.Count > 0 ? points[0] : storedPosition;
+    }
+
+    public static IReadOnlyList<Vector2> InteractionPoints(
+        string itemId,
+        Vector2 storedPosition,
+        Vector2 actorPosition,
+        float clearance = .32f)
+    {
         if (!TryGet(itemId, out var definition))
-            return storedPosition;
+            return [storedPosition];
 
         var center = GroundContactCenter(itemId, storedPosition);
         var halfWidth = definition.GroundContactWidth * .5f + clearance;
@@ -192,24 +223,43 @@ internal static class PlaceableObjectCatalog
         var relative = actorPosition - center;
         var outsideX = MathF.Abs(relative.X) > halfWidth;
         var outsideY = MathF.Abs(relative.Y) > halfDepth;
-
+        Vector2 closest;
         if (outsideX || outsideY)
         {
-            return center + new Vector2(
+            closest = center + new Vector2(
                 Math.Clamp(relative.X, -halfWidth, halfWidth),
                 Math.Clamp(relative.Y, -halfDepth, halfDepth));
         }
-
-        var left = relative.X + halfWidth;
-        var right = halfWidth - relative.X;
-        var top = relative.Y + halfDepth;
-        var bottom = halfDepth - relative.Y;
-        var nearest = MathF.Min(MathF.Min(left, right), MathF.Min(top, bottom));
-        if (nearest == left) relative.X = -halfWidth;
-        else if (nearest == right) relative.X = halfWidth;
-        else if (nearest == top) relative.Y = -halfDepth;
-        else relative.Y = halfDepth;
-        return center + relative;
+        else
+        {
+            var left = relative.X + halfWidth;
+            var right = halfWidth - relative.X;
+            var top = relative.Y + halfDepth;
+            var bottom = halfDepth - relative.Y;
+            var nearest = MathF.Min(
+                MathF.Min(left, right), MathF.Min(top, bottom));
+            if (nearest == left) relative.X = -halfWidth;
+            else if (nearest == right) relative.X = halfWidth;
+            else if (nearest == top) relative.Y = -halfDepth;
+            else relative.Y = halfDepth;
+            closest = center + relative;
+        }
+        return new[]
+            {
+                closest,
+                center + new Vector2(-halfWidth, -halfDepth),
+                center + new Vector2(0, -halfDepth),
+                center + new Vector2(halfWidth, -halfDepth),
+                center + new Vector2(-halfWidth, 0),
+                center + new Vector2(halfWidth, 0),
+                center + new Vector2(-halfWidth, halfDepth),
+                center + new Vector2(0, halfDepth),
+                center + new Vector2(halfWidth, halfDepth)
+            }
+            .Distinct()
+            .OrderBy(point => Vector2.DistanceSquared(
+                actorPosition, point))
+            .ToArray();
     }
 
     public static Vector2 SnapToGrid(

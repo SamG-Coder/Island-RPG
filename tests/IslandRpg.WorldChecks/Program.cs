@@ -2863,6 +2863,26 @@ PlaceableObjectCatalog.TryGet(
     ItemIds.WoodenWall, out var wallInteractionDefinition);
 var wallContactCenter = PlaceableObjectCatalog.GroundContactCenter(
     ItemIds.WoodenWall, wallStoredPosition);
+var frame0WallObstacle = PlaceableObjectCatalog.WallNavigationObstacle(
+    plannedWall.Object! with { VisualFrame = 0 });
+var frame3WallObstacle = PlaceableObjectCatalog.WallNavigationObstacle(
+    plannedWall.Object! with { VisualFrame = 3 });
+var frame4WallObstacle = PlaceableObjectCatalog.WallNavigationObstacle(
+    plannedWall.Object! with { VisualFrame = 4 });
+Require(
+    Vector2.DistanceSquared(
+        frame0WallObstacle.Center,
+        new Vector2(plannedWall.Object!.X, plannedWall.Object.Y) +
+        new Vector2(
+            WorldPlacementGrid.CellSize,
+            WorldPlacementGrid.CellSize)) < .000001f &&
+    frame0WallObstacle.Width == 1f &&
+    frame0WallObstacle.Depth == 1f &&
+    frame3WallObstacle.Width == 1f &&
+    frame3WallObstacle.Depth == .75f &&
+    frame4WallObstacle.Width == .75f &&
+    frame4WallObstacle.Depth == 1f,
+    "palisade collision must move the default square one small cell down-right and trim one depth cell for horizontal and vertical frames");
 var diagonalBuilder = wallContactCenter + new Vector2(4, 4);
 var diagonalWorkPoint = PlaceableObjectCatalog.ClosestInteractionPoint(
     ItemIds.WoodenWall, wallStoredPosition, diagonalBuilder);

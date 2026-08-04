@@ -382,15 +382,7 @@ internal sealed partial class GameHostWindow
             $"You place the {ItemCatalog.Get(preview.ItemId).Name} foundation.",
             ChatMessageStyle.Action);
 
-        var interactionRange = .8f;
-        if (_player is not null &&
-            (_player.Position - preview.Target).Length <= interactionRange)
-            BeginPlayerConstructionWork(placed.Id);
-        else
-            _worldActions.QueuePath(
-                preview.Target, interactionRange,
-                WorldActionType.BuildConstruction,
-                groundObjectId: placed.Id);
+        QueuePlayerConstructionWork(placed);
         return true;
     }
 
@@ -425,9 +417,10 @@ internal sealed partial class GameHostWindow
             BeginPlayerConstructionWork(site.Id);
         else
             _worldActions.QueuePath(
-                target, interactionRange,
+                sitePosition, interactionRange,
                 WorldActionType.BuildConstruction,
-                groundObjectId: site.Id);
+                groundObjectId: site.Id,
+                itemId: site.ItemId);
     }
 
     private void QueuePlayerConstructionSequence(
@@ -598,5 +591,26 @@ internal sealed partial class GameHostWindow
             ChatMessageStyle.Action);
         if (_activePlayer is not null) _saves.SavePlayer(_activePlayer);
         AdvancePlayerConstructionSequence();
+    }
+
+    private void RenderConstructionHealthBars(Vector4 scene)
+    {
+        foreach (var gpu in _worldChunks.Values)
+        {
+            if (!IsChunkVisible(gpu)) continue;
+            foreach (var site in gpu.Chunk.GroundObjects)
+            {
+                if (!ConstructionService.IsConstructionSite(site) ||
+                    site.Health <= 1 ||
+                    !TryGroundObjectVisual(
+                        site, out var frame, out _, out _, out _))
+                    continue;
+                var bounds = SpriteBounds(frame, GroundObjectWorld(site));
+                DrawEntityHealthBar(
+                    scene,
+                    bounds,
+                    site.Health / (float)site.MaxHealth);
+            }
+        }
     }
 }

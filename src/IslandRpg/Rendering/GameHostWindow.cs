@@ -2146,6 +2146,45 @@ internal sealed partial class GameHostWindow : GameWindow
         string? actorId = null,
         IReadOnlyList<NavigationObstacle>? obstacles = null)
     {
+        if (actionType == WorldActionType.BuildConstruction &&
+            itemId is not null)
+        {
+            foreach (var approach in PlaceableObjectCatalog.InteractionPoints(
+                         itemId, target, start))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!GridPathfinder.CanStandAt(
+                        _worldSeed, approach, worldLevel, obstacles))
+                    continue;
+                var sameCell =
+                    (int)MathF.Floor(approach.X) ==
+                    (int)MathF.Floor(start.X) &&
+                    (int)MathF.Floor(approach.Y) ==
+                    (int)MathF.Floor(start.Y);
+                var path = GridPathfinder.Find(
+                    _worldSeed, start, approach,
+                    maximumVisited: ActionPathSearchPolicy.MaximumVisited,
+                    cancellationToken: cancellationToken,
+                    worldLevel: worldLevel,
+                    obstacles: obstacles);
+                if (!sameCell && path.Count == 0) continue;
+                var actionPath = path.ToList();
+                if (actionPath.Count == 0)
+                    actionPath.Add(approach);
+                else
+                    actionPath[^1] = approach;
+                return new PathResult(
+                    requestId,
+                    worldLevel,
+                    actionPath,
+                    new QueuedWorldAction(
+                        actionType, approach, standOff,
+                        groundObjectId, inventorySlot, itemId,
+                        fishKey, vegetationKey, actorId));
+            }
+            return new PathResult(requestId, worldLevel, []);
+        }
+
         var targetCell = new Vector2i(
             (int)MathF.Floor(target.X),
             (int)MathF.Floor(target.Y));
@@ -4448,6 +4487,7 @@ internal sealed partial class GameHostWindow : GameWindow
         RenderTreeHealthBars(scene);
         RenderMiningHealthBars(scene);
         RenderDigSiteHealthBar(scene);
+        RenderConstructionHealthBars(scene);
         RenderPlayerWorldHealthBar(scene);
         RenderCombatTargetHealthBar(scene);
         RenderFishingFeedback(scene);

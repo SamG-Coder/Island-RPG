@@ -163,12 +163,17 @@ internal sealed partial class GameHostWindow
                 if (!PlaceableObjectCatalog.TryGet(
                         groundObject.ItemId, out var definition))
                     continue;
-                obstacles.Add(new(
-                    PlaceableObjectCatalog.GroundContactCenter(
-                        groundObject.ItemId,
-                        new Vector2(groundObject.X, groundObject.Y)),
-                    definition.GroundContactWidth,
-                    definition.GroundContactDepth));
+                if (groundObject.ItemId == ItemIds.WoodenWall)
+                    obstacles.Add(
+                        PlaceableObjectCatalog.WallNavigationObstacle(
+                            groundObject));
+                else
+                    obstacles.Add(new(
+                        PlaceableObjectCatalog.GroundContactCenter(
+                            groundObject.ItemId,
+                            new Vector2(groundObject.X, groundObject.Y)),
+                        definition.GroundContactWidth,
+                        definition.GroundContactDepth));
             }
         }
         return obstacles.ToArray();
