@@ -3154,9 +3154,34 @@ var closedGateObstacles = PlaceableObjectCatalog.GateNavigationObstacles(
     completedGate, includeMiddle: true);
 var openGateObstacles = PlaceableObjectCatalog.GateNavigationObstacles(
     completedGate, includeMiddle: false);
+var horizontalGateObstacles =
+    PlaceableObjectCatalog.GateNavigationObstacles(
+        completedGate with { VisualFrame = 2 }, includeMiddle: false);
+var verticalGateObstacles =
+    PlaceableObjectCatalog.GateNavigationObstacles(
+        completedGate with { VisualFrame = 3 }, includeMiddle: false);
 Require(
     closedGateObstacles.Count == 3 &&
     openGateObstacles.Count == 2 &&
+    PlaceableObjectCatalog.NavigationObstacles(
+        completedGate, includeGateMiddle: true).Count == 3 &&
+    PlaceableObjectCatalog.NavigationObstacles(
+        completedGate, includeGateMiddle: false).Count == 2 &&
+    horizontalGateObstacles.Count == 2 &&
+    MathF.Sign(horizontalGateObstacles[1].Center.X -
+               horizontalGateObstacles[0].Center.X) !=
+    MathF.Sign(horizontalGateObstacles[1].Center.Y -
+               horizontalGateObstacles[0].Center.Y) &&
+    verticalGateObstacles.Count == 2 &&
+    MathF.Sign(verticalGateObstacles[1].Center.X -
+               verticalGateObstacles[0].Center.X) ==
+    MathF.Sign(verticalGateObstacles[1].Center.Y -
+               verticalGateObstacles[0].Center.Y) &&
+    closedGateObstacles[2].Width >=
+        Vector2.Distance(
+            closedGateObstacles[0].Center,
+            closedGateObstacles[1].Center) -
+        closedGateObstacles[0].Width - .001f &&
     openGateObstacles.All(obstacle =>
         MathF.Abs(obstacle.Center.Y -
             PlaceableObjectCatalog.GroundContactCenter(
@@ -7694,8 +7719,40 @@ Require(
      new OpenTK.Mathematics.Vector2(
          10.4125f, 20.4125f)).Length < .0001f,
     "navigation must follow the same forward ground anchor used to render placed objects");
+var rotatableCollisionDefinition = new PlaceableObjectDefinition(
+    "rotation-probe", "probe.png",
+    FootprintWidth: 2, FootprintDepth: 1,
+    Height: 1, HotspotX: 0, HotspotY: 0,
+    NavigationWidth: 1.5f, NavigationDepth: .5f,
+    RotationCount: 4);
+Require(
+    rotatableCollisionDefinition.GroundContact(0) == (1.5f, .5f) &&
+    rotatableCollisionDefinition.GroundContact(1) == (.5f, 1.5f) &&
+    PlaceableObjectCatalog.Overlaps(
+        rotatableCollisionDefinition, Vector2.Zero, 0,
+        rotatableCollisionDefinition, new(1.25f, 0), 0,
+        padding: 0) &&
+    !PlaceableObjectCatalog.Overlaps(
+        rotatableCollisionDefinition, Vector2.Zero, 1,
+        rotatableCollisionDefinition, new(1.25f, 0), 1,
+        padding: 0) &&
+    PlaceableObjectCatalog.ContainsPoint(
+        rotatableCollisionDefinition, Vector2.Zero,
+        new(.2f, .7f), rotation: 1) &&
+    !PlaceableObjectCatalog.ContainsPoint(
+        rotatableCollisionDefinition, Vector2.Zero,
+        new(.7f, .2f), rotation: 1),
+    "rotatable buildings must rotate placement bounds and navigation contact dimensions together");
 var navigationObstacle = new NavigationObstacle(
     new OpenTK.Mathematics.Vector2(4.25f, 7.75f), 2, 1);
+var rotatedNavigationObstacle = new NavigationObstacle(
+    Vector2.Zero, 2, .5f, MathF.PI * .25f);
+Require(
+    rotatedNavigationObstacle.Contains(new(.6f, .6f), clearance: 0) &&
+    !rotatedNavigationObstacle.Contains(new(.6f, -.6f), clearance: 0) &&
+    rotatedNavigationObstacle.AxisAlignedHalfExtents().X > 0.88f &&
+    rotatedNavigationObstacle.AxisAlignedHalfExtents().Y > 0.88f,
+    "navigation obstacles must rotate their actual collision footprint");
 Require(
     navigationObstacle.Contains(
         new OpenTK.Mathematics.Vector2(3.2f, 7.75f)) &&

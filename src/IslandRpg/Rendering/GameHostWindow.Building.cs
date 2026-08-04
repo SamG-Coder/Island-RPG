@@ -727,7 +727,8 @@ internal sealed partial class GameHostWindow
         if (!preserveSequence) _playerConstructionQueue.Clear();
         var sitePosition = new Vector2(site.X, site.Y);
         var target = PlaceableObjectCatalog.ClosestInteractionPoint(
-            site.ItemId, sitePosition, _player.Position);
+            site.ItemId, sitePosition, _player.Position,
+            rotation: site.VisualFrame);
         const float interactionRange = .24f;
         if ((_player.Position - target).Length <= interactionRange)
             BeginPlayerConstructionWork(site.Id);

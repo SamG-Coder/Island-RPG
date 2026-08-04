@@ -2146,13 +2146,15 @@ internal sealed partial class GameHostWindow : GameWindow
         string? fishKey = null,
         string? vegetationKey = null,
         string? actorId = null,
+        int targetRotation = 0,
         IReadOnlyList<NavigationObstacle>? obstacles = null)
     {
         if (actionType == WorldActionType.BuildConstruction &&
             itemId is not null)
         {
             foreach (var approach in PlaceableObjectCatalog.InteractionPoints(
-                         itemId, target, start))
+                         itemId, target, start,
+                         rotation: targetRotation))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!GridPathfinder.CanStandAt(

@@ -6,13 +6,38 @@ namespace IslandRpg.Gameplay;
 internal readonly record struct NavigationObstacle(
     Vector2 Center,
     float Width,
-    float Depth)
+    float Depth,
+    float RotationRadians = 0)
 {
-    public bool Contains(Vector2 point, float clearance = .18f) =>
-        MathF.Abs(point.X - Center.X) <
-            Width * .5f + clearance &&
-        MathF.Abs(point.Y - Center.Y) <
-            Depth * .5f + clearance;
+    public bool Contains(Vector2 point, float clearance = .18f)
+    {
+        var relative = point - Center;
+        if (MathF.Abs(RotationRadians) > .0001f)
+        {
+            var cosine = MathF.Cos(RotationRadians);
+            var sine = MathF.Sin(RotationRadians);
+            relative = new(
+                relative.X * cosine + relative.Y * sine,
+                -relative.X * sine + relative.Y * cosine);
+        }
+
+        return MathF.Abs(relative.X) < Width * .5f + clearance &&
+               MathF.Abs(relative.Y) < Depth * .5f + clearance;
+    }
+
+    public Vector2 AxisAlignedHalfExtents(float clearance = 0)
+    {
+        var halfWidth = Width * .5f + clearance;
+        var halfDepth = Depth * .5f + clearance;
+        if (MathF.Abs(RotationRadians) <= .0001f)
+            return new(halfWidth, halfDepth);
+
+        var cosine = MathF.Abs(MathF.Cos(RotationRadians));
+        var sine = MathF.Abs(MathF.Sin(RotationRadians));
+        return new(
+            halfWidth * cosine + halfDepth * sine,
+            halfWidth * sine + halfDepth * cosine);
+    }
 }
 
 internal static class ActionPathSearchPolicy

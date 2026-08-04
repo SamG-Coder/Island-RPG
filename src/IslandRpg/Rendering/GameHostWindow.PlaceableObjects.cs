@@ -200,22 +200,16 @@ internal sealed partial class GameHostWindow
                         BuildingOwnershipService.CanManage(
                             groundObject, actorId, _settlementGroup);
                     obstacles.AddRange(
-                        PlaceableObjectCatalog.GateNavigationObstacles(
+                        PlaceableObjectCatalog.NavigationObstacles(
                             groundObject,
-                            includeMiddle: !GateService.IsOpen(groundObject) &&
-                                           !actorCanOpen));
+                            includeGateMiddle:
+                                !GateService.IsOpen(groundObject) &&
+                                !actorCanOpen));
                 }
-                else if (WallCatalog.IsWall(groundObject.ItemId))
-                    obstacles.Add(
-                        PlaceableObjectCatalog.WallNavigationObstacle(
-                            groundObject));
                 else
-                    obstacles.Add(new(
-                        PlaceableObjectCatalog.GroundContactCenter(
-                            groundObject.ItemId,
-                            new Vector2(groundObject.X, groundObject.Y)),
-                        definition.GroundContactWidth,
-                        definition.GroundContactDepth));
+                    obstacles.AddRange(
+                        PlaceableObjectCatalog.NavigationObstacles(
+                            groundObject));
             }
         }
         return obstacles.ToArray();
@@ -377,7 +371,8 @@ internal sealed partial class GameHostWindow
                         definition,
                         target,
                         new Vector2(tree.X + .5f, tree.Y + .5f),
-                        .28f)))
+                        .28f,
+                        rotation)))
             {
                 reason = "A tree is blocking part of the footprint.";
                 return false;
@@ -391,7 +386,8 @@ internal sealed partial class GameHostWindow
                         new Vector2(vegetation.X, vegetation.Y),
                         vegetation.Kind == WorldVegetationKind.BerryBush
                             ? .34f
-                            : .22f)))
+                            : .22f,
+                        rotation)))
             {
                 reason = "Vegetation is blocking part of the footprint.";
                 return false;
@@ -405,8 +401,9 @@ internal sealed partial class GameHostWindow
                         existing.ItemId, out var existingDefinition))
                 {
                     if (PlaceableObjectCatalog.Overlaps(
-                            definition, target,
+                            definition, target, rotation,
                             existingDefinition, existingCenter,
+                            existing.VisualFrame,
                             PlaceableObjectCatalog.PlacementPadding(
                                 definition, existingDefinition)))
                     {
@@ -416,7 +413,7 @@ internal sealed partial class GameHostWindow
                 }
                 else if (PlaceableObjectCatalog.ContainsPoint(
                              definition, target,
-                             existingCenter, .18f))
+                             existingCenter, .18f, rotation))
                 {
                     reason = "An item is blocking part of the footprint.";
                     return false;
@@ -426,7 +423,7 @@ internal sealed partial class GameHostWindow
 
         if (_player is not null &&
             PlaceableObjectCatalog.ContainsPoint(
-                definition, target, _player.Position, .24f))
+                definition, target, _player.Position, .24f, rotation))
         {
             reason = "Move clear of the footprint before placing that.";
             return false;

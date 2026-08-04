@@ -1770,7 +1770,8 @@ internal sealed partial class GameHostWindow
         var target = new Vector2(site.Object.X, site.Object.Y);
         var position = new Vector2(villager.PositionX, villager.PositionY);
         var workPosition = PlaceableObjectCatalog.ClosestInteractionPoint(
-            site.Object.ItemId, target, position);
+            site.Object.ItemId, target, position,
+            rotation: site.Object.VisualFrame);
         if (Vector2.DistanceSquared(position, workPosition) > .3f * .3f)
         {
             MoveVillagerForCapability(

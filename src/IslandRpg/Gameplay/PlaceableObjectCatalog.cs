@@ -314,8 +314,11 @@ internal static class PlaceableObjectCatalog
             : ConstructionService.Angle(value);
         return frame switch
         {
-            3 => new(center, 1f, .75f),
-            4 => new(center, .75f, 1f),
+            // Screen-horizontal and screen-vertical wall artwork spans a
+            // complete diagonal world tile. Use a rotated, narrow strip so
+            // the collision follows the visible wall base end to end.
+            3 => new(center, 1.42f, .5f, -MathF.PI * .25f),
+            4 => new(center, 1.42f, .5f, MathF.PI * .25f),
             _ => new(center, 1f, 1f)
         };
     }
@@ -331,18 +334,70 @@ internal static class PlaceableObjectCatalog
                 WorldPlacementGrid.CellSize * 4), rotation) +
             GateCollisionAlignment(rotation);
         const float cell = .85f;
+        var axis = GateCollisionAxis(rotation);
+        var collisionRotation = GateCollisionRotation(rotation);
+        var firstCenter = center + axis *
+            (-1 - WorldPlacementGrid.CellSize * 2);
+        var secondCenter = center + axis;
         var result = new List<NavigationObstacle>(includeMiddle ? 3 : 2)
         {
-            new(center + RotateQuarter(new Vector2(
-                0, -1 - WorldPlacementGrid.CellSize * 2), rotation), cell, cell),
-            new(center + RotateQuarter(new Vector2(0, 1), rotation), cell, cell)
+            new(firstCenter, cell, cell, collisionRotation),
+            new(secondCenter, cell, cell, collisionRotation)
         };
         if (includeMiddle)
+        {
+            // Fill the complete span between both tower collisions. Keeping
+            // this as a separate obstacle lets an opened gate remove only
+            // the passage while both towers remain solid.
+            var distance = Vector2.Distance(firstCenter, secondCenter);
             result.Add(new(
-                center + RotateQuarter(
-                    new Vector2(0, -WorldPlacementGrid.CellSize), rotation),
-                cell, cell));
+                (firstCenter + secondCenter) * .5f,
+                Math.Max(WorldPlacementGrid.CellSize, distance - cell),
+                cell,
+                collisionRotation));
+        }
         return result;
+    }
+
+    private static Vector2 GateCollisionAxis(int rotation) =>
+        (rotation & 3) switch
+        {
+            // GTAX and GTBX follow the two ordinary world-grid axes.
+            1 => new(-1, 0),
+            // The remaining AoE orientations cross both world axes. These
+            // project as horizontal and vertical structures on screen.
+            2 => new(1, -1),
+            3 => new(1, 1),
+            _ => new(0, 1)
+        };
+
+    private static float GateCollisionRotation(int rotation) =>
+        (rotation & 3) switch
+        {
+            0 => MathF.PI * .5f,
+            2 => -MathF.PI * .25f,
+            3 => MathF.PI * .25f,
+            _ => 0
+        };
+
+    public static IReadOnlyList<NavigationObstacle> NavigationObstacles(
+        WorldGroundObject value, bool includeGateMiddle = true)
+    {
+        if (GateCatalog.IsGate(value.ItemId))
+            return GateNavigationObstacles(value, includeGateMiddle);
+        if (WallCatalog.IsWall(value.ItemId))
+            return [WallNavigationObstacle(value)];
+        if (!TryGet(value.ItemId, out var definition))
+            return [];
+        var contact = definition.GroundContact(value.VisualFrame);
+        return
+        [
+            new(
+                GroundContactCenter(
+                    value.ItemId, new(value.X, value.Y)),
+                contact.Width,
+                contact.Depth)
+        ];
     }
 
     private static Vector2 RotateQuarter(Vector2 value, int rotation) =>
@@ -365,10 +420,11 @@ internal static class PlaceableObjectCatalog
         string itemId,
         Vector2 storedPosition,
         Vector2 actorPosition,
-        float clearance = .32f)
+        float clearance = .32f,
+        int rotation = 0)
     {
         var points = InteractionPoints(
-            itemId, storedPosition, actorPosition, clearance);
+            itemId, storedPosition, actorPosition, clearance, rotation);
         return points.Count > 0 ? points[0] : storedPosition;
     }
 
@@ -376,14 +432,16 @@ internal static class PlaceableObjectCatalog
         string itemId,
         Vector2 storedPosition,
         Vector2 actorPosition,
-        float clearance = .32f)
+        float clearance = .32f,
+        int rotation = 0)
     {
         if (!TryGet(itemId, out var definition))
             return [storedPosition];
 
         var center = GroundContactCenter(itemId, storedPosition);
-        var halfWidth = definition.GroundContactWidth * .5f + clearance;
-        var halfDepth = definition.GroundContactDepth * .5f + clearance;
+        var contact = definition.GroundContact(rotation);
+        var halfWidth = contact.Width * .5f + clearance;
+        var halfDepth = contact.Depth * .5f + clearance;
         var relative = actorPosition - center;
         var outsideX = MathF.Abs(relative.X) > halfWidth;
         var outsideY = MathF.Abs(relative.Y) > halfDepth;
@@ -442,15 +500,34 @@ internal static class PlaceableObjectCatalog
     public static bool Overlaps(
         PlaceableObjectDefinition first,
         Vector2 firstCenter,
+        int firstRotation,
+        PlaceableObjectDefinition second,
+        Vector2 secondCenter,
+        int secondRotation,
+        float padding = .08f) =>
+        Overlaps(
+            first.Footprint(firstRotation), firstCenter,
+            second.Footprint(secondRotation), secondCenter,
+            padding);
+
+    public static bool Overlaps(
+        PlaceableObjectDefinition first,
+        Vector2 firstCenter,
         PlaceableObjectDefinition second,
         Vector2 secondCenter,
         float padding = .08f) =>
+        Overlaps(first, firstCenter, 0, second, secondCenter, 0, padding);
+
+    private static bool Overlaps(
+        (float Width, float Depth) first,
+        Vector2 firstCenter,
+        (float Width, float Depth) second,
+        Vector2 secondCenter,
+        float padding) =>
         MathF.Abs(firstCenter.X - secondCenter.X) <
-            (first.FootprintWidth + second.FootprintWidth) * .5f +
-            padding &&
+            (first.Width + second.Width) * .5f + padding &&
         MathF.Abs(firstCenter.Y - secondCenter.Y) <
-            (first.FootprintDepth + second.FootprintDepth) * .5f +
-            padding;
+            (first.Depth + second.Depth) * .5f + padding;
 
     public static float PlacementPadding(
         PlaceableObjectDefinition first,
@@ -464,11 +541,16 @@ internal static class PlaceableObjectCatalog
         PlaceableObjectDefinition definition,
         Vector2 center,
         Vector2 point,
-        float padding = 0) =>
+        float padding = 0,
+        int rotation = 0)
+    {
+        var footprint = definition.Footprint(rotation);
+        return
         MathF.Abs(point.X - center.X) <
-            definition.FootprintWidth * .5f + padding &&
+            footprint.Width * .5f + padding &&
         MathF.Abs(point.Y - center.Y) <
-            definition.FootprintDepth * .5f + padding;
+            footprint.Depth * .5f + padding;
+    }
 
     private static float SnapAxis(float value, float size)
         => WorldPlacementGrid.SnapWithFootprint(value, size);

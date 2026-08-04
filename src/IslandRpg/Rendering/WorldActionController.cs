@@ -257,6 +257,9 @@ internal sealed partial class GameHostWindow
         var start = window._player.Position;
         var obstacles = window.ActiveNavigationObstacles(
             window._activePlayer?.Id);
+        var targetRotation = groundObjectId is { } targetId
+            ? window.FindGroundObjectLocation(targetId)?.Object.VisualFrame ?? 0
+            : 0;
         window._queuedAction = null;
         window._pendingPathTask = Task.Run(
             () => window.FindActionPath(
@@ -273,6 +276,7 @@ internal sealed partial class GameHostWindow
                 fishKey,
                 vegetationKey,
                 actorId,
+                targetRotation,
                 obstacles),
             token);
         window._moveMarker = null;

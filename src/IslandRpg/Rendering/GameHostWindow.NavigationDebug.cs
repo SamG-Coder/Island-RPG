@@ -15,14 +15,21 @@ internal sealed partial class GameHostWindow
         var lines = new List<float>();
         foreach (var obstacle in ActiveNavigationObstacles())
         {
+            if (MathF.Abs(obstacle.RotationRadians) > .0001f)
+            {
+                AddRotatedNavigationCells(lines, scene, obstacle);
+                continue;
+            }
+
+            var bounds = obstacle.AxisAlignedHalfExtents(.18f);
             var minimumX = WorldPlacementGrid.Cell(
-                obstacle.Center.X - obstacle.Width * .5f - .18f);
+                obstacle.Center.X - bounds.X);
             var maximumX = WorldPlacementGrid.Cell(
-                obstacle.Center.X + obstacle.Width * .5f + .18f);
+                obstacle.Center.X + bounds.X);
             var minimumY = WorldPlacementGrid.Cell(
-                obstacle.Center.Y - obstacle.Depth * .5f - .18f);
+                obstacle.Center.Y - bounds.Y);
             var maximumY = WorldPlacementGrid.Cell(
-                obstacle.Center.Y + obstacle.Depth * .5f + .18f);
+                obstacle.Center.Y + bounds.Y);
 
             for (var cellY = minimumY; cellY <= maximumY; cellY++)
             for (var cellX = minimumX; cellX <= maximumX; cellX++)
@@ -38,6 +45,63 @@ internal sealed partial class GameHostWindow
 
         DrawNavigationLines(lines, new(.94f, .16f, .08f, .92f));
     }
+
+    private void AddRotatedNavigationCells(
+        List<float> lines,
+        Vector4 scene,
+        NavigationObstacle obstacle)
+    {
+        const float clearance = .18f;
+        var size = WorldPlacementGrid.CellSize;
+        var columns = Math.Max(
+            1, (int)MathF.Ceiling((obstacle.Width + clearance * 2) / size));
+        var rows = Math.Max(
+            1, (int)MathF.Ceiling((obstacle.Depth + clearance * 2) / size));
+        var cosine = MathF.Cos(obstacle.RotationRadians);
+        var sine = MathF.Sin(obstacle.RotationRadians);
+
+        for (var row = 0; row < rows; row++)
+        for (var column = 0; column < columns; column++)
+        {
+            var localCenter = new Vector2(
+                (column - (columns - 1) * .5f) * size,
+                (row - (rows - 1) * .5f) * size);
+            var center = obstacle.Center + Rotate(
+                localCenter, cosine, sine);
+            AddRotatedNavigationCellOutline(
+                lines, scene, center, size, cosine, sine);
+        }
+    }
+
+    private void AddRotatedNavigationCellOutline(
+        List<float> lines,
+        Vector4 scene,
+        Vector2 center,
+        float size,
+        float cosine,
+        float sine)
+    {
+        var half = size * .5f;
+        var elevation = SamplePlayerTerrain(center.X, center.Y).Height;
+        var first = NavigationPoint(scene,
+            center + Rotate(new(-half, -half), cosine, sine), elevation);
+        var second = NavigationPoint(scene,
+            center + Rotate(new(half, -half), cosine, sine), elevation);
+        var third = NavigationPoint(scene,
+            center + Rotate(new(half, half), cosine, sine), elevation);
+        var fourth = NavigationPoint(scene,
+            center + Rotate(new(-half, half), cosine, sine), elevation);
+        AddNavigationLine(lines, first.X, first.Y, second.X, second.Y);
+        AddNavigationLine(lines, second.X, second.Y, third.X, third.Y);
+        AddNavigationLine(lines, third.X, third.Y, fourth.X, fourth.Y);
+        AddNavigationLine(lines, fourth.X, fourth.Y, first.X, first.Y);
+    }
+
+    private static Vector2 Rotate(
+        Vector2 value, float cosine, float sine) =>
+        new(
+            value.X * cosine - value.Y * sine,
+            value.X * sine + value.Y * cosine);
 
     private void AddNavigationCellOutline(
         List<float> lines,
@@ -124,6 +188,12 @@ internal sealed partial class GameHostWindow
         GL.Uniform1(_shaderUniforms.Get(_program, "tintAmount"), 0f);
         GL.Uniform1(_shaderUniforms.Get(_program, "opacity"), 1f);
     }
+
+    private Vector2 NavigationPoint(
+        Vector4 scene,
+        Vector2 world,
+        float elevation) =>
+        NavigationPoint(scene, world.X, world.Y, elevation);
 
     private Vector2 NavigationPoint(
         Vector4 scene,
