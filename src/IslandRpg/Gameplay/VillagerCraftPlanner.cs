@@ -58,6 +58,7 @@ internal static class VillagerCraftPlanner
                 ItemIds.Plank,
                 ItemIds.Workbench,
                 ItemIds.StorageChest,
+                ItemIds.WoodenWall,
                 ItemIds.Bloomery,
                 ItemIds.BronzeBar,
                 ItemIds.SmithingAnvil,
@@ -192,6 +193,7 @@ internal static class VillagerCraftPlanner
             {
                 ItemIds.Workbench => 4,
                 ItemIds.StorageChest => 6,
+                ItemIds.WoodenWall => 0,
                 _ => 1
             };
             return Count(villager.Inventory, ItemIds.Plank) < target;

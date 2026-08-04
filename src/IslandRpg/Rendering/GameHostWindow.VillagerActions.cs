@@ -56,6 +56,7 @@ internal sealed partial class GameHostWindow
         if (villager.Health <= 0) return false;
         if (VillagerFatigueService.ShouldRest(villager)) return false;
         if (TryExecuteVillagerUrgentAction(index, villager, tier) ||
+            TryVillagerConstruct(index, villager, tier) ||
             TryVillagerSettlementContribution(index, villager, tier) ||
             TryVillagerReachProjectWorksite(index, villager, tier) ||
             TryVillagerPlaceCompletedProject(index, villager) ||
@@ -155,6 +156,7 @@ internal sealed partial class GameHostWindow
                    TryExploreForPromise(index, villager, tier);
         }
         return TryVillagerPromiseRendezvous(index, villager, tier) ||
+               TryVillagerConstruct(index, villager, tier) ||
                TryVillagerSettlementContribution(index, villager, tier) ||
                TryVillagerReachProjectWorksite(index, villager, tier) ||
                TryVillagerPlaceCompletedProject(index, villager) ||
@@ -1696,7 +1698,11 @@ internal sealed partial class GameHostWindow
             villager.Inventory, slot,
             position.X, position.Y, villager.Id);
         if (!placed.Succeeded || placed.Object is null) return false;
-        gpu.Chunk.GroundObjects.Add(placed.Object);
+        var placedObject = placed.Object with
+        {
+            GroupOwnerId = villager.SettlementGroupId
+        };
+        gpu.Chunk.GroundObjects.Add(placedObject);
         _villagers[index] = villager with
         {
             Inventory = placed.Inventory,
@@ -1714,6 +1720,86 @@ internal sealed partial class GameHostWindow
         });
         _villagersDirty = true;
         return true;
+    }
+
+    private bool TryVillagerConstruct(
+        int index,
+        VillagerState villager,
+        VillagerSimulationTier tier)
+    {
+        var site = NearbyGroundObjects(villager, 12)
+            .Where(value =>
+                ConstructionService.IsConstructionSite(value.Object) &&
+                (value.Object.OwnerId == villager.Id ||
+                 villager.ProjectAssignment?.BuilderId == villager.Id ||
+                 value.Object.GroupOwnerId is not null &&
+                 value.Object.GroupOwnerId == villager.SettlementGroupId))
+            .OrderBy(value => Vector2.DistanceSquared(
+                new(villager.PositionX, villager.PositionY),
+                new(value.Object.X, value.Object.Y)))
+            .FirstOrDefault();
+        if (site.Object is null) return false;
+
+        var target = new Vector2(site.Object.X, site.Object.Y);
+        var position = new Vector2(villager.PositionX, villager.PositionY);
+        if (Vector2.DistanceSquared(position, target) > 1.55f * 1.55f)
+        {
+            var workPosition = VillagerSettlementProjectService
+                .RendezvousPoint(target, villager.Id, isBuilder: false);
+            MoveVillagerForCapability(
+                index, villager, tier, workPosition, VillagerNeed.Safe);
+            return true;
+        }
+
+        villager = VillagerFacingService.Face(villager, target);
+        var siteId = site.Object.Id;
+        var intent = new NpcBrainIntent(
+            "construct", EntityAction.Work, target, siteId.ToString("N"));
+        return BeginNpcControlledAction(
+            index,
+            villager,
+            intent,
+            () =>
+            {
+                var actorIndex = VillagerIndex(villager.Id);
+                var location = FindGroundObjectLocation(siteId);
+                if (actorIndex < 0 || location is null ||
+                    !ConstructionService.IsConstructionSite(
+                        location.Value.Object))
+                    return new(intent, false, "site_unavailable");
+                var actor = _villagers[actorIndex];
+                if (actor.Health <= 0)
+                    return new(intent, false, "actor_dead");
+                var craftingLevel = CraftingSkill.LevelForExperience(
+                    actor.CraftingExperience);
+                var health = ConstructionService.WorkHealth(
+                    craftingLevel, actor.Energy);
+                var updated = ConstructionService.AddWork(
+                    location.Value.Object, health);
+                location.Value.Chunk.GroundObjects[location.Value.Index] =
+                    updated;
+                _villagers[actorIndex] = actor with
+                {
+                    CraftingExperience = SkillService.AwardExperience(
+                        actor.CraftingExperience, 6).Experience
+                };
+                QueueChunkSave(location.Value.Chunk);
+                _villagersDirty = true;
+                ObserveLog("construction_work", actor.Id, new
+                {
+                    SiteId = siteId,
+                    updated.ItemId,
+                    AddedHealth = health,
+                    updated.Health,
+                    updated.MaxHealth,
+                    Stage = ConstructionService.Stage(updated).ToString()
+                });
+                return new(intent, true);
+            },
+            VillagerSimulation.NearbyDecisionSeconds,
+            targetAvailable: () =>
+                FindGroundObject(siteId) is { } current &&
+                ConstructionService.IsConstructionSite(current));
     }
 
     private bool TryVillagerWithdrawFood(int index, VillagerState villager)

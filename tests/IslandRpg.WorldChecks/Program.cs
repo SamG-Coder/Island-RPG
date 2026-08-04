@@ -2276,8 +2276,9 @@ Require(workbenchProject?.ProjectItemId == ItemIds.Workbench &&
             projectVillagers,
             new HashSet<string>(
                 [ItemIds.Campfire, ItemIds.Workbench, ItemIds.StorageChest],
-                StringComparer.OrdinalIgnoreCase)) is null,
-    "settlement projects must progress from campfire through required workbench infrastructure to storage");
+                StringComparer.OrdinalIgnoreCase))?.ProjectItemId ==
+            ItemIds.WoodenWall,
+    "settlement projects must progress from campfire through required workbench infrastructure, storage and a defensive wall");
 var assignedProjectVillager = projectVillagers[0] with
 {
     ProjectAssignment = new(
@@ -2798,6 +2799,49 @@ Require(
         Y: 9
     },
     "player and NPC placement must consume and create the same owned world object atomically");
+var wallInventory = PlayerInventory.CreateStartingInventory();
+wallInventory[0] = ItemIds.WoodenWall;
+var plannedWall = EntityInteractionService.Place(
+    wallInventory, 0, 12.5f, 14.5f, "wall-builder");
+Require(
+    plannedWall.Succeeded &&
+    plannedWall.Inventory[0] is null &&
+    plannedWall.Object is
+    {
+        ItemId: ItemIds.WoodenWall,
+        OwnerId: "wall-builder",
+        Health: 1,
+        MaxHealth: ConstructionService.WoodenWallMaximumHealth
+    } &&
+    ConstructionService.IsConstructionSite(plannedWall.Object) &&
+    ConstructionService.Stage(plannedWall.Object) ==
+    ConstructionStage.Planned,
+    "placing a constructible must atomically create a persisted planned site instead of a completed wall");
+var wallFoundation = ConstructionService.AddWork(
+    plannedWall.Object!, 20);
+var wallFrame = ConstructionService.AddWork(wallFoundation, 40);
+var wallNearlyComplete = ConstructionService.AddWork(wallFrame, 35);
+var finishedWall = ConstructionService.AddWork(wallNearlyComplete, 999);
+Require(
+    ConstructionService.Stage(wallFoundation) ==
+        ConstructionStage.Foundation &&
+    ConstructionService.Stage(wallFrame) == ConstructionStage.Frame &&
+    ConstructionService.Stage(wallNearlyComplete) ==
+        ConstructionStage.NearlyComplete &&
+    ConstructionService.Stage(finishedWall) ==
+        ConstructionStage.Complete &&
+    finishedWall.Health == finishedWall.MaxHealth &&
+    !ConstructionService.IsConstructionSite(finishedWall),
+    "NPC construction work must add bounded health and advance every wall stage before completion");
+Require(
+    ConstructionService.Angle(plannedWall.Object!) is >= 0 and < 5 &&
+    ConstructionService.Angle(plannedWall.Object!) ==
+        ConstructionService.Angle(plannedWall.Object!) &&
+    PlaceableObjectCatalog.TryGet(
+        ItemIds.WoodenWall, out var woodenWallDefinition) &&
+    woodenWallDefinition.GroundContactWidth > 0 &&
+    woodenWallDefinition.GroundContactDepth > 0,
+    "wooden walls must select a stable AoE direction and expose collision from their planned stage");
 var droppedInteraction = EntityInteractionService.Drop(
     sharedPlacement.Inventory,
     0,
@@ -7347,7 +7391,7 @@ Require(
         workbenchRecipes,
         CraftingSkill.RecipesFor(
             CraftingCategory.All, ItemIds.Workbench)) &&
-    workbenchRecipes.Count == 5 &&
+    workbenchRecipes.Count == 6 &&
     workbenchRecipes.All(recipe =>
         recipe.RequiredStationItemId == ItemIds.Workbench) &&
     bloomeryRecipes.Count == 2 &&

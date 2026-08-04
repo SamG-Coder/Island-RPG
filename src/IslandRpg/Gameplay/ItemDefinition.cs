@@ -173,6 +173,7 @@ internal static class ItemIds
     public const string CookingPot = "cooking_pot";
     public const string StorageChest = "storage_chest";
     public const string StorageBarrel = "storage_barrel";
+    public const string WoodenWall = "wooden_wall";
     public const string CaveHole = "cave_hole";
     public const string CaveEntrance = "cave_entrance";
     public const string DigSite = "dig_site";
@@ -673,6 +674,12 @@ internal static class ItemCatalog
                 ItemIds.StorageBarrel,
                 "storage barrel", "Barrel",
                 "A compact wooden barrel for persistent item storage.",
+                0, Droppable: false,
+                Tags: ItemTag.PlaceableObject),
+            [ItemIds.WoodenWall] = new(
+                ItemIds.WoodenWall,
+                "wooden wall", "Wooden wall",
+                "A defensive timber wall. It must be built after placement.",
                 0, Droppable: false,
                 Tags: ItemTag.PlaceableObject),
             [ItemIds.TrainingDummy] = new(

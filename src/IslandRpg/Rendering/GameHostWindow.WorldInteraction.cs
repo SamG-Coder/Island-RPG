@@ -677,6 +677,8 @@ internal sealed partial class GameHostWindow
                 Guid.NewGuid(), drop.ItemId,
                 drop.Target.X, drop.Target.Y,
                 OwnerId: _activePlayer!.Id);
+            if (ConstructionService.IsConstructible(drop.ItemId))
+                placed = ConstructionService.Begin(placed);
         }
         else
         {
@@ -745,6 +747,14 @@ internal sealed partial class GameHostWindow
         out string atlasKey,
         out string? shadowKey)
     {
+        if (itemId == ItemIds.WoodenWall)
+        {
+            frame = null!;
+            texture = _treeAtlasTexture;
+            atlasKey = "WALL1NNG";
+            shadowKey = null;
+            return true;
+        }
         if (itemId == ItemIds.CaveHole &&
             _activeWorldLevel == (int)WorldLevel.Underground)
         {

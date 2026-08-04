@@ -104,6 +104,18 @@ internal static class PlaceableObjectCatalog
                 HotspotY: 53,
                 NavigationWidth: .35f,
                 NavigationDepth: .3f),
+            [ItemIds.WoodenWall] = new(
+                ItemIds.WoodenWall,
+                "wooden-wall.png",
+                FootprintWidth: 1,
+                FootprintDepth: 1,
+                Height: 1.8f,
+                HotspotX: 48,
+                HotspotY: 82,
+                RenderWidth: 96,
+                RenderHeight: 88,
+                NavigationWidth: .8f,
+                NavigationDepth: .22f),
             [ItemIds.TrainingDummy] = new(
                 ItemIds.TrainingDummy,
                 Path.Combine("Combat", "training-dummy-source.png"),

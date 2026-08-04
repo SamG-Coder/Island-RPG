@@ -60,6 +60,11 @@ internal static class VillagerSettlementProjectService
             projectItemId = ItemIds.StorageChest;
             requirements = RequirementsFor(projectItemId);
         }
+        else if (!placedItems.Contains(ItemIds.WoodenWall))
+        {
+            projectItemId = ItemIds.WoodenWall;
+            requirements = RequirementsFor(projectItemId);
+        }
         else return null;
         var incumbentAssignment = living
             .Select(value => value.ProjectAssignment)
@@ -139,6 +144,7 @@ internal static class VillagerSettlementProjectService
             new(ItemIds.Logs, 6), new(ItemIds.Sticks, 2),
             new(ItemIds.PlantFibres, 3)
         ],
+        ItemIds.WoodenWall => [new(ItemIds.Logs, 5)],
         _ => []
     };
 

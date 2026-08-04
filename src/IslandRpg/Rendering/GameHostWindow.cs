@@ -627,6 +627,12 @@ internal sealed partial class GameHostWindow : GameWindow
                 "COGX_1H", "SHIP_3BF", "COGXX_DN"
             })
                 names.Add(name);
+            foreach (var name in new[]
+            {
+                "WALL1NNG", "WALL1N0G",
+                "WCON2NNW", "WCON2N0W"
+            })
+                names.Add(name);
         }
 
         return names;
@@ -726,6 +732,10 @@ internal sealed partial class GameHostWindow : GameWindow
                     .Concat(WorldVegetationGenerator.RequiredGraphicNames)
                     .Concat(WorldFishGenerator.RequiredGraphicNames)
                     .Concat(UndergroundResourceGenerator.RequiredGraphicNames)
+                    .Concat([
+                        "WALL1NNG", "WALL1N0G",
+                        "WCON2NNW", "WCON2N0W"
+                    ])
                     .ToHashSet(StringComparer.OrdinalIgnoreCase)
                 : _island?.Trees
                     .SelectMany(tree => new[] { tree.GraphicName, tree.GraphicName[..^2] + "N0" })
@@ -6225,6 +6235,22 @@ internal sealed partial class GameHostWindow : GameWindow
             if (CampfireService.IsCampfire(item.Object))
                 itemAtlasKey = CampfirePresentation.AtlasKey(
                     item.Object, _worldGameSeconds, _clock);
+            if (item.Object.ItemId == ItemIds.WoodenWall)
+            {
+                var angle = ConstructionService.Angle(item.Object);
+                var stage = ConstructionService.Stage(item.Object);
+                if (stage == ConstructionStage.Complete)
+                {
+                    itemAtlasKey = $"WALL1NNG#{angle * 9 + 4}";
+                    shadowAtlasKey = $"WALL1N0G#{angle}";
+                }
+                else
+                {
+                    var stageIndex = (int)stage;
+                    itemAtlasKey = $"WCON2NNW#{angle * 4 + stageIndex}";
+                    shadowAtlasKey = $"WCON2N0W#{angle * 4 + stageIndex}";
+                }
+            }
             var world = GroundObjectWorld(item.Object);
             var objectOpacity = item.Gpu.Opacity *
                 distantDetailOpacity *
@@ -7470,15 +7496,22 @@ internal sealed partial class GameHostWindow : GameWindow
                 asset.Definition.Name);
             var fish = WorldFishGenerator.IsFishGraphic(
                 asset.Definition.Name);
+            var constructionWall =
+                asset.Definition.Name.StartsWith(
+                    "WALL1", StringComparison.OrdinalIgnoreCase) ||
+                asset.Definition.Name.StartsWith(
+                    "WCON2", StringComparison.OrdinalIgnoreCase);
             var frames = cliff || stump || vegetation ||
-                         undergroundResource || treeVariants || fish
+                         undergroundResource || treeVariants || fish ||
+                         constructionWall
                 ? asset.Sprite.Frames
                 : [asset.Sprite.Frames[0]];
             for (var frameIndex = 0; frameIndex < frames.Count; frameIndex++)
             {
                 var frame = frames[frameIndex];
                 var key = cliff || stump || vegetation ||
-                          undergroundResource || treeVariants || fish
+                          undergroundResource || treeVariants || fish ||
+                          constructionWall
                     ? $"{asset.Definition.Name}#{frameIndex}"
                     : asset.Definition.Name;
                 Place(

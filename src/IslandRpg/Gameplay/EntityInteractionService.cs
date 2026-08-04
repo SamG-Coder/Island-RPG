@@ -374,10 +374,14 @@ internal static class EntityInteractionService
             return new(false, unchanged, Failure: "not_placeable");
         if (!PlayerInventory.TryRemove(unchanged, slot, out var updated))
             return new(false, unchanged, Failure: "item_unavailable");
+        var placed = new WorldGroundObject(
+            Guid.NewGuid(), itemId, x, y, OwnerId: ownerId);
+        if (ConstructionService.IsConstructible(itemId))
+            placed = ConstructionService.Begin(placed);
         return new(
             true,
             updated,
-            new(Guid.NewGuid(), itemId, x, y, OwnerId: ownerId),
+            placed,
             itemId,
             1);
     }
