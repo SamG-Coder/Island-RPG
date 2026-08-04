@@ -125,7 +125,8 @@ internal sealed partial class GameHostWindow : GameWindow
         AttackVillager,
         AttackEnemy,
         GiveItemToVillager,
-        BoardFishingBoat
+        BoardFishingBoat,
+        BuildConstruction
     }
     private sealed record QueuedWorldAction(
         WorldActionType Type, Vector2 Target, float Range,
@@ -290,6 +291,7 @@ internal sealed partial class GameHostWindow : GameWindow
         CutTree,
         PickUpItem,
         DropItem,
+        Build,
         OpenStorage,
         CraftingStation,
         Dig,
@@ -1780,7 +1782,9 @@ internal sealed partial class GameHostWindow : GameWindow
                         out _, out _);
                 _groundObjectContext.Open(
                     MouseState.Position,
-                    contextObject.ItemId == ItemIds.TrainingDummy
+                    ConstructionService.IsConstructionSite(contextObject)
+                        ? ["Build", "Demolish", "Walk Here", "Examine"]
+                    : contextObject.ItemId == ItemIds.TrainingDummy
                         ? ["Attack", "Walk Here", "Examine"]
                     : CaveEntranceService.IsEntrance(contextObject)
                         ? _activeWorldLevel == (int)WorldLevel.Overworld
@@ -1868,7 +1872,9 @@ internal sealed partial class GameHostWindow : GameWindow
             if (TryGetGroundObjectUnderMouse(
                     SceneMousePosition(), out var groundObject, out _))
             {
-                if (groundObject.ItemId == ItemIds.TrainingDummy)
+                if (ConstructionService.IsConstructionSite(groundObject))
+                    QueuePlayerConstructionWork(groundObject);
+                else if (groundObject.ItemId == ItemIds.TrainingDummy)
                     QueueTrainingDummyAttack(groundObject);
                 else if (CaveEntranceService.IsEntrance(groundObject))
                     QueueCaveEntry(groundObject);
@@ -4687,6 +4693,21 @@ internal sealed partial class GameHostWindow : GameWindow
         var groundObject = _groundObjectContextTarget;
         _groundObjectContextTarget = null;
         if (groundObject is null) return;
+        if (ConstructionService.IsConstructionSite(groundObject))
+        {
+            if (option == 0)
+                QueuePlayerConstructionWork(groundObject);
+            else if (option == 1)
+                DemolishPlayerConstruction(groundObject);
+            else if (option == 2)
+                QueueWalk(_groundObjectContextWalkTarget);
+            else if (option == 3)
+                _chatUi.AddMessage(
+                    $"Unfinished {ItemCatalog.Get(groundObject.ItemId).Name}: " +
+                    $"{groundObject.Health}/{groundObject.MaxHealth} health.",
+                    ChatMessageStyle.Normal);
+            return;
+        }
         if (CaveEntranceService.IsEntrance(groundObject))
         {
             if (option == 0)
@@ -6240,36 +6261,40 @@ internal sealed partial class GameHostWindow : GameWindow
                 visibleName);
         }
 
+        var wallCells = visibleChunks
+            .SelectMany(gpu => gpu.Chunk.GroundObjects)
+            .Where(value => value.ItemId == ItemIds.WoodenWall)
+            .Select(value => (
+                (int)MathF.Floor(value.X),
+                (int)MathF.Floor(value.Y)))
+            .ToHashSet();
         if (renderGroundObjectsAndFish)
         foreach (var item in visibleChunks
                      .SelectMany(gpu => gpu.Chunk.GroundObjects.Select(
                          groundObject => (Object: groundObject, Gpu: gpu))))
         {
-            if (!TryGroundItemVisual(
-                    item.Object.ItemId,
-                    out _,
-                    out _,
-                    out var itemAtlasKey,
-                    out var shadowAtlasKey))
-                continue;
-            if (CampfireService.IsCampfire(item.Object))
-                itemAtlasKey = CampfirePresentation.AtlasKey(
-                    item.Object, _worldGameSeconds, _clock);
+            string itemAtlasKey;
+            string? shadowAtlasKey;
             if (item.Object.ItemId == ItemIds.WoodenWall)
             {
-                var angle = ConstructionService.Angle(item.Object);
-                var stage = ConstructionService.Stage(item.Object);
-                if (stage == ConstructionStage.Complete)
-                {
-                    itemAtlasKey = PalisadeWallVisuals.WallFrame(angle);
-                    shadowAtlasKey = PalisadeWallVisuals.ShadowFrame(angle);
-                }
-                else
-                {
-                    var stageIndex = (int)stage;
-                    itemAtlasKey = $"WCON2NNW#{angle * 4 + stageIndex}";
-                    shadowAtlasKey = $"WCON2N0W#{angle * 4 + stageIndex}";
-                }
+                var frame = item.Object.VisualFrame is >= 0 and < 5
+                    ? item.Object.VisualFrame
+                    : WallPlacementPlanner.FrameForNeighbors(
+                        new(item.Object.X, item.Object.Y), wallCells);
+                (itemAtlasKey, shadowAtlasKey) =
+                    PalisadeWallVisuals.Resolve(item.Object, frame);
+            }
+            else
+            {
+                if (!TryGroundItemVisual(
+                        item.Object.ItemId,
+                        out _, out _,
+                        out itemAtlasKey,
+                        out shadowAtlasKey))
+                    continue;
+                if (CampfireService.IsCampfire(item.Object))
+                    itemAtlasKey = CampfirePresentation.AtlasKey(
+                        item.Object, _worldGameSeconds, _clock);
             }
             var world = GroundObjectWorld(item.Object);
             var objectOpacity = item.Gpu.Opacity *
@@ -8300,7 +8325,8 @@ internal sealed partial class GameHostWindow : GameWindow
         bool preserveDarkTint = false,
         int teamColor = 0,
         Vector3? outlineColor = null,
-        bool pixelArtFilter = false)
+        bool pixelArtFilter = false,
+        float grayscaleAmount = 0)
     {
         var width = ReferenceWidth;
         var height = ReferenceHeight;
@@ -8337,6 +8363,9 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.Uniform3(GL.GetUniformLocation(_program, "colorTint"), tintColor);
         GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), tintAmount);
         GL.Uniform1(
+            GL.GetUniformLocation(_program, "grayscaleAmount"),
+            grayscaleAmount);
+        GL.Uniform1(
             GL.GetUniformLocation(_program, "preserveDarkTint"),
             preserveDarkTint ? 1 : 0);
         GL.Uniform2(GL.GetUniformLocation(_program, "texelSize"),
@@ -8360,6 +8389,7 @@ internal sealed partial class GameHostWindow : GameWindow
             rightNdc,topNdc,rightU,0
         ]);
         GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), 0f);
+        GL.Uniform1(GL.GetUniformLocation(_program, "grayscaleAmount"), 0f);
         GL.Uniform1(GL.GetUniformLocation(_program, "preserveDarkTint"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "recolorPlayer"), 0);
         GL.Uniform1(

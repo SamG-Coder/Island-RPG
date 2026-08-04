@@ -269,6 +269,9 @@ internal sealed partial class GameHostWindow
                     case "craft":
                         request.Complete(ControlCraft(root));
                         break;
+                    case "build":
+                        request.Complete(ControlBuild(root));
+                        break;
                     case "use":
                         request.Complete(ControlUseInventory(root));
                         break;
@@ -346,6 +349,12 @@ internal sealed partial class GameHostWindow
                                 {
                                     command = "craft",
                                     arguments = "recipe"
+                                },
+                                new
+                                {
+                                    command = "build",
+                                    arguments =
+                                        "action: place|work|demolish; place uses x/y and endX/endY?, work/demolish use id or x/y"
                                 },
                                 new
                                 {
@@ -523,6 +532,57 @@ internal sealed partial class GameHostWindow
                 _activePlayer.Inventory).SequenceEqual(before))
             return Error("craft_failed");
         return ControlSnapshot($"crafted:{recipe.Id}");
+    }
+
+    private string ControlBuild(JsonElement root)
+    {
+        if (_activePlayer is null || _player is null)
+            return Error("world_not_loaded");
+        var action = root.TryGetProperty("action", out var actionElement)
+            ? actionElement.GetString()?.Trim().ToLowerInvariant()
+            : null;
+        if (action == "place")
+        {
+            if (!TryControlPosition(root, out var start))
+                return Error("build_position_required");
+            var end = start;
+            if (root.TryGetProperty("endX", out var endXElement) &&
+                root.TryGetProperty("endY", out var endYElement))
+                end = new(endXElement.GetSingle(), endYElement.GetSingle());
+            if (!float.IsFinite(end.X) || !float.IsFinite(end.Y))
+                return Error("invalid_position");
+
+            _activeBuildingRecipe = WoodenWallRecipe;
+            _wallPlacementAnchor =
+                PlaceableObjectCatalog.SnapBuildingToTile(start);
+            UpdateWallPlacementPreview(end);
+            var greenCount = _wallPlacementPreview.Count(value => value.Valid);
+            var placed = ConfirmWallPlacement(WoodenWallRecipe);
+            _activeBuildingRecipe = null;
+            _wallPlacementAnchor = null;
+            _wallPlacementPreview.Clear();
+            return placed
+                ? ControlSnapshot($"wall_foundations_placed:{greenCount}")
+                : Error("wall_placement_failed");
+        }
+        if (action is "work" or "demolish")
+        {
+            if (!TryResolveControlGroundObject(
+                    root, ConstructionService.IsConstructionSite,
+                    out var site))
+                return Error("construction_site_not_found");
+            if (action == "work")
+            {
+                QueuePlayerConstructionWork(site);
+                return ControlSnapshot("construction_work_queued");
+            }
+            var before = FindGroundObject(site.Id);
+            DemolishPlayerConstruction(site);
+            return FindGroundObject(site.Id) is null && before is not null
+                ? ControlSnapshot("construction_demolished")
+                : Error("construction_demolition_failed");
+        }
+        return Error("invalid_build_action");
     }
 
     private string ControlUseInventory(JsonElement root)
@@ -897,6 +957,9 @@ internal sealed partial class GameHostWindow
 
     private string ControlGroundObjectState(WorldGroundObject value)
     {
+        if (ConstructionService.IsConstructionSite(value))
+            return $"Construction:{ConstructionService.Stage(value)}:" +
+                   $"{value.Health}/{value.MaxHealth}";
         if (CampfireService.IsCampfire(value))
             return CampfireService.State(
                 value, _worldGameSeconds).ToString();
@@ -910,6 +973,8 @@ internal sealed partial class GameHostWindow
 
     private string[] ControlGroundObjectActions(WorldGroundObject value)
     {
+        if (ConstructionService.IsConstructionSite(value))
+            return ["build", "demolish"];
         if (CampfireService.IsCampfire(value))
             return CampfireService.State(value, _worldGameSeconds) switch
             {

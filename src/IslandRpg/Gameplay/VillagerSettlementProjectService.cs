@@ -156,7 +156,7 @@ internal static class VillagerSettlementProjectService
             new(ItemIds.Logs, 6), new(ItemIds.Sticks, 2),
             new(ItemIds.PlantFibres, 3)
         ],
-        ItemIds.WoodenWall => [new(ItemIds.Logs, 5)],
+        ItemIds.WoodenWall => [new(ItemIds.Logs, 1)],
         _ => []
     };
 

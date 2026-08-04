@@ -461,6 +461,11 @@ internal sealed partial class GameHostWindow
 
     private void RenderGroundDropPreview()
     {
+        if (_wallPlacementPreview.Count > 0)
+        {
+            RenderWallPlacementPreview();
+            return;
+        }
         if (_groundDropPreview is not { } preview) return;
         if (preview.TargetObjectId is { } campfireId &&
             FindGroundObject(campfireId) is { } campfire &&
@@ -474,8 +479,9 @@ internal sealed partial class GameHostWindow
                 opacity: .68f,
                 tint: preview.Valid
                     ? new Vector3(.28f, 1f, .34f)
-                    : new Vector3(1f, .22f, .18f),
-                tintAmount: .62f,
+                    : new Vector3(1f, .48f, .42f),
+                tintAmount: .58f,
+                grayscaleAmount: 1f,
                 preserveDarkTint: true);
             return;
         }
@@ -491,14 +497,18 @@ internal sealed partial class GameHostWindow
                 GL.GetUniformLocation(_program, "tint"),
                 preview.Valid
                     ? new Vector3(.28f, 1f, .34f)
-                    : new Vector3(1f, .22f, .18f));
+                    : new Vector3(1f, .48f, .42f));
             GL.Uniform1(
-                GL.GetUniformLocation(_program, "tintAmount"), .72f);
+                GL.GetUniformLocation(_program, "tintAmount"), .58f);
+            GL.Uniform1(
+                GL.GetUniformLocation(_program, "grayscaleAmount"), 1f);
             GL.Uniform1(
                 GL.GetUniformLocation(_program, "preserveDarkTint"), 1);
             DrawTreeBatch(vertices);
             GL.Uniform1(
                 GL.GetUniformLocation(_program, "tintAmount"), 0f);
+            GL.Uniform1(
+                GL.GetUniformLocation(_program, "grayscaleAmount"), 0f);
             GL.Uniform1(
                 GL.GetUniformLocation(_program, "preserveDarkTint"), 0);
             return;
@@ -531,8 +541,9 @@ internal sealed partial class GameHostWindow
             opacity: .58f,
             tint: preview.Valid
                 ? new Vector3(.28f, 1f, .34f)
-                : new Vector3(1f, .22f, .18f),
-            tintAmount: .72f,
+                : new Vector3(1f, .48f, .42f),
+            tintAmount: .58f,
+            grayscaleAmount: 1f,
             preserveDarkTint: true);
     }
 

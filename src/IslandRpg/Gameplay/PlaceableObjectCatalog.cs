@@ -187,6 +187,9 @@ internal static class PlaceableObjectCatalog
             SnapAxis(target.Y, definition.FootprintDepth));
     }
 
+    public static Vector2 SnapBuildingToTile(Vector2 target) =>
+        new(MathF.Floor(target.X) + .5f, MathF.Floor(target.Y) + .5f);
+
     public static bool Overlaps(
         PlaceableObjectDefinition first,
         Vector2 firstCenter,

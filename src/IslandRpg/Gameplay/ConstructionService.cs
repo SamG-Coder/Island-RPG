@@ -42,6 +42,11 @@ internal static class ConstructionService
         };
     }
 
+    public static string? DemolitionRefund(WorldGroundObject value) =>
+        IsConstructionSite(value) && value.ItemId == ItemIds.WoodenWall
+            ? ItemIds.Logs
+            : null;
+
     public static ConstructionStage Stage(WorldGroundObject value)
     {
         if (!IsConstructible(value.ItemId) ||
@@ -59,7 +64,9 @@ internal static class ConstructionService
     }
 
     public static int Angle(WorldGroundObject value) =>
-        value.Id.ToByteArray()[0] % 5;
+        value.VisualFrame is >= 0 and < 5
+            ? value.VisualFrame
+            : value.Id.ToByteArray()[0] % 5;
 
     public static int WorkHealth(int craftingLevel, float energy) =>
         Math.Max(4, (int)MathF.Round(

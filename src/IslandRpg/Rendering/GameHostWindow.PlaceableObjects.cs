@@ -35,8 +35,12 @@ internal sealed partial class GameHostWindow
             _placeableObjectPlacement.ItemId is not { } itemId)
             return false;
 
+        if (_activeBuildingRecipe?.ResultItemId == ItemIds.WoodenWall)
+            return UpdateWallPlacementInput(leftDown, rightDown);
+
         var slot = _placeableObjectPlacement.InventorySlot;
-        if (!InventoryContainsAt(slot, itemId))
+        if (_placeableObjectPlacement.ConsumesInventoryItem &&
+            !InventoryContainsAt(slot, itemId))
         {
             CancelPlaceableObjectPlacement();
             return false;
@@ -50,13 +54,31 @@ internal sealed partial class GameHostWindow
         }
 
         if (leftDown && !_gameLeftWasDown &&
-            _groundDropPreview is
-            {
-                Valid: true
-            } preview)
+            _groundDropPreview is { } preview)
         {
-            QueueGroundObjectDrop(preview);
+            if (_activeBuildingRecipe is { } recipe)
+            {
+                if (preview.Valid)
+                {
+                    if (!PlacePlayerBuildingFoundation(preview, recipe))
+                        return true;
+                }
+                else
+                {
+                    ReportBlockedAction(
+                        $"building-placement-{recipe.Id}",
+                        CanAffordBuilding(recipe)
+                            ? "That location cannot hold this building."
+                            : $"You need {DescribeBuildingMaterials(recipe)} to place this foundation.");
+                    return true;
+                }
+            }
+            else if (preview.Valid)
+                QueueGroundObjectDrop(preview);
+            else
+                return true;
             _placeableObjectPlacement.Cancel();
+            _activeBuildingRecipe = null;
             _groundDropPreview = null;
         }
         return true;
@@ -70,19 +92,29 @@ internal sealed partial class GameHostWindow
         if (IsPointerOverGameUi(pointer) ||
             _minimapUi.HitTest(pointer))
             return;
-        var target = PlaceableObjectCatalog.SnapToGrid(
-            itemId, ScreenToTerrain(SceneMousePosition()));
+        var terrainTarget = ScreenToTerrain(SceneMousePosition());
+        var target = _activeBuildingRecipe is not null
+            ? PlaceableObjectCatalog.SnapBuildingToTile(terrainTarget)
+            : PlaceableObjectCatalog.SnapToGrid(itemId, terrainTarget);
+        var valid = CanPlacePlaceableObjectAt(
+            itemId, target, out _, out _);
+        if (_activeBuildingRecipe is { } recipe)
+            valid &= CanAffordBuilding(recipe);
         _groundDropPreview = new(
             inventorySlot,
             itemId,
             target,
-            CanPlacePlaceableObjectAt(
-                itemId, target, out _, out _));
+            valid);
     }
 
     private void CancelPlaceableObjectPlacement()
     {
         _placeableObjectPlacement.Cancel();
+        _activeBuildingRecipe = null;
+        _buildingPlacementAwaitingRelease = false;
+        _wallPlacementAnchor = null;
+        _wallDragOrientation = null;
+        _wallPlacementPreview.Clear();
         _groundDropPreview = null;
     }
 
@@ -182,7 +214,9 @@ internal sealed partial class GameHostWindow
             return false;
         }
 
-        target = PlaceableObjectCatalog.SnapToGrid(itemId, target);
+        target = _activeBuildingRecipe is not null
+            ? PlaceableObjectCatalog.SnapBuildingToTile(target)
+            : PlaceableObjectCatalog.SnapToGrid(itemId, target);
         var minimumX = (int)MathF.Floor(
             target.X - definition.FootprintWidth * .5f + .001f);
         var maximumX = (int)MathF.Ceiling(
@@ -237,6 +271,20 @@ internal sealed partial class GameHostWindow
                         .28f)))
             {
                 reason = "A tree is blocking part of the footprint.";
+                return false;
+            }
+
+            if (chunk.Vegetation.Any(vegetation =>
+                    vegetation.Kind != WorldVegetationKind.Plant &&
+                    PlaceableObjectCatalog.ContainsPoint(
+                        definition,
+                        target,
+                        new Vector2(vegetation.X, vegetation.Y),
+                        vegetation.Kind == WorldVegetationKind.BerryBush
+                            ? .34f
+                            : .22f)))
+            {
+                reason = "Vegetation is blocking part of the footprint.";
                 return false;
             }
 

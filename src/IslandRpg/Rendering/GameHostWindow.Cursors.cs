@@ -112,6 +112,13 @@ internal sealed partial class GameHostWindow
             next = GameCursorKind.Dig;
             cursor = _digNativeCursor;
         }
+        else if (_activeBuildingRecipe is not null &&
+                 IsPlaceablePlacementActiveOverWorld() &&
+                 _craftingStationNativeCursor is not null)
+        {
+            next = GameCursorKind.Build;
+            cursor = _craftingStationNativeCursor;
+        }
         else if ((IsWorldDropDragOutsideInventory() ||
              IsPlaceablePlacementActiveOverWorld()) &&
             _dropNativeCursor is not null)
@@ -156,7 +163,13 @@ internal sealed partial class GameHostWindow
             else if (TryGetGroundObjectUnderMouse(
                     SceneMousePosition(), out var groundObject, out _))
             {
-                if (IsAttackableCombatTarget(groundObject) &&
+                if (ConstructionService.IsConstructionSite(groundObject) &&
+                    _craftingStationNativeCursor is not null)
+                {
+                    next = GameCursorKind.Build;
+                    cursor = _craftingStationNativeCursor;
+                }
+                else if (IsAttackableCombatTarget(groundObject) &&
                     _attackNativeCursor is not null)
                 {
                     next = GameCursorKind.Attack;

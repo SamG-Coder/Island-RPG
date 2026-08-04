@@ -64,6 +64,34 @@ internal static class CraftingService
         return CraftResult.Success;
     }
 
+    public static CraftResult TryConsumeForPlacement(
+        CraftingRecipe recipe,
+        int craftingLevel,
+        InventoryContainer inventory,
+        out InventoryContainer updated,
+        bool requiredStationAvailable = true,
+        int placements = 1)
+    {
+        updated = inventory.Clone();
+        if (craftingLevel < recipe.RequiredLevel)
+            return CraftResult.Locked;
+        if (recipe.RequiredStationItemId is not null &&
+            !requiredStationAvailable)
+            return CraftResult.MissingStation;
+        foreach (var tool in recipe.RequiredTools ?? [])
+            if (inventory.Count(itemId =>
+                    ItemCatalog.Get(itemId).HasTag(tool.Tag)) < tool.Count)
+                return CraftResult.MissingResources;
+
+        if (placements <= 0) return CraftResult.Success;
+        var working = inventory.Clone();
+        for (var placement = 0; placement < placements; placement++)
+            if (!TryConsumePreferredIngredients(working, recipe.Ingredients))
+                return CraftResult.MissingResources;
+        updated = working;
+        return CraftResult.Success;
+    }
+
     public static CraftResult TryCraftDetailed(
         CraftingRecipe recipe,
         int craftingLevel,

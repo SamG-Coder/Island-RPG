@@ -345,6 +345,13 @@ internal sealed partial class GameHostWindow
                 break;
             case
             {
+                Type: GameHostWindow.WorldActionType.BuildConstruction,
+                GroundObjectId: { } siteId
+            }:
+                window.BeginPlayerConstructionWork(siteId);
+                break;
+            case
+            {
                 Type: GameHostWindow.WorldActionType.DropGroundObject,
                 InventorySlot: >= 0,
                 ItemId: { } itemId,

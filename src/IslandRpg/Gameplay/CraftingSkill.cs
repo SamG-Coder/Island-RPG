@@ -411,9 +411,9 @@ internal static class CraftingSkill
         new(
             "wooden-wall", ItemIds.WoodenWall,
             CraftingCategory.Furniture, 1, 90,
-            [new(ItemIds.Logs, 5)],
+            [new(ItemIds.Logs, 1)],
             [
-                "Trim five logs into stout wall timbers.",
+                "Trim a log into stout wall timbers.",
                 "Mark the wall footprint before raising the frame.",
                 "Build the timbers up until the wall is secure."
             ],

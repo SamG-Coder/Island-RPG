@@ -2865,6 +2865,18 @@ Require(
     PalisadeWallVisuals.ShadowGraphicId == 586 &&
     PalisadeWallVisuals.FrontFrameKey == "WALL1N1G@587#3",
     "wooden walls must use the basic AoE palisade layers rather than the fortified wall or placement flag");
+var plannedWallVisual = PalisadeWallVisuals.Resolve(plannedWall.Object!, 3);
+var completedWallVisual = PalisadeWallVisuals.Resolve(finishedWall, 3);
+Require(
+    plannedWallVisual.Wall.StartsWith(
+        "WCON2NNW#", StringComparison.Ordinal) &&
+    plannedWallVisual.Shadow?.StartsWith(
+        "WCON2N0W#", StringComparison.Ordinal) == true &&
+    completedWallVisual.Wall.StartsWith(
+        "WALL1N1G@587#", StringComparison.Ordinal) &&
+    completedWallVisual.Shadow?.StartsWith(
+        "WALL1N0G@586#", StringComparison.Ordinal) == true,
+    "unfinished and completed palisades must always resolve persistent world-render atlas layers");
 var droppedInteraction = EntityInteractionService.Drop(
     sharedPlacement.Inventory,
     0,
@@ -7574,8 +7586,85 @@ var woodenWallRecipe = CraftingSkill.Recipes.First(value =>
 Require(
     woodenWallRecipe.RequiredLevel == 1 &&
     woodenWallRecipe.RequiredStationItemId is null &&
-    woodenWallRecipe.Ingredients is [{ ItemId: ItemIds.Logs, Count: 5 }],
-    "player wall construction must be available at Crafting level 1 without a workbench and still consume five logs");
+    woodenWallRecipe.Ingredients is [{ ItemId: ItemIds.Logs, Count: 1 }],
+    "player wall construction must be available at Crafting level 1 without a workbench and consume one log per segment");
+var wallPlacementInventory = new InventoryContainer(PlayerInventory.Capacity);
+wallPlacementInventory.TryAdd(ItemIds.Logs);
+wallPlacementInventory.TryAdd(ItemIds.StoneHammer);
+var wallPlacementResult = CraftingService.TryConsumeForPlacement(
+    woodenWallRecipe, 1, wallPlacementInventory,
+    out var afterWallPlacement);
+Require(
+    wallPlacementResult == CraftingService.CraftResult.Success &&
+    wallPlacementInventory.Count(ItemIds.Logs) == 1 &&
+    afterWallPlacement.Count(ItemIds.Logs) == 0 &&
+    afterWallPlacement.Count(ItemIds.StoneHammer) == 1 &&
+    afterWallPlacement.Count(ItemIds.WoodenWall) == 0,
+    "placing a wall foundation must atomically consume one log without crafting a wall into inventory or consuming the hammer");
+var noLogPlacement = CraftingService.TryConsumeForPlacement(
+    woodenWallRecipe, 1, afterWallPlacement,
+    out var unchangedWallInventory);
+Require(
+    noLogPlacement == CraftingService.CraftResult.MissingResources &&
+    unchangedWallInventory.ItemIds().SequenceEqual(
+        afterWallPlacement.ItemIds()) &&
+    unchangedWallInventory.Quantities().SequenceEqual(
+        afterWallPlacement.Quantities()),
+    "a wall foundation without resources must fail without mutating inventory");
+var buildingPlacement = new PlaceableObjectPlacementController();
+buildingPlacement.BeginConstruction(ItemIds.WoodenWall);
+Require(
+    buildingPlacement.Active &&
+    !buildingPlacement.ConsumesInventoryItem &&
+    buildingPlacement.InventorySlot == -1,
+    "building placement must remain active without requiring a crafted inventory slot");
+var horizontalWallLine = WallPlacementPlanner.Line(
+    new Vector2(2.5f, 4.5f), new Vector2(6.5f, .5f));
+var verticalWallLine = WallPlacementPlanner.Line(
+    new Vector2(2.5f, 2.5f), new Vector2(5.5f, 5.5f));
+var horizontalFirstWall = WallPlacementPlanner.Generate(
+    new Vector2(.5f, .5f), new Vector2(4.5f, -1.5f));
+var retainedHorizontalWall = WallPlacementPlanner.Generate(
+    new Vector2(.5f, .5f), new Vector2(4.5f, .5f),
+    WallDragOrientation.HorizontalFirst);
+var switchedVerticalWall = WallPlacementPlanner.Generate(
+    new Vector2(.5f, .5f), new Vector2(1.5f, 3.5f),
+    WallDragOrientation.HorizontalFirst);
+var negativeWall = WallPlacementPlanner.Generate(
+    new Vector2(5.5f, 5.5f), new Vector2(2.5f, 3.5f));
+Require(
+    horizontalWallLine.Count == 5 &&
+    horizontalWallLine[0] == new Vector2(2.5f, 4.5f) &&
+    horizontalWallLine[^1] == new Vector2(6.5f, .5f) &&
+    verticalWallLine.Count == 4 &&
+    WallPlacementPlanner.FrameAt(horizontalWallLine, 1) == 3 &&
+    WallPlacementPlanner.FrameAt(verticalWallLine, 1) == 4 &&
+    horizontalFirstWall.Orientation == WallDragOrientation.HorizontalFirst &&
+    horizontalFirstWall.Tiles.Count == 7 &&
+    horizontalFirstWall.Tiles[4] == new Vector2(4.5f, .5f) &&
+    horizontalFirstWall.Tiles.Distinct().Count() == 7 &&
+    WallPlacementPlanner.FrameAt(horizontalFirstWall.Tiles, 4) == 2 &&
+    retainedHorizontalWall.Orientation == WallDragOrientation.HorizontalFirst &&
+    switchedVerticalWall.Orientation == WallDragOrientation.VerticalFirst &&
+    negativeWall.Tiles[0] == new Vector2(5.5f, 5.5f) &&
+    negativeWall.Tiles[^1] == new Vector2(2.5f, 3.5f) &&
+    WallPlacementPlanner.FrameAt([new Vector2(.5f, .5f)], 0) == 2,
+    "wall dragging must generate stable straight or L-shaped paths with endpoint and corner pieces");
+var threeWallInventory = new InventoryContainer(PlayerInventory.Capacity);
+threeWallInventory.TryAdd(ItemIds.Logs, 3);
+threeWallInventory.TryAdd(ItemIds.StoneHammer);
+var threeWallResult = CraftingService.TryConsumeForPlacement(
+    woodenWallRecipe, 1, threeWallInventory,
+    out var afterThreeWalls, placements: 3);
+Require(
+    threeWallResult == CraftingService.CraftResult.Success &&
+    afterThreeWalls.Count(ItemIds.Logs) == 0 &&
+    afterThreeWalls.Count(ItemIds.StoneHammer) == 1,
+    "confirming a wall line must atomically consume one log for every green foundation");
+Require(
+    ConstructionService.DemolitionRefund(wallFoundation) == ItemIds.Logs &&
+    ConstructionService.DemolitionRefund(finishedWall) is null,
+    "demolishing an unfinished palisade must refund its log while completed walls cannot use the construction refund");
 Require(
     new[] { ItemIds.StorageChest, ItemIds.StorageBarrel }
         .Select(itemId => CraftingSkill.Recipes.Single(recipe =>
