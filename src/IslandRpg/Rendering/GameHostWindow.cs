@@ -251,6 +251,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _shoreDistance;
     private int _waterNormalArray;
     private int _streamVbo;
+    private readonly float[] _spriteQuadVertices = new float[16];
     private int _sceneFramebuffer;
     private int _sceneColor;
     private int _sceneTargetWidth = ReferenceWidth;
@@ -6481,15 +6482,25 @@ internal sealed partial class GameHostWindow : GameWindow
                 VillagerSimulation.RegionalRadius *
                 VillagerSimulation.RegionalRadius)
                 continue;
-            if (GetVillagerVisual(villager) is { } visual)
+            if (GetVillagerVisual(villager) is { } visual &&
+                IsActorVisible(visual))
                 actors.Add(visual);
         }
         foreach (var enemy in _enemies)
-            if (GetEnemyVisual(enemy) is { } enemyVisual)
+            if (GetEnemyVisual(enemy) is { } enemyVisual &&
+                IsActorVisible(enemyVisual))
                 actors.Add(enemyVisual);
         actors.Sort(static (left, right) =>
             left.World.Y.CompareTo(right.World.Y));
         var occludedActors = new bool[actors.Count];
+        var actorBounds = new (
+            float Left, float Top, float Right, float Bottom)[actors.Count];
+        for (var actorIndex = 0; actorIndex < actors.Count; actorIndex++)
+            actorBounds[actorIndex] = SpriteBounds(
+                actors[actorIndex].Frame,
+                actors[actorIndex].World,
+                actors[actorIndex].Mirror);
+        var spriteScale = SpritePixelScale();
         var nextActor = 0;
         foreach (var item in objects)
         {
@@ -6504,15 +6515,23 @@ internal sealed partial class GameHostWindow : GameWindow
             AddAtlasQuad(
                 item.AtlasKey, item.World,
                 item.Opacity, atlasVertices);
-            for (var actorIndex = 0;
-                 actorIndex < nextActor;
-                 actorIndex++)
-                if (!occludedActors[actorIndex] &&
-                    AtlasOverlapsActor(
-                        item.AtlasKey,
-                        item.World,
-                        actors[actorIndex]))
-                    occludedActors[actorIndex] = true;
+            if (_occludedPlayerOutlineEnabled && nextActor > 0 &&
+                _treeAtlas.TryGetValue(item.AtlasKey, out var occluder))
+            {
+                var objectBounds = SpriteBounds(
+                    occluder.Frame, item.World);
+                for (var actorIndex = 0;
+                     actorIndex < nextActor;
+                     actorIndex++)
+                    if (!occludedActors[actorIndex] &&
+                        AtlasOverlapsActor(
+                            occluder,
+                            objectBounds,
+                            actors[actorIndex],
+                            actorBounds[actorIndex],
+                            spriteScale))
+                        occludedActors[actorIndex] = true;
+            }
         }
         FlushAtlas();
         while (nextActor < actors.Count)
@@ -6568,6 +6587,15 @@ internal sealed partial class GameHostWindow : GameWindow
                 pixelArtFilter: actor.PixelArtFilter,
                 outlineColor: new Vector3(1f, .72f, .12f));
         }
+    }
+
+    private bool IsActorVisible(ActorVisual actor)
+    {
+        var bounds = SpriteBounds(
+            actor.Frame, actor.World, actor.Mirror);
+        return bounds.Right >= 0 && bounds.Bottom >= 0 &&
+               bounds.Left <= ReferenceWidth &&
+               bounds.Top <= ReferenceHeight;
     }
 
     private bool IsAtlasItemVisible(string atlasKey, Vector2 world)
@@ -8463,29 +8491,33 @@ internal sealed partial class GameHostWindow : GameWindow
         var topNdc = -(top - height * .5f) * 2 / height;
         var bottomNdc = -(bottom - height * .5f) * 2 / height;
         GL.UseProgram(_program);
-        GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
-        GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), opacity);
-        GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), outlineOnly ? 1 : 0);
+        GL.Uniform1(_shaderUniforms.Get(_program, "image"), 0);
+        GL.Uniform1(_shaderUniforms.Get(_program, "opacity"), opacity);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "outlineOnly"),
+            outlineOnly ? 1 : 0);
         GL.Uniform3(
-            GL.GetUniformLocation(_program, "outlineColor"),
+            _shaderUniforms.Get(_program, "outlineColor"),
             outlineColor ?? new Vector3(1f, .82f, .18f));
-        GL.Uniform1(GL.GetUniformLocation(_program, "wading"),
+        GL.Uniform1(_shaderUniforms.Get(_program, "wading"),
             wading && !outlineOnly ? 1 : 0);
         GL.Uniform1(
             _shaderUniforms.Get(_program, "sceneFogAmount"), 0f);
-        GL.Uniform1(GL.GetUniformLocation(_program, "waterlineUv"),
+        GL.Uniform1(_shaderUniforms.Get(_program, "waterlineUv"),
             Math.Clamp((frame.HotspotY - 13f) / frame.Height, .45f, .88f));
-        GL.Uniform1(GL.GetUniformLocation(_program, "brightness"), 0f);
+        GL.Uniform1(_shaderUniforms.Get(_program, "brightness"), 0f);
         var tintColor = tint ?? Vector3.Zero;
-        GL.Uniform3(GL.GetUniformLocation(_program, "colorTint"), tintColor);
-        GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), tintAmount);
+        GL.Uniform3(
+            _shaderUniforms.Get(_program, "colorTint"), tintColor);
         GL.Uniform1(
-            GL.GetUniformLocation(_program, "grayscaleAmount"),
+            _shaderUniforms.Get(_program, "tintAmount"), tintAmount);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "grayscaleAmount"),
             grayscaleAmount);
         GL.Uniform1(
-            GL.GetUniformLocation(_program, "preserveDarkTint"),
+            _shaderUniforms.Get(_program, "preserveDarkTint"),
             preserveDarkTint ? 1 : 0);
-        GL.Uniform2(GL.GetUniformLocation(_program, "texelSize"),
+        GL.Uniform2(_shaderUniforms.Get(_program, "texelSize"),
             1f / frame.Width, 1f / frame.Height);
         GL.Uniform1(
             _shaderUniforms.Get(_program, "pixelArtFilter"),
@@ -8499,16 +8531,23 @@ internal sealed partial class GameHostWindow : GameWindow
         SetPlayerRecolor(outlineOnly ? 0 : teamColor);
         var leftU = mirror ? 1f : 0f;
         var rightU = mirror ? 0f : 1f;
-        Draw([
-            leftNdc,topNdc,leftU,0,
-            leftNdc,bottomNdc,leftU,1,
-            rightNdc,bottomNdc,rightU,1,
-            rightNdc,topNdc,rightU,0
-        ]);
-        GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), 0f);
-        GL.Uniform1(GL.GetUniformLocation(_program, "grayscaleAmount"), 0f);
-        GL.Uniform1(GL.GetUniformLocation(_program, "preserveDarkTint"), 0);
-        GL.Uniform1(GL.GetUniformLocation(_program, "recolorPlayer"), 0);
+        var quad = _spriteQuadVertices;
+        quad[0] = leftNdc; quad[1] = topNdc;
+        quad[2] = leftU; quad[3] = 0;
+        quad[4] = leftNdc; quad[5] = bottomNdc;
+        quad[6] = leftU; quad[7] = 1;
+        quad[8] = rightNdc; quad[9] = bottomNdc;
+        quad[10] = rightU; quad[11] = 1;
+        quad[12] = rightNdc; quad[13] = topNdc;
+        quad[14] = rightU; quad[15] = 0;
+        Draw(quad);
+        GL.Uniform1(_shaderUniforms.Get(_program, "tintAmount"), 0f);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "grayscaleAmount"), 0f);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "preserveDarkTint"), 0);
+        GL.Uniform1(
+            _shaderUniforms.Get(_program, "recolorPlayer"), 0);
         GL.Uniform1(
             _shaderUniforms.Get(_program, "pixelArtFilter"), 0);
     }

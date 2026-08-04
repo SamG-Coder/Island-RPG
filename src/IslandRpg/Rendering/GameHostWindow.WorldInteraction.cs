@@ -27,19 +27,18 @@ internal sealed partial class GameHostWindow
         Guid? TargetObjectId = null);
 
     private bool AtlasOverlapsActor(
-        string atlasKey, Vector2 world, ActorVisual actor)
+        SpriteAtlasEntry entry,
+        (float Left, float Top, float Right, float Bottom) objectBounds,
+        ActorVisual actor,
+        (float Left, float Top, float Right, float Bottom) actorBounds,
+        float scale)
     {
-        if (!_treeAtlas.TryGetValue(atlasKey, out var entry)) return false;
-        var objectBounds = SpriteBounds(entry.Frame, world);
-        var actorBounds = SpriteBounds(
-            actor.Frame, actor.World, actor.Mirror);
         if (objectBounds.Left >= actorBounds.Right ||
             objectBounds.Right <= actorBounds.Left ||
             objectBounds.Top >= actorBounds.Bottom ||
             objectBounds.Bottom <= actorBounds.Top)
             return false;
 
-        var scale = SpritePixelScale();
         if (scale <= 0) return false;
         var actorFrame = actor.Frame;
         for (var displayY = 0; displayY < actorFrame.Height; displayY++)
