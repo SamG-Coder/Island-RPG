@@ -350,9 +350,9 @@ internal static class PlaceableObjectCatalog
         var geometry = GateCatalog.Geometry(gate, rotation);
         var size = geometry.CollisionRadius * 2;
         var center = GateRenderedGroundCenter(value);
-        if (rotation == 2)
-            return FrontWoodenGateNavigationObstacles(
-                center, includeMiddle);
+        if (rotation is 2 or 3)
+            return AxialWoodenGateNavigationObstacles(
+                center, rotation, includeMiddle);
         var (axis, length, depth, collisionRotation) =
             GateCollisionLayout(rotation, size);
         var endLength = Math.Min(depth, length * .25f);
@@ -394,23 +394,30 @@ internal static class PlaceableObjectCatalog
     }
 
     private static IReadOnlyList<NavigationObstacle>
-        FrontWoodenGateNavigationObstacles(
-            Vector2 center, bool includeMiddle)
+        AxialWoodenGateNavigationObstacles(
+            Vector2 center, int rotation, bool includeMiddle)
     {
-        var axis = Vector2.Normalize(new Vector2(1, -1));
+        var vertical = rotation == 3;
+        var axis = Vector2.Normalize(vertical
+            ? new Vector2(1, 1)
+            : new Vector2(1, -1));
+        var middleFrame = vertical ? 4 : 3;
         var result = new List<NavigationObstacle>(includeMiddle ? 4 : 2)
         {
             // Reuse the exact wall collision mapping: frame 2 is the single
-            // wooden tower and frame 3 is a screen-horizontal wooden wall.
+            // wooden tower, while frames 3 and 4 are the horizontal and
+            // vertical wall sections used by their matching gate artwork.
             WallNavigationObstacleAt(center - axis * 1.5f, 2),
             WallNavigationObstacleAt(center + axis * 1.5f, 2)
         };
         if (includeMiddle)
         {
             result.Insert(1,
-                WallNavigationObstacleAt(center - axis * .5f, 3));
+                WallNavigationObstacleAt(
+                    center - axis * .5f, middleFrame));
             result.Insert(2,
-                WallNavigationObstacleAt(center + axis * .5f, 3));
+                WallNavigationObstacleAt(
+                    center + axis * .5f, middleFrame));
         }
         return result;
     }

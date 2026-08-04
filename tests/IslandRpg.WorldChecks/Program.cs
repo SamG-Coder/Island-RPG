@@ -3218,6 +3218,9 @@ var openHorizontalGateObstacles =
         completedGate with { VisualFrame = 2 }, includeMiddle: false);
 var verticalGateObstacles =
     PlaceableObjectCatalog.GateNavigationObstacles(
+        completedGate with { VisualFrame = 3 }, includeMiddle: true);
+var openVerticalGateObstacles =
+    PlaceableObjectCatalog.GateNavigationObstacles(
         completedGate with { VisualFrame = 3 }, includeMiddle: false);
 Require(
     closedGateObstacles.Count == 3 &&
@@ -3236,10 +3239,15 @@ Require(
                horizontalGateObstacles[0].Center.X) !=
     MathF.Sign(horizontalGateObstacles[3].Center.Y -
                horizontalGateObstacles[0].Center.Y) &&
-    verticalGateObstacles.Count == 2 &&
-    MathF.Sign(verticalGateObstacles[1].Center.X -
+    verticalGateObstacles.Count == 4 &&
+    openVerticalGateObstacles.Count == 2 &&
+    verticalGateObstacles[0].Width == 1 &&
+    verticalGateObstacles[1].Width == 1.42f &&
+    verticalGateObstacles[2].Width == 1.42f &&
+    verticalGateObstacles[3].Width == 1 &&
+    MathF.Sign(verticalGateObstacles[3].Center.X -
                verticalGateObstacles[0].Center.X) ==
-    MathF.Sign(verticalGateObstacles[1].Center.Y -
+    MathF.Sign(verticalGateObstacles[3].Center.Y -
                verticalGateObstacles[0].Center.Y) &&
     closedGateObstacles[2].Width >=
         Vector2.Distance(
