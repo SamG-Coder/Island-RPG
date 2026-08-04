@@ -21,6 +21,7 @@ internal sealed partial class GameHostWindow
     private ObserveVillagerTab _observeVillagerTab;
     private int _observeMemoryOffset;
     private int _observeRosterOffset;
+    private bool _observeOverlayVisible = true;
     private const int ObserveVisibleRosterRows = 5;
 
     private void UpdateObserveUi()
@@ -29,10 +30,12 @@ internal sealed partial class GameHostWindow
         _chatUi.Layout(scene);
         _minimapUi.Layout(scene);
         UpdateCommandHints();
+        if (!_chatUi.Input.Focused && KeyboardState.IsKeyPressed(Keys.O))
+            _observeOverlayVisible = !_observeOverlayVisible;
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         var clicked = leftDown && !_observeRosterLeftWasDown;
         _observeRosterLeftWasDown = leftDown;
-        if (clicked)
+        if (clicked && _observeOverlayVisible)
         {
             var pointer = MouseState.Position;
             var rosterEnd = Math.Min(
@@ -89,9 +92,10 @@ internal sealed partial class GameHostWindow
     }
 
     private bool IsPointerOverObserveUi(Vector2 pointer) =>
-        ObserveVillagerPanelBounds().Contains(pointer) ||
-        _observedVillagerId is not null &&
-        ObserveVillagerDetailBounds().Contains(pointer) ||
+        _observeOverlayVisible &&
+        (ObserveVillagerPanelBounds().Contains(pointer) ||
+         _observedVillagerId is not null &&
+         ObserveVillagerDetailBounds().Contains(pointer)) ||
         _chatUi.BlocksWorldInput(pointer) ||
         _commandHints.HitTest(pointer) ||
         _minimapUi.HitTest(pointer) ||
@@ -104,8 +108,11 @@ internal sealed partial class GameHostWindow
         _chatUi.Layout(scene);
         _minimapUi.Layout(scene);
         RenderVillagerOverheadSpeech(scene);
-        RenderObserveVillagerRoster();
-        RenderObserveVillagerDetails();
+        if (_observeOverlayVisible)
+        {
+            RenderObserveVillagerRoster();
+            RenderObserveVillagerDetails();
+        }
         RenderMinimap();
         RenderChatUi();
         RenderWorldClock(scene);
@@ -153,6 +160,15 @@ internal sealed partial class GameHostWindow
                     : hovered
                         ? new(.09f, .085f, .06f, .98f)
                         : new(.052f, .048f, .036f, .96f));
+        }
+        // Keep the colour and font batches contiguous. During group dialogue
+        // this roster used to alternate GPU batches once for every survivor.
+        for (var index = _observeRosterOffset;
+             index < end;
+             index++)
+        {
+            var villager = _villagers[index];
+            var row = ObserveVillagerRowBounds(index - _observeRosterOffset);
             var phase = _npcController.Phase(villager.Id);
             var status = phase is null
                 ? $"{villager.Activity} · {villager.Action}"
@@ -219,6 +235,11 @@ internal sealed partial class GameHostWindow
                 selected
                     ? new(.55f, .42f, .18f, 1)
                     : new(.25f, .205f, .12f, 1));
+        }
+        for (var index = 0; index < names.Length; index++)
+        {
+            var bounds = ObserveVillagerTabBounds(index);
+            var selected = index == (int)_observeVillagerTab;
             DrawSmallCenteredUiText(
                 names[index], bounds,
                 selected
@@ -458,7 +479,7 @@ internal sealed partial class GameHostWindow
 
     private bool ScrollObserveMemories(Vector2 pointer, float offset)
     {
-        if (_observedVillagerId is null ||
+        if (!_observeOverlayVisible || _observedVillagerId is null ||
             _observeVillagerTab != ObserveVillagerTab.Memory ||
             !ObserveVillagerDetailBounds().Contains(pointer) ||
             offset == 0)
@@ -474,7 +495,8 @@ internal sealed partial class GameHostWindow
 
     private bool ScrollObserveRoster(Vector2 pointer, float offset)
     {
-        if (!ObserveVillagerPanelBounds().Contains(pointer) || offset == 0 ||
+        if (!_observeOverlayVisible ||
+            !ObserveVillagerPanelBounds().Contains(pointer) || offset == 0 ||
             _villagers.Count <= ObserveVisibleRosterRows)
             return false;
         _observeRosterOffset = Math.Clamp(

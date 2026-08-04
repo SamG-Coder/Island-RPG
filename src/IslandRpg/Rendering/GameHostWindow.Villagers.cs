@@ -46,6 +46,15 @@ internal sealed partial class GameHostWindow
     private double _conversationFloorUntil;
     private sealed record VillagerSpeechBubble(
         string Text, double ExpiresAt);
+    private sealed record VillagerSpeechTextLayout(
+        string[] Lines, float Width, float LineHeight);
+    private readonly record struct VillagerSpeechRenderLayout(
+        Vector4 Bounds, float TailCenter,
+        VillagerSpeechTextLayout Text);
+    private readonly Dictionary<string, VillagerSpeechTextLayout>
+        _villagerSpeechTextLayouts = [];
+    private readonly List<VillagerSpeechRenderLayout>
+        _villagerSpeechRenderLayouts = [];
 
     private void LoadVillagers(Vector2 spawn)
     {
@@ -53,6 +62,8 @@ internal sealed partial class GameHostWindow
         ResetSettlementScoutPaths();
         _villagers.Clear();
         _villagerSpeechBubbles.Clear();
+        _villagerSpeechTextLayouts.Clear();
+        _villagerSpeechRenderLayouts.Clear();
         _observedVillagerId = null;
         _queuedPlayerConversationTurns.Clear();
         _conversationFloorSpeakerId = null;
@@ -2276,6 +2287,7 @@ internal sealed partial class GameHostWindow
         if (_chatFont is null || _fontRenderer is null ||
             _villagerSpeechBubbles.Count == 0)
             return;
+        _villagerSpeechRenderLayouts.Clear();
         foreach (var villager in _villagers)
         {
             if (!_villagerSpeechBubbles.TryGetValue(
@@ -2302,9 +2314,18 @@ internal sealed partial class GameHostWindow
                 animation.Graphic.Sprite.Frames[directional.Index],
                 projected,
                 directional.Mirror);
-            DrawVillagerSpeechBubble(
-                scene, sprite, bubble.Text);
+            if (LayoutVillagerSpeechBubble(
+                    scene, sprite, bubble.Text) is { } layout)
+                _villagerSpeechRenderLayouts.Add(layout);
         }
+        // All bubble geometry is submitted together, followed by all glyphs.
+        // Alternating these per villager forced a GPU flush for every survivor
+        // during the opening introductions.
+        foreach (var layout in _villagerSpeechRenderLayouts)
+            DrawVillagerSpeechBubbleGeometry(layout);
+        _uiColorBatch.Flush();
+        foreach (var layout in _villagerSpeechRenderLayouts)
+            DrawVillagerSpeechBubbleText(layout);
     }
 
     private VillagerState CompleteVillagerActionAnimation(
@@ -2362,7 +2383,7 @@ internal sealed partial class GameHostWindow
             : refreshed;
     }
 
-    private void DrawVillagerSpeechBubble(
+    private VillagerSpeechRenderLayout? LayoutVillagerSpeechBubble(
         Vector4 scene,
         (float Left, float Top, float Right, float Bottom) sprite,
         string fullText)
@@ -2370,39 +2391,46 @@ internal sealed partial class GameHostWindow
         const float horizontalPadding = 9;
         const float verticalPadding = 6;
         var font = _chatFont!;
-        var renderer = _fontRenderer!;
         var scale = scene.Z / ReferenceWidth;
         var centerX = scene.X +
                       (sprite.Left + sprite.Right) * .5f * scale;
-        const float maximumTextWidth = 260;
-        var lines = new List<string>(3);
-        var current = "";
-        foreach (var word in fullText.Split(
-                     ' ',
-                     StringSplitOptions.RemoveEmptyEntries))
+        if (!_villagerSpeechTextLayouts.TryGetValue(
+                fullText, out var textLayout))
         {
-            var candidate = current.Length == 0
-                ? word
-                : current + " " + word;
-            if (current.Length > 0 &&
-                font.MeasureString(candidate).X >
-                maximumTextWidth)
+            const float maximumTextWidth = 260;
+            var lines = new List<string>(3);
+            var current = "";
+            foreach (var word in fullText.Split(
+                         ' ',
+                         StringSplitOptions.RemoveEmptyEntries))
             {
-                lines.Add(current);
-                current = word;
+                var candidate = current.Length == 0
+                    ? word
+                    : current + " " + word;
+                if (current.Length > 0 &&
+                    font.MeasureString(candidate).X > maximumTextWidth)
+                {
+                    lines.Add(current);
+                    current = word;
+                }
+                else
+                    current = candidate;
             }
-            else
-                current = candidate;
+            if (current.Length > 0) lines.Add(current);
+            if (lines.Count == 0) return null;
+            var lineHeight = MathF.Ceiling(font.MeasureString("Ag").Y);
+            textLayout = new(
+                lines.ToArray(),
+                lines.Max(line => font.MeasureString(line).X),
+                lineHeight);
+            if (_villagerSpeechTextLayouts.Count >= 64)
+                _villagerSpeechTextLayouts.Clear();
+            _villagerSpeechTextLayouts[fullText] = textLayout;
         }
-        if (current.Length > 0) lines.Add(current);
-        if (lines.Count == 0) return;
-        var lineHeight = MathF.Ceiling(
-            font.MeasureString("Ag").Y);
-        var textWidth = lines.Max(line =>
-            font.MeasureString(line).X);
-        var width = textWidth + horizontalPadding * 2;
+        var width = textLayout.Width + horizontalPadding * 2;
         var height =
-            lineHeight * lines.Count + verticalPadding * 2;
+            textLayout.LineHeight * textLayout.Lines.Length +
+            verticalPadding * 2;
         var x = Math.Clamp(
             centerX - width * .5f,
             scene.X + 4,
@@ -2413,31 +2441,43 @@ internal sealed partial class GameHostWindow
         var bounds = new Vector4(
             MathF.Round(x), MathF.Round(y),
             MathF.Ceiling(width), MathF.Ceiling(height));
+        return new(
+            bounds,
+            Math.Clamp(centerX, bounds.X + 10, bounds.X + bounds.Z - 10),
+            textLayout);
+    }
+
+    private void DrawVillagerSpeechBubbleGeometry(
+        VillagerSpeechRenderLayout layout)
+    {
+        var bounds = layout.Bounds;
         DrawRoundedUiColor(bounds, 6, new(.68f, .68f, .66f, .9f));
         DrawRoundedUiColor(
             new(bounds.X + 1, bounds.Y + 1,
                 bounds.Z - 2, bounds.W - 2),
             5, new(.98f, .98f, .97f, .98f));
-        var tailCenter = Math.Clamp(
-            centerX,
-            bounds.X + 10,
-            bounds.X + bounds.Z - 10);
         DrawUiColor(
             new(
-                MathF.Round(tailCenter - 3),
+                MathF.Round(layout.TailCenter - 3),
                 bounds.Y + bounds.W - 1,
                 6,
                 6),
             new(.98f, .98f, .97f, .98f));
-        _uiColorBatch.Flush();
-        for (var index = 0; index < lines.Count; index++)
-            font.DrawText(
-                renderer,
-                lines[index],
+    }
+
+    private void DrawVillagerSpeechBubbleText(
+        VillagerSpeechRenderLayout layout)
+    {
+        const float horizontalPadding = 9;
+        const float verticalPadding = 6;
+        for (var index = 0; index < layout.Text.Lines.Length; index++)
+            _chatFont!.DrawText(
+                _fontRenderer!,
+                layout.Text.Lines[index],
                 new(
-                    bounds.X + horizontalPadding,
-                    bounds.Y + verticalPadding +
-                    index * lineHeight),
+                    layout.Bounds.X + horizontalPadding,
+                    layout.Bounds.Y + verticalPadding +
+                    index * layout.Text.LineHeight),
                 new FSColor(20, 20, 18, 255));
     }
 

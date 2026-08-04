@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Collections.Concurrent;
 using Microsoft.Win32.SafeHandles;
 using IslandRpg.Gameplay;
 using IslandRpg.Rendering.Ui;
@@ -54,7 +55,7 @@ internal static class ObserveConsole
     private static StreamWriter CreateWriter(Stream stream) =>
         new(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
         {
-            AutoFlush = true
+            AutoFlush = false
         };
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -98,9 +99,20 @@ internal static class ObserveModePolicy
 internal static class ObserveEventLog
 {
     private static readonly object OutputLock = new();
+    private static readonly ConcurrentQueue<PendingEvent> Pending = new();
+    private static readonly AutoResetEvent PendingSignal = new(false);
     private static StreamWriter? _fileWriter;
     private static ObserveSummaryAccumulator? _summary;
+    private static readonly Task OutputTask = Task.Run(ProcessOutput);
     public static string? OutputPath { get; private set; }
+    private sealed record PendingEvent(
+        TextWriter Writer,
+        double RealSeconds,
+        double GameSeconds,
+        string GameTime,
+        string? VillagerId,
+        string EventType,
+        object? Data);
 
     public static void ConfigureOutputFolder(string folder)
     {
@@ -114,8 +126,8 @@ internal static class ObserveEventLog
             FileMode.CreateNew,
             FileAccess.Write,
             FileShare.ReadWrite | FileShare.Delete,
-            bufferSize: 4096,
-            FileOptions.WriteThrough);
+            bufferSize: 65536,
+            FileOptions.SequentialScan);
         lock (OutputLock)
         {
             _fileWriter?.Dispose();
@@ -123,7 +135,7 @@ internal static class ObserveEventLog
                 stream,
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
             {
-                AutoFlush = true
+                AutoFlush = false
             };
             _summary = new(Path.Combine(
                 resolved, Path.GetFileNameWithoutExtension(path)));
@@ -157,17 +169,60 @@ internal static class ObserveEventLog
         string eventType,
         object? data)
     {
-        var line = Serialize(
-            realSeconds, gameSeconds, gameTime,
-            villagerId, eventType, data);
-        writer.WriteLine(line);
-        writer.Flush();
-        lock (OutputLock)
+        // Unit tests and explicit callers retain immediate TextWriter
+        // semantics. The real observe stream is queued so JSON, console/file
+        // I/O, summary parsing, and disk flushes never block OpenTK's thread.
+        if (!ReferenceEquals(writer, Console.Out))
         {
-            _fileWriter?.WriteLine(line);
-            _fileWriter?.Flush();
-            _summary?.Observe(
-                realSeconds, villagerId, eventType, data);
+            var line = Serialize(
+                realSeconds, gameSeconds, gameTime,
+                villagerId, eventType, data);
+            writer.WriteLine(line);
+            writer.Flush();
+            return;
+        }
+        Pending.Enqueue(new(
+            writer,
+            realSeconds,
+            gameSeconds,
+            gameTime,
+            villagerId,
+            eventType,
+            data));
+        PendingSignal.Set();
+    }
+
+    private static void ProcessOutput()
+    {
+        while (true)
+        {
+            PendingSignal.WaitOne(100);
+            if (Pending.IsEmpty) continue;
+            var writers = new HashSet<TextWriter>();
+            lock (OutputLock)
+            {
+                while (Pending.TryDequeue(out var pending))
+                {
+                    var line = Serialize(
+                        pending.RealSeconds,
+                        pending.GameSeconds,
+                        pending.GameTime,
+                        pending.VillagerId,
+                        pending.EventType,
+                        pending.Data);
+                    pending.Writer.WriteLine(line);
+                    writers.Add(pending.Writer);
+                    _fileWriter?.WriteLine(line);
+                    _summary?.Observe(
+                        pending.RealSeconds,
+                        pending.VillagerId,
+                        pending.EventType,
+                        pending.Data);
+                }
+                foreach (var output in writers)
+                    output.Flush();
+                _fileWriter?.Flush();
+            }
         }
     }
 }
