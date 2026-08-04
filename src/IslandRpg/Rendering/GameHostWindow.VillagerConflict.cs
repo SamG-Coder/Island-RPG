@@ -43,6 +43,11 @@ internal sealed partial class GameHostWindow
         if (villager.Health <= 0) return false;
         if (villager.ConflictIntent == VillagerConflictIntent.None)
             return false;
+        // Player-target conflicts are executed by TryVillagerDefendSelf.
+        // Do not clear them merely because the player is not in _villagers.
+        if (VillagerConflictService.TargetsActor(
+                villager, _activePlayer?.Id))
+            return false;
         var targetIndex = _villagers.FindIndex(value =>
             value.Id == villager.ConflictTargetId);
         if (targetIndex < 0 || targetIndex == index ||

@@ -192,6 +192,9 @@ internal sealed partial class GameHostWindow
         var settlementOpeningActive = !openingIncidentActive &&
             !councilActive && UpdateSettlementOpening();
         if (!openingIncidentActive && !councilActive &&
+            !settlementOpeningActive)
+            UpdateSocialIncidentAftermath();
+        if (!openingIncidentActive && !councilActive &&
             !settlementOpeningActive &&
             _worldGameSeconds >= _nextVillagerRoleAssignment)
         {

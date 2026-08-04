@@ -561,10 +561,17 @@ internal sealed partial class GameHostWindow
                 new(VillagerNeed.Safe, fleeTarget),
                 VillagerSimulationTier.Nearby,
                 _worldGameSeconds);
+            var yelled = VillagerYellService.CanYell(
+                victim, _worldGameSeconds);
+            if (yelled)
+                victim = VillagerYellService.MarkYelled(
+                    victim, _worldGameSeconds);
             _villagers[victimIndex] = victim;
             ShowVillagerCombatReaction(
                 victimIndex,
-                "Stop! Why are you attacking me?");
+                yelled
+                    ? $"Help! {_activePlayer.Name} is attacking me!"
+                    : "Stop! Why are you attacking me?");
         }
 
         var spokespersonIndex = -1;
@@ -585,7 +592,17 @@ internal sealed partial class GameHostWindow
             var distance = Vector2.DistanceSquared(
                 new(witness.PositionX, witness.PositionY),
                 attackedPosition);
-            if (distance > 10 * 10) continue;
+            if (distance > VillagerYellService.HearingRadius *
+                           VillagerYellService.HearingRadius)
+                continue;
+            var relationship = witness.Relationships?.FirstOrDefault(value =>
+                value.CharacterId == victim.Id)?.State ?? default;
+            var sameSettlement = victim.SettlementGroupId is not null &&
+                victim.SettlementGroupId == witness.SettlementGroupId;
+            var answersYell = VillagerYellService.ShouldAnswer(
+                witness, victim, _activePlayer.Id,
+                relationship, sameSettlement);
+            if (distance > 10 * 10 && !answersYell) continue;
             witness = VillagerSimulation.RecordWitnessedAttack(
                 witness,
                 _activePlayer.Id,
@@ -597,6 +614,12 @@ internal sealed partial class GameHostWindow
                 _worldGameSeconds);
             var reaction = VillagerWitnessResponseService.Decide(
                 witness, victim, _activePlayer.Id, attackerArmed);
+            if (answersYell &&
+                reaction.Intent != VillagerWitnessIntent.Protect)
+                reaction = new(
+                    VillagerWitnessIntent.Protect,
+                    $"I heard {victim.Name} yell. I should rush to help.",
+                    Math.Max(70, reaction.Priority));
             witness = ApplyPlayerAttackWitnessResponse(
                 witness, victim, reaction);
             _villagers[index] = witness;
@@ -774,7 +797,14 @@ internal sealed partial class GameHostWindow
                       previous.AttackerId != judgment.AttackerId ||
                       previous.VictimId != judgment.VictimId ||
                       previous.Outcome != judgment.Outcome;
-        group = group with { ActiveJusticeCase = judgment };
+        var aftermath = SocialIncidentAftermathService.Begin(
+            group.ActiveAftermath, group, victim,
+            _activePlayer.Id, members, _worldGameSeconds);
+        group = group with
+        {
+            ActiveJusticeCase = judgment,
+            ActiveAftermath = aftermath
+        };
         if (judgment.Outcome == SettlementJusticeOutcome.Exile)
         {
             group = SettlementGroupService.RemoveMember(

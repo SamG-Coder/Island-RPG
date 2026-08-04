@@ -153,7 +153,7 @@ internal sealed partial class GameHostWindow
                         request.Complete(ControlSnapshot("walk_queued"));
                         break;
                     case "stop_player":
-                        _player?.Stop();
+                        _worldActions.StopPlayer();
                         request.Complete(ControlSnapshot("player_stopped"));
                         break;
                     case "combat_style":
@@ -1799,6 +1799,24 @@ internal sealed partial class GameHostWindow
                         _settlementGroup.Exclusion.DeadlineGameSeconds,
                         _settlementGroup.Exclusion.Entries
                     },
+                aftermath = _settlementGroup.ActiveAftermath is null
+                    ? null
+                    : new
+                    {
+                        _settlementGroup.ActiveAftermath.IncidentId,
+                        _settlementGroup.ActiveAftermath.AggressorId,
+                        _settlementGroup.ActiveAftermath.VictimId,
+                        _settlementGroup.ActiveAftermath.ReadyGameSeconds,
+                        _settlementGroup.ActiveAftermath.ExpiresGameSeconds,
+                        assignments = _settlementGroup.ActiveAftermath
+                            .Assignments.Select(value => new
+                            {
+                                value.ActorId,
+                                role = value.Role.ToString(),
+                                value.TargetId,
+                                value.Completed
+                            })
+                    },
                 camp = new
                 {
                     X = _settlementGroup.CampX,
@@ -1828,6 +1846,18 @@ internal sealed partial class GameHostWindow
                 villager.LastDeliberation,
                 villager.Promises,
                 villager.ActionPlan,
+                aftermathMemories = villager.Memories?
+                    .Where(value => value.Kind.StartsWith(
+                        "aftermath-", StringComparison.Ordinal))
+                    .TakeLast(8)
+                    .Select(value => new
+                    {
+                        value.EventId,
+                        value.Kind,
+                        value.SubjectId,
+                        value.Confidence,
+                        value.Summary
+                    }),
                 relationships = villager.Relationships?.Select(relationship =>
                     new
                     {

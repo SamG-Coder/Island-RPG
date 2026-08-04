@@ -3449,6 +3449,59 @@ Require(
         SettlementJusticeOutcome.CollectiveDefense &&
     exileJudgment.Outcome == SettlementJusticeOutcome.Exile,
     "settlement justice must expose every escalating live outcome");
+var aftermathMembers = new[]
+{
+    justiceLeader,
+    justiceVictim,
+    politeRequester with { Id = "aftermath-a", Name = "Aftermath A" },
+    bondedWitness with { Id = "aftermath-b", Name = "Aftermath B" },
+    drasticRequester with { Id = "aftermath-c", Name = "Aftermath C" },
+    traderRequester with { Id = "aftermath-d", Name = "Aftermath D" }
+};
+var aftermath = SocialIncidentAftermathService.Begin(
+    null, justiceGroup, justiceVictim, "player",
+    aftermathMembers, 300);
+var aidAssignment = aftermath.Assignments.Single(value =>
+    value.Role == SocialAftermathRole.AidVictim);
+var aidActor = aftermathMembers.Single(value =>
+    value.Id == aidAssignment.ActorId);
+var aidedActor = SocialIncidentAftermathService.RecordCompletedInteraction(
+    aidActor, aftermath, aidAssignment,
+    "Player", justiceVictim.Name, justiceVictim.Name, 950);
+var supportedVictim = SocialIncidentAftermathService.RecordReceivedSupport(
+    justiceVictim, aftermath, aidAssignment,
+    aidActor.Name, 950);
+var accountAssignment = aftermath.Assignments.Single(value =>
+    value.Role == SocialAftermathRole.ShareAccount);
+var accountListener = aftermathMembers.Single(value =>
+    value.Id == accountAssignment.TargetId);
+var informedListener = SocialIncidentAftermathService.RecordHeardAccount(
+    accountListener, justiceVictim, aftermath,
+    "Player", justiceVictim.Name, 960);
+var completedAftermath = SocialIncidentAftermathService.Complete(
+    aftermath, aidActor.Id);
+Require(aftermath.Assignments.Count <=
+            SocialIncidentAftermathService.MaximumAssignments &&
+        aftermath.Assignments.Select(value => value.ActorId)
+            .Distinct().Count() == aftermath.Assignments.Count &&
+        aftermath.Assignments.Any(value =>
+            value.Role == SocialAftermathRole.GuardVictim) &&
+        aftermath.Assignments.Any(value =>
+            value.Role == SocialAftermathRole.ShareAccount) &&
+        aftermath.Assignments.Any(value =>
+            value.Role == SocialAftermathRole.ConfrontAggressor) &&
+        aidedActor.Memories?.Any(value =>
+            value.EventId == aftermath.IncidentId) == true &&
+        supportedVictim.Memories?.Any(value =>
+            value.Kind == "aftermath-received-aid") == true &&
+        supportedVictim.Relationships?.Single(value =>
+            value.CharacterId == aidActor.Id).State.Gratitude == 12 &&
+        informedListener.Memories?.Single(value =>
+            value.Kind == "aftermath-heard-account").Confidence ==
+            .45f + justiceVictim.Honesty * .4f &&
+        completedAftermath.Assignments.Single(value =>
+            value.ActorId == aidActor.Id).Completed,
+    "social aftermath must bound unique visible roles and apply memories, gratitude, and completion only after an interaction succeeds");
 var resolvedRestitution = SettlementJusticeService.ResolveRestitution(
     restitutionJudgment, "player", justiceVictim.Id);
 var wrongRestitution = SettlementJusticeService.ResolveRestitution(
@@ -3538,6 +3591,16 @@ var defensiveConflict = VillagerConflictService.DecideResponse(
     threateningRequester with { Health = 70, Boldness = .6f },
     drasticRequester,
     wasAttacked: true);
+var playerTargetConflict = politeRequester with
+{
+    ConflictTargetId = "player-target",
+    ConflictIntent = VillagerConflictIntent.Defend
+};
+Require(VillagerConflictService.TargetsActor(
+            playerTargetConflict, "player-target") &&
+        !VillagerConflictService.TargetsActor(
+            playerTargetConflict, "another-actor"),
+    "player-target conflicts must remain distinguishable from NPC-target conflicts so the player combat controller can execute them");
 var retaliatingConflict = VillagerConflictService.DecideResponse(
     drasticRequester with { Health = 70, Boldness = .8f },
     threateningRequester,

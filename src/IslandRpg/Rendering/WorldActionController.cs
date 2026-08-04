@@ -495,5 +495,16 @@ internal sealed partial class GameHostWindow
         window._pendingPathTask = null;
         window._pathRequestId++;
     }
+
+    public void StopPlayer()
+    {
+        window.CancelMeleeCombat();
+        window._queuedAction = null;
+        window._activeTreeId = null;
+        window._activeTreeStickGatherId = null;
+        window._moveMarker = null;
+        CancelPath();
+        window._player?.Stop();
+    }
     }
 }

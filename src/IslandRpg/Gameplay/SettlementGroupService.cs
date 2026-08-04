@@ -19,7 +19,8 @@ internal sealed record SettlementGroupState(
     IReadOnlyList<SettlementScoutReport>? ScoutReports = null,
     IReadOnlyList<SettlementCampResponse>? CampResponses = null,
     SettlementJusticeCase? ActiveJusticeCase = null,
-    SettlementExclusionState? Exclusion = null)
+    SettlementExclusionState? Exclusion = null,
+    SocialIncidentAftermathState? ActiveAftermath = null)
 {
     [JsonIgnore]
     public Vector2 Camp => new(CampX, CampY);

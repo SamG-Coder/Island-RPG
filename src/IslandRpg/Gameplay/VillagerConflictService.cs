@@ -10,6 +10,13 @@ internal static class VillagerConflictService
 {
     public const double ConflictDurationGameSeconds = 10 * 60;
 
+    public static bool TargetsActor(
+        VillagerState state,
+        string? actorId) =>
+        actorId is not null &&
+        state.ConflictIntent != VillagerConflictIntent.None &&
+        state.ConflictTargetId == actorId;
+
     public static VillagerConflictDecision DecideResponse(
         VillagerState responder,
         VillagerState aggressor,
