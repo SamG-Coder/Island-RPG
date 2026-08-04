@@ -3025,9 +3025,28 @@ Require(
     HouseVisuals.AtlasKey(HouseCatalog.All.First(value =>
         value.GraphicId == 10916 && value.Frame == 2).ItemId) ==
         "HOUS3NNX@10916#2" &&
-    HouseVisuals.RequiredGraphics.Count == 13 &&
+    HouseVisuals.RequiredGraphics.Count == 20 &&
     !HouseCatalog.All.Any(value => value.GraphicId == 2229),
     "house rendering must load every completed architecture set with exact ID-qualified frame keys and exclude the damaged special frame");
+var stagedHouseDefinition = HouseCatalog.All[0];
+var stagedHouse = ConstructionService.Begin(new(
+    Guid.NewGuid(), stagedHouseDefinition.ItemId, 1, 1));
+var completedHouse = stagedHouse with
+{
+    Health = stagedHouse.MaxHealth
+};
+Require(
+    ConstructionVisualCatalog.All.Count == 7 &&
+    ConstructionVisualCatalog.All.All(value =>
+        value.FootprintWidth > 0 && value.FootprintDepth > 0 &&
+        value.AtlasKey(0).Contains($"@{value.GraphicId}#0")) &&
+    ConstructionVisualCatalog.ForFootprint(2, 2).GraphicName == "CNST2_NN" &&
+    HouseVisuals.Resolve(stagedHouse) == "CNST2_NN@119#0" &&
+    HouseVisuals.Resolve(ConstructionService.AddWork(stagedHouse, 80)) ==
+        "CNST2_NN@119#2" &&
+    HouseVisuals.Resolve(completedHouse) ==
+        HouseVisuals.AtlasKey(stagedHouseDefinition.ItemId),
+    "houses must visibly progress through foundation and scaffold stages before resolving their completed authored sprite");
 var droppedInteraction = EntityInteractionService.Drop(
     sharedPlacement.Inventory,
     0,

@@ -24,3 +24,16 @@ dotnet run --project tools/IslandRpg.GraphicExport -- `
 
 `TestExport/` is intentionally ignored by Git so it can be reused for any
 future asset audit.
+
+Export every reusable AoE building construction footprint and each of its
+three visual stages:
+
+```powershell
+dotnet run --project tools/IslandRpg.GraphicExport -- `
+  --install "C:\Program Files (x86)\Steam\steamapps\common\Age2HD" `
+  --output TestExport\HouseConstructionStages `
+  --construction-stages
+```
+
+This exports `CNST1_NN`, `CNST2_NN`, `CNST3_NN`, `CNST4_NN`, `CNST8_NN`,
+`CNST12_NN`, and `CNSTD_NN`. Each graphic contains three construction frames.

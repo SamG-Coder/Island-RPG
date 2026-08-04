@@ -14,14 +14,25 @@ if (!File.Exists(datPath))
 
 var allGraphics = GenieDatReader.FindAllGraphics(datPath);
 var graphicsById = allGraphics.ToDictionary(graphic => graphic.GraphicId);
-var matches = allGraphics
+var constructionStageNames = new HashSet<string>(
+    [
+        "CNST1_NN", "CNST2_NN", "CNST3_NN", "CNST4_NN",
+        "CNST8_NN", "CNST12_NN", "CNSTD_NN"
+    ],
+    StringComparer.OrdinalIgnoreCase);
+var matches = (options.ConstructionStages
+    ? allGraphics.Where(graphic => constructionStageNames.Contains(graphic.Name))
+    : options.AllConstructionCandidates
+    ? allGraphics.Where(graphic =>
+        graphic.AngleCount == 1 && graphic.FrameCount <= 12)
+    : allGraphics
     .Where(graphic =>
         options.ExactNames.Contains(graphic.Name) ||
         options.Queries.Any(query =>
             graphic.Name.Contains(
                 query, StringComparison.OrdinalIgnoreCase) ||
             graphic.FileName.Contains(
-                query, StringComparison.OrdinalIgnoreCase)))
+                query, StringComparison.OrdinalIgnoreCase))))
     .OrderBy(graphic => graphic.Name, StringComparer.OrdinalIgnoreCase)
     .ThenBy(graphic => graphic.GraphicId)
     .ToArray();
@@ -56,6 +67,10 @@ foreach (var graphic in matches)
         var palettePath = Age2PaletteResolver.Resolve(install, slpPath).Path;
         var sprite = SlpDecoder.Decode(
             slpPath, JascPalette.Load(palettePath));
+        var frames = options.AllConstructionCandidates
+            ? sprite.Frames.Where(IsConstructionCandidate).ToArray()
+            : sprite.Frames.ToArray();
+        if (frames.Length == 0) continue;
         var duplicateName = matches.Count(value =>
             value.Name.Equals(graphic.Name, StringComparison.OrdinalIgnoreCase)) > 1;
         var folderName = duplicateName
@@ -66,6 +81,9 @@ foreach (var graphic in matches)
         for (var index = 0; index < sprite.Frames.Count; index++)
         {
             var frame = sprite.Frames[index];
+            if (options.AllConstructionCandidates &&
+                !IsConstructionCandidate(frame))
+                continue;
             SavePng(
                 frame,
                 Path.Combine(
@@ -100,6 +118,33 @@ Console.WriteLine(
     $"Matched {matches.Length} DAT graphic(s); exported " +
     $"{exportedFrames} frame(s) from {exportedGraphics} graphic(s) to {outputRoot}");
 return matches.Length == 0 ? 1 : 0;
+
+static bool IsConstructionCandidate(SpriteFrame frame)
+{
+    if (frame.Width is < 70 or > 260 || frame.Height is < 40 or > 190)
+        return false;
+    var opaque = 0;
+    var authoredBlue = 0;
+    var timberOrStone = 0;
+    for (var index = 0; index < frame.Rgba.Length; index += 4)
+    {
+        var alpha = frame.Rgba[index + 3];
+        if (alpha < 48) continue;
+        opaque++;
+        var red = frame.Rgba[index];
+        var green = frame.Rgba[index + 1];
+        var blue = frame.Rgba[index + 2];
+        if (blue > 70 && blue > red * 1.25f && blue > green * 1.18f)
+            authoredBlue++;
+        var maximum = Math.Max(red, Math.Max(green, blue));
+        var minimum = Math.Min(red, Math.Min(green, blue));
+        if (red is > 45 and < 190 && green is > 30 and < 155 &&
+            blue < 125 || maximum - minimum < 28 && maximum is > 45 and < 190)
+            timberOrStone++;
+    }
+    return opaque >= 180 && authoredBlue >= 4 &&
+           timberOrStone >= opaque * .12f;
+}
 
 void AddManifest(
     GenieGraphic graphic, int decodedFrames, string source, string status)
@@ -163,7 +208,9 @@ internal sealed record Options(
     string Install,
     string Output,
     string[] Queries,
-    HashSet<string> ExactNames)
+    HashSet<string> ExactNames,
+    bool AllConstructionCandidates,
+    bool ConstructionStages)
 {
     public static Options Parse(string[] args)
     {
@@ -172,6 +219,8 @@ internal sealed record Options(
         var queries = new List<string>();
         var exactNames = new HashSet<string>(
             StringComparer.OrdinalIgnoreCase);
+        var allConstructionCandidates = false;
+        var constructionStages = false;
         for (var index = 0; index < args.Length; index++)
         {
             var option = args[index];
@@ -179,6 +228,16 @@ internal sealed record Options(
             {
                 PrintUsage();
                 Environment.Exit(0);
+            }
+            if (option == "--all-construction-candidates")
+            {
+                allConstructionCandidates = true;
+                continue;
+            }
+            if (option == "--construction-stages")
+            {
+                constructionStages = true;
+                continue;
             }
             if (index + 1 >= args.Length)
                 throw new ArgumentException(
@@ -205,13 +264,16 @@ internal sealed record Options(
         }
 
         if (install is null || output is null ||
-            queries.Count == 0 && exactNames.Count == 0)
+            queries.Count == 0 && exactNames.Count == 0 &&
+            !allConstructionCandidates && !constructionStages)
         {
             PrintUsage();
             throw new ArgumentException(
                 "--install, --output, and at least one --query or --exact are required.");
         }
-        return new(install, output, queries.ToArray(), exactNames);
+        return new(
+            install, output, queries.ToArray(), exactNames,
+            allConstructionCandidates, constructionStages);
     }
 
     private static void PrintUsage()
@@ -219,6 +281,12 @@ internal sealed record Options(
         Console.Error.WriteLine(
             "Usage: IslandRpg.GraphicExport --install <Age2HD folder> " +
             "--output <folder> [--query <text> ...] [--exact <DAT name> ...]");
+        Console.Error.WriteLine(
+            "       IslandRpg.GraphicExport --install <folder> --output <folder> " +
+            "--all-construction-candidates");
+        Console.Error.WriteLine(
+            "       IslandRpg.GraphicExport --install <folder> --output <folder> " +
+            "--construction-stages");
         Console.Error.WriteLine(
             "Search terms match DAT graphic names and filenames; multiple " +
             "queries/exact names are combined.");

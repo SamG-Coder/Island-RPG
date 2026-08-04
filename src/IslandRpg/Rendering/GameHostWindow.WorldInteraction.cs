@@ -189,7 +189,7 @@ internal sealed partial class GameHostWindow
     {
         if (HouseCatalog.IsHouse(value.ItemId))
         {
-            atlasKey = HouseVisuals.AtlasKey(value.ItemId);
+            atlasKey = HouseVisuals.Resolve(value);
             shadowKey = null;
             texture = _treeAtlasTexture;
             if (_treeAtlas.TryGetValue(atlasKey, out var houseAtlas))

@@ -11,6 +11,7 @@ internal sealed partial class GameHostWindow
     private bool _buildingPanelOpen;
     private bool _buildingPanelLeftWasDown;
     private BuildingBrowserCategory? _buildingBrowserCategory;
+    private short? _buildingHouseGraphicId;
     private int _buildingBrowserScrollRow;
     private Guid? _activePlayerConstructionId;
     private int _lastPlayerConstructionStrike;
@@ -54,16 +55,16 @@ internal sealed partial class GameHostWindow
             ItemIds.WoodenWall),
         new(
             BuildingBrowserCategory.Defences,
-            "Stone wall",
-            "Strong defence · 3 large rocks",
-            BuildingRecipe(ItemIds.StoneWall),
-            ItemIds.StoneWall),
-        new(
-            BuildingBrowserCategory.Defences,
             "Fortified wooden wall",
             "Reinforced timber · 2 logs",
             BuildingRecipe(ItemIds.FortifiedWoodenWall),
             ItemIds.FortifiedWoodenWall),
+        new(
+            BuildingBrowserCategory.Defences,
+            "Stone wall",
+            "Strong defence · 3 large rocks",
+            BuildingRecipe(ItemIds.StoneWall),
+            ItemIds.StoneWall),
         new(
             BuildingBrowserCategory.Defences,
             "Fortified wall",
@@ -72,14 +73,25 @@ internal sealed partial class GameHostWindow
             ItemIds.FortifiedWall)
     }.Concat(HouseCatalog.All.Select(house => new BuildingBrowserEntry(
         BuildingBrowserCategory.Housing,
-        house.Name,
-        $"{house.LogCost} logs" +
+        HouseTileName(house),
+        $"{house.Name} - {house.LogCost} logs" +
         (house.RockCost > 0 ? $" - {house.RockCost} large rocks" : ""),
         BuildingRecipe(house.ItemId),
         house.ItemId))).ToArray();
 
     private static CraftingRecipe BuildingRecipe(string itemId) =>
         CraftingSkill.Recipes.First(value => value.ResultItemId == itemId);
+
+    private static string HouseTileName(HouseDefinition house)
+    {
+        var architecture = house.Architecture
+            .Replace("Advanced ", "Adv. ", StringComparison.Ordinal)
+            .Replace("Central European", "Central", StringComparison.Ordinal)
+            .Replace("Western European", "Western", StringComparison.Ordinal)
+            .Replace("Middle Eastern", "Middle East", StringComparison.Ordinal)
+            .Replace("Early shelter", "Shelter", StringComparison.Ordinal);
+        return $"{architecture} {house.Frame + 1}";
+    }
 
     private static CraftingRecipe WoodenWallRecipe =>
         BuildingRecipe(ItemIds.WoodenWall);
@@ -90,6 +102,7 @@ internal sealed partial class GameHostWindow
         if (_buildingPanelOpen)
         {
             _buildingBrowserCategory = null;
+            _buildingHouseGraphicId = null;
             _buildingBrowserScrollRow = 0;
         }
         CancelPlaceableObjectPlacement();
@@ -100,7 +113,7 @@ internal sealed partial class GameHostWindow
         var inventory = _gameUi.Panel.Bounds;
         const float gap = 6;
         var right = inventory.X - gap;
-        var width = MathF.Min(440, right - SceneClientBounds().X - 8);
+        var width = MathF.Min(560, right - SceneClientBounds().X - 8);
         return new(right - width, inventory.Y, width, inventory.W);
     }
 
@@ -111,6 +124,9 @@ internal sealed partial class GameHostWindow
 
     private static Vector4 BuildingGridBounds(Vector4 panel) =>
         new(panel.X + 12, panel.Y + 45, panel.Z - 24, panel.W - 57);
+
+    private static Vector4 BuildingBackButtonBounds(Vector4 panel) =>
+        new(panel.X + 12, panel.Y + 12, 56, 22);
 
     private static Vector4 BuildingGridTileBounds(Vector4 panel, int index)
     {
@@ -143,23 +159,44 @@ internal sealed partial class GameHostWindow
                     if (!BuildingGridTileBounds(panel, index).Contains(pointer))
                         continue;
                     _buildingBrowserCategory = categories[index];
+                    _buildingHouseGraphicId = null;
                     _buildingBrowserScrollRow = 0;
                     break;
                 }
             }
             else
             {
-                if (BuildingGridTileBounds(panel, 0).Contains(pointer))
+                if (BuildingBackButtonBounds(panel).Contains(pointer))
                 {
-                    _buildingBrowserCategory = null;
+                    if (_buildingBrowserCategory ==
+                            BuildingBrowserCategory.Housing &&
+                        _buildingHouseGraphicId is not null)
+                        _buildingHouseGraphicId = null;
+                    else
+                        _buildingBrowserCategory = null;
                     _buildingBrowserScrollRow = 0;
+                }
+                else if (_buildingBrowserCategory ==
+                             BuildingBrowserCategory.Housing &&
+                         _buildingHouseGraphicId is null)
+                {
+                    var groups = VisibleHouseArchitectureGroups();
+                    for (var index = 0; index < groups.Count; index++)
+                    {
+                        if (!BuildingGridTileBounds(panel, index)
+                                .Contains(pointer))
+                            continue;
+                        _buildingHouseGraphicId = groups[index].GraphicId;
+                        _buildingBrowserScrollRow = 0;
+                        break;
+                    }
                 }
                 else
                 {
                     var entries = VisibleBuildingEntries();
                     for (var index = 0; index < entries.Count; index++)
                     {
-                        if (!BuildingGridTileBounds(panel, index + 1)
+                        if (!BuildingGridTileBounds(panel, index)
                                 .Contains(pointer))
                             continue;
                         BeginPlayerBuildingPlacement(entries[index].Recipe);
@@ -182,10 +219,25 @@ internal sealed partial class GameHostWindow
         if (_buildingBrowserCategory is not { } category) return [];
         var entries = BuildingBrowserEntries
             .Where(value => value.Category == category)
+            .Where(value => category != BuildingBrowserCategory.Housing ||
+                _buildingHouseGraphicId is null ||
+                HouseCatalog.Get(value.ItemId).GraphicId ==
+                _buildingHouseGraphicId)
             .ToArray();
         var first = _buildingBrowserScrollRow * BuildingGridColumns;
-        var capacity = BuildingGridColumns * BuildingGridRows - 1;
+        var capacity = BuildingGridColumns * BuildingGridRows;
         return entries.Skip(first).Take(capacity).ToArray();
+    }
+
+    private IReadOnlyList<HouseDefinition> VisibleHouseArchitectureGroups()
+    {
+        var groups = HouseCatalog.All
+            .GroupBy(value => value.GraphicId)
+            .Select(group => group.First())
+            .ToArray();
+        var first = _buildingBrowserScrollRow * BuildingGridColumns;
+        return groups.Skip(first)
+            .Take(BuildingGridColumns * BuildingGridRows).ToArray();
     }
 
     private bool ScrollBuildingBrowser(Vector2 pointer, float offset)
@@ -194,9 +246,8 @@ internal sealed partial class GameHostWindow
             _buildingBrowserCategory is not { } category ||
             !BuildingPanelBounds().Contains(pointer))
             return false;
-        var count = BuildingBrowserEntries.Count(value =>
-            value.Category == category);
-        var visibleSlots = BuildingGridColumns * BuildingGridRows - 1;
+        var count = BrowserEntryCount(category);
+        var visibleSlots = BuildingGridColumns * BuildingGridRows;
         var maximumScrollRow = Math.Max(0,
             (count - visibleSlots + BuildingGridColumns - 1) /
             BuildingGridColumns);
@@ -205,6 +256,14 @@ internal sealed partial class GameHostWindow
             0, maximumScrollRow);
         return true;
     }
+
+    private int BrowserEntryCount(BuildingBrowserCategory category) =>
+        category == BuildingBrowserCategory.Housing
+            ? _buildingHouseGraphicId is { } graphicId
+                ? HouseCatalog.All.Count(value => value.GraphicId == graphicId)
+                : HouseCatalog.All.Select(value => value.GraphicId)
+                    .Distinct().Count()
+            : BuildingBrowserEntries.Count(value => value.Category == category);
 
     private void BeginPlayerBuildingPlacement(CraftingRecipe recipe)
     {
@@ -316,11 +375,6 @@ internal sealed partial class GameHostWindow
         if (_activeBuildingRecipe is not { } recipe ||
             !WallCatalog.IsWall(recipe.ResultItemId))
             return false;
-        if (_buildingPlacementAwaitingRelease)
-        {
-            if (!leftDown) _buildingPlacementAwaitingRelease = false;
-            return true;
-        }
         if (rightDown && !_gameRightWasDown)
         {
             CancelPlaceableObjectPlacement();
@@ -632,8 +686,14 @@ internal sealed partial class GameHostWindow
         DrawPanelCaption(
             _buildingBrowserCategory is null
                 ? "Construction"
-                : $"Construction · {_buildingBrowserCategory}",
+                : _buildingHouseGraphicId is { } graphicId
+                    ? HouseCatalog.All.First(value =>
+                        value.GraphicId == graphicId).Architecture
+                    : _buildingBrowserCategory.ToString()!,
             panel);
+
+        if (_buildingBrowserCategory is not null)
+            DrawBuildingBrowserBack(panel);
 
         if (_buildingBrowserCategory is null)
         {
@@ -649,26 +709,54 @@ internal sealed partial class GameHostWindow
             return;
         }
 
-        DrawBuildingBrowserTile(
-            BuildingGridTileBounds(panel, 0), "Back", "Categories",
-            itemId: null);
+        if (_buildingBrowserCategory == BuildingBrowserCategory.Housing &&
+            _buildingHouseGraphicId is null)
+        {
+            var groups = VisibleHouseArchitectureGroups();
+            for (var index = 0; index < groups.Count; index++)
+            {
+                var house = groups[index];
+                DrawBuildingBrowserTile(
+                    BuildingGridTileBounds(panel, index),
+                    HouseArchitectureTileName(house.Architecture),
+                    $"3 {house.Architecture} variants",
+                    house.ItemId);
+            }
+            DrawBuildingBrowserScrollbar(panel);
+            return;
+        }
+
         var entries = VisibleBuildingEntries();
         for (var index = 0; index < entries.Count; index++)
         {
             var entry = entries[index];
             DrawBuildingBrowserTile(
-                BuildingGridTileBounds(panel, index + 1),
+                BuildingGridTileBounds(panel, index),
                 entry.Name, entry.Description, entry.ItemId);
         }
         DrawBuildingBrowserScrollbar(panel);
     }
 
+    private void DrawBuildingBrowserBack(Vector4 panel)
+    {
+        var bounds = BuildingBackButtonBounds(panel);
+        var hovered = bounds.Contains(MouseState.Position);
+        DrawUiColor(bounds, hovered
+            ? new(.16f, .13f, .065f, .82f)
+            : new(.012f, .011f, .009f, .58f));
+        DrawPanelOutline(bounds, 1, hovered
+            ? new(.72f, .54f, .20f, 1)
+            : new(.38f, .30f, .15f, 1));
+        DrawSmallCenteredUiText(
+            "Back", bounds, new(232, 219, 177, 255));
+        if (hovered) DrawUiHoverTooltip("Back", bounds);
+    }
+
     private void DrawBuildingBrowserScrollbar(Vector4 panel)
     {
         if (_buildingBrowserCategory is not { } category) return;
-        var count = BuildingBrowserEntries.Count(value =>
-            value.Category == category);
-        var visibleSlots = BuildingGridColumns * BuildingGridRows - 1;
+        var count = BrowserEntryCount(category);
+        var visibleSlots = BuildingGridColumns * BuildingGridRows;
         var maximumScrollRow = Math.Max(0,
             (count - visibleSlots + BuildingGridColumns - 1) /
             BuildingGridColumns);
@@ -683,6 +771,14 @@ internal sealed partial class GameHostWindow
             track.Z, thumbHeight);
         DrawUiColor(thumb, new(.62f, .48f, .19f, 1));
     }
+
+    private static string HouseArchitectureTileName(string architecture) =>
+        architecture
+            .Replace("Advanced ", "Adv. ", StringComparison.Ordinal)
+            .Replace("Central European", "Central", StringComparison.Ordinal)
+            .Replace("Western European", "Western", StringComparison.Ordinal)
+            .Replace("Middle Eastern", "Middle East", StringComparison.Ordinal)
+            .Replace("Early shelter", "Shelter", StringComparison.Ordinal);
 
     private void DrawBuildingBrowserTile(
         Vector4 bounds, string name, string description, string? itemId)
@@ -699,7 +795,7 @@ internal sealed partial class GameHostWindow
             DrawBuildingBrowserIcon(icon, itemId);
         else
             DrawCenteredUiText("<", icon, new(232, 219, 177, 255));
-        DrawCenteredUiText(
+        DrawSmallCenteredUiText(
             name, new(bounds.X + 2, bounds.Y + 47, bounds.Z - 4, 17),
             new(236, 222, 178, 255));
         if (hovered)
@@ -728,6 +824,10 @@ internal sealed partial class GameHostWindow
                 width,
                 height),
             brightness: .08f,
+            spriteOutline: Vector3.Zero,
+            spriteTexelSize: new(
+                (wall.U1 - wall.U0) / Math.Max(1, wall.Frame.Width),
+                (wall.V1 - wall.V0) / Math.Max(1, wall.Frame.Height)),
             uvRectangle: new(
                 wall.U0, wall.V0,
                 wall.U1 - wall.U0,
@@ -756,6 +856,10 @@ internal sealed partial class GameHostWindow
                 bounds.Y + (bounds.W - height) * .5f,
                 width, height),
             brightness: .08f,
+            spriteOutline: Vector3.Zero,
+            spriteTexelSize: new(
+                (house.U1 - house.U0) / Math.Max(1, house.Frame.Width),
+                (house.V1 - house.V0) / Math.Max(1, house.Frame.Height)),
             uvRectangle: new(
                 house.U0, house.V0,
                 house.U1 - house.U0,

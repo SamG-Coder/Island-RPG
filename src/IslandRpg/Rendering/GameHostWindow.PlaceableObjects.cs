@@ -35,6 +35,12 @@ internal sealed partial class GameHostWindow
             _placeableObjectPlacement.ItemId is not { } itemId)
             return false;
 
+        if (_buildingPlacementAwaitingRelease)
+        {
+            if (!leftDown) _buildingPlacementAwaitingRelease = false;
+            return true;
+        }
+
         if (_activeBuildingRecipe is { } buildingRecipe &&
             WallCatalog.IsWall(buildingRecipe.ResultItemId))
             return UpdateWallPlacementInput(leftDown, rightDown);

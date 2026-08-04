@@ -6004,6 +6004,7 @@ internal sealed partial class GameHostWindow : GameWindow
         float drawOpacity = 1,
         int teamColor = 0,
         Vector3? spriteOutline = null,
+        Vector2? spriteTexelSize = null,
         float sceneDarkness = 0,
         IReadOnlyList<UiSpriteLight>? localLights = null)
     {
@@ -6067,8 +6068,10 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.Uniform1(
             _shaderUniforms.Get(_program, "grayscaleAmount"),
             grayscaleAmount);
-        GL.Uniform2(_shaderUniforms.Get(_program, "texelSize"),
+        var texelSize = spriteTexelSize ?? new Vector2(
             1f / frame.Width, 1f / frame.Height);
+        GL.Uniform2(
+            _shaderUniforms.Get(_program, "texelSize"), texelSize);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, texture);
         SetPlayerRecolor(teamColor);
@@ -6346,7 +6349,7 @@ internal sealed partial class GameHostWindow : GameWindow
             }
             else if (HouseCatalog.IsHouse(item.Object.ItemId))
             {
-                itemAtlasKey = HouseVisuals.AtlasKey(item.Object.ItemId);
+                itemAtlasKey = HouseVisuals.Resolve(item.Object);
                 shadowAtlasKey = null;
             }
             else
