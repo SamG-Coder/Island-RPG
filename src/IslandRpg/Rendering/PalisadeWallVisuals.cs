@@ -28,11 +28,9 @@ internal static class PalisadeWallVisuals
         var stage = ConstructionService.Stage(value);
         if (stage == ConstructionStage.Complete)
             return (WallFrame(frame), ShadowFrame(frame));
-        // The single/corner wall has only one authored unfinished base.
-        // Other directions retain their existing construction transitions.
-        var stageIndex = frame == FrontFrame
-            ? (int)ConstructionStage.Planned
-            : (int)stage;
+        // Wooden palisades have one authored base per direction and then the
+        // completed wall. Later WCON2 stages belong to stone construction.
+        const int stageIndex = (int)ConstructionStage.Planned;
         return (
             $"WCON2NNW#{frame * 4 + stageIndex}",
             $"WCON2N0W#{frame * 4 + stageIndex}");

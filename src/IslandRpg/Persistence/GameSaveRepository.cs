@@ -102,6 +102,7 @@ internal sealed record GameSettings(
     bool MusicEnabled = true,
     float EffectsVolume = .85f,
     bool UseTestAssets = false,
+    bool UnlimitedBuildMode = false,
     bool UnlimitedZoom = true,
     ChatDisplaySize ChatSize = ChatDisplaySize.Small,
     bool WrapChatText = true,

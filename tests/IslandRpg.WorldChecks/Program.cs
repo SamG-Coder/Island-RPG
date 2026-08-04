@@ -2858,6 +2858,27 @@ Require(
     woodenWallDefinition.GroundContactWidth > 0 &&
     woodenWallDefinition.GroundContactDepth > 0,
     "wooden walls must select a stable AoE direction and expose collision from their planned stage");
+var wallStoredPosition = new Vector2(12.5f, 8.5f);
+PlaceableObjectCatalog.TryGet(
+    ItemIds.WoodenWall, out var wallInteractionDefinition);
+var wallContactCenter = PlaceableObjectCatalog.GroundContactCenter(
+    ItemIds.WoodenWall, wallStoredPosition);
+var diagonalBuilder = wallContactCenter + new Vector2(4, 4);
+var diagonalWorkPoint = PlaceableObjectCatalog.ClosestInteractionPoint(
+    ItemIds.WoodenWall, wallStoredPosition, diagonalBuilder);
+var sideBuilder = wallContactCenter + new Vector2(-4, .1f);
+var sideWorkPoint = PlaceableObjectCatalog.ClosestInteractionPoint(
+    ItemIds.WoodenWall, wallStoredPosition, sideBuilder);
+Require(
+    diagonalWorkPoint.X > wallContactCenter.X &&
+    diagonalWorkPoint.Y > wallContactCenter.Y &&
+    MathF.Abs(diagonalWorkPoint.X - wallContactCenter.X -
+        (wallInteractionDefinition!.GroundContactWidth * .5f + .32f)) < .001f &&
+    MathF.Abs(diagonalWorkPoint.Y - wallContactCenter.Y -
+        (wallInteractionDefinition.GroundContactDepth * .5f + .32f)) < .001f &&
+    sideWorkPoint.X < wallContactCenter.X &&
+    MathF.Abs(sideWorkPoint.Y - sideBuilder.Y) < .001f,
+    "player and NPC builders must approach the nearest wall edge or diagonal corner without entering its blocked tile");
 Require(
     PalisadeWallVisuals.WallGraphic == "WALL1N1G" &&
     PalisadeWallVisuals.WallGraphicId == 587 &&

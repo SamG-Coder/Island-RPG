@@ -449,6 +449,18 @@ internal sealed partial class GameHostWindow
                 _useTestAssetsToggle.HitTest(MouseState.Position);
             DrawToggleControl(_useTestAssetsToggle);
         }
+        if (list.VisibleIndices.Contains(
+                DeveloperSettingsController.UnlimitedBuildIndex))
+        {
+            _unlimitedBuildToggle.SetChecked(
+                _saves.LoadSettings().UnlimitedBuildMode);
+            _unlimitedBuildToggle.Layout(
+                DeveloperSettingsController.UnlimitedBuildBounds(list),
+                horizontalInset: 0);
+            _unlimitedBuildToggle.Hovered =
+                _unlimitedBuildToggle.HitTest(MouseState.Position);
+            DrawToggleControl(_unlimitedBuildToggle);
+        }
         RenderDeveloperSection(
             list,
             DeveloperSettingsController.ProgressionHeaderIndex,

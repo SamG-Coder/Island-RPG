@@ -177,6 +177,41 @@ internal static class PlaceableObjectCatalog
         return storedPosition + new Vector2(forward, forward);
     }
 
+    public static Vector2 ClosestInteractionPoint(
+        string itemId,
+        Vector2 storedPosition,
+        Vector2 actorPosition,
+        float clearance = .32f)
+    {
+        if (!TryGet(itemId, out var definition))
+            return storedPosition;
+
+        var center = GroundContactCenter(itemId, storedPosition);
+        var halfWidth = definition.GroundContactWidth * .5f + clearance;
+        var halfDepth = definition.GroundContactDepth * .5f + clearance;
+        var relative = actorPosition - center;
+        var outsideX = MathF.Abs(relative.X) > halfWidth;
+        var outsideY = MathF.Abs(relative.Y) > halfDepth;
+
+        if (outsideX || outsideY)
+        {
+            return center + new Vector2(
+                Math.Clamp(relative.X, -halfWidth, halfWidth),
+                Math.Clamp(relative.Y, -halfDepth, halfDepth));
+        }
+
+        var left = relative.X + halfWidth;
+        var right = halfWidth - relative.X;
+        var top = relative.Y + halfDepth;
+        var bottom = halfDepth - relative.Y;
+        var nearest = MathF.Min(MathF.Min(left, right), MathF.Min(top, bottom));
+        if (nearest == left) relative.X = -halfWidth;
+        else if (nearest == right) relative.X = halfWidth;
+        else if (nearest == top) relative.Y = -halfDepth;
+        else relative.Y = halfDepth;
+        return center + relative;
+    }
+
     public static Vector2 SnapToGrid(
         string itemId, Vector2 target)
     {

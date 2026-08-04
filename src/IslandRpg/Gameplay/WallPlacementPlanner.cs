@@ -135,6 +135,7 @@ internal static class WallPlacementPlanner
             : WallDragOrientation.VerticalFirst;
     }
 
+
     private static void AppendSteps(
         List<Vector2> result,
         ref int x, ref int y,

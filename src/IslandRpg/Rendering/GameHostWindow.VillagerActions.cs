@@ -1769,10 +1769,10 @@ internal sealed partial class GameHostWindow
 
         var target = new Vector2(site.Object.X, site.Object.Y);
         var position = new Vector2(villager.PositionX, villager.PositionY);
-        if (Vector2.DistanceSquared(position, target) > 1.55f * 1.55f)
+        var workPosition = PlaceableObjectCatalog.ClosestInteractionPoint(
+            site.Object.ItemId, target, position);
+        if (Vector2.DistanceSquared(position, workPosition) > .3f * .3f)
         {
-            var workPosition = VillagerSettlementProjectService
-                .RendezvousPoint(target, villager.Id, isBuilder: false);
             MoveVillagerForCapability(
                 index, villager, tier, workPosition, VillagerNeed.Safe);
             return true;

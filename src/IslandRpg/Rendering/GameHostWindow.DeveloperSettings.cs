@@ -18,6 +18,9 @@ internal sealed partial class GameHostWindow
     private readonly ToggleControlState _useTestAssetsToggle = new(
         "Use Test Assets",
         "Load Resources/Images/TestAssets after restarting.");
+    private readonly ToggleControlState _unlimitedBuildToggle = new(
+        "Unlimited Build Mode",
+        "Place developer buildings without consuming resources.");
 
     private bool UpdateDeveloperSettings(
         Vector2 pointer, Vector4 panel)
@@ -36,6 +39,10 @@ internal sealed partial class GameHostWindow
         _useTestAssetsToggle.SetChecked(settings.UseTestAssets);
         _useTestAssetsToggle.Layout(
             DeveloperSettingsController.UseTestAssetsBounds(list),
+            horizontalInset: 0);
+        _unlimitedBuildToggle.SetChecked(settings.UnlimitedBuildMode);
+        _unlimitedBuildToggle.Layout(
+            DeveloperSettingsController.UnlimitedBuildBounds(list),
             horizontalInset: 0);
         if (_activePlayer is not null &&
             list.VisibleIndices.Contains(
@@ -113,6 +120,16 @@ internal sealed partial class GameHostWindow
             _chatUi.AddMessage(
                 "Asset source change will apply after restarting the game.",
                 ChatMessageStyle.Action);
+            return true;
+        }
+        if (list.VisibleIndices.Contains(
+                DeveloperSettingsController.UnlimitedBuildIndex) &&
+            _unlimitedBuildToggle.ToggleAt(pointer))
+        {
+            _saves.SaveSettings(settings with
+            {
+                UnlimitedBuildMode = _unlimitedBuildToggle.IsChecked
+            });
             return true;
         }
         var changed = _developerSettings.TryUpdate(

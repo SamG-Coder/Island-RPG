@@ -81,19 +81,43 @@ internal sealed partial class GameHostWindow
             ChatMessageStyle.Action);
     }
 
-    private bool CanAffordBuilding(CraftingRecipe recipe) =>
-        _activePlayer is not null &&
-        CraftingService.TryConsumeForPlacement(
+    private bool UnlimitedBuildModeEnabled =>
+        _settingsMenu.DeveloperModeEnabled &&
+        _saves.LoadSettings().UnlimitedBuildMode;
+
+    private CraftingService.CraftResult TryConsumeBuildingMaterials(
+        CraftingRecipe recipe,
+        out InventoryContainer inventory,
+        int placements = 1)
+    {
+        if (_activePlayer is not { } player)
+        {
+            inventory = new(PlayerInventory.Capacity);
+            return CraftingService.CraftResult.MissingResources;
+        }
+        if (UnlimitedBuildModeEnabled)
+        {
+            inventory = ActivePlayerInventory();
+            return CraftingService.CraftResult.Success;
+        }
+        return CraftingService.TryConsumeForPlacement(
             recipe,
             CraftingSkill.LevelForExperience(
-                _activePlayer.CraftingExperience),
-            ActivePlayerInventory(), out _,
-            HasRequiredCraftingStation(recipe)) ==
-        CraftingService.CraftResult.Success;
+                player.CraftingExperience),
+            ActivePlayerInventory(), out inventory,
+            HasRequiredCraftingStation(recipe), placements);
+    }
+
+    private bool CanAffordBuilding(CraftingRecipe recipe) =>
+        _activePlayer is not null &&
+        TryConsumeBuildingMaterials(recipe, out _) ==
+            CraftingService.CraftResult.Success;
 
     private int AffordableBuildingCount(CraftingRecipe recipe)
     {
         if (_activePlayer is null) return 0;
+        if (UnlimitedBuildModeEnabled)
+            return WallPlacementPlanner.MaximumSegments;
         var inventory = ActivePlayerInventory();
         var count = 0;
         while (count < WallPlacementPlanner.MaximumSegments &&
@@ -229,12 +253,8 @@ internal sealed partial class GameHostWindow
             resolved.Add((gpu, node.Target, node.Frame));
         }
 
-        var result = CraftingService.TryConsumeForPlacement(
-            recipe,
-            CraftingSkill.LevelForExperience(
-                _activePlayer.CraftingExperience),
-            ActivePlayerInventory(), out var inventory,
-            HasRequiredCraftingStation(recipe), valid.Length);
+        var result = TryConsumeBuildingMaterials(
+            recipe, out var inventory, valid.Length);
         if (result != CraftingService.CraftResult.Success) return false;
 
         var placed = new List<(GpuWorldChunk Chunk, WorldGroundObject Object)>(
@@ -340,12 +360,8 @@ internal sealed partial class GameHostWindow
             ReportBlockedAction("building-location-blocked", reason);
             return false;
         }
-        var result = CraftingService.TryConsumeForPlacement(
-            recipe,
-            CraftingSkill.LevelForExperience(
-                _activePlayer.CraftingExperience),
-            ActivePlayerInventory(), out var inventory,
-            HasRequiredCraftingStation(recipe));
+        var result = TryConsumeBuildingMaterials(
+            recipe, out var inventory);
         if (result != CraftingService.CraftResult.Success)
         {
             ReportBlockedAction(
@@ -401,8 +417,10 @@ internal sealed partial class GameHostWindow
             !ConstructionService.IsConstructionSite(site))
             return;
         if (!preserveSequence) _playerConstructionQueue.Clear();
-        var target = new Vector2(site.X, site.Y);
-        const float interactionRange = .8f;
+        var sitePosition = new Vector2(site.X, site.Y);
+        var target = PlaceableObjectCatalog.ClosestInteractionPoint(
+            site.ItemId, sitePosition, _player.Position);
+        const float interactionRange = .24f;
         if ((_player.Position - target).Length <= interactionRange)
             BeginPlayerConstructionWork(site.Id);
         else
