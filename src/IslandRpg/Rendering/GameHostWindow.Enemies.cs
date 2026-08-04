@@ -254,7 +254,7 @@ internal sealed partial class GameHostWindow
             anchor.Y + (frame.Height - frame.HotspotY) * scale);
     }
 
-    private static string EnemyDisplayName(EnemyKind kind) => kind switch
+    internal static string EnemyDisplayName(EnemyKind kind) => kind switch
     {
         EnemyKind.WaterSlime => "Water slime",
         EnemyKind.GrassSlime => "Grass slime",

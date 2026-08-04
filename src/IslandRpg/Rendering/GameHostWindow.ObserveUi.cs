@@ -265,6 +265,11 @@ internal sealed partial class GameHostWindow
         var plans = VillagerPromisePlanService.PlansFor(villager).Count;
         var totalSkillLevel = ObserveSkillEntries.Sum(entry =>
             VillagerSkillService.Level(villager, entry.Skill));
+        var relationshipSummary = VillagerRelationshipClassifier.Summarize(
+            villager.Relationships, villager.RecognizedLeaderId);
+        var attractions = villager.Relationships?.Count(relationship =>
+            RelationshipAttraction(villager, relationship) !=
+            VillagerAttractionLevel.None) ?? 0;
         string[] left =
         [
             $"Status: {phase} / {villager.Action}",
@@ -277,6 +282,9 @@ internal sealed partial class GameHostWindow
             $"Energy: {villager.Energy:0.0}",
             $"Move efficiency: {VillagerFatigueService.MovementEffectiveness(villager.Energy):P0}",
             $"Work efficiency: {VillagerFatigueService.WorkEffectiveness(villager.Energy):P0}",
+            VillagerAdrenalineService.IsActive(villager, _worldGameSeconds)
+                ? $"Adrenaline: active · Stress {villager.AdrenalineStress:0}/100"
+                : $"Stress: {villager.AdrenalineStress:0}/100",
             $"Replan in: {VillagerStatusService.SecondsUntilDecision(villager, _worldGameSeconds):0.0}s",
             $"Action time: {villager.ActionTime:0.0}s",
             $"Blocked attempts: {villager.BlockedMoveAttempts}",
@@ -288,7 +296,7 @@ internal sealed partial class GameHostWindow
             $"Food carried: {VillagerSimulation.CountFood(villager.Inventory)}",
             $"Total skill level: {totalSkillLevel}",
             $"Goals/promises/plans: {goal}/{promises}/{plans}",
-            $"Relationships: {villager.Relationships?.Count ?? 0}",
+            $"F/B/R/E/A: {relationshipSummary.Friends}/{relationshipSummary.CloseBonds}/{relationshipSummary.Rivals}/{relationshipSummary.Enemies}/{attractions}",
             $"Memories: {villager.Memories?.Count ?? 0}",
             $"Location memories: {villager.LocationMemories?.Count ?? 0}",
             $"Known people: {villager.KnownPeople?.Count ?? 0}",

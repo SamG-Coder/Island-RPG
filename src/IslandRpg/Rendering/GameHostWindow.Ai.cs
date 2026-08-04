@@ -967,6 +967,8 @@ internal sealed partial class GameHostWindow
                 relationships[relationshipIndex] = updated;
             else
                 relationships.Add(updated);
+            ReportPlayerRelationshipTransition(
+                villager, existing.State, state);
             villager = villager with
             {
                 Relationships = relationships
@@ -1221,7 +1223,7 @@ internal sealed partial class GameHostWindow
                 character is '-' or '\''));
     }
 
-    private static string RelationshipDescription(
+    private string RelationshipDescription(
         VillagerState observer,
         string subjectId)
     {
@@ -1229,8 +1231,41 @@ internal sealed partial class GameHostWindow
             observer.Relationships?.FirstOrDefault(value =>
                 value.CharacterId == subjectId)?.State ??
             default;
-        if (relationship.Trust < -20) return "distrusts";
-        if (relationship.Trust > 20) return "trusts";
-        return "neutral";
+        var description = VillagerRelationshipClassifier.PromptDescription(
+            relationship,
+            observer.RecognizedLeaderId == subjectId);
+        var subjectGender = _villagers.FirstOrDefault(value =>
+                value.Id == subjectId)?.Gender ??
+            (_activePlayer?.Id == subjectId
+                ? _activePlayer.Gender
+                : (EntityGender?)null);
+        if (subjectGender is null) return description;
+        return VillagerRelationshipClassifier.Attraction(
+            observer.Id, observer.Gender,
+            subjectId, subjectGender.Value, relationship) switch
+        {
+            VillagerAttractionLevel.Interest =>
+                $"feels a tentative romantic attraction toward and {description}",
+            VillagerAttractionLevel.Attracted =>
+                $"is romantically attracted to and {description}",
+            VillagerAttractionLevel.Devoted =>
+                $"is deeply romantically attached to and {description}",
+            _ => description
+        };
+    }
+
+    private void ReportPlayerRelationshipTransition(
+        VillagerState villager,
+        in RelationshipState before,
+        in RelationshipState after)
+    {
+        if (_activePlayer is null) return;
+        var transition = VillagerRelationshipClassifier.Transition(
+            villager.Id, villager.Gender,
+            _activePlayer.Id, _activePlayer.Gender,
+            before, after,
+            villager.RecognizedLeaderId == _activePlayer.Id);
+        if (transition.PlayerMessage(villager.Name) is { } message)
+            _chatUi.AddMessage(message, ChatMessageStyle.Action);
     }
 }

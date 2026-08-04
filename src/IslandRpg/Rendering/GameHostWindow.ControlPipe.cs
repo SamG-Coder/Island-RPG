@@ -727,6 +727,8 @@ internal sealed partial class GameHostWindow
                     value.ItemId,
                     value.X,
                     value.Y,
+                    value.OwnerId,
+                    value.GroupOwnerId,
                     state = ControlGroundObjectState(value),
                     actions = ControlGroundObjectActions(value),
                     distance = Vector2.Distance(
@@ -1777,6 +1779,26 @@ internal sealed partial class GameHostWindow
                 _settlementGroup.LeaderId,
                 _settlementGroup.MemberIds,
                 openingStage = _settlementGroup.OpeningStage.ToString(),
+                justice = _settlementGroup.ActiveJusticeCase is null
+                    ? null
+                    : new
+                    {
+                        severity = _settlementGroup.ActiveJusticeCase.Severity.ToString(),
+                        outcome = _settlementGroup.ActiveJusticeCase.Outcome.ToString(),
+                        _settlementGroup.ActiveJusticeCase.AttackerId,
+                        _settlementGroup.ActiveJusticeCase.VictimId,
+                        _settlementGroup.ActiveJusticeCase.RecentAttackCount,
+                        _settlementGroup.ActiveJusticeCase.RestitutionRemaining,
+                        _settlementGroup.ActiveJusticeCase.Resolved
+                    },
+                exclusion = _settlementGroup.Exclusion is null
+                    ? null
+                    : new
+                    {
+                        stage = _settlementGroup.Exclusion.Stage.ToString(),
+                        _settlementGroup.Exclusion.DeadlineGameSeconds,
+                        _settlementGroup.Exclusion.Entries
+                    },
                 camp = new
                 {
                     X = _settlementGroup.CampX,
@@ -1790,6 +1812,12 @@ internal sealed partial class GameHostWindow
                 villager.Health,
                 villager.Hunger,
                 villager.Energy,
+                adrenalineActive = VillagerAdrenalineService.IsActive(
+                    villager, _worldGameSeconds),
+                villager.AdrenalineStress,
+                villager.AdrenalineCooldownUntilGameSeconds,
+                conflictIntent = villager.ConflictIntent.ToString(),
+                villager.ConflictMotive,
                 villager.Activity,
                 villager.ActivityUntilGameSeconds,
                 villager.NextDecisionGameSeconds,
@@ -1800,6 +1828,24 @@ internal sealed partial class GameHostWindow
                 villager.LastDeliberation,
                 villager.Promises,
                 villager.ActionPlan,
+                relationships = villager.Relationships?.Select(relationship =>
+                    new
+                    {
+                        relationship.CharacterId,
+                        kind = VillagerRelationshipClassifier.Classify(
+                                relationship.State,
+                                relationship.CharacterId ==
+                                villager.RecognizedLeaderId)
+                            .ToString(),
+                        attraction = RelationshipAttraction(
+                            villager, relationship).ToString(),
+                        relationship.State.Trust,
+                        relationship.State.Affection,
+                        relationship.State.Respect,
+                        relationship.State.Fear,
+                        relationship.State.Gratitude,
+                        relationship.State.Resentment
+                    }),
                 conversation = villager.ConversationHistory?.TakeLast(6)
             })
         });
@@ -1820,6 +1866,23 @@ internal sealed partial class GameHostWindow
 
     private static string Error(string error) =>
         JsonSerializer.Serialize(new { ok = false, error });
+
+    private VillagerAttractionLevel RelationshipAttraction(
+        VillagerState observer,
+        VillagerRelationship relationship)
+    {
+        var subjectGender = _villagers.FirstOrDefault(value =>
+                value.Id == relationship.CharacterId)?.Gender ??
+            (_activePlayer?.Id == relationship.CharacterId
+                ? _activePlayer.Gender
+                : (EntityGender?)null);
+        return subjectGender is { } gender
+            ? VillagerRelationshipClassifier.Attraction(
+                observer.Id, observer.Gender,
+                relationship.CharacterId, gender,
+                relationship.State)
+            : VillagerAttractionLevel.None;
+    }
 }
 
 internal static class ControlTargetSelection

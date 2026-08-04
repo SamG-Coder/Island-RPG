@@ -17,6 +17,7 @@ internal sealed partial class GameHostWindow
     private Vector2 _enemyCombatPathTarget;
     private readonly Dictionary<string, double>
         _villagerAttackReactionAt = [];
+    private double _nextSettlementExclusionCheckAt;
     private readonly EntityActionCooldowns _actionCooldowns = new();
     private double _nextMeleeAttackAt;
     private double _swingStartedForAttackAt;
@@ -35,7 +36,12 @@ internal sealed partial class GameHostWindow
             FindGroundObject(dummyId) is not { } dummy ||
             dummy.ItemId != ItemIds.TrainingDummy)
             return;
+        var targetChanged = _combatTargetId != dummyId ||
+                            _combatVillagerId is not null ||
+                            _combatEnemyId is not null;
         _combatTargetId = dummyId;
+        _combatVillagerId = null;
+        _combatEnemyId = null;
         var target = new Vector2(dummy.X, dummy.Y);
         var readyAt = PlayerMeleeReadyAt();
         if (readyAt <= _clock)
@@ -50,8 +56,9 @@ internal sealed partial class GameHostWindow
             // but must never restart the animation or its impact timing.
             _player.AttackAt(target);
         }
-        _chatUi.AddMessage(
-            "You begin attacking the training dummy.",
+        AnnounceCombatTarget(
+            targetChanged,
+            "the training dummy",
             ChatMessageStyle.Action);
     }
 
@@ -66,8 +73,14 @@ internal sealed partial class GameHostWindow
         var villager = _villagers[index];
         var target = new Vector2(
             villager.PositionX, villager.PositionY);
+        var targetChanged = _combatVillagerId != villager.Id ||
+                            _combatTargetId is not null ||
+                            _combatEnemyId is not null;
         _combatTargetId = null;
         _combatVillagerId = villager.Id;
+        _combatEnemyId = null;
+        AnnounceCombatTarget(
+            targetChanged, villager.Name, ChatMessageStyle.Warning);
         if (Vector2.Distance(_player.Position, target) >
             MeleeCombatService.AttackRange + .3f)
         {
@@ -87,9 +100,6 @@ internal sealed partial class GameHostWindow
             _swingStartedForAttackAt = 0;
             _player.AttackAt(target);
         }
-        _chatUi.AddMessage(
-            $"You begin attacking {villager.Name}.",
-            ChatMessageStyle.Warning);
     }
 
     internal void BeginEnemyCombat(Guid enemyId)
@@ -99,9 +109,16 @@ internal sealed partial class GameHostWindow
             value.Id == enemyId && value.Alive &&
             value.WorldLevel == _activeWorldLevel);
         if (enemy is null) return;
+        var targetChanged = _combatEnemyId != enemy.Id ||
+                            _combatTargetId is not null ||
+                            _combatVillagerId is not null;
         _combatTargetId = null;
         _combatVillagerId = null;
         _combatEnemyId = enemy.Id;
+        AnnounceCombatTarget(
+            targetChanged,
+            EnemyDisplayName(enemy.Kind).ToLowerInvariant(),
+            ChatMessageStyle.Warning);
         if (Vector2.Distance(_player.Position, enemy.Position) >
             MeleeCombatService.AttackRange + .3f)
         {
@@ -109,9 +126,16 @@ internal sealed partial class GameHostWindow
             return;
         }
         StartPlayerMeleeSwing(enemy.Position);
-        _chatUi.AddMessage(
-            $"You begin attacking {EnemyDisplayName(enemy.Kind).ToLowerInvariant()}.",
-            ChatMessageStyle.Warning);
+    }
+
+    internal void AnnounceCombatTarget(
+        bool targetChanged,
+        string targetName,
+        ChatMessageStyle style)
+    {
+        if (targetChanged)
+            _chatUi.AddMessage(
+                $"You begin attacking {targetName}.", style);
     }
 
     private bool HasMeleeCombatTarget =>
@@ -467,6 +491,8 @@ internal sealed partial class GameHostWindow
             return;
         }
         ApplyPlayerCombatExperience(interaction.Experience);
+        var relationshipBefore = villager.Relationships?.FirstOrDefault(value =>
+            value.CharacterId == _activePlayer.Id)?.State ?? default;
         villager = VillagerSimulation.RecordAttack(
             villager,
             _activePlayer.Id,
@@ -474,11 +500,16 @@ internal sealed partial class GameHostWindow
                 villager, _activePlayer.Id),
             roll.Damage,
             _worldGameSeconds);
+        var relationshipAfter = villager.Relationships?.FirstOrDefault(value =>
+            value.CharacterId == _activePlayer.Id)?.State ?? default;
+        ReportPlayerRelationshipTransition(
+            villager, relationshipBefore, relationshipAfter);
         ShowEntityImpact(
             VillagerFeedbackKey(villager.Id), roll.Damage, true);
         _villagers[index] = villager;
         _villagersDirty = true;
         ReactToVillagerAttack(index);
+        EscalateSettlementJustice(index);
         _chatUi.AddMessage(
             $"You hit {villager.Name} for {roll.Damage}.",
             ChatMessageStyle.Damage);
@@ -536,10 +567,14 @@ internal sealed partial class GameHostWindow
                 "Stop! Why are you attacking me?");
         }
 
-        var closestWitnessIndex = -1;
-        var closestDistance = float.MaxValue;
+        var spokespersonIndex = -1;
+        var spokespersonPriority = int.MinValue;
+        string? spokespersonMessage = null;
         var attackedPosition = new Vector2(
             victim.PositionX, victim.PositionY);
+        var attackerArmed = _activePlayer.Inventory?.Any(itemId =>
+            itemId is not null &&
+            ItemCatalog.Get(itemId).HasTag(ItemTag.Weapon)) == true;
         for (var index = 0; index < _villagers.Count; index++)
         {
             if (index == victimIndex) continue;
@@ -560,20 +595,115 @@ internal sealed partial class GameHostWindow
                 VillagerSimulation.PerceivedName(
                     witness, victim.Id),
                 _worldGameSeconds);
+            var reaction = VillagerWitnessResponseService.Decide(
+                witness, victim, _activePlayer.Id, attackerArmed);
+            witness = ApplyPlayerAttackWitnessResponse(
+                witness, victim, reaction);
             _villagers[index] = witness;
-            if (distance >= closestDistance) continue;
-            closestDistance = distance;
-            closestWitnessIndex = index;
+            ObserveLog("player_attack_witness", witness.Id, new
+            {
+                VictimId = victim.Id,
+                Intent = reaction.Intent.ToString(),
+                reaction.Thought,
+                Armed = attackerArmed
+            });
+            var priority = reaction.Priority -
+                           (int)MathF.Round(MathF.Sqrt(distance));
+            if (reaction.Intent == VillagerWitnessIntent.Ignore ||
+                priority <= spokespersonPriority)
+                continue;
+            spokespersonIndex = index;
+            spokespersonPriority = priority;
+            spokespersonMessage = WitnessReactionLine(
+                witness, victim, reaction.Intent);
         }
-        if (closestWitnessIndex >= 0)
-        {
-            var witness = _villagers[closestWitnessIndex];
+        if (spokespersonIndex >= 0 && spokespersonMessage is not null)
             ShowVillagerCombatReaction(
-                closestWitnessIndex,
-                $"Stop attacking {VillagerSimulation.PerceivedName(
-                    witness, victim.Id)}!");
-        }
+                spokespersonIndex, spokespersonMessage);
         _villagersDirty = true;
+    }
+
+    private VillagerState ApplyPlayerAttackWitnessResponse(
+        VillagerState witness,
+        VillagerState victim,
+        VillagerWitnessDecision reaction)
+    {
+        var position = new Vector2(witness.PositionX, witness.PositionY);
+        if (reaction.Intent == VillagerWitnessIntent.Protect)
+            return witness with
+            {
+                ConflictTargetId = _activePlayer!.Id,
+                ConflictIntent = VillagerConflictIntent.Defend,
+                ConflictMotive = $"protect {victim.Name}",
+                ConflictExpiresGameSeconds = _worldGameSeconds +
+                    VillagerConflictService.ConflictDurationGameSeconds,
+                FollowingActorId = null,
+                Need = VillagerNeed.Safe,
+                NextDecisionGameSeconds = _worldGameSeconds,
+                LastDeliberation = new(
+                    reaction.Thought, "witness_response", "protect",
+                    85, 15, 70, reaction.Priority, _worldGameSeconds)
+            };
+        if (reaction.Intent is not
+            (VillagerWitnessIntent.BackAway or
+             VillagerWitnessIntent.SeekHelp))
+            return witness with
+            {
+                LastDeliberation = new(
+                    reaction.Thought, "witness_response",
+                    reaction.Intent.ToString().ToLowerInvariant(),
+                    55, 5, reaction.Intent == VillagerWitnessIntent.Warn
+                        ? 30 : 10,
+                    reaction.Priority, _worldGameSeconds)
+            };
+
+        var destination = position;
+        if (reaction.Intent == VillagerWitnessIntent.SeekHelp &&
+            witness.RecognizedLeaderId is { } leaderId &&
+            _villagers.FirstOrDefault(value =>
+                value.Id == leaderId && value.Health > 0 &&
+                value.WorldLevel == witness.WorldLevel) is { } leader)
+            destination = new(leader.PositionX, leader.PositionY);
+        else
+        {
+            var away = position - _player!.Position;
+            if (away.LengthSquared <= .001f) away = Vector2.UnitX;
+            destination = WorldLevelNavigation.ReachableWalkableTarget(
+                _worldSeed, position,
+                position + away.Normalized() * 4,
+                witness.WorldLevel, maximumRadius: 2);
+        }
+        var moving = VillagerSimulation.ApplyDecision(
+            witness,
+            new(VillagerNeed.Safe, destination),
+            VillagerSimulationTier.Nearby,
+            _worldGameSeconds);
+        return moving with
+        {
+            LastDeliberation = new(
+                reaction.Thought, "witness_response",
+                reaction.Intent == VillagerWitnessIntent.SeekHelp
+                    ? "seek_help" : "back_away",
+                70, 10, 55, reaction.Priority, _worldGameSeconds)
+        };
+    }
+
+    private static string WitnessReactionLine(
+        VillagerState witness,
+        VillagerState victim,
+        VillagerWitnessIntent intent)
+    {
+        var name = VillagerSimulation.PerceivedName(witness, victim.Id);
+        return intent switch
+        {
+            VillagerWitnessIntent.Protect =>
+                $"Leave {name} alone!",
+            VillagerWitnessIntent.SeekHelp =>
+                $"Help! {name} is being attacked!",
+            VillagerWitnessIntent.BackAway =>
+                "Keep away from me!",
+            _ => $"Stop attacking {name}!"
+        };
     }
 
     private void ShowVillagerCombatReaction(
@@ -589,6 +719,304 @@ internal sealed partial class GameHostWindow
         _chatUi.AddMessage(
             $"{villager.Name}: {message}",
             ChatMessageStyle.Warning);
+    }
+
+    private void EscalateSettlementJustice(int victimIndex)
+    {
+        if (_activePlayer is null || _player is null ||
+            _settlementGroup is not { } group ||
+            (uint)victimIndex >= (uint)_villagers.Count ||
+            !SettlementGroupService.IsMember(
+                group, _villagers[victimIndex].Id))
+            return;
+        var victim = _villagers[victimIndex];
+        var leader = _villagers.FirstOrDefault(value =>
+                         value.Id == group.LeaderId && value.Health > 0) ??
+                     _villagers.Where(value =>
+                             value.Health > 0 &&
+                             SettlementGroupService.IsMember(group, value.Id))
+                         .OrderByDescending(value =>
+                             value.Honesty + value.Boldness)
+                         .FirstOrDefault();
+        if (leader is null) return;
+        var incidentVictims = _villagers
+            .Where(value => SettlementGroupService.IsMember(group, value.Id))
+            .Select(value => new
+            {
+                Victim = value,
+                Attacks = value.Memories?.Count(memory =>
+                    memory.Kind == "violence" &&
+                    memory.SubjectId == _activePlayer.Id &&
+                    _worldGameSeconds - memory.GameSeconds <=
+                    SettlementJusticeService.IncidentWindowGameSeconds) ?? 0
+            })
+            .Where(value => value.Attacks > 0)
+            .ToArray();
+        var recentAttacks = incidentVictims.Sum(value => value.Attacks);
+        victim = incidentVictims
+            .OrderBy(value => value.Victim.Health)
+            .ThenByDescending(value => value.Attacks)
+            .Select(value => value.Victim)
+            .FirstOrDefault() ?? victim;
+        var attackerArmed = _activePlayer.Inventory?.Any(itemId =>
+            itemId is not null &&
+            ItemCatalog.Get(itemId).HasTag(ItemTag.Weapon)) == true;
+        var members = _villagers.Where(value =>
+            value.Health > 0 &&
+            SettlementGroupService.IsMember(group, value.Id)).ToArray();
+        var judgment = SettlementJusticeService.Judge(
+            group, leader, victim, _activePlayer.Id,
+            recentAttacks, attackerArmed, members, _worldGameSeconds);
+        var previous = group.ActiveJusticeCase;
+        judgment = SettlementJusticeService.PreserveEscalation(
+            previous, judgment);
+        var changed = previous is null ||
+                      previous.AttackerId != judgment.AttackerId ||
+                      previous.VictimId != judgment.VictimId ||
+                      previous.Outcome != judgment.Outcome;
+        group = group with { ActiveJusticeCase = judgment };
+        if (judgment.Outcome == SettlementJusticeOutcome.Exile)
+        {
+            group = SettlementGroupService.RemoveMember(
+                group, _activePlayer.Id);
+            if (previous?.Outcome != SettlementJusticeOutcome.Exile)
+                group = group with { Exclusion = null };
+        }
+        _settlementGroup = group;
+        _saves.SaveSettlementGroup(_activeWorld!.Id, group);
+        ApplySettlementJusticeConsequences(group, victim, judgment, changed);
+        if (changed)
+        {
+            var leaderIndex = VillagerIndex(leader.Id);
+            if (leaderIndex >= 0)
+                ShowVillagerCombatReaction(
+                    leaderIndex,
+                    SettlementJusticeService.LeaderLine(
+                        judgment, _activePlayer.Name, victim.Name));
+        }
+        ObserveLog("settlement_justice", leader.Id, new
+        {
+            judgment.AttackerId,
+            judgment.VictimId,
+            Severity = judgment.Severity.ToString(),
+            Outcome = judgment.Outcome.ToString(),
+            judgment.RecentAttackCount,
+            Changed = changed
+        });
+    }
+
+    private void ApplySettlementJusticeConsequences(
+        SettlementGroupState group,
+        VillagerState victim,
+        SettlementJusticeCase judgment,
+        bool changed)
+    {
+        if (_activePlayer is null || _player is null) return;
+        for (var index = 0; index < _villagers.Count; index++)
+        {
+            var member = _villagers[index];
+            if (member.Health <= 0 ||
+                !SettlementGroupService.IsMember(group, member.Id))
+                continue;
+            if (changed)
+                member = RecordSettlementJudgment(
+                    member, judgment, _activePlayer.Name, victim.Name);
+            if (judgment.Outcome ==
+                    SettlementJusticeOutcome.CollectiveDefense &&
+                SettlementJusticeService.SupportsSanction(
+                    member, victim, _activePlayer.Id) &&
+                member.Boldness >= .5f)
+            {
+                member = member with
+                {
+                    ConflictTargetId = _activePlayer.Id,
+                    ConflictIntent = VillagerConflictIntent.Defend,
+                    ConflictMotive = $"settlement judgment: {judgment.Outcome}",
+                    ConflictExpiresGameSeconds = _worldGameSeconds +
+                        VillagerConflictService.ConflictDurationGameSeconds,
+                    FollowingActorId = null,
+                    Need = VillagerNeed.Safe,
+                    NextDecisionGameSeconds = _worldGameSeconds
+                };
+            }
+            else if (judgment.Outcome is
+                     SettlementJusticeOutcome.Avoidance or
+                     SettlementJusticeOutcome.CollectiveDefense or
+                     SettlementJusticeOutcome.Exile)
+            {
+                var position = new Vector2(member.PositionX, member.PositionY);
+                var away = position - _player.Position;
+                if (away.LengthSquared <= .001f) away = Vector2.UnitX;
+                var destination = WorldLevelNavigation.ReachableWalkableTarget(
+                    _worldSeed, position,
+                    position + away.Normalized() * 4,
+                    member.WorldLevel, maximumRadius: 2);
+                member = VillagerSimulation.ApplyDecision(
+                    member, new(VillagerNeed.Safe, destination),
+                    VillagerSimulationTier.Nearby, _worldGameSeconds);
+            }
+            _villagers[index] = member;
+        }
+        _villagersDirty = true;
+    }
+
+    private static VillagerState RecordSettlementJudgment(
+        VillagerState villager,
+        SettlementJusticeCase judgment,
+        string attackerName,
+        string victimName)
+    {
+        var memories = villager.Memories?.ToList() ?? [];
+        memories.Add(new(
+            Guid.NewGuid(), "settlement-justice", judgment.AttackerId,
+            null, 1, judgment.FiledGameSeconds,
+            judgment.Outcome == SettlementJusticeOutcome.Warning ? -15 : -40,
+            $"The settlement judged {attackerName}'s attack on {victimName} as {judgment.Outcome}."));
+        if (memories.Count > VillagerSimulation.MaximumMemories)
+            memories.RemoveRange(
+                0, memories.Count - VillagerSimulation.MaximumMemories);
+        return villager with { Memories = memories };
+    }
+
+    private void UpdateSettlementExclusion()
+    {
+        if (_clock < _nextSettlementExclusionCheckAt ||
+            _activePlayer is null || _player is null ||
+            _settlementGroup is not { } group ||
+            !SettlementJusticeService.IsExiled(group, _activePlayer.Id))
+            return;
+        _nextSettlementExclusionCheckAt = _clock + .5;
+        var policy = SettlementExclusionPolicy.Default;
+        var position = _activeWorldLevel == group.WorldLevel
+            ? _player.Position
+            : group.Camp + new Vector2(policy.DisengageRadius + 1, 0);
+        var transition = SettlementExclusionService.Advance(
+            policy, group.Exclusion, _activePlayer.Id,
+            position, group.Camp, _worldGameSeconds);
+        if (transition.Changed)
+        {
+            group = group with { Exclusion = transition.State };
+            _settlementGroup = group;
+            _saves.SaveSettlementGroup(_activeWorld!.Id, group);
+            HandleSettlementExclusionTransition(
+                group, transition.State, transition.PreviousStage);
+        }
+        else if (transition.State.Stage ==
+                 SettlementExclusionStage.Enforcement)
+            EnforceSettlementExclusion(group);
+    }
+
+    private void HandleSettlementExclusionTransition(
+        SettlementGroupState group,
+        SettlementExclusionState state,
+        SettlementExclusionStage previous)
+    {
+        var leaderIndex = VillagerIndex(group.LeaderId);
+        switch (state.Stage)
+        {
+            case SettlementExclusionStage.Grace when state.Entries > 1:
+                if (leaderIndex >= 0)
+                    ShowVillagerCombatReaction(
+                        leaderIndex,
+                        $"You were cast out. Leave within {Math.Ceiling(
+                            SettlementExclusionPolicy.Default
+                                .ReentryGraceGameSeconds /
+                            VillagerSimulation.GameSecondsPerRealSecond):0} seconds.");
+                break;
+            case SettlementExclusionStage.FinalWarning:
+                if (leaderIndex >= 0)
+                    ShowVillagerCombatReaction(
+                        leaderIndex,
+                        "Final warning. Cross beyond our camp boundary now!");
+                break;
+            case SettlementExclusionStage.Enforcement:
+                if (leaderIndex >= 0)
+                    ShowVillagerCombatReaction(
+                        leaderIndex,
+                        "They refuse to leave. Drive them from the camp!");
+                EnforceSettlementExclusion(group);
+                break;
+            case SettlementExclusionStage.Outside when
+                previous != SettlementExclusionStage.Outside:
+                ClearSettlementExclusionPursuit();
+                if (leaderIndex >= 0)
+                    ShowVillagerCombatReaction(
+                        leaderIndex,
+                        "They are beyond the boundary. Hold the camp.");
+                break;
+        }
+        ObserveLog("settlement_exclusion", state.ActorId, new
+        {
+            Previous = previous.ToString(),
+            Stage = state.Stage.ToString(),
+            state.Entries,
+            state.DeadlineGameSeconds
+        });
+    }
+
+    private void EnforceSettlementExclusion(SettlementGroupState group)
+    {
+        if (_activePlayer is null) return;
+        var victim = group.ActiveJusticeCase?.VictimId is { } victimId
+            ? _villagers.FirstOrDefault(value => value.Id == victimId)
+            : null;
+        var responders = SettlementExclusionService.SelectResponders(
+            _villagers.Where(value =>
+                SettlementGroupService.IsMember(group, value.Id)));
+        for (var index = 0; index < _villagers.Count; index++)
+        {
+            var member = _villagers[index];
+            var enforcing = string.Equals(
+                member.ConflictMotive,
+                "enforce settlement exclusion",
+                StringComparison.Ordinal);
+            if (!responders.Contains(member.Id) || member.Boldness < .5f ||
+                victim is not null &&
+                !SettlementJusticeService.SupportsSanction(
+                    member, victim, _activePlayer.Id))
+            {
+                if (enforcing)
+                {
+                    _villagers[index] = VillagerConflictService.Clear(
+                        member, _worldGameSeconds);
+                    _villagerWork.ReleaseActor(member.Id);
+                    _villagersDirty = true;
+                }
+                continue;
+            }
+            if (member.ConflictTargetId == _activePlayer.Id &&
+                member.ConflictIntent == VillagerConflictIntent.Defend &&
+                member.ConflictExpiresGameSeconds > _worldGameSeconds + 60)
+                continue;
+            _villagers[index] = member with
+            {
+                ConflictTargetId = _activePlayer.Id,
+                ConflictIntent = VillagerConflictIntent.Defend,
+                ConflictMotive = "enforce settlement exclusion",
+                ConflictExpiresGameSeconds = _worldGameSeconds +
+                    VillagerConflictService.ConflictDurationGameSeconds,
+                FollowingActorId = null,
+                Need = VillagerNeed.Safe,
+                NextDecisionGameSeconds = _worldGameSeconds
+            };
+            _villagersDirty = true;
+        }
+    }
+
+    private void ClearSettlementExclusionPursuit()
+    {
+        for (var index = 0; index < _villagers.Count; index++)
+        {
+            var villager = _villagers[index];
+            if (!string.Equals(
+                    villager.ConflictMotive,
+                    "enforce settlement exclusion",
+                    StringComparison.Ordinal))
+                continue;
+            _villagers[index] = VillagerConflictService.Clear(
+                villager, _worldGameSeconds);
+            _villagersDirty = true;
+        }
     }
 
     private void UpdateCombatPanelInput(Vector2 pointer, bool leftDown)

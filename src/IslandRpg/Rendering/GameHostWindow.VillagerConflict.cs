@@ -176,36 +176,47 @@ internal sealed partial class GameHostWindow
     {
         var caller = _villagers[callerIndex];
         var aggressor = _villagers[aggressorIndex];
-        var helperIndex = -1;
-        var bestDistance = float.MaxValue;
+        if (!VillagerYellService.CanYell(caller, _worldGameSeconds)) return;
+        var helpers = new List<(int Index, float Distance)>();
         for (var index = 0; index < _villagers.Count; index++)
         {
             if (index == callerIndex || index == aggressorIndex) continue;
             var candidate = _villagers[index];
-            var trust = candidate.Relationships?.FirstOrDefault(value =>
-                value.CharacterId == caller.Id)?.State.Trust ?? 0;
+            var relationship = candidate.Relationships?.FirstOrDefault(value =>
+                value.CharacterId == caller.Id)?.State ?? default;
             var distance = Vector2.DistanceSquared(
                 new(candidate.PositionX, candidate.PositionY),
                 new(caller.PositionX, caller.PositionY));
-            if (candidate.Health <= 20 || candidate.Boldness < .55f ||
-                candidate.WorldLevel != caller.WorldLevel || trust <= 0 ||
-                distance > 10 * 10 || distance >= bestDistance)
+            if (candidate.Boldness < .55f ||
+                !VillagerYellService.CanHearAndRespond(candidate, caller) ||
+                !VillagerRelationshipClassifier.WillDefend(
+                    relationship,
+                    caller.Id == candidate.RecognizedLeaderId))
                 continue;
-            helperIndex = index;
-            bestDistance = distance;
+            helpers.Add((index, distance));
         }
-        if (helperIndex < 0) return;
-        var helper = _villagers[helperIndex];
-        if (helper.ConflictTargetId == aggressor.Id) return;
-        _villagers[helperIndex] = VillagerConflictService.ApplyDecision(
-            helper, aggressor,
-            new(VillagerConflictIntent.Defend,
-                $"{caller.Name} needs help. I should defend them.",
-                70, true),
-            $"help {caller.Name}", _worldGameSeconds);
+        caller = VillagerYellService.MarkYelled(caller, _worldGameSeconds);
+        _villagers[callerIndex] = caller;
+        ShowVillagerCombatReaction(
+            callerIndex, $"Help! {aggressor.Name} is attacking me!");
+        var responderIds = new List<string>();
+        foreach (var (helperIndex, _) in helpers
+                     .OrderBy(value => value.Distance)
+                     .Take(VillagerYellService.MaximumResponders))
+        {
+            var helper = _villagers[helperIndex];
+            if (helper.ConflictTargetId == aggressor.Id) continue;
+            _villagers[helperIndex] = VillagerConflictService.ApplyDecision(
+                helper, aggressor,
+                new(VillagerConflictIntent.Defend,
+                    $"I heard {caller.Name} yell. I should rush to help.",
+                    70, true),
+                $"answer {caller.Name}'s yell", _worldGameSeconds);
+            responderIds.Add(helper.Id);
+        }
         ObserveLog("call_for_help", caller.Id, new
         {
-            HelperId = helper.Id,
+            ResponderIds = responderIds,
             AggressorId = aggressor.Id
         });
         _villagersDirty = true;
@@ -229,9 +240,12 @@ internal sealed partial class GameHostWindow
             witness = VillagerSimulation.RecordWitnessedAttack(
                 witness, aggressor.Id, aggressor.Name,
                 victim.Id, victim.Name, _worldGameSeconds);
-            var victimTrust = witness.Relationships?.FirstOrDefault(value =>
-                value.CharacterId == victim.Id)?.State.Trust ?? 0;
-            if (victimTrust > 5 && witness.Boldness >= .55f)
+            var victimRelationship = witness.Relationships?.FirstOrDefault(value =>
+                value.CharacterId == victim.Id)?.State ?? default;
+            if (VillagerRelationshipClassifier.WillDefend(
+                    victimRelationship,
+                    victim.Id == witness.RecognizedLeaderId) &&
+                witness.Boldness >= .55f)
                 witness = VillagerConflictService.ApplyDecision(
                     witness, aggressor,
                     new(VillagerConflictIntent.Defend,
@@ -249,8 +263,10 @@ internal sealed partial class GameHostWindow
             Vector2.DistanceSquared(
                 new(candidate.PositionX, candidate.PositionY),
                 new(victim.PositionX, victim.PositionY)) <= 10 * 10 &&
-            (candidate.Relationships?.FirstOrDefault(value =>
-                value.CharacterId == victim.Id)?.State.Trust ?? 0) > 0);
+            VillagerRelationshipClassifier.WillDefend(
+                candidate.Relationships?.FirstOrDefault(value =>
+                    value.CharacterId == victim.Id)?.State ?? default,
+                victim.Id == candidate.RecognizedLeaderId));
 
     private void EndVillagerConflict(
         int index, VillagerState villager, string reason)

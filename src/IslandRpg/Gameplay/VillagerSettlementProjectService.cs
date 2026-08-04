@@ -211,6 +211,12 @@ internal static class VillagerSettlementProjectService
             CountMatching(villager.Inventory, requirement.ItemId) <
             requirement.Quantity);
 
+    public static bool CanReceiveAccountabilityPrompt(
+        VillagerState villager) =>
+        villager.ProjectAssignment is { } assignment &&
+        villager.Id != assignment.BuilderId &&
+        villager.Id != assignment.LeaderId;
+
     public static Vector2 ExplorationTarget(
         VillagerState villager,
         double gameSeconds)

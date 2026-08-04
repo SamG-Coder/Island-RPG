@@ -153,8 +153,11 @@ internal sealed partial class GameHostWindow
             }
             else
             {
-                var reconciledGroup = SettlementGroupService.IncludeMember(
-                    loadedGroup, _activePlayer?.Id);
+                var reconciledGroup = SettlementJusticeService.IsExiled(
+                        loadedGroup, _activePlayer?.Id)
+                    ? loadedGroup
+                    : SettlementGroupService.IncludeMember(
+                        loadedGroup, _activePlayer?.Id);
                 if (!ReferenceEquals(reconciledGroup, loadedGroup))
                 {
                     _settlementGroup = reconciledGroup;
@@ -178,6 +181,7 @@ internal sealed partial class GameHostWindow
     private void UpdateVillagers(float elapsed)
     {
         if (_player is null || _activeWorld is null) return;
+        UpdateSettlementExclusion();
         AdvanceVillagerTimedActivities();
         UpdateConversationTurns();
         _villagerWork.Expire(_worldGameSeconds);
@@ -263,6 +267,16 @@ internal sealed partial class GameHostWindow
             if (!ReferenceEquals(previous, energized))
             {
                 previous = energized;
+                _villagers[index] = previous;
+                _villagersDirty = true;
+            }
+            var immediateDanger = previous.Health <= 20 ||
+                previous.ConflictIntent != VillagerConflictIntent.None;
+            var adrenaline = VillagerAdrenalineService.Advance(
+                previous, _worldGameSeconds, immediateDanger);
+            if (!ReferenceEquals(previous, adrenaline))
+            {
+                previous = adrenaline;
                 _villagers[index] = previous;
                 _villagersDirty = true;
             }
@@ -1182,7 +1196,8 @@ internal sealed partial class GameHostWindow
     private void TryPromptStalledProject()
     {
         var stalled = _villagers.FirstOrDefault(value =>
-            value.ProjectAssignment?.BuilderId != value.Id &&
+            VillagerSettlementProjectService
+                .CanReceiveAccountabilityPrompt(value) &&
             VillagerSettlementProjectService.IsStalled(
                 value, _worldGameSeconds));
         if (stalled is null ||
@@ -1297,7 +1312,8 @@ internal sealed partial class GameHostWindow
                 VillagerSimulation.CountFood(
                     _activePlayer.Inventory ?? []),
                 VillagerCapabilityMemory.VisibleTools(
-                    _activePlayer.Inventory)));
+                    _activePlayer.Inventory),
+                _activePlayer.Gender));
         foreach (var actor in _villagers)
             _socialActorObservations.Add(new(
                 actor.Id,
@@ -1309,7 +1325,8 @@ internal sealed partial class GameHostWindow
                 VillagerSimulation.CountFood(
                     actor.Inventory),
                 VillagerCapabilityMemory.VisibleTools(
-                    actor.Inventory)));
+                    actor.Inventory),
+                actor.Gender));
         var beforeSocialObservation = villager;
         foreach (var actor in _socialActorObservations)
         {
@@ -2646,10 +2663,16 @@ internal sealed partial class GameHostWindow
         var itemInstanceId = Guid.NewGuid();
         var giverName = VillagerSimulation.PerceivedName(
             villager, _activePlayer.Id, "stranger");
+        var relationshipBefore = villager.Relationships?.FirstOrDefault(value =>
+            value.CharacterId == _activePlayer.Id)?.State ?? default;
         villager = VillagerSimulation.RecordGift(
             villager with { Inventory = receiverInventory },
             _activePlayer.Id, giverName, itemInstanceId,
             gift.ItemId, _worldGameSeconds);
+        var relationshipAfter = villager.Relationships?.FirstOrDefault(value =>
+            value.CharacterId == _activePlayer.Id)?.State ?? default;
+        ReportPlayerRelationshipTransition(
+            villager, relationshipBefore, relationshipAfter);
         villager = VillagerSimulation.RecordDialogueTurn(
             villager, villager.Id, villager.Name,
             reply, _worldGameSeconds);
@@ -2664,8 +2687,30 @@ internal sealed partial class GameHostWindow
             _activeInventorySlot = -1;
         _villagersDirty = true;
         _saves.SavePlayer(_activePlayer);
+        ResolveSettlementRestitution(gift);
         ShowVillagerSpeech(villagerIndex, reply, _player.Position);
         return new(intent, true);
+    }
+
+    private void ResolveSettlementRestitution(PendingVillagerGift gift)
+    {
+        if (_settlementGroup?.ActiveJusticeCase is not { } activeCase)
+            return;
+        var resolved = SettlementJusticeService.ResolveRestitution(
+            activeCase, gift.PlayerId, gift.VillagerId);
+        if (!resolved.Resolved || activeCase.Resolved) return;
+        _settlementGroup = _settlementGroup with
+        {
+            ActiveJusticeCase = resolved
+        };
+        _saves.SaveSettlementGroup(
+            _activeWorld!.Id, _settlementGroup);
+        var leaderIndex = VillagerIndex(_settlementGroup.LeaderId);
+        if (leaderIndex >= 0)
+            ShowVillagerSpeech(
+                leaderIndex,
+                "Restitution has been made. Let this violence end.",
+                _player!.Position);
     }
 
     private static int ItemValue(string itemId)

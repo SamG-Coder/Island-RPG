@@ -26,6 +26,10 @@ internal sealed partial class GameHostWindow
                         reservationKey, villager.Id),
                 targetAvailable))
             return false;
+        if (intent.Action == EntityAction.Attack &&
+            intent.Target is { } attackTarget)
+            villager = VillagerFacingService.Face(
+                villager, attackTarget);
         _villagers[index] = villager with
         {
             Action = intent.Action,
@@ -78,11 +82,20 @@ internal sealed partial class GameHostWindow
     private bool TryExecuteVillagerUrgentAction(
         int index,
         VillagerState villager,
-        VillagerSimulationTier tier) =>
-        villager.Health > 0 &&
-        (TryVillagerResolveNpcConflict(index, villager, tier) ||
-         TryVillagerDefendSelf(index, villager, tier) ||
-         TryVillagerMeetUrgentFoodNeed(index, villager, tier));
+        VillagerSimulationTier tier)
+    {
+        if (villager.Health <= 0) return false;
+        var exclusionDuty = string.Equals(
+            villager.ConflictMotive,
+            "enforce settlement exclusion",
+            StringComparison.Ordinal);
+        if (exclusionDuty &&
+            VillagerIntentPriorityService.NeedsUrgentFood(villager))
+            return TryVillagerMeetUrgentFoodNeed(index, villager, tier);
+        return TryVillagerResolveNpcConflict(index, villager, tier) ||
+               TryVillagerDefendSelf(index, villager, tier) ||
+               TryVillagerMeetUrgentFoodNeed(index, villager, tier);
+    }
 
     private bool TryVillagerMeetUrgentFoodNeed(
         int index,
@@ -1780,13 +1793,18 @@ internal sealed partial class GameHostWindow
         VillagerState villager,
         VillagerSimulationTier tier)
     {
-        if (IsObserveWorld ||
-            _activePlayer is null || _player is null ||
-            villager.Boldness < .58f ||
+        var defendingWitness = _activePlayer is not null &&
+            villager.ConflictTargetId == _activePlayer.Id &&
+            villager.ConflictIntent == VillagerConflictIntent.Defend;
+        var defendingSelf = villager.Boldness >= .58f &&
+            _activePlayer is not null &&
             villager.Memories?.Any(memory =>
                 memory.Kind == "violence" &&
                 memory.SubjectId == _activePlayer.Id &&
-                _worldGameSeconds - memory.GameSeconds < 15 * 60) != true)
+                _worldGameSeconds - memory.GameSeconds < 15 * 60) == true;
+        if (IsObserveWorld ||
+            _activePlayer is null || _player is null ||
+            (!defendingSelf && !defendingWitness))
             return false;
         var position = new Vector2(villager.PositionX, villager.PositionY);
         var distance = Vector2.DistanceSquared(position, _player.Position);

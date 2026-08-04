@@ -193,7 +193,12 @@ internal sealed record VillagerState(
     float HealthRegenerationRemainder = 0,
     float TimedHealingRemaining = 0,
     float TimedHealingSeconds = 0,
-    float TimedHealingRemainder = 0);
+    float TimedHealingRemainder = 0,
+    float AdrenalineStress = 0,
+    double AdrenalineUntilGameSeconds = 0,
+    double AdrenalineCooldownUntilGameSeconds = 0,
+    double? LastAdrenalineGameSeconds = null,
+    double NextYellGameSeconds = 0);
 
 internal static class VillagerSimulationClock
 {
@@ -260,7 +265,8 @@ internal readonly record struct SocialActorObservation(
     int WorldLevel,
     float Hunger,
     int FoodCount,
-    IReadOnlyList<string>? VisibleToolIds = null);
+    IReadOnlyList<string>? VisibleToolIds = null,
+    EntityGender? Gender = null);
 
 internal readonly record struct VillagerSocialGoal(
     VillagerSocialIntent Intent,
@@ -822,6 +828,18 @@ internal static class VillagerSimulation
                 actor.VisibleToolIds is { Count: > 0 } ||
                 VillagerCapabilityMemory.KnownTools(
                     state, actor.Id).Count > 0;
+            var actorId = actor.Id;
+            var relationship = state.Relationships?.FirstOrDefault(value =>
+                value.CharacterId == actorId)?.State ?? default;
+            var relationshipKind =
+                VillagerRelationshipClassifier.Classify(
+                    relationship,
+                    actor.Id == state.RecognizedLeaderId);
+            var attraction = actor.Gender is { } actorGender
+                ? VillagerRelationshipClassifier.Attraction(
+                    state.Id, state.Gender,
+                    actor.Id, actorGender, relationship)
+                : VillagerAttractionLevel.None;
             var relationshipCheckIn =
                 state.Need == VillagerNeed.Social &&
                 (known is null ||
@@ -852,7 +870,11 @@ internal static class VillagerSimulation
                  needsOurSurplus
                     ? 1024
                     : 0) -
-                (hasKnownTool ? 16 : 0);
+                (hasKnownTool ? 16 : 0) +
+                VillagerRelationshipClassifier
+                    .SocialPreferenceAdjustment(relationshipKind) +
+                VillagerRelationshipClassifier
+                    .AttractionPreferenceAdjustment(attraction);
             if (score >= bestScore) continue;
             bestScore = score;
             bestDistance = distance;

@@ -17,7 +17,9 @@ internal sealed record SettlementGroupState(
     SettlementOpeningStage OpeningStage = SettlementOpeningStage.CacheReady,
     IReadOnlyList<SettlementScoutAssignment>? ScoutAssignments = null,
     IReadOnlyList<SettlementScoutReport>? ScoutReports = null,
-    IReadOnlyList<SettlementCampResponse>? CampResponses = null)
+    IReadOnlyList<SettlementCampResponse>? CampResponses = null,
+    SettlementJusticeCase? ActiveJusticeCase = null,
+    SettlementExclusionState? Exclusion = null)
 {
     [JsonIgnore]
     public Vector2 Camp => new(CampX, CampY);
@@ -109,6 +111,19 @@ internal static class SettlementGroupService
         };
     }
 
+    public static SettlementGroupState RemoveMember(
+        SettlementGroupState group,
+        string? actorId)
+    {
+        if (string.IsNullOrWhiteSpace(actorId) || !IsMember(group, actorId))
+            return group;
+        return group with
+        {
+            MemberIds = group.MemberIds.Where(value =>
+                !value.Equals(actorId, StringComparison.Ordinal)).ToArray()
+        };
+    }
+
     public static bool CanAccess(
         VillagerState villager,
         string? characterOwnerId,
@@ -120,6 +135,20 @@ internal static class SettlementGroupService
         !string.IsNullOrWhiteSpace(groupOwnerId) &&
         string.Equals(groupOwnerId, villager.SettlementGroupId,
             StringComparison.Ordinal);
+
+    public static bool CanAccess(
+        SettlementGroupState? group,
+        string actorId,
+        string? characterOwnerId,
+        string? groupOwnerId) =>
+        string.IsNullOrWhiteSpace(characterOwnerId) &&
+        string.IsNullOrWhiteSpace(groupOwnerId) ||
+        string.Equals(characterOwnerId, actorId,
+            StringComparison.Ordinal) ||
+        group is not null &&
+        string.Equals(groupOwnerId, group.Id,
+            StringComparison.Ordinal) &&
+        IsMember(group, actorId);
 
     public static bool IsInCache(
         SettlementGroupState group,

@@ -230,6 +230,13 @@ internal sealed partial class GameHostWindow
         var groundObject = chunk?.Chunk.GroundObjects.FirstOrDefault(
             item => item.Id == groundObjectId);
         if (chunk is null || groundObject is null) return;
+        if (!CanPlayerAccessGroundObject(groundObject))
+        {
+            ReportBlockedAction(
+                "settlement-cache-forbidden",
+                "You are no longer permitted to take from this settlement's cache.");
+            return;
+        }
         var itemId = groundObject.ItemId;
         var crop = CropService.IsCrop(groundObject);
         if (crop && !CropService.IsReady(
@@ -283,6 +290,14 @@ internal sealed partial class GameHostWindow
             QuestEventType.GatherItem, itemId));
     }
 
+    private bool CanPlayerAccessGroundObject(WorldGroundObject groundObject) =>
+        _activePlayer is not null &&
+        SettlementGroupService.CanAccess(
+            _settlementGroup,
+            _activePlayer.Id,
+            groundObject.OwnerId,
+            groundObject.GroupOwnerId);
+
     internal void BeginGroundObjectPickup(Guid groundObjectId, Vector2 target)
     {
         if (_player is null || _activePlayer is null) return;
@@ -293,6 +308,13 @@ internal sealed partial class GameHostWindow
         if (groundObject is null ||
             PlaceableObjectCatalog.IsPlaceable(groundObject.ItemId))
             return;
+        if (!CanPlayerAccessGroundObject(groundObject))
+        {
+            ReportBlockedAction(
+                "settlement-cache-forbidden",
+                "You are no longer permitted to take from this settlement's cache.");
+            return;
+        }
         var pickupItemId = CropService.IsCrop(groundObject)
             ? groundObject.FuelItemId
             : groundObject.ItemId;

@@ -861,6 +861,67 @@ Require(VillagerFatigueService.MovementEffectiveness(25) <
         VillagerFatigueService.AdjustedWorkDuration(10, 25) >
             VillagerFatigueService.AdjustedWorkDuration(10, 100),
     "low energy must reduce movement speed and work effectiveness");
+var adrenalineStart = advancedVillagers[0] with
+{
+    Health = 18,
+    Energy = 5,
+    AdrenalineStress = 0,
+    LastAdrenalineGameSeconds = 100
+};
+var adrenaline = VillagerAdrenalineService.Advance(
+    adrenalineStart, 100, immediateDanger: true);
+var blockedAdrenaline = VillagerAdrenalineService.Advance(
+    adrenaline with { Energy = 1 }, 200, immediateDanger: true);
+var recoveredAdrenaline = VillagerAdrenalineService.Advance(
+    blockedAdrenaline,
+    adrenaline.AdrenalineCooldownUntilGameSeconds + 600,
+    immediateDanger: false);
+var deadAdrenaline = VillagerAdrenalineService.Advance(
+    adrenalineStart with { Health = 0 }, 200, immediateDanger: true);
+Require(adrenaline.Energy > adrenalineStart.Energy &&
+        adrenaline.AdrenalineStress ==
+            VillagerAdrenalineService.StressCost &&
+        VillagerAdrenalineService.IsActive(adrenaline, 101) &&
+        blockedAdrenaline.Energy == 1 &&
+        recoveredAdrenaline.AdrenalineStress <
+            blockedAdrenaline.AdrenalineStress &&
+        deadAdrenaline == (adrenalineStart with { Health = 0 }),
+    "danger must trigger bounded adrenaline energy with stress, cooldown, recovery, and no dead-state mutation");
+var facingAttacker = VillagerFacingService.Face(
+    advancedVillagers[0] with
+    {
+        PositionX = 2,
+        PositionY = 3,
+        FacingX = -1,
+        FacingY = 0
+    },
+    new(2, 8));
+var yellCaller = advancedVillagers[0] with
+{
+    Id = "yell-caller", PositionX = 0, PositionY = 0,
+    Health = 80, Hunger = 80, Energy = 80
+};
+var nearYellResponder = yellCaller with
+{
+    Id = "near-yell-responder", PositionX = 23
+};
+var farYellResponder = yellCaller with
+{
+    Id = "far-yell-responder", PositionX = 25
+};
+var markedYell = VillagerYellService.MarkYelled(yellCaller, 100);
+Require(Math.Abs(facingAttacker.FacingX) < .001f &&
+        facingAttacker.FacingY > .999f &&
+        VillagerYellService.CanHearAndRespond(
+            nearYellResponder, yellCaller) &&
+        !VillagerYellService.CanHearAndRespond(
+            farYellResponder, yellCaller) &&
+        !VillagerYellService.CanHearAndRespond(
+            nearYellResponder with { Hunger = 1 }, yellCaller) &&
+        !VillagerYellService.CanYell(markedYell, 101) &&
+        VillagerYellService.CanYell(
+            markedYell, markedYell.NextYellGameSeconds),
+    "NPC attacks must face their target while yells use an extended, survival-aware hearing radius and cooldown");
 var locationMemoryVillager = VillagerLocationMemoryService.Remember(
     advancedVillagers[0] with
     {
@@ -2209,6 +2270,23 @@ var assignedProjectVillager = projectVillagers[0] with
         [new(ItemIds.LargeRock, 1)],
         AssignedGameSeconds: 100)
 };
+var accountableContributor = assignedProjectVillager with
+{
+    ProjectAssignment = assignedProjectVillager.ProjectAssignment! with
+    {
+        LeaderId = "project-leader"
+    }
+};
+var selfAccountableLeader = accountableContributor with
+{
+    Id = "project-leader"
+};
+Require(
+    VillagerSettlementProjectService.CanReceiveAccountabilityPrompt(
+        accountableContributor) &&
+    !VillagerSettlementProjectService.CanReceiveAccountabilityPrompt(
+        selfAccountableLeader),
+    "project accountability must target helpers without making leaders confront themselves");
 var completedProjectBuilder = projectVillagers[2] with
 {
     Inventory = PlayerInventory.CreateStartingInventory(),
@@ -2221,6 +2299,8 @@ var completedProjectBuilder = projectVillagers[2] with
 completedProjectBuilder.Inventory[0] = ItemIds.Campfire;
 Require(VillagerSettlementProjectService.NeedsItem(
             assignedProjectVillager, ItemIds.LargeRock) &&
+        !VillagerSettlementProjectService.CanReceiveAccountabilityPrompt(
+            completedProjectBuilder) &&
         VillagerSettlementProjectService.CarriesCompletedProject(
             completedProjectBuilder) &&
         !VillagerSettlementProjectService.CarriesCompletedProject(
@@ -3246,6 +3326,184 @@ Require(
         value.CharacterId == drasticRequester.Id).State is
         { Fear: > 0, Resentment: > 0, Trust: < 0 },
     "drastic refusal branches must persist thought, memory, fear, resentment, and lost trust");
+var bondedWitness = politeRequester with
+{
+    Health = 70,
+    Boldness = .8f,
+    Sociability = .6f,
+    Relationships =
+    [
+        new VillagerRelationship(
+            requestOwner.Id,
+            new(Trust: 30, Affection: 20))
+    ]
+};
+var protectiveWitness = VillagerWitnessResponseService.Decide(
+    bondedWitness, requestOwner, "player", attackerArmed: false);
+var helpSeekingWitness = VillagerWitnessResponseService.Decide(
+    bondedWitness with { Boldness = .4f },
+    requestOwner, "player", attackerArmed: true);
+var fleeingWitness = VillagerWitnessResponseService.Decide(
+    politeRequester with
+    {
+        Health = 70,
+        Boldness = .15f,
+        Honesty = .2f,
+        Sociability = .2f,
+        Relationships = []
+    },
+    requestOwner, "player", attackerArmed: false);
+var warningWitness = VillagerWitnessResponseService.Decide(
+    politeRequester with
+    {
+        Health = 70,
+        Boldness = .5f,
+        Honesty = .8f,
+        Sociability = .4f,
+        Relationships = []
+    },
+    requestOwner, "player", attackerArmed: false);
+var uninvolvedWitness = VillagerWitnessResponseService.Decide(
+    politeRequester with
+    {
+        Health = 70,
+        Boldness = .4f,
+        Honesty = .2f,
+        Sociability = .2f,
+        Relationships = []
+    },
+    requestOwner, "player", attackerArmed: false);
+Require(protectiveWitness.Intent == VillagerWitnessIntent.Protect,
+    "a bold friend must protect an attacked friend");
+Require(helpSeekingWitness.Intent == VillagerWitnessIntent.SeekHelp,
+    "a cautious friend must seek help against an armed attacker");
+Require(fleeingWitness.Intent == VillagerWitnessIntent.BackAway,
+    "a timid witness must back away from violence");
+Require(warningWitness.Intent == VillagerWitnessIntent.Warn,
+    "a principled witness must warn the attacker");
+Require(uninvolvedWitness.Intent == VillagerWitnessIntent.Ignore,
+    "a detached witness may avoid intervening for an acquaintance");
+var justiceLeader = politeRequester with
+{
+    Id = "justice-leader",
+    Name = "Justice leader",
+    Health = 100,
+    Boldness = .2f,
+    Honesty = .2f,
+    Relationships = []
+};
+var justiceVictim = requestOwner with
+{
+    Id = "justice-victim",
+    Name = "Justice victim",
+    Health = 90
+};
+var justiceGroup = SettlementGroupService.Form(
+    "justice-world",
+    justiceLeader.Id,
+    [justiceLeader.Id, justiceVictim.Id, "player", "member-a", "member-b"],
+    new(0, 0), 0, 100);
+var warningJudgment = SettlementJusticeService.Judge(
+    justiceGroup, justiceLeader, justiceVictim,
+    "player", 1, false, [justiceLeader, justiceVictim], 200);
+var restitutionJudgment = SettlementJusticeService.Judge(
+    justiceGroup, justiceLeader, justiceVictim,
+    "player", 2, false, [justiceLeader, justiceVictim], 210);
+var avoidanceJudgment = SettlementJusticeService.Judge(
+    justiceGroup, justiceLeader,
+    justiceVictim with { Health = 50 },
+    "player", 3, false, [justiceLeader, justiceVictim], 220);
+var collectiveJudgment = SettlementJusticeService.Judge(
+    justiceGroup,
+    justiceLeader with { Boldness = .8f },
+    justiceVictim with { Health = 50 },
+    "outsider", 3, false,
+    [justiceLeader with { Boldness = .8f }, justiceVictim], 230);
+var exileJudgment = SettlementJusticeService.Judge(
+    justiceGroup,
+    justiceLeader with { Honesty = .8f },
+    justiceVictim with { Health = 20 },
+    "player", 6, true,
+    [justiceLeader with { Honesty = .8f }, justiceVictim], 240);
+Require(
+    warningJudgment.Outcome == SettlementJusticeOutcome.Warning &&
+    restitutionJudgment.Outcome == SettlementJusticeOutcome.Restitution &&
+    avoidanceJudgment.Outcome == SettlementJusticeOutcome.Avoidance &&
+    collectiveJudgment.Outcome ==
+        SettlementJusticeOutcome.CollectiveDefense &&
+    exileJudgment.Outcome == SettlementJusticeOutcome.Exile,
+    "settlement justice must expose every escalating live outcome");
+var resolvedRestitution = SettlementJusticeService.ResolveRestitution(
+    restitutionJudgment, "player", justiceVictim.Id);
+var wrongRestitution = SettlementJusticeService.ResolveRestitution(
+    restitutionJudgment, "someone-else", justiceVictim.Id);
+var exiledGroup = SettlementGroupService.RemoveMember(
+    justiceGroup with { ActiveJusticeCase = exileJudgment }, "player");
+var preservedExile = SettlementJusticeService.PreserveEscalation(
+    exileJudgment,
+    restitutionJudgment with { FiledGameSeconds = 250 });
+Require(
+    resolvedRestitution.Resolved &&
+    resolvedRestitution.RestitutionRemaining == 0 &&
+    !wrongRestitution.Resolved &&
+    !SettlementGroupService.IsMember(exiledGroup, "player") &&
+    SettlementJusticeService.IsExiled(exiledGroup, "player") &&
+    !SettlementJusticeService.IsExiled(exiledGroup, "member-a") &&
+    !SettlementGroupService.CanAccess(
+        exiledGroup, "player", null, justiceGroup.Id) &&
+    SettlementGroupService.CanAccess(
+        exiledGroup, "member-a", null, justiceGroup.Id) &&
+    preservedExile.Outcome == SettlementJusticeOutcome.Exile &&
+    exiledGroup.ActiveJusticeCase?.Outcome ==
+        SettlementJusticeOutcome.Exile,
+    "restitution must resolve only through the offender gifting the victim, while exile must revoke membership and persist judgment");
+var exclusionPolicy = new SettlementExclusionPolicy(
+    Radius: 10,
+    DisengageRadius: 12,
+    InitialGraceGameSeconds: 100,
+    ReentryGraceGameSeconds: 40,
+    FinalWarningGameSeconds: 20);
+var initialExclusion = SettlementExclusionService.Advance(
+    exclusionPolicy, null, "player", new(1, 1), new(0, 0), 1000);
+var initiallyOutsideExclusion = SettlementExclusionService.Advance(
+    exclusionPolicy, null, "player", new(13, 0), new(0, 0), 1000);
+var finalExclusion = SettlementExclusionService.Advance(
+    exclusionPolicy, initialExclusion.State,
+    "player", new(1, 1), new(0, 0), 1100);
+var enforcedExclusion = SettlementExclusionService.Advance(
+    exclusionPolicy, finalExclusion.State,
+    "player", new(1, 1), new(0, 0), 1120);
+var departedExclusion = SettlementExclusionService.Advance(
+    exclusionPolicy, enforcedExclusion.State,
+    "player", new(13, 0), new(0, 0), 1130);
+var reenteredExclusion = SettlementExclusionService.Advance(
+    exclusionPolicy, departedExclusion.State,
+    "player", new(2, 0), new(0, 0), 1140);
+var eligibleResponder = advancedVillagers[0] with
+{
+    Id = "eligible-responder", Health = 90, Hunger = 80,
+    Energy = 80, Boldness = .9f
+};
+var starvingResponder = advancedVillagers[0] with
+{
+    Id = "starving-responder", Health = 90, Hunger = 5,
+    Energy = 80, Boldness = 1
+};
+var responders = SettlementExclusionService.SelectResponders(
+    new[] { eligibleResponder, starvingResponder });
+Require(
+    initialExclusion.State.Stage == SettlementExclusionStage.Grace &&
+    initiallyOutsideExclusion.Changed &&
+    initiallyOutsideExclusion.State.Stage ==
+        SettlementExclusionStage.Outside &&
+    finalExclusion.State.Stage == SettlementExclusionStage.FinalWarning &&
+    enforcedExclusion.State.Stage == SettlementExclusionStage.Enforcement &&
+    departedExclusion.State.Stage == SettlementExclusionStage.Outside &&
+    reenteredExclusion.State.Stage == SettlementExclusionStage.Grace &&
+    reenteredExclusion.State.Entries == 2 &&
+    reenteredExclusion.State.DeadlineGameSeconds == 1180 &&
+    responders.SetEquals(new[] { eligibleResponder.Id }),
+    "exclusion zones must grant grace, warn, enforce, disengage beyond the boundary, escalate faster on re-entry, and keep starving villagers off enforcement duty");
 var frightenedConflict = VillagerConflictService.DecideResponse(
     politeRequester with { Health = 70, Boldness = .2f },
     drasticRequester,
@@ -3986,6 +4244,33 @@ Require(
             VillagerSimulation.RelationshipCheckInSeconds).Intent ==
         VillagerSocialIntent.SeekCompany,
     "completed acquaintances must not loop companionship dialogue and may only check in after a substantial interval");
+var bondAwareSocialState = matureRelationship with
+{
+    KnownPeople =
+    [
+        new("friend-id", AcquaintanceStage.DiscussedSkills,
+            "Friend", 0, 5),
+        new("rival-id", AcquaintanceStage.DiscussedSkills,
+            "Rival", 0, 5)
+    ],
+    Relationships =
+    [
+        new("friend-id", new(Trust: 25, Affection: 15)),
+        new("rival-id", new(Trust: -20, Resentment: 25))
+    ]
+};
+var bondAwareSocialGoal = VillagerSimulation.SelectSocialGoal(
+    bondAwareSocialState,
+    new SocialActorObservation[]
+    {
+        new("rival-id", "Rival", new(.5f, 0), 0, 90, 0),
+        new("friend-id", "Friend", new(2, 0), 0, 90, 0)
+    },
+    VillagerSimulation.RelationshipCheckInSeconds + 1);
+Require(
+    bondAwareSocialGoal.OtherActorId == "friend-id" &&
+    bondAwareSocialGoal.Intent == VillagerSocialIntent.SeekCompany,
+    "optional companionship must prefer a farther friend over a nearby rival");
 Require(
     villagerSpawnA.All(value =>
         value.Goals?.Count == 2 &&
@@ -5329,6 +5614,105 @@ Require(
         movementState,
         movementState with { PositionX = movementState.PositionX + .1f }),
     "stationary villagers must not repeatedly block each other while moving villagers still resolve collisions");
+Require(
+    VillagerRelationshipClassifier.Classify(new(
+        Trust: 24, Affection: 16)) == VillagerRelationshipKind.Friend &&
+    VillagerRelationshipClassifier.Classify(new(
+        Trust: 52, Affection: 41)) == VillagerRelationshipKind.CloseBond &&
+    VillagerRelationshipClassifier.Classify(new(
+        Trust: -18, Resentment: 24)) == VillagerRelationshipKind.Rival &&
+    VillagerRelationshipClassifier.Classify(new(
+        Trust: -20, Fear: 42, Resentment: 30)) ==
+        VillagerRelationshipKind.FearedEnemy,
+    "relationship values must map to stable friendship, bond, rivalry, and enemy classifications");
+var classifiedRelationships = VillagerRelationshipClassifier.Summarize(
+[
+    new("friend", new(Trust: 25, Affection: 15)),
+    new("bond", new(Trust: 50, Affection: 40)),
+    new("rival", new(Trust: -20, Resentment: 25)),
+    new("enemy", new(Trust: -40))
+]);
+Require(
+    classifiedRelationships == new VillagerRelationshipSummary(1, 1, 1, 1),
+    "relationship summaries must count each durable social state once");
+Require(
+    VillagerRelationshipClassifier.SocialPreferenceAdjustment(
+        VillagerRelationshipKind.CloseBond) <
+    VillagerRelationshipClassifier.SocialPreferenceAdjustment(
+        VillagerRelationshipKind.Friend) &&
+    VillagerRelationshipClassifier.SocialPreferenceAdjustment(
+        VillagerRelationshipKind.Friend) < 0 &&
+    VillagerRelationshipClassifier.SocialPreferenceAdjustment(
+        VillagerRelationshipKind.Rival) > 0 &&
+    VillagerRelationshipClassifier.SocialPreferenceAdjustment(
+        VillagerRelationshipKind.FearedEnemy) >
+    VillagerRelationshipClassifier.SocialPreferenceAdjustment(
+        VillagerRelationshipKind.Enemy),
+    "optional social choices must prefer close bonds and avoid increasingly dangerous relationships");
+Require(
+    !VillagerRelationshipClassifier.WillDefend(new(Trust: .5f)) &&
+    VillagerRelationshipClassifier.WillDefend(new(
+        Trust: 25, Affection: 15)) &&
+    VillagerRelationshipClassifier.WillDefend(new(
+        Trust: 8, Gratitude: 30)) &&
+    VillagerRelationshipClassifier.WillDefend(new(
+        Trust: 5, Respect: 22), subjectIsLeader: true),
+    "casual acquaintances must stay out of fights while friends, rescuers, and respected leaders can receive aid");
+Require(
+    VillagerRelationshipClassifier.PromptDescription(new(
+        Trust: 25, Affection: 15)) == "considers a friend" &&
+    VillagerRelationshipClassifier.PromptDescription(new(
+        Trust: -20, Resentment: 25)) == "considers a rival" &&
+    VillagerRelationshipClassifier.PromptDescription(new(
+        Trust: -20, Fear: 40, Resentment: 25)) == "fears as an enemy",
+    "dialogue prompts must use the same classified bonds and hostilities as gameplay");
+var devotedRelationship = new RelationshipState(
+    Trust: 100, Affection: 100, Respect: 100, Gratitude: 100);
+Require(
+    VillagerRelationshipClassifier.Attraction(
+        "adult-man", EntityGender.Male,
+        "adult-woman", EntityGender.Female,
+        devotedRelationship) == VillagerAttractionLevel.Devoted &&
+    VillagerRelationshipClassifier.Attraction(
+        "adult-man", EntityGender.Male,
+        "adult-man-two", EntityGender.Male,
+        devotedRelationship) == VillagerAttractionLevel.None &&
+    VillagerRelationshipClassifier.Attraction(
+        "adult-woman", EntityGender.Female,
+        "adult-woman-two", EntityGender.Female,
+        devotedRelationship) == VillagerAttractionLevel.None &&
+    VillagerRelationshipClassifier.Attraction(
+        "adult-man", EntityGender.Male,
+        "hostile-woman", EntityGender.Female,
+        devotedRelationship with { Resentment = 20 }) ==
+        VillagerAttractionLevel.None,
+    "romantic attraction must be adult opposite-sex only and suppressed by hostility");
+Require(
+    VillagerRelationshipClassifier.AttractionPreferenceAdjustment(
+        VillagerAttractionLevel.Attracted) <
+    VillagerRelationshipClassifier.AttractionPreferenceAdjustment(
+        VillagerAttractionLevel.Interest) &&
+    VillagerRelationshipClassifier.AttractionPreferenceAdjustment(
+        VillagerAttractionLevel.Devoted) <
+    VillagerRelationshipClassifier.AttractionPreferenceAdjustment(
+        VillagerAttractionLevel.Attracted),
+    "stronger romantic attraction must create a stronger optional social pull");
+var enemyTransition = VillagerRelationshipClassifier.Transition(
+    "villager", EntityGender.Female,
+    "player", EntityGender.Male,
+    default,
+    new(Trust: -40, Resentment: 50));
+Require(
+    enemyTransition.PlayerMessage("Alice") ==
+        "Alice now considers you an enemy." &&
+    VillagerRelationshipClassifier.Transition(
+        "villager", EntityGender.Female,
+        "player", EntityGender.Female,
+        new(Trust: 10, Affection: 8),
+        new(Trust: 25, Affection: 15))
+        .PlayerMessage("Alice") ==
+        "Alice now considers you a friend.",
+    "meaningful player relationship thresholds must create concise milestone feedback");
 var movementProbeEntity = new WorldEntity(Vector2.Zero);
 Require(
     movementProbeEntity.MoveSpeed ==

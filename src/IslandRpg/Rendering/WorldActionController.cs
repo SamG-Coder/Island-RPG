@@ -1,5 +1,6 @@
 using IslandRpg.Assets;
 using IslandRpg.Gameplay;
+using IslandRpg.Rendering.Ui;
 using IslandRpg.World;
 using OpenTK.Mathematics;
 
@@ -87,10 +88,16 @@ internal sealed partial class GameHostWindow
 
     public void QueueVillagerAttack(VillagerState villager)
     {
-        if (window._combatVillagerId != villager.Id)
+        var targetChanged = window._combatVillagerId != villager.Id ||
+                            window._combatTargetId is not null ||
+                            window._combatEnemyId is not null;
+        if (targetChanged)
             window.CancelMeleeCombat();
         window._combatTargetId = null;
         window._combatVillagerId = villager.Id;
+        window._combatEnemyId = null;
+        window.AnnounceCombatTarget(
+            targetChanged, villager.Name, ChatMessageStyle.Warning);
         window._villagerCombatPathTarget = new(
             villager.PositionX, villager.PositionY);
         window._villagerCombatRepathAt =
@@ -106,11 +113,18 @@ internal sealed partial class GameHostWindow
 
     public void QueueEnemyAttack(EnemyState enemy)
     {
-        if (window._combatEnemyId != enemy.Id)
+        var targetChanged = window._combatEnemyId != enemy.Id ||
+                            window._combatTargetId is not null ||
+                            window._combatVillagerId is not null;
+        if (targetChanged)
             window.CancelMeleeCombat();
         window._combatTargetId = null;
         window._combatVillagerId = null;
         window._combatEnemyId = enemy.Id;
+        window.AnnounceCombatTarget(
+            targetChanged,
+            GameHostWindow.EnemyDisplayName(enemy.Kind).ToLowerInvariant(),
+            ChatMessageStyle.Warning);
         window._enemyCombatPathTarget = enemy.Position;
         window._enemyCombatRepathAt =
             window._clock + MeleeCombatService.MovingTargetRepathSeconds;
