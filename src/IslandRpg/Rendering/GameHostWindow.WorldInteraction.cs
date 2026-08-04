@@ -149,8 +149,8 @@ internal sealed partial class GameHostWindow
             if (!IsChunkVisible(gpu)) continue;
         foreach (var candidate in gpu.Chunk.GroundObjects)
         {
-            if (!TryGroundItemVisual(
-                    candidate.ItemId, out var frame, out _, out _, out _))
+            if (!TryGroundObjectVisual(
+                    candidate, out var frame, out _, out _, out _))
                 continue;
             var world = GroundObjectWorld(candidate);
             var visualBounds = SpriteBounds(
@@ -178,6 +178,33 @@ internal sealed partial class GameHostWindow
         }
         }
         return groundObject is not null;
+    }
+
+    private bool TryGroundObjectVisual(
+        WorldGroundObject value,
+        out SpriteFrame frame,
+        out int texture,
+        out string atlasKey,
+        out string? shadowKey)
+    {
+        if (value.ItemId != ItemIds.WoodenWall)
+            return TryGroundItemVisual(
+                value.ItemId,
+                out frame, out texture, out atlasKey, out shadowKey);
+
+        var visualFrame = value.VisualFrame is >= 0 and < 5
+            ? value.VisualFrame
+            : ConstructionService.Angle(value);
+        (atlasKey, shadowKey) =
+            PalisadeWallVisuals.Resolve(value, visualFrame);
+        texture = _treeAtlasTexture;
+        if (_treeAtlas.TryGetValue(atlasKey, out var atlas))
+        {
+            frame = atlas.Frame;
+            return texture != 0;
+        }
+        frame = null!;
+        return false;
     }
 
     private bool TryGetFishUnderMouse(

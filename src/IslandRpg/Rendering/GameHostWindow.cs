@@ -623,6 +623,7 @@ internal sealed partial class GameHostWindow : GameWindow
                 "VMBAS_WN", "VMBAS_FN", "VMBAS_AN", "VMBAS_DN", "VMBAS_SN",
                 "VFBAS_WN", "VFBAS_FN", "VFBAS_AN", "VFBAS_DN", "VFBAS_SN",
                 "VMLUM_AN", "VFLUM_AN",
+                "VMBLD_TN", "VFBLD_TN",
                 "VMFAR_TN", "VFFAR_TN",
                 "VMMIN_TN", "VFMIN_TN",
                 "VMFOR_TN", "VFFOR_TN",
@@ -1783,7 +1784,13 @@ internal sealed partial class GameHostWindow : GameWindow
                 _groundObjectContext.Open(
                     MouseState.Position,
                     ConstructionService.IsConstructionSite(contextObject)
-                        ? ["Build", "Demolish", "Walk Here", "Examine"]
+                        ? [
+                            "Walk here",
+                            "Build",
+                            "Build All (Same Type)",
+                            "Demolish",
+                            "Examine"
+                        ]
                     : contextObject.ItemId == ItemIds.TrainingDummy
                         ? ["Attack", "Walk Here", "Examine"]
                     : CaveEntranceService.IsEntrance(contextObject)
@@ -1817,7 +1824,10 @@ internal sealed partial class GameHostWindow : GameWindow
                         : fixedObject
                         ? ["Walk Here", "Examine"]
                         : ["Pick up", "Walk Here", "Examine"],
-                    SceneClientBounds(), 142);
+                    SceneClientBounds(),
+                    ConstructionService.IsConstructionSite(contextObject)
+                        ? 214
+                        : 142);
             }
             else if (TryGetFishUnderMouse(
                          SceneMousePosition(), out var contextFish))
@@ -4696,12 +4706,14 @@ internal sealed partial class GameHostWindow : GameWindow
         if (ConstructionService.IsConstructionSite(groundObject))
         {
             if (option == 0)
-                QueuePlayerConstructionWork(groundObject);
-            else if (option == 1)
-                DemolishPlayerConstruction(groundObject);
-            else if (option == 2)
                 QueueWalk(_groundObjectContextWalkTarget);
+            else if (option == 1)
+                QueuePlayerConstructionWork(groundObject);
+            else if (option == 2)
+                QueueAllPlayerConstructionWork(groundObject);
             else if (option == 3)
+                DemolishPlayerConstruction(groundObject);
+            else if (option == 4)
                 _chatUi.AddMessage(
                     $"Unfinished {ItemCatalog.Get(groundObject.ItemId).Name}: " +
                     $"{groundObject.Health}/{groundObject.MaxHealth} health.",
@@ -6821,6 +6833,7 @@ internal sealed partial class GameHostWindow : GameWindow
             [EntityAction.Move] = "WN",
             [EntityAction.Attack] = "AN",
             [EntityAction.Work] = "AN",
+            [EntityAction.Build] = "TN",
             [EntityAction.Gather] = "TN",
             [EntityAction.Dig] = "TN",
             [EntityAction.Mine] = "TN",
@@ -6837,6 +6850,8 @@ internal sealed partial class GameHostWindow : GameWindow
             {
                 EntityAction.Work =>
                     gender == EntityGender.Male ? "VMLUM_" : "VFLUM_",
+                EntityAction.Build =>
+                    gender == EntityGender.Male ? "VMBLD_" : "VFBLD_",
                 EntityAction.Gather =>
                     gender == EntityGender.Male ? "VMFOR_" : "VFFOR_",
                 EntityAction.Dig =>

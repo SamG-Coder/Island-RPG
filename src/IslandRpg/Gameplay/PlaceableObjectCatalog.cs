@@ -114,8 +114,8 @@ internal static class PlaceableObjectCatalog
                 HotspotY: 82,
                 RenderWidth: 96,
                 RenderHeight: 88,
-                NavigationWidth: .8f,
-                NavigationDepth: .22f),
+                NavigationWidth: 1f,
+                NavigationDepth: 1f),
             [ItemIds.TrainingDummy] = new(
                 ItemIds.TrainingDummy,
                 Path.Combine("Combat", "training-dummy-source.png"),

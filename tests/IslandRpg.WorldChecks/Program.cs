@@ -2863,7 +2863,7 @@ Require(
     PalisadeWallVisuals.WallGraphicId == 587 &&
     PalisadeWallVisuals.ShadowGraphic == "WALL1N0G" &&
     PalisadeWallVisuals.ShadowGraphicId == 586 &&
-    PalisadeWallVisuals.FrontFrameKey == "WALL1N1G@587#3",
+    PalisadeWallVisuals.FrontFrameKey == "WALL1N1G@587#2",
     "wooden walls must use the basic AoE palisade layers rather than the fortified wall or placement flag");
 var plannedWallVisual = PalisadeWallVisuals.Resolve(plannedWall.Object!, 3);
 var completedWallVisual = PalisadeWallVisuals.Resolve(finishedWall, 3);

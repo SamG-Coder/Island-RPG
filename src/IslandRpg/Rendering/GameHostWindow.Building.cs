@@ -11,6 +11,8 @@ internal sealed partial class GameHostWindow
     private bool _buildingPanelOpen;
     private bool _buildingPanelLeftWasDown;
     private Guid? _activePlayerConstructionId;
+    private int _lastPlayerConstructionStrike;
+    private readonly Queue<Guid> _playerConstructionQueue = [];
     private CraftingRecipe? _activeBuildingRecipe;
     private bool _buildingPlacementAwaitingRelease;
     private Vector2? _wallPlacementAnchor;
@@ -257,6 +259,8 @@ internal sealed partial class GameHostWindow
             $"You mark out {placed.Count} palisade wall " +
             $"{(placed.Count == 1 ? "foundation" : "foundations")}.",
             ChatMessageStyle.Action);
+        QueuePlayerConstructionSequence(
+            placed.Select(value => value.Object));
         return true;
     }
 
@@ -385,15 +389,18 @@ internal sealed partial class GameHostWindow
             !ConstructionService.IsConstructionSite(location.Value.Object))
             return;
         _activePlayerConstructionId = siteId;
-        _player?.WorkAt(new(
+        _lastPlayerConstructionStrike = 0;
+        _player?.BuildAt(new(
             location.Value.Object.X, location.Value.Object.Y));
     }
 
-    private void QueuePlayerConstructionWork(WorldGroundObject site)
+    private void QueuePlayerConstructionWork(
+        WorldGroundObject site, bool preserveSequence = false)
     {
         if (_player is null ||
             !ConstructionService.IsConstructionSite(site))
             return;
+        if (!preserveSequence) _playerConstructionQueue.Clear();
         var target = new Vector2(site.X, site.Y);
         const float interactionRange = .8f;
         if ((_player.Position - target).Length <= interactionRange)
@@ -403,6 +410,49 @@ internal sealed partial class GameHostWindow
                 target, interactionRange,
                 WorldActionType.BuildConstruction,
                 groundObjectId: site.Id);
+    }
+
+    private void QueuePlayerConstructionSequence(
+        IEnumerable<WorldGroundObject> sites)
+    {
+        _playerConstructionQueue.Clear();
+        foreach (var site in sites)
+            if (ConstructionService.IsConstructionSite(site))
+                _playerConstructionQueue.Enqueue(site.Id);
+        AdvancePlayerConstructionSequence();
+    }
+
+    private void QueueAllPlayerConstructionWork(WorldGroundObject selected)
+    {
+        if (_player is null) return;
+        var remaining = _worldChunks.Values
+            .Where(IsActiveWorldChunk)
+            .SelectMany(value => value.Chunk.GroundObjects)
+            .Where(value =>
+                ConstructionService.IsConstructionSite(value) &&
+                string.Equals(
+                    value.ItemId, selected.ItemId,
+                    StringComparison.OrdinalIgnoreCase))
+            .OrderBy(value =>
+                (_player.Position - new Vector2(value.X, value.Y))
+                .LengthSquared)
+            .ToArray();
+        QueuePlayerConstructionSequence(remaining);
+    }
+
+    private void AdvancePlayerConstructionSequence()
+    {
+        while (_playerConstructionQueue.TryDequeue(out var siteId))
+        {
+            var location = FindGroundObjectLocation(siteId);
+            if (location is null ||
+                !ConstructionService.IsConstructionSite(
+                    location.Value.Object))
+                continue;
+            QueuePlayerConstructionWork(
+                location.Value.Object, preserveSequence: true);
+            return;
+        }
     }
 
     private void RenderBuildingPanel()
@@ -484,15 +534,29 @@ internal sealed partial class GameHostWindow
             !ConstructionService.IsConstructionSite(location.Value.Object))
         {
             _activePlayerConstructionId = null;
-            if (_player.Action == EntityAction.Work) _player.Stop();
+            if (_player.Action == EntityAction.Build) _player.Stop();
+            AdvancePlayerConstructionSequence();
             return;
         }
-        if (_player.Action != EntityAction.Work)
+        if (_player.Action != EntityAction.Build)
         {
             _activePlayerConstructionId = null;
             return;
         }
-        if (_player.ActionTime < GroundItemActionSeconds) return;
+        if (!_entityAnimations.TryGetValue(
+                (_player.Gender, EntityAction.Build), out var animation))
+            return;
+        var framesPerAngle = Math.Max(
+            1, animation.Graphic.Sprite.Frames.Count / 5);
+        var cycleDuration = Math.Max(
+            framesPerAngle * animation.SecondsPerFrame, .1f);
+        var impactFrame = Math.Clamp(6, 0, framesPerAngle - 1);
+        var impactTime = impactFrame * animation.SecondsPerFrame;
+        if (_player.ActionTime < impactTime) return;
+        var strike = 1 + (int)(
+            (_player.ActionTime - impactTime) / cycleDuration);
+        if (strike <= _lastPlayerConstructionStrike) return;
+        _lastPlayerConstructionStrike = strike;
         var level = CraftingSkill.LevelForExperience(
             _activePlayer?.CraftingExperience ?? 0);
         var addedHealth = ConstructionService.WorkHealth(level, 100);
@@ -508,15 +572,13 @@ internal sealed partial class GameHostWindow
             };
         QueueChunkSave(location.Value.Chunk);
         if (ConstructionService.IsConstructionSite(updated))
-        {
-            _player.WorkAt(new(updated.X, updated.Y));
             return;
-        }
         _activePlayerConstructionId = null;
         _player.Stop();
         _chatUi.AddMessage(
             $"You finish building {ItemCatalog.Get(updated.ItemId).Name}.",
             ChatMessageStyle.Action);
         if (_activePlayer is not null) _saves.SavePlayer(_activePlayer);
+        AdvancePlayerConstructionSequence();
     }
 }

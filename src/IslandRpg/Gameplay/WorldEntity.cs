@@ -25,6 +25,7 @@ internal enum EntityAction
     Move,
     Attack,
     Work,
+    Build,
     Gather,
     Dig,
     Mine,
@@ -42,6 +43,7 @@ internal static class EntityActionLifecycle
 
     public static bool CompletesAfterAnimation(EntityAction action) =>
         action is EntityAction.Attack or EntityAction.Work or
+            EntityAction.Build or
             EntityAction.Gather or EntityAction.Dig or
             EntityAction.Mine or EntityAction.Fish;
 
@@ -166,6 +168,16 @@ internal sealed class WorldEntity
         if (direction.LengthSquared > .0001f)
             Facing = direction.Normalized();
         SetAction(EntityAction.Work);
+    }
+
+    public void BuildAt(Vector2 target)
+    {
+        _path.Clear();
+        Target = Position;
+        var direction = target - Position;
+        if (direction.LengthSquared > .0001f)
+            Facing = direction.Normalized();
+        SetAction(EntityAction.Build);
     }
 
     public void GatherAt(Vector2 target)

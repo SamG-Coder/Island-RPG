@@ -28,7 +28,11 @@ internal static class PalisadeWallVisuals
         var stage = ConstructionService.Stage(value);
         if (stage == ConstructionStage.Complete)
             return (WallFrame(frame), ShadowFrame(frame));
-        var stageIndex = (int)stage;
+        // The single/corner wall has only one authored unfinished base.
+        // Other directions retain their existing construction transitions.
+        var stageIndex = frame == FrontFrame
+            ? (int)ConstructionStage.Planned
+            : (int)stage;
         return (
             $"WCON2NNW#{frame * 4 + stageIndex}",
             $"WCON2N0W#{frame * 4 + stageIndex}");
