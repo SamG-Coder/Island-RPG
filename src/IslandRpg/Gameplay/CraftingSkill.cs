@@ -74,7 +74,8 @@ internal static class CraftingSkill
         recipe.Ingredients.Any(ingredient => ingredient.Accepts(itemId));
 
     public static readonly IReadOnlyList<CraftingRecipe> Recipes =
-    [
+    new CraftingRecipe[]
+    {
         new(
             "rope", ItemIds.Rope,
             CraftingCategory.Resources, 1, 15,
@@ -603,7 +604,7 @@ internal static class CraftingSkill
             [
                 new(ItemTag.Hammer, "hammer")
             ])
-    ];
+    }.Concat(HouseCatalog.Recipes).ToArray();
 
     private static CraftingRecipe SmithingTool(
         string id, string resultItemId, string toolName,

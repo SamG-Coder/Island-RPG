@@ -2996,6 +2996,38 @@ Require(
     PalisadeWallVisuals.Resolve(stoneWall, 3).Wall.StartsWith(
         "WCON2NNW#", StringComparison.Ordinal),
     "fences, stone walls and fortified walls must resolve their authored AoE directional and construction frames");
+Require(
+    HouseCatalog.All.Count == 63 &&
+    HouseCatalog.All.Select(value => value.ItemId).Distinct(
+        StringComparer.OrdinalIgnoreCase).Count() == 63 &&
+    HouseCatalog.All.GroupBy(value => value.GraphicId)
+        .All(group => group.Count() == 3) &&
+    HouseCatalog.All.All(house =>
+        house.Frame is >= 0 and < 3 &&
+        ItemCatalog.TryGet(house.ItemId, out var item) &&
+        item.HasTag(ItemTag.PlaceableObject) &&
+        PlaceableObjectCatalog.TryGet(house.ItemId, out var placeable) &&
+        placeable.FootprintWidth == 2 &&
+        placeable.FootprintDepth == 2 &&
+        CraftingSkill.Recipes.Any(recipe =>
+            recipe.ResultItemId == house.ItemId) &&
+        ConstructionService.Begin(new(
+            Guid.NewGuid(), house.ItemId, 1, 1)) is
+        {
+            Health: 1,
+            MaxHealth: > 0
+        }),
+    "all 63 authored house variants must have unique save IDs, recipes, two-tile footprints and construction state");
+Require(
+    HouseVisuals.AtlasKey(HouseCatalog.All.First(value =>
+        value.GraphicId == 2197 && value.Frame == 0).ItemId) ==
+        "HOUS1NNG@2197#0" &&
+    HouseVisuals.AtlasKey(HouseCatalog.All.First(value =>
+        value.GraphicId == 10916 && value.Frame == 2).ItemId) ==
+        "HOUS3NNX@10916#2" &&
+    HouseVisuals.RequiredGraphics.Count == 13 &&
+    !HouseCatalog.All.Any(value => value.GraphicId == 2229),
+    "house rendering must load every completed architecture set with exact ID-qualified frame keys and exclude the damaged special frame");
 var droppedInteraction = EntityInteractionService.Drop(
     sharedPlacement.Inventory,
     0,

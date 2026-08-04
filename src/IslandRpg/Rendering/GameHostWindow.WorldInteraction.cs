@@ -187,6 +187,19 @@ internal sealed partial class GameHostWindow
         out string atlasKey,
         out string? shadowKey)
     {
+        if (HouseCatalog.IsHouse(value.ItemId))
+        {
+            atlasKey = HouseVisuals.AtlasKey(value.ItemId);
+            shadowKey = null;
+            texture = _treeAtlasTexture;
+            if (_treeAtlas.TryGetValue(atlasKey, out var houseAtlas))
+            {
+                frame = houseAtlas.Frame;
+                return texture != 0;
+            }
+            frame = null!;
+            return false;
+        }
         if (!WallCatalog.IsWall(value.ItemId))
             return TryGroundItemVisual(
                 value.ItemId,
@@ -541,6 +554,26 @@ internal sealed partial class GameHostWindow
                 GL.GetUniformLocation(_program, "preserveDarkTint"), 0);
             return;
         }
+        if (HouseCatalog.IsHouse(preview.ItemId))
+        {
+            var vertices = new List<float>();
+            AddAtlasQuad(HouseVisuals.AtlasKey(preview.ItemId), world, .58f,
+                vertices);
+            GL.UseProgram(_program);
+            GL.Uniform3(
+                GL.GetUniformLocation(_program, "tint"),
+                preview.Valid
+                    ? new Vector3(.28f, 1f, .34f)
+                    : new Vector3(1f, .48f, .42f));
+            GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), .58f);
+            GL.Uniform1(GL.GetUniformLocation(_program, "grayscaleAmount"), 1f);
+            GL.Uniform1(GL.GetUniformLocation(_program, "preserveDarkTint"), 1);
+            DrawTreeBatch(vertices);
+            GL.Uniform1(GL.GetUniformLocation(_program, "tintAmount"), 0f);
+            GL.Uniform1(GL.GetUniformLocation(_program, "grayscaleAmount"), 0f);
+            GL.Uniform1(GL.GetUniformLocation(_program, "preserveDarkTint"), 0);
+            return;
+        }
         if (!TryGroundItemVisual(
                 preview.ItemId,
                 out var frame,
@@ -813,6 +846,14 @@ internal sealed partial class GameHostWindow
         out string atlasKey,
         out string? shadowKey)
     {
+        if (HouseCatalog.IsHouse(itemId))
+        {
+            frame = null!;
+            texture = _treeAtlasTexture;
+            atlasKey = HouseVisuals.AtlasKey(itemId);
+            shadowKey = null;
+            return false;
+        }
         if (WallCatalog.IsWall(itemId))
         {
             frame = null!;

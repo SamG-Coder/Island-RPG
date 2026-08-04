@@ -190,6 +190,23 @@ internal static class PlaceableObjectCatalog
                 NavigationDepth: .05f)
         };
 
+    static PlaceableObjectCatalog()
+    {
+        foreach (var house in HouseCatalog.All)
+            Definitions[house.ItemId] = new(
+                house.ItemId,
+                $"{house.ItemId}.png",
+                FootprintWidth: 2,
+                FootprintDepth: 2,
+                Height: 2.5f,
+                HotspotX: 64,
+                HotspotY: 104,
+                RenderWidth: 128,
+                RenderHeight: 112,
+                NavigationWidth: 1.65f,
+                NavigationDepth: 1.65f);
+    }
+
     public static IReadOnlyCollection<PlaceableObjectDefinition> All =>
         Definitions.Values;
 

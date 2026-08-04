@@ -26,7 +26,8 @@ internal sealed partial class GameHostWindow
 
     private enum BuildingBrowserCategory
     {
-        Defences
+        Defences,
+        Housing
     }
 
     private sealed record BuildingBrowserEntry(
@@ -37,7 +38,8 @@ internal sealed partial class GameHostWindow
         string ItemId);
 
     private static IReadOnlyList<BuildingBrowserEntry> BuildingBrowserEntries =>
-    [
+    new BuildingBrowserEntry[]
+    {
         new(
             BuildingBrowserCategory.Defences,
             "Wooden fence",
@@ -68,7 +70,13 @@ internal sealed partial class GameHostWindow
             "Heavy defence · 5 large rocks",
             BuildingRecipe(ItemIds.FortifiedWall),
             ItemIds.FortifiedWall)
-    ];
+    }.Concat(HouseCatalog.All.Select(house => new BuildingBrowserEntry(
+        BuildingBrowserCategory.Housing,
+        house.Name,
+        $"{house.LogCost} logs" +
+        (house.RockCost > 0 ? $" - {house.RockCost} large rocks" : ""),
+        BuildingRecipe(house.ItemId),
+        house.ItemId))).ToArray();
 
     private static CraftingRecipe BuildingRecipe(string itemId) =>
         CraftingSkill.Recipes.First(value => value.ResultItemId == itemId);
@@ -482,7 +490,8 @@ internal sealed partial class GameHostWindow
         {
             ReportBlockedAction(
                 "demolish-inventory-full",
-                "You need inventory space to recover the log.");
+                $"You need inventory space to recover the " +
+                $"{ItemCatalog.Get(refund).Name}.");
             return;
         }
         var location = FindGroundObjectLocation(site.Id);
@@ -493,7 +502,9 @@ internal sealed partial class GameHostWindow
         if (_activePlayerConstructionId == site.Id)
             _activePlayerConstructionId = null;
         _chatUi.AddMessage(
-            "You demolish the unfinished palisade and recover one log.",
+            $"You demolish the unfinished " +
+            $"{ItemCatalog.Get(site.ItemId).Name} and recover one " +
+            $"{ItemCatalog.Get(refund).Name}.",
             ChatMessageStyle.Action);
     }
 
@@ -631,7 +642,10 @@ internal sealed partial class GameHostWindow
                 DrawBuildingBrowserTile(
                     BuildingGridTileBounds(panel, index),
                     categories[index].ToString(),
-                    "Building category", ItemIds.WoodenWall);
+                    "Building category",
+                    categories[index] == BuildingBrowserCategory.Housing
+                        ? HouseCatalog.All[0].ItemId
+                        : ItemIds.WoodenWall);
             return;
         }
 
@@ -682,7 +696,7 @@ internal sealed partial class GameHostWindow
             : new(.49f, .38f, .17f, 1));
         var icon = new Vector4(bounds.X + 5, bounds.Y + 4, bounds.Z - 10, 42);
         if (itemId is not null)
-            DrawWallBuildIcon(icon, itemId);
+            DrawBuildingBrowserIcon(icon, itemId);
         else
             DrawCenteredUiText("<", icon, new(232, 219, 177, 255));
         DrawCenteredUiText(
@@ -718,6 +732,34 @@ internal sealed partial class GameHostWindow
                 wall.U0, wall.V0,
                 wall.U1 - wall.U0,
                 wall.V1 - wall.V0));
+    }
+
+    private void DrawBuildingBrowserIcon(Vector4 bounds, string itemId)
+    {
+        if (WallCatalog.IsWall(itemId))
+        {
+            DrawWallBuildIcon(bounds, itemId);
+            return;
+        }
+        if (!HouseCatalog.IsHouse(itemId) || _treeAtlasTexture == 0 ||
+            !_treeAtlas.TryGetValue(HouseVisuals.AtlasKey(itemId), out var house))
+            return;
+        var scale = MathF.Min(
+            bounds.Z / Math.Max(1, house.Frame.Width),
+            bounds.W / Math.Max(1, house.Frame.Height));
+        var width = house.Frame.Width * scale;
+        var height = house.Frame.Height * scale;
+        DrawUiSprite(
+            house.Frame, _treeAtlasTexture,
+            new(
+                bounds.X + (bounds.Z - width) * .5f,
+                bounds.Y + (bounds.W - height) * .5f,
+                width, height),
+            brightness: .08f,
+            uvRectangle: new(
+                house.U0, house.V0,
+                house.U1 - house.U0,
+                house.V1 - house.V0));
     }
 
     internal void UpdatePlayerConstruction()

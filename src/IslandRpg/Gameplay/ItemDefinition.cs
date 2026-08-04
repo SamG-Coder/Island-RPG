@@ -742,6 +742,15 @@ internal static class ItemCatalog
 
     static ItemCatalog()
     {
+        foreach (var house in HouseCatalog.All)
+            Items[house.ItemId] = new(
+                house.ItemId,
+                house.Name.ToLowerInvariant(),
+                house.Name,
+                $"A {house.Architecture.ToLowerInvariant()} dwelling.",
+                null,
+                Droppable: false,
+                Tags: ItemTag.PlaceableObject);
         foreach (var (id, item) in Items.ToArray())
             if (IsSlimeDropStackable(id))
                 Items[id] = item with { CanStack = true };

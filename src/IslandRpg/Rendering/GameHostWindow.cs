@@ -633,6 +633,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 names.Add(name);
             foreach (var name in PalisadeWallVisuals.RequiredGraphics)
                 names.Add(name);
+            foreach (var name in HouseVisuals.RequiredGraphics)
+                names.Add(name);
         }
 
         return names;
@@ -733,6 +735,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     .Concat(WorldFishGenerator.RequiredGraphicNames)
                     .Concat(UndergroundResourceGenerator.RequiredGraphicNames)
                     .Concat(PalisadeWallVisuals.RequiredGraphics)
+                    .Concat(HouseVisuals.RequiredGraphics)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase)
                 : _island?.Trees
                     .SelectMany(tree => new[] { tree.GraphicName, tree.GraphicName[..^2] + "N0" })
@@ -6341,6 +6344,11 @@ internal sealed partial class GameHostWindow : GameWindow
                 (itemAtlasKey, shadowAtlasKey) =
                     PalisadeWallVisuals.Resolve(item.Object, frame);
             }
+            else if (HouseCatalog.IsHouse(item.Object.ItemId))
+            {
+                itemAtlasKey = HouseVisuals.AtlasKey(item.Object.ItemId);
+                shadowAtlasKey = null;
+            }
             else
             {
                 if (!TryGroundItemVisual(
@@ -7603,9 +7611,11 @@ internal sealed partial class GameHostWindow : GameWindow
                 asset.Definition.Name);
             var constructionWall = PalisadeWallVisuals.IsWallGraphic(
                 asset.Definition.Name);
+            var constructionHouse = HouseVisuals.IsHouseGraphic(
+                asset.Definition.Name);
             var frames = cliff || stump || vegetation ||
                          undergroundResource || treeVariants || fish ||
-                         constructionWall
+                         constructionWall || constructionHouse
                 ? asset.Sprite.Frames
                 : [asset.Sprite.Frames[0]];
             for (var frameIndex = 0; frameIndex < frames.Count; frameIndex++)
@@ -7613,13 +7623,13 @@ internal sealed partial class GameHostWindow : GameWindow
                 var frame = frames[frameIndex];
                 var framed = cliff || stump || vegetation ||
                              undergroundResource || treeVariants || fish ||
-                             constructionWall;
-                var key = constructionWall
+                             constructionWall || constructionHouse;
+                var key = constructionWall || constructionHouse
                     ? $"{asset.Definition.Name}@{asset.Definition.GraphicId}#{frameIndex}"
                     : framed
                         ? $"{asset.Definition.Name}#{frameIndex}"
                         : asset.Definition.Name;
-                var alias = constructionWall
+                var alias = constructionWall || constructionHouse
                     ? $"{asset.Definition.Name}#{frameIndex}"
                     : (cliff || stump || vegetation ||
                        undergroundResource || treeVariants || fish) &&
