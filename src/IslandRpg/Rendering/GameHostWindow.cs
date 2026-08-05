@@ -12,6 +12,7 @@ using IslandRpg.Gameplay;
 using IslandRpg.World;
 using IslandRpg.Rendering.Ui;
 using StbImageSharp;
+using System.Buffers;
 
 namespace IslandRpg.Rendering;
 
@@ -74,7 +75,14 @@ internal sealed partial class GameHostWindow : GameWindow
         public WorldFishRenderItem[] FishRenderItems { get; set; } = [];
     }
     private sealed record SpriteAtlasEntry(
-        SpriteFrame Frame, float U0, float V0, float U1, float V1);
+        SpriteFrame Frame,
+        int Texture,
+        int PageWidth,
+        int PageHeight,
+        float U0,
+        float V0,
+        float U1,
+        float V1);
     private sealed record EntityAnimation(
         LoadedGraphic Graphic, int[] Textures, float SecondsPerFrame);
     private sealed record ActorVisual(
@@ -262,9 +270,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _pauseBlurFramebuffer;
     private Vector2i _pauseBlurSize;
     private int _treeBatchVbo;
-    private int _treeAtlasTexture;
-    private int _treeAtlasWidth;
-    private int _treeAtlasHeight;
+    private readonly List<int> _treeAtlasTextures = [];
     private int _cliffBatchVbo;
     private int _cliffTexture;
     private readonly Dictionary<string, SpriteAtlasEntry> _treeAtlas =
@@ -6665,7 +6671,11 @@ internal sealed partial class GameHostWindow : GameWindow
             IsometricTerrainProjection.Project(x, y, z);
     }
 
-    private void AddTreeQuad(string graphicName, Vector2 world, float opacity, List<float> vertices)
+    private void AddTreeQuad(
+        string graphicName,
+        Vector2 world,
+        float opacity,
+        AtlasDrawBatch vertices)
         => AddAtlasQuad(graphicName, world, opacity, vertices);
 
     private static Vector2 CliffWorld(CliffFace face)
@@ -6698,9 +6708,15 @@ internal sealed partial class GameHostWindow : GameWindow
                _camera + world * _zoom;
     }
 
-    private void AddAtlasQuad(string atlasKey, Vector2 world, float opacity, List<float> vertices)
+    private void AddAtlasQuad(
+        string atlasKey,
+        Vector2 world,
+        float opacity,
+        AtlasDrawBatch batch)
     {
         if (!_treeAtlas.TryGetValue(atlasKey, out var entry)) return;
+        var vertices = batch.ForPage(
+            entry.Texture, entry.PageWidth, entry.PageHeight);
         var frame = entry.Frame;
         var width = ReferenceWidth;
         var height = ReferenceHeight;
@@ -6724,6 +6740,7 @@ internal sealed partial class GameHostWindow : GameWindow
         Add(leftNdc, topNdc, entry.U0, entry.V0);
         Add(rightNdc, bottomNdc, entry.U1, entry.V1);
         Add(rightNdc, topNdc, entry.U1, entry.V0);
+        batch.Added(30);
 
         void Add(float px, float py, float u, float v)
         {
@@ -6732,60 +6749,76 @@ internal sealed partial class GameHostWindow : GameWindow
         }
     }
 
-    private void DrawTreeBatch(List<float> vertices)
+    private void DrawTreeBatch(AtlasDrawBatch batch)
     {
-        if (vertices.Count == 0 || _treeAtlasTexture == 0) return;
+        if (batch.Count == 0) return;
         GL.UseProgram(_program);
         GL.Uniform1(GL.GetUniformLocation(_program, "image"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "opacity"), 1f);
         GL.Uniform1(GL.GetUniformLocation(_program, "outlineOnly"), 0);
         GL.Uniform1(GL.GetUniformLocation(_program, "wading"), 0);
+        BindAtlasVertexLayout();
         GL.ActiveTexture(TextureUnit.Texture0);
-        GL.BindTexture(TextureTarget.Texture2D, _treeAtlasTexture);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _treeBatchVbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float),
-            _worldRenderQueue.CopyVertices(vertices),
-            BufferUsageHint.StreamDraw);
-        const int stride = 5 * sizeof(float);
-        GL.EnableVertexAttribArray(0);
-        GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, stride, 0);
-        GL.EnableVertexAttribArray(1);
-        GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, stride, 2 * sizeof(float));
-        GL.EnableVertexAttribArray(2);
-        GL.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, stride, 4 * sizeof(float));
-        GL.DisableVertexAttribArray(3);
-        GL.DisableVertexAttribArray(4);
-        GL.DisableVertexAttribArray(5);
-        GL.DrawArrays(PrimitiveType.Triangles, 0, vertices.Count / 5);
+        for (var runIndex = 0;
+             runIndex < batch.ActiveRunCount;
+             runIndex++)
+        {
+            var run = batch.Runs[runIndex];
+            if (run.Vertices.Count == 0) continue;
+            GL.BindTexture(TextureTarget.Texture2D, run.Texture);
+            GL.BufferData(
+                BufferTarget.ArrayBuffer,
+                run.Vertices.Count * sizeof(float),
+                _worldRenderQueue.CopyVertices(run.Vertices),
+                BufferUsageHint.StreamDraw);
+            GL.DrawArrays(
+                PrimitiveType.Triangles, 0,
+                run.Vertices.Count / 5);
+        }
     }
 
     private void DrawTreeOutlineBatch(
-        List<float> vertices, Vector3 color)
+        AtlasDrawBatch batch, Vector3 color)
     {
-        if (vertices.Count == 0 ||
-            _treeAtlasTexture == 0 ||
-            _treeAtlasWidth <= 0 ||
-            _treeAtlasHeight <= 0)
-            return;
+        if (batch.Count == 0) return;
         GL.UseProgram(_program);
         GL.Uniform1(_shaderUniforms.Get(_program, "image"), 0);
         GL.Uniform1(_shaderUniforms.Get(_program, "opacity"), 1f);
         GL.Uniform1(_shaderUniforms.Get(_program, "outlineOnly"), 1);
         GL.Uniform3(
             _shaderUniforms.Get(_program, "outlineColor"), color);
-        GL.Uniform2(
-            _shaderUniforms.Get(_program, "texelSize"),
-            1f / _treeAtlasWidth,
-            1f / _treeAtlasHeight);
         GL.Uniform1(_shaderUniforms.Get(_program, "wading"), 0);
         GL.ActiveTexture(TextureUnit.Texture0);
-        GL.BindTexture(TextureTarget.Texture2D, _treeAtlasTexture);
+        BindAtlasVertexLayout();
+        for (var runIndex = 0;
+             runIndex < batch.ActiveRunCount;
+             runIndex++)
+        {
+            var run = batch.Runs[runIndex];
+            if (run.Vertices.Count == 0) continue;
+            GL.Uniform2(
+                _shaderUniforms.Get(_program, "texelSize"),
+                1f / run.Width,
+                1f / run.Height);
+            GL.BindTexture(TextureTarget.Texture2D, run.Texture);
+            GL.BufferData(
+                BufferTarget.ArrayBuffer,
+                run.Vertices.Count * sizeof(float),
+                _worldRenderQueue.CopyVertices(run.Vertices),
+                BufferUsageHint.StreamDraw);
+            GL.DrawArrays(
+                PrimitiveType.Triangles, 0,
+                run.Vertices.Count / 5);
+        }
+        GL.Uniform1(_shaderUniforms.Get(_program, "outlineOnly"), 0);
+    }
+
+    private void BindAtlasVertexLayout()
+    {
+        // VertexAttribPointer captures the currently bound array buffer.
+        // Always bind first so atlas sprites cannot read geometry left behind
+        // by the terrain or actor pass.
         GL.BindBuffer(BufferTarget.ArrayBuffer, _treeBatchVbo);
-        GL.BufferData(
-            BufferTarget.ArrayBuffer,
-            vertices.Count * sizeof(float),
-            _worldRenderQueue.CopyVertices(vertices),
-            BufferUsageHint.StreamDraw);
         const int stride = 5 * sizeof(float);
         GL.EnableVertexAttribArray(0);
         GL.VertexAttribPointer(
@@ -6801,9 +6834,6 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.DisableVertexAttribArray(3);
         GL.DisableVertexAttribArray(4);
         GL.DisableVertexAttribArray(5);
-        GL.DrawArrays(
-            PrimitiveType.Triangles, 0, vertices.Count / 5);
-        GL.Uniform1(_shaderUniforms.Get(_program, "outlineOnly"), 0);
     }
 
     private void StreamWorld()
@@ -7636,16 +7666,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private void PrepareTreeAtlas()
     {
         GL.GetInteger(GetPName.MaxTextureSize, out var maximumTextureSize);
-        // A narrow atlas becomes extremely tall as construction variants are
-        // added. Use a wider page so neither dimension approaches the GPU's
-        // per-texture limit. This is independent of available VRAM.
-        var atlasWidth = Math.Min(8192, maximumTextureSize);
-        const int padding = 1;
-        var placements = new List<(
-            string Key, string? Alias, SpriteFrame Frame, int X, int Y)>();
-        var x = padding;
-        var y = padding;
-        var rowHeight = 0;
+        var pageSize = Math.Min(4096, maximumTextureSize);
+        var sources = new List<SpriteAtlasSource>();
         foreach (var asset in _worldAssets)
         {
             var cliff = asset.Definition.Name.StartsWith("CLF", StringComparison.OrdinalIgnoreCase);
@@ -7891,47 +7913,90 @@ internal sealed partial class GameHostWindow : GameWindow
             WorldFishPresentation.DepthAtlasKey,
             null,
             WorldFishPresentation.CreateDepthFrame());
-        var requiredHeight = y + rowHeight + padding;
-        var atlasHeight = 1;
-        while (atlasHeight < requiredHeight) atlasHeight *= 2;
-        if (atlasHeight > maximumTextureSize)
-            throw new InvalidOperationException(
-                $"The world sprite atlas requires {atlasWidth}x{atlasHeight}, " +
-                $"but this GPU supports at most {maximumTextureSize}px per dimension.");
-        var rgba = new byte[atlasWidth * atlasHeight * 4];
-        foreach (var placement in placements)
+        var pages = SpriteAtlasPacker.Pack(sources, pageSize);
+        var atlasMegabytes = pages.Sum(
+            page => (long)page.Width * page.Height * 4) /
+            (1024d * 1024d);
+        System.Diagnostics.Debug.WriteLine(
+            $"World sprite atlas: {pages.Count} pages, " +
+            $"{atlasMegabytes:N1} MiB RGBA8");
+        foreach (var page in pages)
         {
-            for (var row = 0; row < placement.Frame.Height; row++)
-                System.Buffer.BlockCopy(
-                    placement.Frame.Rgba, row * placement.Frame.Width * 4,
-                    rgba, ((placement.Y + row) * atlasWidth + placement.X) * 4,
-                    placement.Frame.Width * 4);
-            _treeAtlas[placement.Key] = new(
-                placement.Frame,
-                placement.X / (float)atlasWidth,
-                placement.Y / (float)atlasHeight,
-                (placement.X + placement.Frame.Width) / (float)atlasWidth,
-                (placement.Y + placement.Frame.Height) / (float)atlasHeight);
-            if (placement.Alias is not null)
-                _treeAtlas[placement.Alias] = _treeAtlas[placement.Key];
+            // Upload one bounded page at a time. The staging array becomes
+            // reusable immediately instead of retaining a 256 MB 8K copy.
+            var byteCount = checked(page.Width * page.Height * 4);
+            var rgba = ArrayPool<byte>.Shared.Rent(byteCount);
+            int texture;
+            try
+            {
+                rgba.AsSpan(0, byteCount).Clear();
+                foreach (var placement in page.Placements)
+                    for (var row = 0;
+                         row < placement.Source.Frame.Height;
+                         row++)
+                        System.Buffer.BlockCopy(
+                            placement.Source.Frame.Rgba,
+                            row * placement.Source.Frame.Width * 4,
+                            rgba,
+                            ((placement.Y + row) * page.Width + placement.X) * 4,
+                            placement.Source.Frame.Width * 4);
+                texture = Upload(page.Width, page.Height, rgba);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(rgba);
+            }
+            _treeAtlasTextures.Add(texture);
+            foreach (var placement in page.Placements)
+            {
+                var source = placement.Source;
+                _treeAtlas[source.Key] = new(
+                    source.Frame,
+                    texture,
+                    page.Width,
+                    page.Height,
+                    placement.X / (float)page.Width,
+                    placement.Y / (float)page.Height,
+                    (placement.X + source.Frame.Width) /
+                        (float)page.Width,
+                    (placement.Y + source.Frame.Height) /
+                        (float)page.Height);
+                if (source.Alias is not null)
+                    _treeAtlas[source.Alias] = _treeAtlas[source.Key];
+            }
         }
-        _treeAtlasTexture = Upload(atlasWidth, atlasHeight, rgba);
-        _treeAtlasWidth = atlasWidth;
-        _treeAtlasHeight = atlasHeight;
         _treeBatchVbo = GL.GenBuffer();
 
         void Place(string key, string? alias, SpriteFrame frame)
         {
-            if (x + frame.Width + padding > atlasWidth)
-            {
-                x = padding;
-                y += rowHeight + padding;
-                rowHeight = 0;
-            }
-            placements.Add((key, alias, frame, x, y));
-            x += frame.Width + padding;
-            rowHeight = Math.Max(rowHeight, frame.Height);
+            sources.Add(new(
+                key, alias, frame,
+                SpriteAtlasGroup(key)));
         }
+    }
+
+    private static string SpriteAtlasGroup(string key)
+    {
+        var graphicName = key.Split('@', '#')[0];
+        if (key.StartsWith("GATE@", StringComparison.OrdinalIgnoreCase) ||
+            PalisadeWallVisuals.IsWallGraphic(graphicName) ||
+            HouseVisuals.IsHouseGraphic(graphicName) ||
+            DefenceBuildingVisuals.IsDefenceGraphic(graphicName) ||
+            GateVisuals.IsGateGraphic(graphicName))
+            return "construction";
+        if (key.StartsWith("NATURAL", StringComparison.OrdinalIgnoreCase) ||
+            key.StartsWith("CAVE_GROWTH", StringComparison.OrdinalIgnoreCase) ||
+            WorldVegetationGenerator.IsVegetationGraphic(graphicName) ||
+            WorldTreeCatalog.HasVariants(graphicName))
+            return "world";
+        if (key.StartsWith(
+                LevelUpFireworks.AtlasPrefix,
+                StringComparison.OrdinalIgnoreCase) ||
+            key.StartsWith(
+                SlimeAttackEffects.AtlasPrefix,
+                StringComparison.OrdinalIgnoreCase))
+            return "effects";
+        return "items";
     }
 
     private static string NaturalAtlasKey(int cell, bool shadow) =>
@@ -8596,7 +8661,7 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         var texture = GL.GenTexture();
         GL.BindTexture(TextureTarget.Texture2D, texture);
-        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, width, height, 0,
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, width, height, 0,
             PixelFormat.Rgba, PixelType.UnsignedByte, rgba);
         var uploadError = GL.GetError();
         if (uploadError != OpenTK.Graphics.OpenGL4.ErrorCode.NoError)
@@ -8963,7 +9028,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_pauseBlurFramebuffer != 0)
             GL.DeleteFramebuffer(_pauseBlurFramebuffer);
         if (_treeBatchVbo != 0) GL.DeleteBuffer(_treeBatchVbo);
-        if (_treeAtlasTexture != 0) GL.DeleteTexture(_treeAtlasTexture);
+        foreach (var texture in _treeAtlasTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
         if (_cliffBatchVbo != 0) GL.DeleteBuffer(_cliffBatchVbo);
         if (_cliffTexture != 0) GL.DeleteTexture(_cliffTexture);
         if (_terrainProgram != 0) GL.DeleteProgram(_terrainProgram);

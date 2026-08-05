@@ -7135,6 +7135,28 @@ Console.WriteLine(
     $"procedural {directTerrainTimer.Elapsed.TotalMilliseconds:N1} ms, " +
     $"loaded {loadedTerrainTimer.Elapsed.TotalMilliseconds:N1} ms.");
 
+var atlasProbeFrame = new SpriteFrame(
+    40, 40, 20, 40, new byte[40 * 40 * 4]);
+var atlasPages = SpriteAtlasPacker.Pack(
+[
+    new("world:a", null, atlasProbeFrame, "world"),
+    new("world:a", null,
+        new SpriteFrame(20, 20, 10, 20, new byte[20 * 20 * 4]),
+        "world"),
+    new("world:b", null, atlasProbeFrame, "world"),
+    new("construction:a", null, atlasProbeFrame, "construction")
+], maximumPageSize: 64);
+Require(
+    atlasPages.Count == 3 &&
+    atlasPages.All(page => page.Width <= 64 && page.Height <= 64) &&
+    atlasPages.All(page => page.Width < 64 && page.Height < 64) &&
+    atlasPages.SelectMany(page => page.Placements)
+        .Select(value => value.Source.Key).Distinct().Count() == 3 &&
+    atlasPages.SelectMany(page => page.Placements)
+        .Single(value => value.Source.Key == "world:a")
+        .Source.Frame.Width == 20,
+    "sprite atlas packing must separate asset groups, retain last-loaded duplicate keys and produce bounded tight pages");
+
 var renderItems = Enumerable.Range(0, 8_192)
     .Select(index => new WorldRenderItem(
         new(
@@ -7147,14 +7169,20 @@ var renderItems = Enumerable.Range(0, 8_192)
 var expectedRenderOrder = WorldRenderQueue.LegacyOrder(renderItems);
 var reusableRenderQueue = new WorldRenderQueue();
 reusableRenderQueue.Reset(renderItems.Length);
-reusableRenderQueue.GroundOutlineVertices.AddRange(
+var outlineVertices = reusableRenderQueue.GroundOutlineVertices.ForPage(
+    1, 256, 256);
+outlineVertices.AddRange(
     Enumerable.Repeat(1f, renderItems.Length * 30));
+reusableRenderQueue.GroundOutlineVertices.Added(
+    renderItems.Length * 30);
 var outlineCapacity =
-    reusableRenderQueue.GroundOutlineVertices.Capacity;
+    outlineVertices.Capacity;
 reusableRenderQueue.Reset(renderItems.Length);
+var reusedOutlineVertices =
+    reusableRenderQueue.GroundOutlineVertices.ForPage(1, 256, 256);
 Require(
     reusableRenderQueue.GroundOutlineVertices.Count == 0 &&
-    reusableRenderQueue.GroundOutlineVertices.Capacity == outlineCapacity,
+    reusedOutlineVertices.Capacity == outlineCapacity,
     "ground-item outline vertices must be cleared and reused without reallocating");
 foreach (var item in renderItems)
     reusableRenderQueue.AddObject(

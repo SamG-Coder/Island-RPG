@@ -456,8 +456,8 @@ internal sealed partial class GameHostWindow
     private void RenderWallPlacementPreview()
     {
         if (_wallPlacementPreview.Count == 0) return;
-        var green = new List<float>();
-        var red = new List<float>();
+        var green = new AtlasDrawBatch();
+        var red = new AtlasDrawBatch();
         foreach (var node in _wallPlacementPreview)
         {
             var world = GroundObjectWorld(new(
@@ -475,7 +475,7 @@ internal sealed partial class GameHostWindow
         GL.Uniform1(GL.GetUniformLocation(_program, "grayscaleAmount"), 0f);
         GL.Uniform1(GL.GetUniformLocation(_program, "preserveDarkTint"), 0);
 
-        void DrawTinted(List<float> vertices, Vector3 tint)
+        void DrawTinted(AtlasDrawBatch vertices, Vector3 tint)
         {
             if (vertices.Count == 0) return;
             GL.UseProgram(_program);
@@ -718,8 +718,7 @@ internal sealed partial class GameHostWindow
     private void DrawWallBuildIcon(Vector4 bounds, string itemId)
     {
         var frontWallKey = PalisadeWallVisuals.FrontFrameKeyFor(itemId);
-        if (!_treeAtlas.TryGetValue(frontWallKey, out var wall) ||
-            _treeAtlasTexture == 0)
+        if (!_treeAtlas.TryGetValue(frontWallKey, out var wall))
             return;
         var scale = MathF.Min(
             bounds.Z / Math.Max(1, wall.Frame.Width),
@@ -728,7 +727,7 @@ internal sealed partial class GameHostWindow
         var height = wall.Frame.Height * scale;
         DrawUiSprite(
             wall.Frame,
-            _treeAtlasTexture,
+            wall.Texture,
             new(
                 bounds.X + (bounds.Z - width) * .5f,
                 bounds.Y + (bounds.W - height) * .5f,
@@ -759,7 +758,7 @@ internal sealed partial class GameHostWindow
                 : GateCatalog.IsGate(itemId)
                     ? GateVisuals.AtlasKey(itemId)
                     : null;
-        if (buildingKey is null || _treeAtlasTexture == 0 ||
+        if (buildingKey is null ||
             !_treeAtlas.TryGetValue(buildingKey, out var house))
             return;
         var scale = MathF.Min(
@@ -768,7 +767,7 @@ internal sealed partial class GameHostWindow
         var width = house.Frame.Width * scale;
         var height = house.Frame.Height * scale;
         DrawUiSprite(
-            house.Frame, _treeAtlasTexture,
+            house.Frame, house.Texture,
             new(
                 bounds.X + (bounds.Z - width) * .5f,
                 bounds.Y + (bounds.W - height) * .5f,

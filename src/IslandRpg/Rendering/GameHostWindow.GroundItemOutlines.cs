@@ -16,9 +16,9 @@ internal sealed partial class GameHostWindow
         string atlasKey,
         Vector2 world,
         float opacity,
-        List<float> vertices) =>
+        AtlasDrawBatch vertices) =>
         AddAtlasQuad(atlasKey, world, opacity, vertices);
 
-    private void DrawGroundItemOutlines(List<float> vertices) =>
+    private void DrawGroundItemOutlines(AtlasDrawBatch vertices) =>
         DrawTreeOutlineBatch(vertices, GroundItemOutlineColor);
 }

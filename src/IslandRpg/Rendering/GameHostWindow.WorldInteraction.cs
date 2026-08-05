@@ -194,12 +194,13 @@ internal sealed partial class GameHostWindow
         {
             atlasKey = HouseVisuals.Resolve(value);
             shadowKey = null;
-            texture = _treeAtlasTexture;
             if (_treeAtlas.TryGetValue(atlasKey, out var houseAtlas))
             {
                 frame = houseAtlas.Frame;
-                return texture != 0;
+                texture = houseAtlas.Texture;
+                return true;
             }
+            texture = 0;
             frame = null!;
             return false;
         }
@@ -207,12 +208,13 @@ internal sealed partial class GameHostWindow
         {
             atlasKey = DefenceBuildingVisuals.Resolve(value);
             shadowKey = null;
-            texture = _treeAtlasTexture;
             if (_treeAtlas.TryGetValue(atlasKey, out var defenceAtlas))
             {
                 frame = defenceAtlas.Frame;
-                return texture != 0;
+                texture = defenceAtlas.Texture;
+                return true;
             }
+            texture = 0;
             frame = null!;
             return false;
         }
@@ -220,12 +222,13 @@ internal sealed partial class GameHostWindow
         {
             atlasKey = GateVisuals.Resolve(value);
             shadowKey = GateVisuals.ResolveShadow(value);
-            texture = _treeAtlasTexture;
             if (_treeAtlas.TryGetValue(atlasKey, out var gateAtlas))
             {
                 frame = gateAtlas.Frame;
-                return texture != 0;
+                texture = gateAtlas.Texture;
+                return true;
             }
+            texture = 0;
             frame = null!;
             return false;
         }
@@ -239,12 +242,13 @@ internal sealed partial class GameHostWindow
             : ConstructionService.Angle(value);
         (atlasKey, shadowKey) =
             PalisadeWallVisuals.Resolve(value, visualFrame);
-        texture = _treeAtlasTexture;
         if (_treeAtlas.TryGetValue(atlasKey, out var atlas))
         {
             frame = atlas.Frame;
-            return texture != 0;
+            texture = atlas.Texture;
+            return true;
         }
+        texture = 0;
         frame = null!;
         return false;
     }
@@ -560,7 +564,7 @@ internal sealed partial class GameHostWindow
         {
             var wallPreviewKey =
                 PalisadeWallVisuals.FrontFrameKeyFor(preview.ItemId);
-            var vertices = new List<float>();
+            var vertices = new AtlasDrawBatch();
             AddAtlasQuad(wallPreviewKey, world, .58f, vertices);
             GL.UseProgram(_program);
             GL.Uniform3(
@@ -587,7 +591,7 @@ internal sealed partial class GameHostWindow
             DefenceBuildingCatalog.IsDefence(preview.ItemId) ||
             GateCatalog.IsGate(preview.ItemId))
         {
-            var vertices = new List<float>();
+            var vertices = new AtlasDrawBatch();
             var buildingKey = HouseCatalog.IsHouse(preview.ItemId)
                 ? HouseVisuals.AtlasKey(preview.ItemId)
                 : DefenceBuildingCatalog.IsDefence(preview.ItemId)
@@ -627,7 +631,7 @@ internal sealed partial class GameHostWindow
                 GL.GetUniformLocation(_program, "tintAmount"), 0f);
             GL.Uniform1(
                 GL.GetUniformLocation(_program, "preserveDarkTint"), 0);
-            var shadowVertices = new List<float>();
+            var shadowVertices = new AtlasDrawBatch();
             AddAtlasQuad(
                 shadowKey, world, .34f, shadowVertices);
             DrawTreeBatch(shadowVertices);
@@ -886,7 +890,7 @@ internal sealed partial class GameHostWindow
         if (HouseCatalog.IsHouse(itemId))
         {
             frame = null!;
-            texture = _treeAtlasTexture;
+            texture = 0;
             atlasKey = HouseVisuals.AtlasKey(itemId);
             shadowKey = null;
             return false;
@@ -894,7 +898,7 @@ internal sealed partial class GameHostWindow
         if (DefenceBuildingCatalog.IsDefence(itemId))
         {
             frame = null!;
-            texture = _treeAtlasTexture;
+            texture = 0;
             atlasKey = DefenceBuildingVisuals.AtlasKey(itemId);
             shadowKey = null;
             return false;
@@ -902,7 +906,7 @@ internal sealed partial class GameHostWindow
         if (GateCatalog.IsGate(itemId))
         {
             frame = null!;
-            texture = _treeAtlasTexture;
+            texture = 0;
             atlasKey = GateVisuals.AtlasKey(itemId);
             shadowKey = null;
             return false;
@@ -910,7 +914,7 @@ internal sealed partial class GameHostWindow
         if (WallCatalog.IsWall(itemId))
         {
             frame = null!;
-            texture = _treeAtlasTexture;
+            texture = 0;
             atlasKey = PalisadeWallVisuals.FrontFrameKeyFor(itemId);
             shadowKey = null;
             return false;
