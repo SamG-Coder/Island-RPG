@@ -138,18 +138,27 @@ internal static class CraftingSkill
                     ])
             ]),
         new(
-            "small-rocks", ItemIds.SmallRocks,
-            CraftingCategory.Resources, 1, 8,
-            [new(ItemIds.MediumRock, 2)],
+            "small-rocks",
+            ItemIds.SmallRocks,
+            CraftingCategory.Resources,
+            1,
+            8,
             [
-                "Hold one medium rock as the striking stone.",
-                "Break the other medium rock into two piles of small rocks."
+                new(ItemIds.LargeRock, 1),
+                new(ItemIds.MediumRock, 1)
+            ],
+            [
+                "Hold the large rock as the striking stone.",
+                "Break the medium rock into two piles of small rocks."
             ],
             [
                 new(
-                    [new(ItemIds.MediumRock, 2)],
                     [
-                        new(ItemIds.MediumRock, 1),
+                        new(ItemIds.LargeRock, 1),
+                        new(ItemIds.MediumRock, 1)
+                    ],
+                    [
+                        new(ItemIds.LargeRock, 1),
                         new(ItemIds.SmallRocks, 2)
                     ])
             ]),
