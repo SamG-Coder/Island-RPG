@@ -603,12 +603,9 @@ internal sealed partial class GameHostWindow
         var sourceItem = inventory[sourceSlot]!;
 
         if (TryResolveOptionalControlInventorySlot(
-                root, sourceSlot, out var targetSlot, out var targetError))
+                root, sourceSlot, out _, out var targetError))
         {
-            _activeInventorySlot = -1;
-            ActivateInventorySlot(sourceSlot);
-            ActivateInventorySlot(targetSlot);
-            return ControlSnapshot("inventory_items_used_together");
+            return Error("inventory_item_combining_removed_use_crafting");
         }
         if (targetError is not null) return Error(targetError);
 

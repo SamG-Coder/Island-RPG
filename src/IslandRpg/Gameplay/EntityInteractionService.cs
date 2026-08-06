@@ -487,7 +487,7 @@ internal static class EntityInteractionService
         string toolItemId,
         float roll,
         out string?[] updatedInventory) =>
-        PlayerInventory.TryBluntStoneTool(
+        ToolUpkeepService.TryBluntStoneTool(
             inventory, toolItemId, roll, out updatedInventory);
 
     public static bool TryAutoSharpenStoneTool(
@@ -500,7 +500,7 @@ internal static class EntityInteractionService
             normalized, item => item == ItemIds.SmallRocks);
         var toolSlot = Array.FindIndex(
             normalized, item => item == bluntToolItemId);
-        return PlayerInventory.TrySharpenStoneTool(
+        return ToolUpkeepService.TrySharpenStoneTool(
             normalized, rocksSlot, toolSlot, out updatedInventory);
     }
 }

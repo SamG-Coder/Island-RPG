@@ -62,20 +62,6 @@ internal sealed partial class GameHostWindow
             Cursor = _defaultNativeCursor;
     }
 
-    private bool CanCraftRecipe(string recipeId)
-    {
-        var recipe = CraftingSkill.Recipes.First(
-            candidate => candidate.Id == recipeId);
-        var level = CraftingSkill.LevelForExperience(
-            _activePlayer?.CraftingExperience ?? 0);
-        if (level >= recipe.RequiredLevel) return true;
-        ReportBlockedAction(
-            "crafting-level-too-low",
-            $"You need Crafting level {recipe.RequiredLevel} to make " +
-            $"{ItemCatalog.Get(recipe.ResultItemId).Name}.");
-        return false;
-    }
-
     private void AwardCraftingExperience(string recipeId)
     {
         if (_activePlayer is null) return;
@@ -98,22 +84,6 @@ internal sealed partial class GameHostWindow
             _chatUi.AddMessage(
                 $"Your Crafting level is now {award.Level}.",
                 ChatMessageStyle.LevelUp);
-    }
-
-    private void CompletePlayerCraft(
-        string recipeId, string?[]? beforeInventory,
-        string?[]? afterInventory)
-    {
-        var recipe = CraftingSkill.Recipes.First(
-            candidate => candidate.Id == recipeId);
-        var added = PlayerInventory.AddedCount(
-            beforeInventory, afterInventory, recipe.ResultItemId);
-        if (added > 0)
-            RecordQuestEvent(new(
-                QuestEventType.CraftItem,
-                recipe.ResultItemId,
-                added));
-        AwardCraftingExperience(recipeId);
     }
 
     private void CompletePlayerCraft(
@@ -182,7 +152,10 @@ internal sealed partial class GameHostWindow
             HasRequiredCraftingStation(recipe));
         if (availability == RecipeAvailability.Locked)
         {
-            CanCraftRecipe(recipe.Id);
+            ReportBlockedAction(
+                "crafting-level-too-low",
+                $"You need Crafting level {recipe.RequiredLevel} to make " +
+                $"{ItemCatalog.Get(recipe.ResultItemId).Name}.");
             return false;
         }
         if (availability == RecipeAvailability.MissingResources)

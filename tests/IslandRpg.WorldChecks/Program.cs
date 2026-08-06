@@ -7523,13 +7523,8 @@ Require(
         ItemIds.BronzeKnife &&
     ItemCatalog.Get(ItemIds.StoneKnife).HasTag(ItemTag.Weapon) &&
     ItemCatalog.Get(ItemIds.BronzeKnife).HasTag(ItemTag.Weapon) &&
-    ItemCatalog.Get(ItemIds.IronKnife).HasTag(ItemTag.Weapon) &&
-    PlayerInventory.TryBreakRock(
-        [ItemIds.BronzeHammer, ItemIds.LargeRock], 0, 1,
-        out var bronzeHammerSplit) &&
-    bronzeHammerSplit[0] == ItemIds.BronzeHammer &&
-    bronzeHammerSplit.Count(item => item == ItemIds.MediumRock) == 2,
-    "knife selection must prefer one best weapon while metal hammers continue using shared tool actions");
+    ItemCatalog.Get(ItemIds.IronKnife).HasTag(ItemTag.Weapon),
+    "knife selection must prefer one best weapon");
 var bronzeHammerRecipe = CraftingSkill.Recipes.Single(recipe =>
     recipe.ResultItemId == ItemIds.BronzeHammer);
 Require(
@@ -8318,17 +8313,18 @@ Require(ItemCatalog.Get(ItemIds.Workbench) is var workbenchItem &&
         workbenchItem.HasTag(ItemTag.PlaceableObject) &&
         !workbenchItem.Droppable,
     "the packed workbench must be placeable once rather than droppable");
-Require(PlayerInventory.TrySwap(
-            ["axe", "logs", "oak_logs"], 0, 2,
-            out var swappedInventory) &&
-        swappedInventory[0] == "oak_logs" &&
-        swappedInventory[1] == "logs" &&
-        swappedInventory[2] == "axe",
+var swappedInventory = PlayerInventory.CreateContainer();
+swappedInventory.TryAdd("axe");
+swappedInventory.TryAdd("logs");
+swappedInventory.TryAdd("oak_logs");
+Require(swappedInventory.TrySwap(0, 2) &&
+        swappedInventory[0]?.ItemId == "oak_logs" &&
+        swappedInventory[1]?.ItemId == "logs" &&
+        swappedInventory[2]?.ItemId == "axe",
     "dragging between occupied inventory slots must swap their items");
-Require(PlayerInventory.TrySwap(
-            swappedInventory, 0, 5, out var movedToEmptySlot) &&
-        movedToEmptySlot[0] is null &&
-        movedToEmptySlot[5] == "oak_logs",
+Require(swappedInventory.TrySwap(0, 5) &&
+        swappedInventory[0] is null &&
+        swappedInventory[5]?.ItemId == "oak_logs",
     "inventory items must move into empty fixed slots without compacting");
 var gameUi = new GameUiControlState();
 gameUi.Layout(new(0, 0, 1280, 720));
@@ -9107,103 +9103,18 @@ Require(PlayerInventory.Count(inventory) == 28 &&
         !PlayerInventory.TryAdd(inventory, "logs", out var unchanged) &&
         unchanged.Length == 28,
     "inventory must have exactly 28 non-stacking slots");
-Require(PlayerInventory.TryBreakRock(
-        [ItemIds.LargeRock, ItemIds.LargeRock],
-        0, 1, out var splitLarge) &&
-        splitLarge.Count(item => item == ItemIds.MediumRock) == 2 &&
-        splitLarge[0] == ItemIds.LargeRock,
-    "a large rock tool must split another large rock into two medium rocks");
-Require(PlayerInventory.TryBreakRock(
-        [ItemIds.LargeRock, ItemIds.MediumRock],
-        0, 1, out var splitMedium) &&
-        splitMedium.Count(item => item == ItemIds.SmallRocks) == 2,
-    "a large rock tool must split a medium rock into two pebble items");
-Require(PlayerInventory.TryBreakRock(
-        [ItemIds.StoneHammer, ItemIds.LargeRock],
-        0, 1, out var hammerSplit) &&
-        hammerSplit[0] == ItemIds.StoneHammer &&
-        hammerSplit.Count(item => item == ItemIds.MediumRock) == 2,
-    "a stone hammer must split rocks without being consumed");
-Require(!PlayerInventory.TryBreakRock(
-        Enumerable.Repeat<string?>(ItemIds.LargeRock, PlayerInventory.Capacity)
-            .ToArray(),
-        0, 1, out _),
-    "rock splitting must require an empty inventory slot");
-Require(PlayerInventory.TrySharpenRock(
-        [ItemIds.MediumRock, ItemIds.MediumRock],
-        0, 1, out var sharpenedRock) &&
-        sharpenedRock[0] is null &&
-        sharpenedRock[1] == ItemIds.SharpenedRock &&
-        PlayerInventory.Count(sharpenedRock) == 1,
-    "using a medium rock on another must consume both and create a sharp rock");
-Require(!PlayerInventory.TrySharpenRock(
-        [ItemIds.MediumRock, ItemIds.LargeRock],
-        0, 1, out _),
-    "creating a sharp rock must require two medium rocks");
-Require(PlayerInventory.TryCraftStoneAxe(
-        [ItemIds.SharpenedRock, ItemIds.Sticks],
-        0, 1, out var craftedAxe) &&
-        craftedAxe[0] is null &&
-        craftedAxe[1] == ItemIds.StoneAxe &&
-        ItemCatalog.Get(craftedAxe[1]!).HasTag(ItemTag.Axe) &&
-        PlayerInventory.Count(craftedAxe) == 1,
-    "using a sharp rock on sticks must consume both and create a stone axe");
-Require(!PlayerInventory.TryCraftStoneAxe(
-        [ItemIds.SharpenedRock, ItemIds.Logs],
-        0, 1, out _),
-    "crafting an axe must require sticks");
-Require(PlayerInventory.TryCraftStoneKnife(
-        [ItemIds.SharpenedRock, ItemIds.PlantFibres],
-        0, 1, out var craftedKnife) &&
-        craftedKnife[0] is null &&
-        craftedKnife[1] == ItemIds.StoneKnife &&
-        PlayerInventory.Count(craftedKnife) == 1 &&
-        PlayerInventory.TryCraftStoneKnife(
-            [ItemIds.PlantFibres, ItemIds.SharpenedRock],
-            0, 1, out var reverseCraftedKnife) &&
-        reverseCraftedKnife[1] == ItemIds.StoneKnife,
-    "using fibre and a sharp rock in either order must create a stone knife");
-Require(!PlayerInventory.TryCraftStoneKnife(
-        [ItemIds.SharpenedRock, ItemIds.Sticks],
-        0, 1, out _),
-    "crafting a stone knife must require plant fibre");
-Require(PlayerInventory.TryCraftStoneHammer(
-        [ItemIds.MediumRock, ItemIds.Sticks],
-        0, 1, out var craftedHammer) &&
-        craftedHammer[0] is null &&
-        craftedHammer[1] == ItemIds.StoneHammer &&
-        ItemCatalog.Get(craftedHammer[1]!).HasTag(ItemTag.Tool) &&
-        !ItemCatalog.Get(craftedHammer[1]!).HasTag(ItemTag.Axe),
-    "using a medium rock on sticks must consume both and create a stone hammer");
-Require(!PlayerInventory.TryCraftStoneHammer(
-        [ItemIds.MediumRock, ItemIds.Logs],
-        0, 1, out _),
-    "crafting a stone hammer must require sticks");
-Require(PlayerInventory.TryBluntStoneTool(
+Require(EntityInteractionService.TryBluntStoneTool(
         [ItemIds.StoneAxe], ItemIds.StoneAxe, .009f,
         out var bluntAxe) &&
         bluntAxe[0] == ItemIds.BluntStoneAxe &&
         !PlayerInventory.HasAxe(bluntAxe) &&
         PlayerInventory.HasAnyAxe(bluntAxe),
     "a stone axe must become unusably blunt on the one-percent roll");
-Require(!PlayerInventory.TryBluntStoneTool(
+Require(!EntityInteractionService.TryBluntStoneTool(
         [ItemIds.StoneHammer], ItemIds.StoneHammer, .01f,
         out var unchangedHammer) &&
         unchangedHammer[0] == ItemIds.StoneHammer,
     "the stone-tool blunt chance must be exactly one percent");
-Require(PlayerInventory.TrySharpenStoneTool(
-        [ItemIds.SmallRocks, ItemIds.BluntStoneAxe],
-        0, 1, out var resharpenedAxe) &&
-        resharpenedAxe[0] is null &&
-        resharpenedAxe[1] == ItemIds.StoneAxe &&
-        PlayerInventory.HasAxe(resharpenedAxe),
-    "using small rocks on a blunt stone axe must consume them and restore it");
-Require(PlayerInventory.TrySharpenStoneTool(
-        [ItemIds.SmallRocks, ItemIds.BluntStoneHammer],
-        0, 1, out var resharpenedHammer) &&
-        resharpenedHammer[0] is null &&
-        resharpenedHammer[1] == ItemIds.StoneHammer,
-    "using small rocks on a blunt stone hammer must restore it");
 Require(
     EntityInteractionService.TryAutoSharpenStoneTool(
         [ItemIds.BluntStoneAxe, ItemIds.SmallRocks, ItemIds.Sticks],
@@ -9607,20 +9518,6 @@ Require(
     ItemCatalog.Get(ItemIds.BurntRedSnapper)
         .HasTag(ItemTag.BurntFood),
     "fish states must use authored raw/cooked pairs and reuse the cooked icon for shader-derived burnt fish");
-Require(PlayerInventory.TryCarvePlank(
-        [ItemIds.StoneKnife, ItemIds.Logs],
-        0, 1, out var carvedPlank) &&
-        carvedPlank[0] == ItemIds.StoneKnife &&
-        carvedPlank[1] == ItemIds.Plank &&
-        PlayerInventory.TryCarvePlank(
-            [ItemIds.StoneKnife, ItemIds.OakLogs],
-            0, 1, out var carvedOakPlank) &&
-        carvedOakPlank[0] == ItemIds.StoneKnife &&
-        carvedOakPlank[1] == ItemIds.Plank &&
-        !PlayerInventory.TryCarvePlank(
-            [ItemIds.SharpenedRock, ItemIds.Logs],
-            0, 1, out _),
-    "a knife must carve any log into a plank without being consumed");
 Require(ItemCatalog.Get(ItemIds.Plank) is var plankDefinition &&
         plankDefinition.SpriteCell == 7 &&
         plankDefinition.HasTag(ItemTag.WoodcuttingMaterial),
