@@ -408,6 +408,21 @@ internal sealed partial class GameHostWindow
         if (!enemy.Alive)
         {
             DropEnemyLoot(enemy);
+            var split = SlimeAbilityService.Split(
+                enemy, HashCode.Combine(_worldSeed, enemy.Id));
+            if (split.Length > 0)
+            {
+                _enemies.AddRange(split);
+                _slimeAttackEffects.SplitBurst(
+                    enemy.Kind,
+                    EnemyEffectWorld(enemy.Position),
+                    HashCode.Combine(enemy.Id, split.Length));
+                PlaySlimeSplitSound(enemy.Kind);
+                _chatUi.AddMessage(
+                    $"The large {EnemyDisplayName(enemy.Kind).ToLowerInvariant()} " +
+                    "bursts into two smaller slimes!",
+                    ChatMessageStyle.Warning);
+            }
             _chatUi.AddMessage(
                 $"The {EnemyDisplayName(enemy.Kind).ToLowerInvariant()} dissolves.",
                 ChatMessageStyle.Action);

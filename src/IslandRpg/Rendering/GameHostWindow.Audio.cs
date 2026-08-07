@@ -1,4 +1,5 @@
 using IslandRpg.Audio;
+using IslandRpg.Gameplay;
 using IslandRpg.Rendering.Ui;
 using OpenTK.Mathematics;
 
@@ -36,7 +37,8 @@ internal sealed partial class GameHostWindow
             _soundEffects.Preload(
                 _soundCues.Values
                     .SelectMany(variants => variants)
-                    .Select(sound => sound.Path));
+                    .Select(sound => sound.Path)
+                    .Concat(SlimeSoundEffects.Prepare()));
         }
         catch
         {
@@ -126,6 +128,12 @@ internal sealed partial class GameHostWindow
             AppContext.BaseDirectory, "Resources", "Audio", fileName);
         if (File.Exists(path)) _soundEffects?.Play(path);
     }
+
+    private void PlaySlimeAttackSound(EnemyKind kind) =>
+        _soundEffects?.Play(SlimeSoundEffects.Attack(kind));
+
+    private void PlaySlimeSplitSound(EnemyKind kind) =>
+        _soundEffects?.Play(SlimeSoundEffects.Split(kind));
 
     private void ApplyMusicSettings()
     {

@@ -40,6 +40,13 @@ internal readonly record struct SlimeAttackLight(
     float RadiusPixels,
     float Intensity);
 
+internal readonly record struct SlimeImpactWave(
+    Vector2 World,
+    Vector3 Color,
+    float Progress,
+    float Opacity,
+    float RadiusPixels);
+
 internal sealed class SlimeAttackEffects
 {
     public const int ParticleCapacity = 160;
@@ -48,12 +55,15 @@ internal sealed class SlimeAttackEffects
 
     private readonly Particle[] _particles = new Particle[ParticleCapacity];
     private readonly Light[] _lights = new Light[LightCapacity];
+    private readonly Wave[] _waves = new Wave[LightCapacity];
     private int _nextParticle;
     private int _nextLight;
+    private int _nextWave;
 
     public bool Active =>
         _particles.Any(value => value.Life > 0) ||
-        _lights.Any(value => value.Life > 0);
+        _lights.Any(value => value.Life > 0) ||
+        _waves.Any(value => value.Life > 0);
     internal int ActiveParticleCount =>
         _particles.Count(value => value.Life > 0);
     internal int ActiveLightCount =>
@@ -98,6 +108,24 @@ internal sealed class SlimeAttackEffects
             profile.LightLife,
             profile.LightLife);
         _nextLight = (_nextLight + 1) % LightCapacity;
+        _waves[_nextWave] = new(
+            targetWorld, profile.LightColor,
+            profile.LightRadiusPixels * .82f,
+            .52f, .52f);
+        _nextWave = (_nextWave + 1) % LightCapacity;
+    }
+
+    public void SplitBurst(
+        EnemyKind kind, Vector2 world, int seed)
+    {
+        var random = new Random(seed);
+        for (var side = -1; side <= 1; side += 2)
+        {
+            var target = world + new Vector2(
+                side * (22 + random.NextSingle() * 12),
+                -10 - random.NextSingle() * 18);
+            Burst(kind, world, target, random.Next());
+        }
     }
 
     public void Update(float elapsed)
@@ -119,6 +147,13 @@ internal sealed class SlimeAttackEffects
             if (light.Life <= 0) continue;
             light.Life = Math.Max(0, light.Life - elapsed);
             _lights[index] = light;
+        }
+        for (var index = 0; index < _waves.Length; index++)
+        {
+            var wave = _waves[index];
+            if (wave.Life <= 0) continue;
+            wave.Life = Math.Max(0, wave.Life - elapsed);
+            _waves[index] = wave;
         }
     }
 
@@ -151,12 +186,29 @@ internal sealed class SlimeAttackEffects
         }
     }
 
+    public IEnumerable<SlimeImpactWave> Waves()
+    {
+        foreach (var wave in _waves)
+        {
+            if (wave.Life <= 0) continue;
+            var progress = 1 - wave.Life / wave.MaximumLife;
+            yield return new(
+                wave.World,
+                wave.Color,
+                progress,
+                MathF.Pow(wave.Life / wave.MaximumLife, .72f),
+                wave.RadiusPixels);
+        }
+    }
+
     public void Clear()
     {
         Array.Clear(_particles);
         Array.Clear(_lights);
+        Array.Clear(_waves);
         _nextParticle = 0;
         _nextLight = 0;
+        _nextWave = 0;
     }
 
     public static IEnumerable<(string Key, SpriteFrame Frame)> Frames()
@@ -222,6 +274,20 @@ internal sealed class SlimeAttackEffects
         public readonly Vector3 Color = color;
         public readonly float RadiusPixels = radiusPixels;
         public readonly float MaximumIntensity = maximumIntensity;
+        public float Life = life;
+        public readonly float MaximumLife = maximumLife;
+    }
+
+    private struct Wave(
+        Vector2 world,
+        Vector3 color,
+        float radiusPixels,
+        float life,
+        float maximumLife)
+    {
+        public readonly Vector2 World = world;
+        public readonly Vector3 Color = color;
+        public readonly float RadiusPixels = radiusPixels;
         public float Life = life;
         public readonly float MaximumLife = maximumLife;
     }

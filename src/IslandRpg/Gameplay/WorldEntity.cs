@@ -73,6 +73,7 @@ internal sealed class WorldEntity
     public float MoveSpeed { get; set; } =
         ActorMovementService.BaseMoveSpeed;
     public float TerrainSpeedMultiplier { get; set; } = 1f;
+    public float StatusSpeedMultiplier { get; set; } = 1f;
 
     public WorldEntity(Vector2 position, EntityGender gender = EntityGender.Male)
     {
@@ -232,7 +233,8 @@ internal sealed class WorldEntity
         ActionTime += elapsed;
         if (Action != EntityAction.Move) return;
         var remainingMovement = MoveSpeed *
-            Math.Clamp(TerrainSpeedMultiplier, .35f, 1f) * elapsed;
+            Math.Clamp(TerrainSpeedMultiplier, .35f, 1f) *
+            Math.Clamp(StatusSpeedMultiplier, 0, 1f) * elapsed;
         while (Action == EntityAction.Move)
         {
             var displacement = Target - Position;

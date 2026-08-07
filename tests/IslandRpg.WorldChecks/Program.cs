@@ -27,6 +27,43 @@ if (slimeExportIndex >= 0)
     return;
 }
 
+if (args.Contains("--slime-combat-check", StringComparer.OrdinalIgnoreCase))
+{
+    var focusedWaterStatus = SlimeAbilityService.Apply(
+        default, EnemyKind.WaterSlime, 10);
+    var focusedRootStatus = SlimeAbilityService.Apply(
+        focusedWaterStatus, EnemyKind.GrassSlime, 10);
+    var focusedPoisonStatus = SlimeAbilityService.Apply(
+        focusedRootStatus, EnemyKind.CaveSlime, 10);
+    var focusedPoisonTick = SlimeAbilityService.Advance(
+        focusedPoisonStatus, 11);
+    var focusedLargeSlime = new EnemyState(
+        Guid.NewGuid(), Guid.NewGuid(), EnemyKind.SandSlime,
+        Vector2.Zero, Vector2.Zero, Vector2.Zero,
+        0, 6, 0, 40,
+        Behavior: EnemyBehavior.Dead,
+        SizeScale: SlimeAbilityService.SizeScale(6));
+    var focusedChildren = SlimeAbilityService.Split(
+        focusedLargeSlime, 2187);
+    var focusedEffects = new SlimeAttackEffects();
+    foreach (var kind in Enum.GetValues<EnemyKind>())
+        focusedEffects.Burst(
+            kind, Vector2.Zero, Vector2.UnitX, (int)kind);
+    if (!(focusedWaterStatus.MovementMultiplier(11) is > .5f and < 1 &&
+          focusedRootStatus.MovementMultiplier(11) == 0 &&
+          focusedPoisonTick.PoisonDamage == 1 &&
+          focusedChildren.Length == 2 &&
+          focusedChildren.All(child => child.SplitGeneration == 1) &&
+          SlimeAbilityService.Split(focusedChildren[0], 2187).Length == 0 &&
+          focusedEffects.ActiveParticleCount > 0 &&
+          focusedEffects.Lights().Count() == 4 &&
+          focusedEffects.Waves().Count() == 4))
+        throw new InvalidOperationException(
+            "slime combat abilities and bounded effects must remain integrated");
+    Console.WriteLine("Slime combat checks passed: 12/12.");
+    return;
+}
+
 if (args.Contains("--ai-score", StringComparer.OrdinalIgnoreCase))
 {
     var modelIndex = Array.FindIndex(args, value => value == "--model");
@@ -11177,6 +11214,7 @@ for (var burst = 0; burst < 20; burst++)
         burst);
 }
 var slimeAttackLights = slimeAttackEffects.Lights().ToArray();
+var slimeImpactWaves = slimeAttackEffects.Waves().ToArray();
 Require(
     slimeEffectProfiles.Select(profile => profile.LightColor)
         .Distinct().Count() == slimeEffectProfiles.Length &&
@@ -11188,15 +11226,50 @@ Require(
     slimeAttackEffects.ActiveLightCount ==
         SlimeAttackEffects.LightCapacity &&
     slimeAttackLights.Length == SlimeAttackEffects.LightCapacity &&
+    slimeImpactWaves.Length == SlimeAttackEffects.LightCapacity &&
     slimeAttackLights.All(light =>
-        light.Intensity > 0 && light.RadiusPixels > 0),
-    "slime attacks must use distinct type profiles and bounded particle and light pools");
+        light.Intensity > 0 && light.RadiusPixels > 0) &&
+    slimeImpactWaves.All(wave =>
+        wave.Opacity > 0 && wave.RadiusPixels > 0),
+    "slime attacks must use distinct type profiles and bounded particle, light and shader-wave pools");
 slimeAttackEffects.Update(2);
 Require(
     !slimeAttackEffects.Active &&
     slimeAttackEffects.ActiveParticleCount == 0 &&
     slimeAttackEffects.ActiveLightCount == 0,
     "slime attack particles and their existing-scene lights must expire cleanly");
+
+var waterStatus = SlimeAbilityService.Apply(
+    default, EnemyKind.WaterSlime, 10);
+var grassStatus = SlimeAbilityService.Apply(
+    waterStatus, EnemyKind.GrassSlime, 10);
+var caveStatus = SlimeAbilityService.Apply(
+    grassStatus, EnemyKind.CaveSlime, 10);
+var poisonTick = SlimeAbilityService.Advance(caveStatus, 11);
+var largeSlime = new EnemyState(
+    Guid.NewGuid(), Guid.NewGuid(), EnemyKind.WaterSlime,
+    Vector2.Zero, Vector2.Zero, Vector2.Zero,
+    0, 6, 0, 40,
+    Behavior: EnemyBehavior.Dead,
+    SizeScale: SlimeAbilityService.SizeScale(6));
+var splitSlimes = SlimeAbilityService.Split(largeSlime, 2187);
+var rootedEntity = new WorldEntity(Vector2.Zero)
+{
+    StatusSpeedMultiplier = grassStatus.MovementMultiplier(11)
+};
+rootedEntity.MoveTo(Vector2.UnitX);
+rootedEntity.Update(1);
+Require(
+    waterStatus.MovementMultiplier(11) is > .5f and < 1 &&
+    grassStatus.MovementMultiplier(11) == 0 &&
+    poisonTick.PoisonDamage == 1 &&
+    splitSlimes.Length == 2 &&
+    splitSlimes.All(child =>
+        child.Alive && child.SplitGeneration == 1 &&
+        child.SizeScale < largeSlime.SizeScale) &&
+    SlimeAbilityService.Split(splitSlimes[0], 2187).Length == 0 &&
+    rootedEntity.Position == Vector2.Zero,
+    "slime abilities must slow, root and poison through bounded statuses while large slimes split only once");
 
 var grassSpawner = new EnemySpawnerState(
     Guid.NewGuid(), Vector2.Zero, (int)WorldLevel.Overworld,

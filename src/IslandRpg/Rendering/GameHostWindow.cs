@@ -1996,6 +1996,8 @@ internal sealed partial class GameHostWindow : GameWindow
                     wading,
                     currentTerrain.Height,
                     nextTerrain.Height);
+            _player.StatusSpeedMultiplier =
+                _playerSlimeStatus.MovementMultiplier(_clock);
             if (_fishingBoatBoarded && _fishingBoat is not null)
             {
                 _fishingBoat.Update(elapsed);
@@ -6560,7 +6562,10 @@ internal sealed partial class GameHostWindow : GameWindow
             _levelUpFireworks.AddTo(_levelUpParticleAdder);
         }
         if (_slimeAttackEffects.Active)
+        {
+            DrawSlimeImpactShaders();
             _slimeAttackEffects.AddTo(_levelUpParticleAdder);
+        }
         if (atlasVertices.Count > 0)
         {
             DrawTreeBatch(atlasVertices);
@@ -9035,6 +9040,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_terrainProgram != 0) GL.DeleteProgram(_terrainProgram);
         if (_softActorShadowProgram != 0)
             GL.DeleteProgram(_softActorShadowProgram);
+        if (_slimeImpactProgram != 0)
+            GL.DeleteProgram(_slimeImpactProgram);
         if (_cinematicOceanProgram != 0)
             GL.DeleteProgram(_cinematicOceanProgram);
         if (_cinematicLightningProgram != 0)

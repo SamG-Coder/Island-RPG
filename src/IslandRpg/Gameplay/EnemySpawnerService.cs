@@ -41,7 +41,9 @@ internal sealed record EnemyState(
     EntityAction VisualAction = EntityAction.Idle,
     double VisualActionStartedAt = 0,
     double AggroReadyAt = 0,
-    float HealthRegenerationRemainder = 0)
+    float HealthRegenerationRemainder = 0,
+    float SizeScale = 1,
+    int SplitGeneration = 0)
 {
     public bool Alive => Health > 0;
 }
@@ -323,9 +325,11 @@ internal static class EnemySpawnerService
                 break;
         }
         var health = 16 + power * 4;
+        var sizeScale = SlimeAbilityService.SizeScale(power);
         return new(
             Guid.NewGuid(), spawner.Id, entry.Kind, position, position, position,
-            spawner.WorldLevel, power, health, health);
+            spawner.WorldLevel, power, health, health,
+            SizeScale: sizeScale);
     }
 
 }

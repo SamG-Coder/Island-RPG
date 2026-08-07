@@ -12,8 +12,10 @@ internal sealed partial class GameHostWindow
     private readonly List<EnemySpawnerState> _enemySpawners = [];
     private readonly List<EnemyState> _enemies = [];
     private readonly SlimeAttackEffects _slimeAttackEffects = new();
+    private SlimeVictimStatus _playerSlimeStatus;
     private SlimeSpriteRig? _slimeRig;
     private int _softActorShadowProgram;
+    private int _slimeImpactProgram;
     private Guid? _enemyContextTargetId;
     private Vector2 _enemyContextWalkTarget;
     private readonly int[] _slimeFrontTextures =
@@ -39,6 +41,8 @@ internal sealed partial class GameHostWindow
             Path.Combine(directory, "slime-sprites-back.png"));
         _softActorShadowProgram =
             GameShaderPrograms.CreateSoftShadowProgram();
+        _slimeImpactProgram =
+            GameShaderPrograms.CreateSlimeImpactProgram();
         foreach (var state in Enum.GetValues<SlimeAnimationState>())
         for (var frame = 0; frame < SlimeSpriteRig.Columns; frame++)
         {
@@ -59,6 +63,7 @@ internal sealed partial class GameHostWindow
         _enemySpawners.Clear();
         _enemies.Clear();
         _slimeAttackEffects.Clear();
+        _playerSlimeStatus = default;
         _nextEnemySpawnerProbe = 0;
         _playerEnemyTargetableAt = 0;
     }
@@ -67,6 +72,11 @@ internal sealed partial class GameHostWindow
     {
         if (_mode != PreviewMode.Game || _player is null ||
             _activeWorld is null) return;
+        var status = SlimeAbilityService.Advance(
+            _playerSlimeStatus, _clock);
+        _playerSlimeStatus = status.Status;
+        if (status.PoisonDamage > 0)
+            ApplyPlayerDamage(status.PoisonDamage, "Cave slime poison");
         _enemies.RemoveAll(enemy =>
             !enemy.Alive && SlimeSpriteRig.DeathAnimationComplete(
                 _clock - enemy.VisualActionStartedAt));
@@ -121,6 +131,18 @@ internal sealed partial class GameHostWindow
                 var controlled = EnemySpawnerService.UpdateController(
                     placed, actors, _clock, elapsed,
                     unchecked((int)_worldSeed));
+                if (placed.Kind == EnemyKind.SandSlime &&
+                    placed.TargetId is not null &&
+                    placed.Behavior == EnemyBehavior.Idle &&
+                    controlled.Behavior is EnemyBehavior.Chase or
+                        EnemyBehavior.Attack)
+                {
+                    var world = EnemyEffectWorld(controlled.Position);
+                    _slimeAttackEffects.SplitBurst(
+                        EnemyKind.SandSlime, world,
+                        HashCode.Combine(controlled.Id, (int)_clock));
+                    PlaySlimeAttackSound(EnemyKind.SandSlime);
+                }
                 controlled = ResolveEnemyAttack(controlled);
                 nextEnemies.Add(AdvanceEnemyPath(controlled, elapsed));
             }
@@ -161,14 +183,33 @@ internal sealed partial class GameHostWindow
             targetWorld + new Vector2(0, -18),
             HashCode.Combine(enemy.Id, (int)(_clock * 1000)));
         if (interaction.Attack.Hit)
+        {
             ApplyPlayerDamage(
                 interaction.Attack.Damage,
                 EnemyDisplayName(enemy.Kind));
+            _playerSlimeStatus = SlimeAbilityService.Apply(
+                _playerSlimeStatus, enemy.Kind, _clock);
+            AnnounceSlimeAbility(enemy.Kind);
+        }
         else
             ShowEntityImpact(
                 PlayerFeedbackKey(_activePlayer.Id), 0, false);
         TryAutoRetaliate(enemy);
+        PlaySlimeAttackSound(enemy.Kind);
         return enemy;
+    }
+
+    private void AnnounceSlimeAbility(EnemyKind kind)
+    {
+        var message = kind switch
+        {
+            EnemyKind.WaterSlime => "The splash drenches you and slows your steps!",
+            EnemyKind.GrassSlime => "Vines coil around your feet and hold you fast!",
+            EnemyKind.CaveSlime => "Venomous slime burns through your blood!",
+            _ => null
+        };
+        if (message is not null)
+            _chatUi.AddMessage(message, ChatMessageStyle.Warning);
     }
 
     private Vector2 EnemyEffectWorld(Vector2 position)
@@ -288,6 +329,45 @@ internal sealed partial class GameHostWindow
             right, bottom, 1, 1,
             right, top, 1, 0
         ]);
+    }
+
+    private void DrawSlimeImpactShaders()
+    {
+        if (_slimeImpactProgram == 0) return;
+        foreach (var wave in _slimeAttackEffects.Waves())
+        {
+            var screen = SpriteAnchor(wave.World);
+            var radius = wave.RadiusPixels *
+                         SpritePixelScale() * (1 + wave.Progress * .32f);
+            var halfHeight = radius * .38f;
+            var left = (screen.X - radius - ReferenceWidth * .5f) *
+                       2 / ReferenceWidth;
+            var right = (screen.X + radius - ReferenceWidth * .5f) *
+                        2 / ReferenceWidth;
+            var top = -(screen.Y - halfHeight - ReferenceHeight * .5f) *
+                      2 / ReferenceHeight;
+            var bottom = -(screen.Y + halfHeight - ReferenceHeight * .5f) *
+                         2 / ReferenceHeight;
+            GL.UseProgram(_slimeImpactProgram);
+            GL.Uniform3(
+                _shaderUniforms.Get(_slimeImpactProgram, "effectColor"),
+                wave.Color);
+            GL.Uniform1(
+                _shaderUniforms.Get(_slimeImpactProgram, "progress"),
+                wave.Progress);
+            GL.Uniform1(
+                _shaderUniforms.Get(_slimeImpactProgram, "opacity"),
+                wave.Opacity);
+            GL.Uniform1(
+                _shaderUniforms.Get(_slimeImpactProgram, "distortion"),
+                .85f);
+            Draw([
+                left, top, 0, 0,
+                left, bottom, 0, 1,
+                right, bottom, 1, 1,
+                right, top, 1, 0
+            ]);
+        }
     }
 
     private EnemyState AdvanceEnemyPath(EnemyState enemy, float elapsed)
@@ -595,6 +675,13 @@ internal sealed partial class GameHostWindow
         var terrain = SamplePlayerTerrain(enemy.Position.X, enemy.Position.Y);
         var world = IsometricTerrainProjection.Project(
             enemy.Position.X, enemy.Position.Y, terrain.Height);
+        var camouflaged = enemy.Kind == EnemyKind.GrassSlime &&
+                          enemy.TargetId is null &&
+                          enemy.Behavior is EnemyBehavior.Idle or
+                              EnemyBehavior.Roam;
+        var burrowing = enemy.Kind == EnemyKind.SandSlime &&
+                        enemy.TargetId is not null &&
+                        _clock < enemy.AggroReadyAt;
         return new(
             frame,
             pose.UsesBackSheet
@@ -606,9 +693,9 @@ internal sealed partial class GameHostWindow
             0,
             SlimeTint(enemy.Kind),
             .28f,
-            SlimeSpriteRig.WorldScale,
-            Opacity: .88f,
-            SoftShadow: true,
+            SlimeSpriteRig.WorldScale * enemy.SizeScale,
+            Opacity: burrowing ? .18f : camouflaged ? .42f : .88f,
+            SoftShadow: !burrowing,
             PixelArtFilter: true);
     }
 

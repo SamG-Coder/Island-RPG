@@ -23,6 +23,41 @@ internal static class GameShaderPrograms
         return CreateProgram(vertex, fragment);
     }
 
+    public static int CreateSlimeImpactProgram()
+    {
+        const string vertex = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uvIn; out vec2 uv; void main(){uv=uvIn;gl_Position=vec4(p,0,1);}";
+        const string fragment = """
+            #version 330 core
+            in vec2 uv;
+            out vec4 color;
+            uniform vec3 effectColor;
+            uniform float progress;
+            uniform float opacity;
+            uniform float distortion;
+            float hash(vec2 p) {
+                return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+            }
+            void main() {
+                vec2 p = (uv - .5) * 2.0;
+                p.y *= 1.75;
+                float angle = atan(p.y, p.x);
+                float noise = (hash(vec2(floor(angle * 13.0), 2.0)) - .5) * .09;
+                float radius = length(p) + noise * distortion;
+                float ringAt = mix(.10, .88, progress);
+                float ring = 1.0 - smoothstep(.025, .105,
+                    abs(radius - ringAt));
+                float core = (1.0 - smoothstep(0.0, .52, radius)) *
+                    (1.0 - progress) * .42;
+                float alpha = (ring + core) * opacity *
+                    (1.0 - smoothstep(.76, 1.0, radius));
+                if (alpha < .008) discard;
+                vec3 glow = effectColor * (1.25 + ring * .55);
+                color = vec4(glow, alpha);
+            }
+            """;
+        return CreateProgram(vertex, fragment);
+    }
+
     public static int CreateCinematicLightningProgram()
     {
         const string vertex = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uvIn; out vec2 uv; void main(){uv=uvIn;gl_Position=vec4(p,0,1);}";
