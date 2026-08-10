@@ -28,7 +28,10 @@ internal sealed class SettingsMenuState
     private static readonly SettingsTab[] AllTabs =
         Enum.GetValues<SettingsTab>();
     private static readonly string[] DisplayItems =
-        ["fullscreen", "resolution", "vsync", "frame-limit", "metrics"];
+        [
+            "fullscreen", "resolution", "vsync", "frame-limit", "metrics",
+            "crt-mode"
+        ];
     private static readonly string[] GameItems =
     [
         "occluded-player-outline", "unlimited-zoom",

@@ -247,6 +247,9 @@ internal sealed partial class GameHostWindow : GameWindow
     private int _uploadIndex;
     private int _terrainUploadIndex;
     private int _program;
+    private int _crtSignalProgram;
+    private int _crtTubeProgram;
+    private bool _crtModeEnabled;
     private int _terrainProgram;
     private int _cliffProgram;
     private int _islandVbo;
@@ -262,6 +265,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly float[] _spriteQuadVertices = new float[16];
     private int _sceneFramebuffer;
     private int _sceneColor;
+    private int _crtSignalFramebuffer;
+    private int _crtSignalTexture;
     private int _sceneTargetWidth = ReferenceWidth;
     private int _sceneTargetHeight = ReferenceHeight;
     private int _pauseBlurProgram;
@@ -546,6 +551,8 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.Enable(EnableCap.Blend);
         GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
         _program = GameShaderPrograms.CreateSpriteProgram();
+        _crtSignalProgram = GameShaderPrograms.CreateCrtSignalProgram();
+        _crtTubeProgram = GameShaderPrograms.CreateCrtTubeProgram();
         _pauseBlurProgram =
             GameShaderPrograms.CreateModalBlurProgram();
         _vao = GL.GenVertexArray();
@@ -3425,6 +3432,17 @@ internal sealed partial class GameHostWindow : GameWindow
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT,
             (int)TextureWrapMode.ClampToEdge);
         _sceneFramebuffer = GL.GenFramebuffer();
+        _crtSignalTexture = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture2D, _crtSignalTexture);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS,
+            (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT,
+            (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
+            (int)TextureMinFilter.Linear);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
+            (int)TextureMagFilter.Linear);
+        _crtSignalFramebuffer = GL.GenFramebuffer();
         ResizeSceneTarget(force: true);
     }
 
@@ -3468,6 +3486,64 @@ internal sealed partial class GameHostWindow : GameWindow
         var status = GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
         if (status != FramebufferErrorCode.FramebufferComplete)
             throw new InvalidOperationException($"Scene framebuffer is incomplete: {status}");
+
+        // A floating-point intermediate keeps beam energy in linear light. It
+        // also separates raster reconstruction from the physical tube mask,
+        // matching the way a CRT signal and its phosphor screen are independent.
+        GL.BindTexture(TextureTarget.Texture2D, _crtSignalTexture);
+        GL.TexImage2D(
+            TextureTarget.Texture2D,
+            0,
+            PixelInternalFormat.Rgba16f,
+            width,
+            height,
+            0,
+            PixelFormat.Rgba,
+            PixelType.HalfFloat,
+            IntPtr.Zero);
+        GL.BindFramebuffer(
+            FramebufferTarget.Framebuffer, _crtSignalFramebuffer);
+        GL.FramebufferTexture2D(
+            FramebufferTarget.Framebuffer,
+            FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D,
+            _crtSignalTexture,
+            0);
+        status = GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+        if (status != FramebufferErrorCode.FramebufferComplete)
+            throw new InvalidOperationException(
+                $"CRT signal framebuffer is incomplete: {status}");
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+    }
+
+    private void ReconstructCrtSignal()
+    {
+        GL.BindFramebuffer(
+            FramebufferTarget.Framebuffer, _crtSignalFramebuffer);
+        GL.Viewport(0, 0, _sceneTargetWidth, _sceneTargetHeight);
+        GL.ClearColor(0, 0, 0, 1);
+        GL.Clear(ClearBufferMask.ColorBufferBit);
+        GL.UseProgram(_crtSignalProgram);
+        GL.Uniform1(
+            _shaderUniforms.Get(_crtSignalProgram, "image"), 0);
+        GL.Uniform2(
+            _shaderUniforms.Get(_crtSignalProgram, "sourceSize"),
+            (float)_sceneTargetWidth,
+            (float)_sceneTargetHeight);
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, _sceneColor);
+        GL.TexParameter(TextureTarget.Texture2D,
+            TextureParameterName.TextureMinFilter,
+            (int)TextureMinFilter.Linear);
+        GL.TexParameter(TextureTarget.Texture2D,
+            TextureParameterName.TextureMagFilter,
+            (int)TextureMagFilter.Linear);
+        Draw([
+            -1, 1, 0, 1,
+            -1,-1, 0, 0,
+             1,-1, 1, 0,
+             1, 1, 1, 1
+        ]);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
     }
 
@@ -3494,20 +3570,45 @@ internal sealed partial class GameHostWindow : GameWindow
             MathF.Abs(outputWidth - _sceneTargetWidth) < .51f &&
             MathF.Abs(outputHeight - _sceneTargetHeight) < .51f;
 
-        GL.UseProgram(_program);
-        GL.Uniform1(_shaderUniforms.Get(_program, "image"), 0);
-        GL.Uniform1(_shaderUniforms.Get(_program, "opacity"), 1f);
-        GL.Uniform1(_shaderUniforms.Get(_program, "outlineOnly"), 0);
-        GL.Uniform1(_shaderUniforms.Get(_program, "wading"), 0);
-        UploadSceneLighting();
+        if (_crtModeEnabled) ReconstructCrtSignal();
+        GL.Viewport(0, 0, framebufferWidth, framebufferHeight);
+        var presentationProgram = _crtModeEnabled
+            ? _crtTubeProgram
+            : _program;
+        GL.UseProgram(presentationProgram);
+        GL.Uniform1(
+            _shaderUniforms.Get(presentationProgram, "image"), 0);
+        if (_crtModeEnabled)
+        {
+            GL.Uniform2(
+                _shaderUniforms.Get(_crtTubeProgram, "sourceSize"),
+                (float)_sceneTargetWidth,
+                (float)_sceneTargetHeight);
+            GL.Uniform2(
+                _shaderUniforms.Get(_crtTubeProgram, "outputSize"),
+                outputWidth,
+                outputHeight);
+            GL.Uniform1(
+                _shaderUniforms.Get(_crtTubeProgram, "time"),
+                (float)_clock);
+        }
+        else
+        {
+            GL.Uniform1(_shaderUniforms.Get(_program, "opacity"), 1f);
+            GL.Uniform1(_shaderUniforms.Get(_program, "outlineOnly"), 0);
+            GL.Uniform1(_shaderUniforms.Get(_program, "wading"), 0);
+            UploadSceneLighting();
+        }
         GL.ActiveTexture(TextureUnit.Texture0);
-        GL.BindTexture(TextureTarget.Texture2D, _sceneColor);
+        GL.BindTexture(
+            TextureTarget.Texture2D,
+            _crtModeEnabled ? _crtSignalTexture : _sceneColor);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
-            (int)(nativePresentation
+            (int)(nativePresentation && !_crtModeEnabled
                 ? TextureMinFilter.Nearest
                 : TextureMinFilter.Linear));
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
-            (int)(nativePresentation
+            (int)(nativePresentation && !_crtModeEnabled
                 ? TextureMagFilter.Nearest
                 : TextureMagFilter.Linear));
         Draw([
@@ -3518,9 +3619,12 @@ internal sealed partial class GameHostWindow : GameWindow
         ]);
         // This program also renders sprites and UI. Keep the cave composite
         // strictly scoped to this one fullscreen draw.
-        GL.Uniform1(_shaderUniforms.Get(_program, "sceneLighting"), 0);
-        GL.Uniform1(
-            _shaderUniforms.Get(_program, "sceneFogAmount"), 0f);
+        if (!_crtModeEnabled)
+        {
+            GL.Uniform1(_shaderUniforms.Get(_program, "sceneLighting"), 0);
+            GL.Uniform1(
+                _shaderUniforms.Get(_program, "sceneFogAmount"), 0f);
+        }
     }
 
     protected override void OnRenderFrame(FrameEventArgs e)
@@ -9027,6 +9131,9 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_streamVbo != 0) GL.DeleteBuffer(_streamVbo);
         if (_sceneFramebuffer != 0) GL.DeleteFramebuffer(_sceneFramebuffer);
         if (_sceneColor != 0) GL.DeleteTexture(_sceneColor);
+        if (_crtSignalFramebuffer != 0)
+            GL.DeleteFramebuffer(_crtSignalFramebuffer);
+        if (_crtSignalTexture != 0) GL.DeleteTexture(_crtSignalTexture);
         if (_pauseBlurTexture != 0) GL.DeleteTexture(_pauseBlurTexture);
         if (_pauseBlurIntermediate != 0)
             GL.DeleteTexture(_pauseBlurIntermediate);
@@ -9049,6 +9156,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_cliffProgram != 0) GL.DeleteProgram(_cliffProgram);
         GL.DeleteVertexArray(_vao);
         if (_pauseBlurProgram != 0) GL.DeleteProgram(_pauseBlurProgram);
+        if (_crtSignalProgram != 0) GL.DeleteProgram(_crtSignalProgram);
+        if (_crtTubeProgram != 0) GL.DeleteProgram(_crtTubeProgram);
         GL.DeleteProgram(_program);
         base.OnUnload();
         if (saveFailure is not null)

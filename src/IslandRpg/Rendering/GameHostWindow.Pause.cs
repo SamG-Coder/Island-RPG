@@ -180,8 +180,10 @@ internal sealed partial class GameHostWindow
                         3 => "Frame limit: " +
                              DisplaySettingsController.FrameRateLabel(
                                  settings.FrameRateLimit),
-                        _ => "Performance metrics: " +
-                             $"{(settings.PerformanceMetrics ? "On" : "Off")}"
+                        4 => "Performance metrics: " +
+                             $"{(settings.PerformanceMetrics ? "On" : "Off")}",
+                        _ => "CRT mode: " +
+                             $"{(settings.CrtMode ? "On" : "Off")}"
                     };
                     DrawMenuButton(
                         _settingsMenu.OptionBounds(option), caption);

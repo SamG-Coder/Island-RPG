@@ -35,7 +35,7 @@ internal sealed partial class GameHostWindow
             _resolutionDropdown.Close();
             return true;
         }
-        for (var option = 0; option < 5; option++)
+        for (var option = 0; option < 6; option++)
         {
             if (option == 1) continue;
             if (!_settingsMenu.ContentList.VisibleIndices.Contains(option) ||
@@ -53,6 +53,10 @@ internal sealed partial class GameHostWindow
                 {
                     PerformanceMetrics = !settings.PerformanceMetrics
                 },
+                5 => settings with
+                {
+                    CrtMode = !settings.CrtMode
+                },
                 _ => settings
             };
             _saves.SaveSettings(settings);
@@ -66,6 +70,7 @@ internal sealed partial class GameHostWindow
         IslandRpg.Persistence.GameSettings settings)
     {
         _performanceMetricsEnabled = settings.PerformanceMetrics;
+        _crtModeEnabled = settings.CrtMode;
         _occludedPlayerOutlineEnabled =
             settings.OccludedPlayerOutline;
         _autoRetaliateEnabled = settings.AutoRetaliate;

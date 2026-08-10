@@ -4,6 +4,158 @@ namespace IslandRpg.Rendering;
 
 internal static class GameShaderPrograms
 {
+    public static int CreateCrtSignalProgram()
+    {
+        const string vertex = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uvIn; out vec2 uv; void main(){uv=uvIn;gl_Position=vec4(p,0,1);}";
+        const string fragment = """
+            #version 330 core
+            in vec2 uv;
+            out vec4 color;
+            uniform sampler2D image;
+            uniform vec2 sourceSize;
+            const float InputGamma = 2.4;
+
+            vec3 sourceAt(vec2 sampleUv) {
+                vec2 texel = 1.0 / max(sourceSize, vec2(1.0));
+                vec3 center = pow(max(texture(image, sampleUv).rgb,
+                    vec3(0.0)), vec3(InputGamma));
+                vec3 nearLeft = pow(max(texture(image,
+                    sampleUv - vec2(texel.x, 0.0)).rgb,
+                    vec3(0.0)), vec3(InputGamma));
+                vec3 nearRight = pow(max(texture(image,
+                    sampleUv + vec2(texel.x, 0.0)).rgb,
+                    vec3(0.0)), vec3(InputGamma));
+                vec3 farLeft = pow(max(texture(image,
+                    sampleUv - vec2(texel.x * 2.0, 0.0)).rgb,
+                    vec3(0.0)), vec3(InputGamma));
+                vec3 farRight = pow(max(texture(image,
+                    sampleUv + vec2(texel.x * 2.0, 0.0)).rgb,
+                    vec3(0.0)), vec3(InputGamma));
+                return center * .56 + (nearLeft + nearRight) * .18 +
+                    (farLeft + farRight) * .04;
+            }
+
+            float beamWeight(float distance, vec3 signal) {
+                float luminance = dot(signal, vec3(.2126, .7152, .0722));
+                float width = mix(.20, .44,
+                    sqrt(clamp(luminance, 0.0, 1.0)));
+                width += fwidth(distance) * .28;
+                return exp(-2.15 * pow(distance / width, 2.0));
+            }
+
+            void main() {
+                // A monitor-like 480-line signal is independent of the physical
+                // LCD resolution. Two adjacent raster lines are integrated with
+                // brightness-dependent Gaussian beam widths.
+                float signalHeight = min(480.0, sourceSize.y);
+                vec2 signalSize = vec2(
+                    floor(signalHeight * sourceSize.x / sourceSize.y + .5),
+                    signalHeight);
+                vec2 signalPosition = uv * signalSize - vec2(.5);
+                float line = floor(signalPosition.y);
+                float lineDistance = fract(signalPosition.y);
+                vec2 firstUv = vec2(uv.x, (line + .5) / signalSize.y);
+                vec2 secondUv = vec2(uv.x, (line + 1.5) / signalSize.y);
+                vec3 first = sourceAt(firstUv);
+                vec3 second = sourceAt(secondUv);
+                vec3 beam = first * beamWeight(lineDistance, first) +
+                    second * beamWeight(1.0 - lineDistance, second);
+                color = vec4(beam * 1.12, 1.0);
+            }
+            """;
+        return CreateProgram(vertex, fragment);
+    }
+
+    public static int CreateCrtTubeProgram()
+    {
+        const string vertex = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uvIn; out vec2 uv; void main(){uv=uvIn;gl_Position=vec4(p,0,1);}";
+        const string fragment = """
+            #version 330 core
+            in vec2 uv;
+            out vec4 color;
+            uniform sampler2D image;
+            uniform vec2 sourceSize;
+            uniform vec2 outputSize;
+            uniform float time;
+
+            vec2 curve(vec2 value) {
+                vec2 centered = value * 2.0 - 1.0;
+                float radiusSquared = dot(centered, centered);
+                centered += centered * vec2(.032, .044) * radiusSquared;
+                centered *= vec2(.972, .965);
+                return centered * .5 + .5;
+            }
+
+            vec3 signalAt(vec2 value) {
+                return texture(image, clamp(value, vec2(0.0), vec2(1.0))).rgb;
+            }
+
+            vec3 phosphorMask(vec2 pixel) {
+                // Three RGB slots form one shadow-mask triad. The second row is
+                // offset like a slot-mask tube, but remains independent from the
+                // raster scanline phase reconstructed in the previous pass.
+                float pitch = max(1.0, floor(outputSize.y / 720.0));
+                float maskRow = floor(pixel.y / (pitch * 2.0));
+                float shiftedX = pixel.x + mod(maskRow, 2.0) * pitch * 1.5;
+                float channel = floor(mod(shiftedX, pitch * 3.0) / pitch);
+                vec3 mask = vec3(.56);
+                if (channel < 1.0) mask.r = 1.18;
+                else if (channel < 2.0) mask.g = 1.18;
+                else mask.b = 1.18;
+                float rowPosition = fract(pixel.y / (pitch * 2.0));
+                float slot = mix(.76, 1.0,
+                    smoothstep(.08, .25, rowPosition) *
+                    (1.0 - smoothstep(.75, .92, rowPosition)));
+                return mask * slot;
+            }
+
+            void main() {
+                vec2 warped = curve(uv);
+                if (warped.x <= 0.0 || warped.x >= 1.0 ||
+                    warped.y <= 0.0 || warped.y >= 1.0) {
+                    color = vec4(.0025, .003, .0025, 1.0);
+                    return;
+                }
+
+                vec2 texel = 1.0 / max(sourceSize, vec2(1.0));
+                // Slight beam convergence error is channel-specific, not a
+                // generic RGB tint over every output pixel.
+                vec3 signal;
+                signal.r = signalAt(warped + vec2(texel.x * .32, 0.0)).r;
+                signal.g = signalAt(warped).g;
+                signal.b = signalAt(warped - vec2(texel.x * .28, 0.0)).b;
+
+                vec3 nearGlow =
+                    signalAt(warped + vec2(texel.x * 2.0, 0.0)) +
+                    signalAt(warped - vec2(texel.x * 2.0, 0.0)) +
+                    signalAt(warped + vec2(0.0, texel.y * 2.0)) +
+                    signalAt(warped - vec2(0.0, texel.y * 2.0));
+                vec3 farGlow =
+                    signalAt(warped + vec2(texel.x * 6.0, texel.y * 3.0)) +
+                    signalAt(warped + vec2(-texel.x * 6.0, texel.y * 3.0)) +
+                    signalAt(warped + vec2(texel.x * 6.0, -texel.y * 3.0)) +
+                    signalAt(warped - vec2(texel.x * 6.0, texel.y * 3.0));
+                vec3 bloom = nearGlow * .035 + farGlow * .013;
+                vec3 halation = bloom * vec3(1.06, .91, .78);
+
+                vec2 physicalPixel = uv * outputSize;
+                vec3 tube = signal * phosphorMask(physicalPixel) * 1.28;
+                tube += bloom * .18 + halation * .10;
+
+                vec2 edge = warped * (1.0 - warped);
+                float vignette = pow(clamp(
+                    edge.x * edge.y * 17.0, 0.0, 1.0), .20);
+                float glass = 1.0 - .045 * dot(
+                    warped - vec2(.5), warped - vec2(.5));
+                tube *= vignette * glass;
+                tube += max(tube - .78, vec3(0.0)) * .08;
+                color = vec4(pow(max(tube, vec3(0.0)),
+                    vec3(1.0 / 2.2)), 1.0);
+            }
+            """;
+        return CreateProgram(vertex, fragment);
+    }
+
     public static int CreateSoftShadowProgram()
     {
         const string vertex = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uvIn; out vec2 uv; void main(){uv=uvIn;gl_Position=vec4(p,0,1);}";
