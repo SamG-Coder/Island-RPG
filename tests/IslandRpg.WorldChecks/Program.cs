@@ -6755,7 +6755,8 @@ Require(defaultDisplaySettings.VSyncMode ==
         defaultDisplaySettings.FrameRateLimit == 0 &&
         !defaultDisplaySettings.UseTestAssets &&
         defaultDisplaySettings.AutoRetaliate &&
-        !defaultDisplaySettings.CrtMode,
+        !defaultDisplaySettings.CrtMode &&
+        !defaultDisplaySettings.ClassicPcMode,
     "display settings must default to adaptive VSync, unlimited FPS and opt-in CRT presentation");
 var cycledDisplaySettings =
     DisplaySettingsController.CycleVSync(defaultDisplaySettings);

@@ -567,6 +567,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _uiColorBatch.Initialize();
         _uiPillRenderer.Initialize();
         CreateSceneTarget();
+        PrepareClassicPcDisplay();
         PrepareLoadingScreen();
         PrepareGameUi();
         if (_cannotLocateAoeAssets)
@@ -1690,11 +1691,12 @@ internal sealed partial class GameHostWindow : GameWindow
         _chatFont?.MeasureString(text).X ?? text.Length * 7;
 
     private Vector2 SceneMousePosition()
-        => SceneCoordinateMapper.ClientToScene(
-            MouseState.Position,
-            ClientSize,
-            FramebufferSize,
-            new(ReferenceWidth, ReferenceHeight));
+        => MapClassicPcWorldPointer(
+            SceneCoordinateMapper.ClientToScene(
+                MouseState.Position,
+                ClientSize,
+                FramebufferSize,
+                new(ReferenceWidth, ReferenceHeight)));
 
     private Vector4 SceneClientBounds()
     {
@@ -2118,6 +2120,7 @@ internal sealed partial class GameHostWindow : GameWindow
     }
 
     private bool IsPointerOverGameUi(Vector2 mouse) =>
+        IsClassicPcFurniturePointer() ||
         _gameUi.BlocksWorldInput(mouse) ||
         BuildingPanelBounds().Contains(mouse) && _buildingPanelOpen ||
         _chatUi.BlocksWorldInput(mouse) ||
@@ -3235,6 +3238,7 @@ internal sealed partial class GameHostWindow : GameWindow
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         base.OnMouseWheel(e);
+        if (TryZoomClassicPcView(e.OffsetY)) return;
         if (_screen == ScreenState.MainMenu && e.OffsetY != 0)
         {
             if (_frontendPage == FrontendPage.CharacterSelect)
@@ -3412,6 +3416,7 @@ internal sealed partial class GameHostWindow : GameWindow
         base.OnResize(e);
         GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
         ResizeSceneTarget();
+        ResizeClassicPcCapture();
     }
 
     protected override void OnTextInput(TextInputEventArgs e)
@@ -3551,6 +3556,9 @@ internal sealed partial class GameHostWindow : GameWindow
     {
         var framebufferWidth = Math.Max(1, FramebufferSize.X);
         var framebufferHeight = Math.Max(1, FramebufferSize.Y);
+        GL.BindFramebuffer(
+            FramebufferTarget.Framebuffer,
+            ClassicPcDisplayActive ? _classicPcCaptureFramebuffer : 0);
         GL.Viewport(0, 0, framebufferWidth, framebufferHeight);
         GL.ClearColor(0.025f, 0.028f, 0.025f, 1);
         GL.Clear(ClearBufferMask.ColorBufferBit);
@@ -3571,6 +3579,9 @@ internal sealed partial class GameHostWindow : GameWindow
             MathF.Abs(outputHeight - _sceneTargetHeight) < .51f;
 
         if (_crtModeEnabled) ReconstructCrtSignal();
+        GL.BindFramebuffer(
+            FramebufferTarget.Framebuffer,
+            ClassicPcDisplayActive ? _classicPcCaptureFramebuffer : 0);
         GL.Viewport(0, 0, framebufferWidth, framebufferHeight);
         var presentationProgram = _crtModeEnabled
             ? _crtTubeProgram
@@ -3625,12 +3636,14 @@ internal sealed partial class GameHostWindow : GameWindow
             GL.Uniform1(
                 _shaderUniforms.Get(_program, "sceneFogAmount"), 0f);
         }
+        if (ClassicPcDisplayActive) RenderClassicPcComposite();
     }
 
     protected override void OnRenderFrame(FrameEventArgs e)
     {
         base.OnRenderFrame(e);
         UpdateSmoothZoom(e.Time);
+        UpdateClassicPcViewZoom(e.Time);
         _fontRenderer?.BeginFrame(ClientSize.X, ClientSize.Y);
         _uiColorBatch.BeginFrame(ClientSize.X, ClientSize.Y);
         _uiPillRenderer.BeginFrame(ClientSize.X, ClientSize.Y);
@@ -9131,6 +9144,13 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_streamVbo != 0) GL.DeleteBuffer(_streamVbo);
         if (_sceneFramebuffer != 0) GL.DeleteFramebuffer(_sceneFramebuffer);
         if (_sceneColor != 0) GL.DeleteTexture(_sceneColor);
+        if (_classicPcTexture != 0) GL.DeleteTexture(_classicPcTexture);
+        if (_classicPcCaptureFramebuffer != 0)
+            GL.DeleteFramebuffer(_classicPcCaptureFramebuffer);
+        if (_classicPcCaptureTexture != 0)
+            GL.DeleteTexture(_classicPcCaptureTexture);
+        if (_classicPcScreenProgram != 0)
+            GL.DeleteProgram(_classicPcScreenProgram);
         if (_crtSignalFramebuffer != 0)
             GL.DeleteFramebuffer(_crtSignalFramebuffer);
         if (_crtSignalTexture != 0) GL.DeleteTexture(_crtSignalTexture);

@@ -30,7 +30,7 @@ internal sealed class SettingsMenuState
     private static readonly string[] DisplayItems =
         [
             "fullscreen", "resolution", "vsync", "frame-limit", "metrics",
-            "crt-mode"
+            "crt-mode", "classic-pc-mode"
         ];
     private static readonly string[] GameItems =
     [

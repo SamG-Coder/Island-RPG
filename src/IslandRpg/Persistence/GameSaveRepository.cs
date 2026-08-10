@@ -108,6 +108,7 @@ internal sealed record GameSettings(
     bool WrapChatText = true,
     bool AutoRetaliate = true,
     bool CrtMode = false,
+    bool ClassicPcMode = false,
     NpcAiSettings? Ai = null)
 {
     public NpcAiSettings EffectiveAi

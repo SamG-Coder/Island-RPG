@@ -41,6 +41,11 @@ internal sealed partial class GameHostWindow
     {
         var width = Math.Max(1, FramebufferSize.X);
         var height = Math.Max(1, FramebufferSize.Y);
+        // Blur whichever composition target is currently active. Classic PC
+        // mode renders the whole game into its monitor capture rather than the
+        // default backbuffer, so hard-coding framebuffer zero makes the pause
+        // overlay disappear behind the final room composite.
+        GL.GetInteger(GetPName.FramebufferBinding, out var composedFramebuffer);
         if (_pauseBlurTexture == 0)
         {
             _pauseBlurTexture = GL.GenTexture();
@@ -72,7 +77,8 @@ internal sealed partial class GameHostWindow
         GL.Viewport(0, 0, width, height);
         DrawBlurPass(_pauseBlurTexture, new(1f / width, 0));
 
-        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        GL.BindFramebuffer(
+            FramebufferTarget.Framebuffer, composedFramebuffer);
         GL.Viewport(0, 0, width, height);
         DrawBlurPass(_pauseBlurIntermediate, new(0, 1f / height));
 
@@ -182,8 +188,12 @@ internal sealed partial class GameHostWindow
                                  settings.FrameRateLimit),
                         4 => "Performance metrics: " +
                              $"{(settings.PerformanceMetrics ? "On" : "Off")}",
-                        _ => "CRT mode: " +
-                             $"{(settings.CrtMode ? "On" : "Off")}"
+                        5 => "CRT mode: " +
+                             $"{(settings.CrtMode ? "On" : "Off")}",
+                        _ => "Classic PC setup: " +
+                             (settings.CrtMode
+                                 ? settings.ClassicPcMode ? "On" : "Off"
+                                 : "Requires CRT mode")
                     };
                     DrawMenuButton(
                         _settingsMenu.OptionBounds(option), caption);

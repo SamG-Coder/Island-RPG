@@ -35,7 +35,7 @@ internal sealed partial class GameHostWindow
             _resolutionDropdown.Close();
             return true;
         }
-        for (var option = 0; option < 6; option++)
+        for (var option = 0; option < 7; option++)
         {
             if (option == 1) continue;
             if (!_settingsMenu.ContentList.VisibleIndices.Contains(option) ||
@@ -57,6 +57,10 @@ internal sealed partial class GameHostWindow
                 {
                     CrtMode = !settings.CrtMode
                 },
+                6 when settings.CrtMode => settings with
+                {
+                    ClassicPcMode = !settings.ClassicPcMode
+                },
                 _ => settings
             };
             _saves.SaveSettings(settings);
@@ -71,6 +75,7 @@ internal sealed partial class GameHostWindow
     {
         _performanceMetricsEnabled = settings.PerformanceMetrics;
         _crtModeEnabled = settings.CrtMode;
+        _classicPcModeEnabled = settings.CrtMode && settings.ClassicPcMode;
         _occludedPlayerOutlineEnabled =
             settings.OccludedPlayerOutline;
         _autoRetaliateEnabled = settings.AutoRetaliate;

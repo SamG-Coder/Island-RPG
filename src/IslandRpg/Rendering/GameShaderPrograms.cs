@@ -4,6 +4,39 @@ namespace IslandRpg.Rendering;
 
 internal static class GameShaderPrograms
 {
+    public static int CreateClassicPcScreenProgram()
+    {
+        const string vertex = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uvIn; out vec2 uv; void main(){uv=uvIn;gl_Position=vec4(p,0,1);}";
+        const string fragment = """
+            #version 330 core
+            in vec2 uv;
+            out vec4 color;
+            uniform sampler2D image;
+
+            float roundedGlassMask(vec2 value) {
+                const float radius = .026;
+                vec2 centered = abs(value - vec2(.5));
+                vec2 corner = max(
+                    centered - vec2(.5 - radius), vec2(0.0));
+                float distance = length(corner) - radius;
+                return 1.0 - smoothstep(-.003, .003, distance);
+            }
+
+            void main() {
+                float glass = roundedGlassMask(uv);
+                if (glass <= .001) discard;
+                vec4 source = texture(image, uv);
+                // A restrained edge falloff seats the rendered image behind the
+                // monitor glass instead of leaving a visibly square texture edge.
+                vec2 edge = uv * (1.0 - uv);
+                float innerVignette = pow(clamp(
+                    edge.x * edge.y * 19.0, 0.0, 1.0), .055);
+                color = vec4(source.rgb * innerVignette, source.a * glass);
+            }
+            """;
+        return CreateProgram(vertex, fragment);
+    }
+
     public static int CreateCrtSignalProgram()
     {
         const string vertex = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uvIn; out vec2 uv; void main(){uv=uvIn;gl_Position=vec4(p,0,1);}";
