@@ -1,3 +1,5 @@
+using IslandRpg.Gameplay;
+
 namespace IslandRpg.Simulation;
 
 /// <summary>
@@ -44,7 +46,8 @@ public sealed record SimulationLimits
 
     internal SimulationLimits ValidatedCopy()
     {
-        if (MaximumActors <= 0)
+        if (MaximumActors is <= 0 or >
+            NetworkPopulationLimits.MaximumActors)
         {
             throw new ArgumentOutOfRangeException(nameof(MaximumActors));
         }

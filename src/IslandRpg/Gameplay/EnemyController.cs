@@ -112,7 +112,7 @@ internal abstract class EnemyController
 internal sealed class SlimeEnemyController : EnemyController
 {
     protected override double ReactionDelaySeconds(EnemyState enemy) =>
-        enemy.Kind == EnemyKind.CaveSlime ? .25 : .8;
+        SlimeCombatRules.ReactionDelaySeconds(enemy.Kind);
 
     protected override bool CanTarget(
         EnemyState enemy, EnemyActorPresence actor) =>

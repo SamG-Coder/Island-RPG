@@ -20,6 +20,8 @@ internal sealed class ClientConnection : IAsyncDisposable
     private Dictionary<WorldChunkKey, uint>? _publicWorldRevisions;
     private Dictionary<WorldChunkKey, uint>? _publicResourceRevisions;
     private Dictionary<Guid, uint>? _publicBoatRevisions;
+    private Dictionary<Guid, uint>? _publicEnemyRevisions;
+    private readonly PrivatePlayerStateHighWater _privatePlayerState = new();
     private long _nextOutboundSequence;
     private int _disposed;
 
@@ -91,8 +93,56 @@ internal sealed class ClientConnection : IAsyncDisposable
         lock (_outboundSync)
         {
             if (_lifetime.IsCancellationRequested) return false;
-            var sequence = checked((ulong)++_nextOutboundSequence);
-            return _outbound.Writer.TryWrite(createMessage(sequence));
+            var sequence = checked((ulong)_nextOutboundSequence + 1);
+            var message = createMessage(sequence);
+            if (message is PlayerStateMessage)
+                throw new InvalidOperationException(
+                    "Private player state must use its monotonic publication path.");
+            if (!_outbound.Writer.TryWrite(message)) return false;
+            _nextOutboundSequence = checked((long)sequence);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Atomically publishes only the player-state sections newer than those
+    /// already queued for this client. A command result captured before an
+    /// autonomous combat mutation can therefore still publish its newer
+    /// inventory section without rewinding the actor section. The projected
+    /// delta is rebased to this connection's exact queued high-water.
+    /// </summary>
+    public bool TryQueuePrivateStateSequenced(
+        Func<ulong, PlayerStateMessage> createMessage)
+    {
+        ArgumentNullException.ThrowIfNull(createMessage);
+        lock (_outboundSync)
+        {
+            if (_lifetime.IsCancellationRequested) return false;
+            var sequence = checked((ulong)_nextOutboundSequence + 1);
+            var publication = _privatePlayerState.Project(
+                createMessage(sequence));
+            if (publication is null) return true;
+            if (!_outbound.Writer.TryWrite(publication))
+                return false;
+            _nextOutboundSequence = checked((long)sequence);
+            _privatePlayerState.Observe(publication);
+            return true;
+        }
+    }
+
+    public uint PrivateActorRevisionHighWater
+    {
+        get
+        {
+            lock (_outboundSync) return _privatePlayerState.ActorRevision;
+        }
+    }
+
+    public uint PrivateInventoryRevisionHighWater
+    {
+        get
+        {
+            lock (_outboundSync) return _privatePlayerState.InventoryRevision;
         }
     }
 
@@ -118,7 +168,8 @@ internal sealed class ClientConnection : IAsyncDisposable
             updates.Apply(
                 _publicWorldRevisions,
                 _publicResourceRevisions,
-                _publicBoatRevisions);
+                _publicBoatRevisions,
+                _publicEnemyRevisions);
             return true;
         }
     }
@@ -155,8 +206,13 @@ internal sealed class ClientConnection : IAsyncDisposable
     {
         lock (_outboundSync)
         {
-            return !_lifetime.IsCancellationRequested &&
-                _outbound.Writer.TryWrite(message);
+            if (message is PlayerStateMessage)
+                throw new InvalidOperationException(
+                    "Private player state must use its monotonic publication path.");
+            if (_lifetime.IsCancellationRequested ||
+                !_outbound.Writer.TryWrite(message))
+                return false;
+            return true;
         }
     }
 
@@ -210,7 +266,8 @@ internal sealed class ClientConnection : IAsyncDisposable
             {
                 return;
             }
-            if (!TryQueue(_server.CreatePlayerStateBaseline(this, player.Value)))
+            if (!TryQueuePrivateStateSequenced(sequence =>
+                    _server.CreatePlayerStateBaseline(sequence, player.Value)))
             {
                 return;
             }
@@ -309,7 +366,8 @@ internal sealed class ClientConnection : IAsyncDisposable
     internal void SetPublicBaselineHighWater(
         IEnumerable<WorldChunkRevisionState> worldChunks,
         IEnumerable<ResourceChunkSparseState> resourceChunks,
-        IEnumerable<AuthoritativeBoatSnapshot> boats)
+        IEnumerable<AuthoritativeBoatSnapshot> boats,
+        IEnumerable<AuthoritativeEnemySnapshot> enemies)
     {
         _publicWorldRevisions = worldChunks.ToDictionary(
             static value => new WorldChunkKey(
@@ -320,6 +378,9 @@ internal sealed class ClientConnection : IAsyncDisposable
             static value => value.ResourceChunkRevision);
         _publicBoatRevisions = boats.ToDictionary(
             static value => value.BoatId.Value,
+            static value => value.Revision);
+        _publicEnemyRevisions = enemies.ToDictionary(
+            static value => value.EnemyId.Value,
             static value => value.Revision);
     }
 
@@ -334,6 +395,8 @@ internal sealed class ClientConnection : IAsyncDisposable
                 ValidateResources(resources, _publicResourceRevisions),
             BoatDeltaBatchMessage boats =>
                 ValidateBoats(boats, _publicBoatRevisions),
+            EnemyDeltaBatchMessage enemies =>
+                ValidateEnemies(enemies, _publicEnemyRevisions),
             _ => PublicRevisionUpdates.None
         };
     }
@@ -465,10 +528,48 @@ internal sealed class ClientConnection : IAsyncDisposable
             : new PublicRevisionUpdates(Boats: next);
     }
 
+    private static PublicRevisionUpdates ValidateEnemies(
+        EnemyDeltaBatchMessage message,
+        Dictionary<Guid, uint>? revisions)
+    {
+        if (revisions is null)
+            throw new InvalidOperationException(
+                "Public enemy high-water was not initialized.");
+        var next = new List<(Guid EnemyId, uint Revision)>();
+        var stale = false;
+        var seen = new HashSet<Guid>();
+        foreach (var delta in message.Deltas)
+        {
+            if (!seen.Add(delta.Reference.EnemyId))
+                throw new InvalidOperationException(
+                    "A public enemy batch changed one enemy more than once.");
+            if (delta.CurrentRevision <= delta.Reference.ExpectedRevision)
+                throw new InvalidOperationException(
+                    "A public enemy delta did not advance its revision.");
+            revisions.TryGetValue(delta.Reference.EnemyId, out var known);
+            if (delta.CurrentRevision <= known)
+            {
+                stale = true;
+                continue;
+            }
+            if (delta.Reference.ExpectedRevision != known)
+                throw new InvalidOperationException(
+                    "A public enemy delta lost its per-connection revision chain.");
+            next.Add((delta.Reference.EnemyId, delta.CurrentRevision));
+        }
+        if (stale && next.Count != 0)
+            throw new InvalidOperationException(
+                "A public enemy batch straddled the retained bootstrap revision.");
+        return next.Count == 0
+            ? PublicRevisionUpdates.Stale
+            : new PublicRevisionUpdates(Enemies: next);
+    }
+
     private sealed record PublicRevisionUpdates(
         IReadOnlyList<(WorldChunkKey Chunk, uint Revision)>? World = null,
         IReadOnlyList<(WorldChunkKey Chunk, uint Revision)>? Resources = null,
         IReadOnlyList<(Guid BoatId, uint Revision)>? Boats = null,
+        IReadOnlyList<(Guid EnemyId, uint Revision)>? Enemies = null,
         bool IsStale = false)
     {
         public static PublicRevisionUpdates None { get; } = new();
@@ -477,7 +578,8 @@ internal sealed class ClientConnection : IAsyncDisposable
         public void Apply(
             Dictionary<WorldChunkKey, uint>? world,
             Dictionary<WorldChunkKey, uint>? resources,
-            Dictionary<Guid, uint>? boats)
+            Dictionary<Guid, uint>? boats,
+            Dictionary<Guid, uint>? enemies)
         {
             if (World is not null)
                 foreach (var value in World)
@@ -488,6 +590,9 @@ internal sealed class ClientConnection : IAsyncDisposable
             if (Boats is not null)
                 foreach (var value in Boats)
                     boats![value.BoatId] = value.Revision;
+            if (Enemies is not null)
+                foreach (var value in Enemies)
+                    enemies![value.EnemyId] = value.Revision;
         }
     }
 
@@ -497,5 +602,66 @@ internal sealed class ClientConnection : IAsyncDisposable
         {
             await TcpFrameCodec.WriteAsync(stream, message, cancellationToken).ConfigureAwait(false);
         }
+    }
+}
+
+/// <summary>
+/// Per-connection high-water for the independently revisioned private actor
+/// and inventory sections. All calls are serialized by ClientConnection's
+/// outbound lock; this type is separate only to keep projection deterministic
+/// and directly regression-testable.
+/// </summary>
+internal sealed class PrivatePlayerStateHighWater
+{
+    public uint ActorRevision { get; private set; }
+
+    public uint InventoryRevision { get; private set; }
+
+    public void Observe(PlayerStateMessage message)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        if (message.Flags.HasFlag(PlayerStateFlags.Actor))
+            ActorRevision = Math.Max(ActorRevision, message.ActorRevision);
+        if (message.Flags.HasFlag(PlayerStateFlags.Inventory))
+            InventoryRevision = Math.Max(
+                InventoryRevision, message.InventoryRevision);
+    }
+
+    public PlayerStateMessage? Project(PlayerStateMessage candidate)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        if (ActorRevision == 0 && InventoryRevision == 0 &&
+            candidate.Flags.HasFlag(PlayerStateFlags.Baseline))
+            return candidate;
+        var publishActor =
+            candidate.Flags.HasFlag(PlayerStateFlags.Actor) &&
+            candidate.ActorRevision > ActorRevision;
+        var publishInventory =
+            candidate.Flags.HasFlag(PlayerStateFlags.Inventory) &&
+            candidate.InventoryRevision > InventoryRevision;
+        if (!publishActor && !publishInventory)
+            return null;
+
+        var flags = PlayerStateFlags.None;
+        if (publishActor) flags |= PlayerStateFlags.Actor;
+        if (publishInventory) flags |= PlayerStateFlags.Inventory;
+        return candidate with
+        {
+            Flags = flags,
+            BaselineActorRevision = ActorRevision,
+            BaselineInventoryRevision = InventoryRevision,
+            ActorRevision = publishActor
+                ? candidate.ActorRevision
+                : ActorRevision,
+            InventoryRevision = publishInventory
+                ? candidate.InventoryRevision
+                : InventoryRevision,
+            InventorySlots = publishInventory
+                ? candidate.InventorySlots
+                : Array.Empty<InventorySlotState>(),
+            CombatTargetEnemyId = publishActor
+                ? candidate.CombatTargetEnemyId
+                : Guid.Empty
+        };
     }
 }

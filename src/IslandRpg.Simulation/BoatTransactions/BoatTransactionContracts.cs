@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Numerics;
+using IslandRpg.Gameplay;
 
 namespace IslandRpg.Simulation;
 
@@ -153,7 +154,8 @@ public sealed record AuthoritativeBoatTransactionOptions
 
     public int MaximumRouteWaypoints { get; init; } = 4_096;
 
-    public int MaximumBoats { get; init; } = 256;
+    public int MaximumBoats { get; init; } =
+        NetworkPopulationLimits.MaximumBoats;
 
     /// <summary>
     /// Fixed-authority time between distinct route-planning requests for the
@@ -177,7 +179,8 @@ public sealed record AuthoritativeBoatTransactionOptions
             !float.IsFinite(MaximumMoveDistance) || MaximumMoveDistance <= 0 ||
             MaximumPathSearchVisited <= 0 || MaximumRouteWaypoints <= 0 ||
             MaximumRouteWaypoints > MaximumPathSearchVisited ||
-            MaximumBoats <= 0 ||
+            MaximumBoats is <= 0 or >
+                NetworkPopulationLimits.MaximumBoats ||
             !double.IsFinite(PlanningCadenceSeconds) ||
             PlanningCadenceSeconds is < 0 or > 60 ||
             MaximumPlansPerAdvance <= 0)

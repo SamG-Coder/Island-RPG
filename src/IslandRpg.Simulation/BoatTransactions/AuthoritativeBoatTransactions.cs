@@ -137,7 +137,11 @@ public sealed class AuthoritativeBoatTransactions
         boat.ClearRoute();
         boat.Revision = checked(boat.Revision + 1);
         _boatsByOccupant.Add(actor.ActorId, boat.BoatId);
-        var gameplay = AdvanceActor(actor.Gameplay);
+        // Boarding is an authoritative transition out of on-foot combat.
+        // Clear both the target and its cadence in the same gameplay revision
+        // that records occupancy so no intermediate aboard-combat state can
+        // be checkpointed or observed.
+        var gameplay = AdvanceActor(actor.Gameplay, cancelCombat: true);
         return Accepted(command.Context, gameplay,
             new(BoatChangeKind.Updated, previous, boat.ToSnapshot()),
             new(boat.Position, boat.WorldLevel, boat.BoatId));
@@ -282,6 +286,32 @@ public sealed class AuthoritativeBoatTransactions
         return new(BoatChangeKind.Updated, previous, boat.ToSnapshot());
     }
 
+    /// <summary>
+    /// Trusted owner-thread seam for cross-feature transitions such as death
+    /// and respawn. It atomically stops the boat and clears both sides of the
+    /// occupancy index without applying command optimistic-lock rules.
+    /// </summary>
+    public BoatStateDelta? DetachOccupant(ActorId actorId)
+    {
+        EnsureOwner();
+        if (!_boatsByOccupant.TryGetValue(actorId, out var id)) return null;
+        if (!_boats.TryGetValue(id, out var boat) ||
+            boat.OccupantActorId != actorId ||
+            boat.OccupantPlayerId is null)
+            throw new InvalidOperationException(
+                "The authoritative boat occupancy index is inconsistent.");
+
+        var previous = boat.ToSnapshot();
+        boat.OccupantActorId = null;
+        boat.OccupantPlayerId = null;
+        boat.ClearRoute();
+        boat.Revision = checked(boat.Revision + 1);
+        if (!_boatsByOccupant.Remove(actorId))
+            throw new InvalidOperationException(
+                "The authoritative boat occupancy index could not be cleared.");
+        return new(BoatChangeKind.Updated, previous, boat.ToSnapshot());
+    }
+
     public ImmutableArray<BoatStateDelta> Advance(double elapsedSeconds)
     {
         EnsureOwner();
@@ -402,11 +432,10 @@ public sealed class AuthoritativeBoatTransactions
         boatId.Value.TryWriteBytes(input[16..], bigEndian: true, out _);
         Span<byte> digest = stackalloc byte[32];
         SHA256.HashData(input, digest);
-        // The high bit reserves a disjoint network-identity namespace for
-        // travel entities. Actor IDs are emitted with this bit clear, so a
-        // boat and actor cannot alias even when their stable hashes collide.
-        return BinaryPrimitives.ReadUInt64BigEndian(digest) |
-               (1UL << 63);
+        // Boats use the exact 10 high-bit namespace. Actors use 00 and
+        // enemies use 01, so independently derived IDs cannot alias.
+        return (BinaryPrimitives.ReadUInt64BigEndian(digest) &
+                ~(3UL << 62)) | (2UL << 62);
     }
 
     private BoatTransactionResult? ValidateOccupant(
@@ -647,9 +676,16 @@ public sealed class AuthoritativeBoatTransactions
             StringComparison.OrdinalIgnoreCase);
 
     private static PlayerGameplaySnapshot AdvanceActor(
-        PlayerGameplaySnapshot gameplay) => gameplay with
+        PlayerGameplaySnapshot gameplay,
+        bool cancelCombat = false) => gameplay with
         {
-            ActorRevision = checked(gameplay.ActorRevision + 1)
+            ActorRevision = checked(gameplay.ActorRevision + 1),
+            CombatTargetEnemyId = cancelCombat
+                ? null
+                : gameplay.CombatTargetEnemyId,
+            NextCombatAttackTick = cancelCombat
+                ? 0
+                : gameplay.NextCombatAttackTick
         };
 
     private static BoatTransactionResult Accepted(

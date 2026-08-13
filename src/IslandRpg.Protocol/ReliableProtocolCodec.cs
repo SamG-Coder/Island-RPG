@@ -229,6 +229,18 @@ public static class ReliableProtocolCodec
             case BoatActionResultMessage value:
                 WriteBoatActionResult(writer, value);
                 break;
+            case EnemyBaselineMessage value:
+                WriteEnemyBaseline(writer, value);
+                break;
+            case EnemyDeltaBatchMessage value:
+                WriteEnemyDeltaBatch(writer, value);
+                break;
+            case CombatEventBatchMessage value:
+                WriteCombatEventBatch(writer, value);
+                break;
+            case CombatActionResultMessage value:
+                WriteCombatActionResult(writer, value);
+                break;
             default:
                 throw new ProtocolException($"Unsupported message type {message.GetType().FullName}.");
         }
@@ -317,6 +329,14 @@ public static class ReliableProtocolCodec
                 ReadBoatDeltaBatch(sequence, tick, ref reader),
             ProtocolMessageKind.BoatActionResult =>
                 ReadBoatActionResult(sequence, tick, ref reader),
+            ProtocolMessageKind.EnemyBaseline =>
+                ReadEnemyBaseline(sequence, tick, ref reader),
+            ProtocolMessageKind.EnemyDeltaBatch =>
+                ReadEnemyDeltaBatch(sequence, tick, ref reader),
+            ProtocolMessageKind.CombatEventBatch =>
+                ReadCombatEventBatch(sequence, tick, ref reader),
+            ProtocolMessageKind.CombatActionResult =>
+                ReadCombatActionResult(sequence, tick, ref reader),
             _ => throw new ProtocolException($"Unsupported reliable message kind {header.Kind}."),
         };
     }
@@ -443,6 +463,10 @@ public static class ReliableProtocolCodec
                 writer.WriteByte((byte)ActionCommandKind.BoatAction);
                 WriteBoatAction(writer, action);
                 break;
+            case CombatActionPayload action:
+                writer.WriteByte((byte)ActionCommandKind.CombatAction);
+                WriteCombatAction(writer, action);
+                break;
             default:
                 throw new ProtocolException(
                     $"Unsupported action payload type {value.Payload.GetType().FullName}.");
@@ -510,6 +534,7 @@ public static class ReliableProtocolCodec
             ActionCommandKind.ResourceAction => ReadResourceAction(ref reader),
             ActionCommandKind.CaveAction => ReadCaveAction(ref reader),
             ActionCommandKind.BoatAction => ReadBoatAction(ref reader),
+            ActionCommandKind.CombatAction => ReadCombatAction(ref reader),
             _ => throw new ProtocolException($"Unsupported action command kind {kind}."),
         };
         return new ActionCommandMessage(
@@ -744,6 +769,66 @@ public static class ReliableProtocolCodec
     {
         var result = new BoatReference(reader.ReadGuid(), reader.ReadUInt32());
         EnsureBoatId(result.BoatId);
+        return result;
+    }
+
+    private static void WriteCombatAction(WireWriter writer, CombatActionPayload action)
+    {
+        EnsureDefined(action.Action, nameof(action.Action));
+        writer.WriteByte((byte)action.Action);
+        switch (action)
+        {
+            case SetCombatTargetAction target:
+                if (target.Enemy.ExpectedRevision == 0)
+                    throw new ProtocolException(
+                        "Combat targets require an existing enemy revision.");
+                WriteCombatEnemyReference(writer, target.Enemy);
+                break;
+            case CancelCombatAction:
+            case RespawnAction:
+                break;
+            case SetCombatStanceAction stance:
+                EnsureDefined(stance.Stance, nameof(stance.Stance));
+                writer.WriteByte((byte)stance.Stance);
+                break;
+            default:
+                throw new ProtocolException($"Unsupported combat action payload {action.GetType().FullName}.");
+        }
+    }
+
+    private static CombatActionPayload ReadCombatAction(ref WireReader reader) =>
+        ReadEnum<CombatActionKind>(reader.ReadByte(), nameof(CombatActionKind)) switch
+        {
+            CombatActionKind.SetTarget => new SetCombatTargetAction(
+                ReadExistingCombatEnemyReference(ref reader)),
+            CombatActionKind.Cancel => new CancelCombatAction(),
+            CombatActionKind.SetStance => new SetCombatStanceAction(
+                ReadEnum<CombatStance>(reader.ReadByte(), nameof(CombatStance))),
+            CombatActionKind.Respawn => new RespawnAction(),
+            var action => throw new ProtocolException($"Unsupported combat action kind {action}.")
+        };
+
+    private static void WriteCombatEnemyReference(WireWriter writer, CombatEnemyReference value)
+    {
+        EnsureEnemyId(value.EnemyId);
+        writer.WriteGuid(value.EnemyId);
+        writer.WriteUInt32(value.ExpectedRevision);
+    }
+
+    private static CombatEnemyReference ReadCombatEnemyReference(ref WireReader reader)
+    {
+        var result = new CombatEnemyReference(reader.ReadGuid(), reader.ReadUInt32());
+        EnsureEnemyId(result.EnemyId);
+        return result;
+    }
+
+    private static CombatEnemyReference ReadExistingCombatEnemyReference(
+        ref WireReader reader)
+    {
+        var result = ReadCombatEnemyReference(ref reader);
+        if (result.ExpectedRevision == 0)
+            throw new ProtocolException(
+                "Combat targets require an existing enemy revision.");
         return result;
     }
 
@@ -1591,6 +1676,267 @@ public static class ReliableProtocolCodec
             throw new ProtocolException("Boat action result has inconsistent revisions.");
     }
 
+    private static void WriteEnemyBaseline(WireWriter writer, EnemyBaselineMessage value)
+    {
+        ValidateEnemyStates(value.Enemies);
+        writer.WriteUInt16((ushort)value.Enemies.Count);
+        foreach (var enemy in value.Enemies) WriteEnemyState(writer, enemy);
+    }
+
+    private static EnemyBaselineMessage ReadEnemyBaseline(
+        ulong sequence, ulong tick, ref WireReader reader)
+    {
+        var count = reader.ReadUInt16();
+        if (count > ProtocolLimits.MaxEnemiesPerBatch)
+            throw new ProtocolException("Enemy baseline exceeds its hard limit.");
+        var enemies = new EnemyState[count];
+        for (var index = 0; index < count; index++)
+            enemies[index] = ReadEnemyState(ref reader);
+        ValidateEnemyStates(enemies);
+        return new EnemyBaselineMessage(sequence, tick, enemies);
+    }
+
+    private static void WriteEnemyDeltaBatch(WireWriter writer, EnemyDeltaBatchMessage value)
+    {
+        ValidateEnemyDeltas(value.Deltas);
+        writer.WriteUInt16((ushort)value.Deltas.Count);
+        foreach (var delta in value.Deltas)
+        {
+            writer.WriteByte((byte)delta.Kind);
+            WriteCombatEnemyReference(writer, delta.Reference);
+            writer.WriteUInt32(delta.CurrentRevision);
+            writer.WriteBoolean(delta.State is not null);
+            if (delta.State is { } state) WriteEnemyState(writer, state);
+        }
+    }
+
+    private static EnemyDeltaBatchMessage ReadEnemyDeltaBatch(
+        ulong sequence, ulong tick, ref WireReader reader)
+    {
+        var count = reader.ReadUInt16();
+        if (count > ProtocolLimits.MaxEnemiesPerBatch)
+            throw new ProtocolException("Enemy delta batch exceeds its hard limit.");
+        var deltas = new EnemyDelta[count];
+        for (var index = 0; index < count; index++)
+        {
+            var kind = ReadEnum<EnemyDeltaKind>(reader.ReadByte(), nameof(EnemyDeltaKind));
+            var reference = ReadCombatEnemyReference(ref reader);
+            var revision = reader.ReadUInt32();
+            var hasState = reader.ReadBoolean();
+            deltas[index] = new EnemyDelta(
+                kind, reference, revision,
+                hasState ? ReadEnemyState(ref reader) : null);
+        }
+        ValidateEnemyDeltas(deltas);
+        return new EnemyDeltaBatchMessage(sequence, tick, deltas);
+    }
+
+    private static void WriteEnemyState(WireWriter writer, EnemyState value)
+    {
+        ValidateEnemyState(value);
+        writer.WriteGuid(value.EnemyId);
+        writer.WriteUInt64(value.EntityId);
+        writer.WriteUInt32(value.Revision);
+        writer.WriteByte((byte)value.Archetype);
+        writer.WriteByte((byte)value.Size);
+        writer.WriteByte((byte)value.Behavior);
+        writer.WriteUInt32((uint)value.StatusFlags);
+        writer.WriteSingle(value.X);
+        writer.WriteSingle(value.Y);
+        writer.WriteInt16(value.WorldLevel);
+        writer.WriteInt32(value.Health);
+        writer.WriteInt32(value.MaximumHealth);
+        writer.WriteUInt64(value.TargetEntityId);
+        writer.WriteGuid(value.ParentEnemyId);
+        writer.WriteUInt32(value.SpawnOrdinal);
+    }
+
+    private static EnemyState ReadEnemyState(ref WireReader reader)
+    {
+        var result = new EnemyState(
+            reader.ReadGuid(),
+            reader.ReadUInt64(),
+            reader.ReadUInt32(),
+            ReadEnum<CombatEnemyArchetype>(reader.ReadByte(), nameof(CombatEnemyArchetype)),
+            ReadEnum<CombatEnemySize>(reader.ReadByte(), nameof(CombatEnemySize)),
+            ReadEnum<CombatEnemyBehavior>(reader.ReadByte(), nameof(CombatEnemyBehavior)),
+            ReadEnum<CombatStatusFlags>(reader.ReadUInt32(), nameof(CombatStatusFlags)),
+            ReadFinite(ref reader, "EnemyX"),
+            ReadFinite(ref reader, "EnemyY"),
+            reader.ReadInt16(),
+            reader.ReadInt32(),
+            reader.ReadInt32(),
+            reader.ReadUInt64(),
+            reader.ReadGuid(),
+            reader.ReadUInt32());
+        ValidateEnemyState(result);
+        return result;
+    }
+
+    private static void ValidateEnemyStates(IReadOnlyList<EnemyState>? values)
+    {
+        if (values is null || values.Count > ProtocolLimits.MaxEnemiesPerBatch)
+            throw new ProtocolException("Enemy state count exceeds its hard limit.");
+        var ids = new HashSet<Guid>();
+        var entities = new HashSet<ulong>();
+        foreach (var value in values)
+        {
+            ValidateEnemyState(value);
+            if (!ids.Add(value.EnemyId) || !entities.Add(value.EntityId))
+                throw new ProtocolException("Enemy identities are duplicated.");
+        }
+    }
+
+    private static void ValidateEnemyState(EnemyState value)
+    {
+        EnsureEnemyId(value.EnemyId);
+        if (value.EntityId == 0 || value.Revision == 0)
+            throw new ProtocolException("Enemy state omitted its entity or revision.");
+        EnsureDefined(value.Archetype, nameof(value.Archetype));
+        EnsureDefined(value.Size, nameof(value.Size));
+        EnsureDefined(value.Behavior, nameof(value.Behavior));
+        EnsureDefined(value.StatusFlags, nameof(value.StatusFlags));
+        EnsureFinite(value.X, nameof(value.X));
+        EnsureFinite(value.Y, nameof(value.Y));
+        if (value.MaximumHealth <= 0 || value.Health < 0 || value.Health > value.MaximumHealth)
+            throw new ProtocolException("Enemy health must be within its positive maximum.");
+        if ((value.Behavior == CombatEnemyBehavior.Dead) != (value.Health == 0))
+            throw new ProtocolException("Enemy behavior and health disagree.");
+        if (value.ParentEnemyId == value.EnemyId)
+            throw new ProtocolException("An enemy cannot be its own parent.");
+    }
+
+    private static void ValidateEnemyDeltas(IReadOnlyList<EnemyDelta>? deltas)
+    {
+        if (deltas is null || deltas.Count == 0 ||
+            deltas.Count > ProtocolLimits.MaxEnemiesPerBatch)
+            throw new ProtocolException("Enemy delta count exceeds its hard limit.");
+        var ids = new HashSet<Guid>();
+        foreach (var delta in deltas)
+        {
+            EnsureDefined(delta.Kind, nameof(delta.Kind));
+            EnsureEnemyId(delta.Reference.EnemyId);
+            if (!ids.Add(delta.Reference.EnemyId) ||
+                delta.CurrentRevision <= delta.Reference.ExpectedRevision)
+                throw new ProtocolException("Enemy delta revision chain is invalid.");
+            if (delta.Kind == EnemyDeltaKind.Upsert)
+            {
+                if (delta.State is not { } state ||
+                    state.EnemyId != delta.Reference.EnemyId ||
+                    state.Revision != delta.CurrentRevision)
+                    throw new ProtocolException("Enemy upsert does not match its reference.");
+                ValidateEnemyState(state);
+            }
+            else if (delta.State is not null)
+                throw new ProtocolException("Enemy removal cannot include state.");
+        }
+    }
+
+    private static void WriteCombatEventBatch(WireWriter writer, CombatEventBatchMessage value)
+    {
+        ValidateCombatEvents(value.Events);
+        writer.WriteUInt16((ushort)value.Events.Count);
+        foreach (var item in value.Events)
+        {
+            writer.WriteUInt64(item.EventOrdinal);
+            writer.WriteByte((byte)item.Kind);
+            writer.WriteUInt64(item.SourceEntityId);
+            writer.WriteUInt64(item.TargetEntityId);
+            writer.WriteInt32(item.Amount);
+            writer.WriteByte((byte)item.StatusEffect);
+            writer.WriteSingle(item.X);
+            writer.WriteSingle(item.Y);
+            writer.WriteInt16(item.WorldLevel);
+            writer.WriteUInt64(item.RelatedEntityId);
+        }
+    }
+
+    private static CombatEventBatchMessage ReadCombatEventBatch(
+        ulong sequence, ulong tick, ref WireReader reader)
+    {
+        var count = reader.ReadUInt16();
+        if (count > ProtocolLimits.MaxCombatEventsPerBatch)
+            throw new ProtocolException("Combat event batch exceeds its hard limit.");
+        var events = new CombatEvent[count];
+        for (var index = 0; index < count; index++)
+            events[index] = new CombatEvent(
+                reader.ReadUInt64(),
+                ReadEnum<CombatEventKind>(reader.ReadByte(), nameof(CombatEventKind)),
+                reader.ReadUInt64(), reader.ReadUInt64(), reader.ReadInt32(),
+                ReadEnum<CombatStatusEffect>(reader.ReadByte(), nameof(CombatStatusEffect)),
+                ReadFinite(ref reader, "CombatEventX"),
+                ReadFinite(ref reader, "CombatEventY"),
+                reader.ReadInt16(), reader.ReadUInt64());
+        ValidateCombatEvents(events);
+        return new CombatEventBatchMessage(sequence, tick, events);
+    }
+
+    private static void ValidateCombatEvents(IReadOnlyList<CombatEvent>? events)
+    {
+        if (events is null || events.Count == 0 ||
+            events.Count > ProtocolLimits.MaxCombatEventsPerBatch)
+            throw new ProtocolException("Combat event count exceeds its hard limit.");
+        ulong previous = 0;
+        foreach (var item in events)
+        {
+            if (item.EventOrdinal == 0 || item.EventOrdinal <= previous)
+                throw new ProtocolException("Combat event ordinals must increase within a batch.");
+            previous = item.EventOrdinal;
+            EnsureDefined(item.Kind, nameof(item.Kind));
+            EnsureDefined(item.StatusEffect, nameof(item.StatusEffect));
+            EnsureFinite(item.X, nameof(item.X));
+            EnsureFinite(item.Y, nameof(item.Y));
+            if (item.Amount < 0)
+                throw new ProtocolException("Combat event amount cannot be negative.");
+        }
+    }
+
+    private static void WriteCombatActionResult(WireWriter writer, CombatActionResultMessage value)
+    {
+        ValidateCombatActionResult(value);
+        writer.WriteGuid(value.CommandId);
+        writer.WriteByte((byte)value.Action);
+        writer.WriteGuid(value.Enemy.EnemyId);
+        writer.WriteUInt32(value.Enemy.ExpectedRevision);
+        writer.WriteBoolean(value.Accepted);
+        writer.WriteByte((byte)value.RejectionCode);
+        writer.WriteString(value.Detail, ProtocolLimits.DetailBytes, nameof(value.Detail));
+        writer.WriteUInt32(value.ActorRevision);
+        writer.WriteUInt32(value.InventoryRevision);
+        writer.WriteUInt32(value.EnemyRevision);
+    }
+
+    private static CombatActionResultMessage ReadCombatActionResult(
+        ulong sequence, ulong tick, ref WireReader reader)
+    {
+        var result = new CombatActionResultMessage(
+            sequence, tick, reader.ReadGuid(),
+            ReadEnum<CombatActionKind>(reader.ReadByte(), nameof(CombatActionKind)),
+            new CombatEnemyReference(reader.ReadGuid(), reader.ReadUInt32()),
+            reader.ReadBoolean(),
+            ReadEnum<CommandRejectionCode>(reader.ReadByte(), nameof(CommandRejectionCode)),
+            reader.ReadString(ProtocolLimits.DetailBytes, "Detail"),
+            reader.ReadUInt32(), reader.ReadUInt32(), reader.ReadUInt32());
+        ValidateCombatActionResult(result);
+        return result;
+    }
+
+    private static void ValidateCombatActionResult(CombatActionResultMessage value)
+    {
+        EnsureCommandId(value.CommandId);
+        EnsureDefined(value.Action, nameof(value.Action));
+        ValidateActionResult(value.Accepted, value.RejectionCode);
+        if (value.Action == CombatActionKind.SetTarget)
+        {
+            EnsureEnemyId(value.Enemy.EnemyId);
+            if (value.Enemy.ExpectedRevision == 0 ||
+                value.EnemyRevision < value.Enemy.ExpectedRevision)
+                throw new ProtocolException("Combat result regressed its enemy revision.");
+        }
+        else if (value.Enemy != default || value.EnemyRevision != 0)
+            throw new ProtocolException("A target-free combat result carried enemy state.");
+    }
+
     private static ResourceNodeSparseState ReadResourceNodeState(
         ref WireReader reader)
     {
@@ -1955,6 +2301,15 @@ public static class ReliableProtocolCodec
         writer.WriteInt32(value.AdventureExperience);
         writer.WriteInt32(value.DiggingExperience);
         writer.WriteInt32(value.FishingExperience);
+        writer.WriteInt32(value.MaximumHealth);
+        writer.WriteInt32(value.AttackExperience);
+        writer.WriteInt32(value.StrengthExperience);
+        writer.WriteInt32(value.DefenceExperience);
+        writer.WriteByte((byte)value.CombatStance);
+        writer.WriteByte((byte)value.LifeState);
+        writer.WriteUInt64(value.RespawnTick);
+        writer.WriteUInt32((uint)value.CombatStatusFlags);
+        writer.WriteGuid(value.CombatTargetEnemyId);
     }
 
     private static PlayerStateMessage ReadPlayerState(
@@ -1995,6 +2350,15 @@ public static class ReliableProtocolCodec
         var adventureExperience = reader.ReadInt32();
         var diggingExperience = reader.ReadInt32();
         var fishingExperience = reader.ReadInt32();
+        var maximumHealth = reader.ReadInt32();
+        var attackExperience = reader.ReadInt32();
+        var strengthExperience = reader.ReadInt32();
+        var defenceExperience = reader.ReadInt32();
+        var combatStance = ReadEnum<CombatStance>(reader.ReadByte(), nameof(CombatStance));
+        var lifeState = ReadEnum<CombatLifeState>(reader.ReadByte(), nameof(CombatLifeState));
+        var respawnTick = reader.ReadUInt64();
+        var combatStatusFlags = ReadEnum<CombatStatusFlags>(reader.ReadUInt32(), nameof(CombatStatusFlags));
+        var combatTargetEnemyId = reader.ReadGuid();
 
         var result = new PlayerStateMessage(
             sequence,
@@ -2017,7 +2381,16 @@ public static class ReliableProtocolCodec
             miningExperience,
             adventureExperience,
             diggingExperience,
-            fishingExperience);
+            fishingExperience,
+            maximumHealth,
+            attackExperience,
+            strengthExperience,
+            defenceExperience,
+            combatStance,
+            lifeState,
+            respawnTick,
+            combatStatusFlags,
+            combatTargetEnemyId);
         ValidatePlayerState(result);
         return result;
     }
@@ -2057,9 +2430,9 @@ public static class ReliableProtocolCodec
                 "Inventory revision changed without an inventory-state section.");
         }
 
-        if (value.Health < 0)
+        if (value.MaximumHealth <= 0 || value.Health < 0 || value.Health > value.MaximumHealth)
         {
-            throw new ProtocolException("Health cannot be negative.");
+            throw new ProtocolException("Player health must be within its positive maximum.");
         }
 
         EnsureFinite(value.Hunger, nameof(value.Hunger));
@@ -2081,10 +2454,25 @@ public static class ReliableProtocolCodec
             value.MiningExperience < 0 ||
             value.AdventureExperience < 0 ||
             value.DiggingExperience < 0 ||
-            value.FishingExperience < 0)
+            value.FishingExperience < 0 || value.AttackExperience < 0 ||
+            value.StrengthExperience < 0 || value.DefenceExperience < 0)
         {
             throw new ProtocolException("Skill experience cannot be negative.");
         }
+
+        EnsureDefined(value.CombatStance, nameof(value.CombatStance));
+        EnsureDefined(value.LifeState, nameof(value.LifeState));
+        EnsureDefined(value.CombatStatusFlags, nameof(value.CombatStatusFlags));
+        if ((value.LifeState == CombatLifeState.Alive) != (value.Health > 0))
+            throw new ProtocolException("Player life state and health disagree.");
+        if (value.LifeState == CombatLifeState.Alive && value.RespawnTick != 0)
+            throw new ProtocolException("A living player cannot have a pending respawn tick.");
+        if (!hasActor && value.CombatTargetEnemyId != Guid.Empty)
+            throw new ProtocolException(
+                "A combat target was supplied without an actor-state section.");
+        if (value.LifeState == CombatLifeState.Dead &&
+            value.CombatTargetEnemyId != Guid.Empty)
+            throw new ProtocolException("A dead player cannot retain a combat target.");
 
         if (value.InventorySlots is null)
         {
@@ -2179,6 +2567,12 @@ public static class ReliableProtocolCodec
         {
             throw new ProtocolException("Boat ID cannot be empty.");
         }
+    }
+
+    private static void EnsureEnemyId(Guid enemyId)
+    {
+        if (enemyId == Guid.Empty)
+            throw new ProtocolException("Enemy ID cannot be empty.");
     }
 
     private static void EnsureResourceNodeId(ResourceNodeId resourceNodeId)

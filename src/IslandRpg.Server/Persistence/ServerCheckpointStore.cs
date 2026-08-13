@@ -13,13 +13,14 @@ namespace IslandRpg.Server.Persistence;
 public sealed class ServerCheckpointStore
 {
     public const long MaximumCheckpointBytes = 256L * 1024 * 1024;
-    public const int MaximumActors = 1_024;
+    public const int MaximumActors = NetworkPopulationLimits.MaximumActors;
     public const int MaximumWorldObjects = 2_000_000;
     public const int MaximumChunkRevisions = 1_000_000;
     public const int MaximumContainerSlots = 1_024;
     public const int MaximumStackQuantity = 1_000_000;
     public const int PlayerInventoryCapacity = 28;
-    public const int MaximumBoats = 256;
+    public const int MaximumBoats = NetworkPopulationLimits.MaximumBoats;
+    public const int MaximumEnemies = NetworkPopulationLimits.MaximumEnemies;
     public const int MaximumBoatRoutePoints = 4_096;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -223,7 +224,7 @@ public sealed class ServerCheckpointStore
                 !players.Add(actor.PlayerId) || !actors.Add(actor.ActorId) ||
                 !float.IsFinite(actor.X) || !float.IsFinite(actor.Y) ||
                 actor.LastProcessedCommandSequence < 0 || actor.ActorRevision == 0 ||
-                actor.InventoryRevision == 0 || actor.Health is < 0 or > 100 ||
+                actor.InventoryRevision == 0 || actor.Health < 0 ||
                 !float.IsFinite(actor.Hunger) || actor.Hunger is < 0 or > 100 ||
                 !float.IsFinite(actor.WellFedSeconds) || actor.WellFedSeconds < 0 ||
                 actor.CraftingExperience < 0 || actor.CookingExperience < 0 ||
@@ -232,6 +233,28 @@ public sealed class ServerCheckpointStore
                 actor.AdventureExperience < 0 ||
                 actor.DiggingExperience < 0 ||
                 actor.FishingExperience < 0 ||
+                actor.MaximumHealth <= 0 ||
+                actor.Health > actor.MaximumHealth ||
+                actor.AttackExperience < 0 ||
+                actor.StrengthExperience < 0 ||
+                actor.DefenceExperience < 0 ||
+                !Enum.IsDefined(actor.CombatStance) ||
+                !Enum.IsDefined(actor.LifeState) ||
+                actor.RespawnAvailableTick < 0 ||
+                actor.LifeState == ActorLifeState.Alive &&
+                    (actor.Health <= 0 || actor.RespawnAvailableTick != 0) ||
+                actor.LifeState == ActorLifeState.Dead &&
+                    (actor.Health != 0 || actor.RespawnAvailableTick == 0 ||
+                     actor.CombatTargetEnemyId is not null) ||
+                !double.IsFinite(actor.SlowedUntil) ||
+                !double.IsFinite(actor.RootedUntil) ||
+                !double.IsFinite(actor.PoisonedUntil) ||
+                !double.IsFinite(actor.NextPoisonTickAt) ||
+                actor.SlowedUntil < 0 || actor.RootedUntil < 0 ||
+                actor.PoisonedUntil < 0 || actor.NextPoisonTickAt < 0 ||
+                actor.PoisonDamage < 0 ||
+                actor.CombatTargetEnemyId == Guid.Empty ||
+                actor.NextCombatAttackTick < 0 ||
                 actor.ReconnectTokenHash is not { Length: 32 } ||
                 actor.Inventory is null || actor.Inventory.Count != PlayerInventoryCapacity ||
                 actor.CommandReceipts is null ||
@@ -349,6 +372,62 @@ public sealed class ServerCheckpointStore
 
         ValidateResources(value.Resources, actors);
         ValidateBoats(value.Boats, players, actors);
+        ValidateCombat(value.Combat, value.WorldSeed, actors, value.Actors);
+    }
+
+    private static void ValidateCombat(
+        ServerCombatCheckpoint? combat,
+        long worldSeed,
+        IReadOnlySet<Guid> actors,
+        IReadOnlyList<ServerActorCheckpoint> actorStates)
+    {
+        combat ??= new ServerCombatCheckpoint(worldSeed, 1, 1, []);
+        if (combat.WorldSeed != worldSeed || combat.NextEventOrdinal == 0 ||
+            combat.NextSpawnOrdinal == 0 || combat.Enemies is null ||
+            combat.Enemies.Count > MaximumEnemies)
+            throw new InvalidDataException(
+                "The combat checkpoint header is invalid.");
+        var ids = new HashSet<Guid>();
+        var ordinals = new HashSet<uint>();
+        foreach (var enemy in combat.Enemies)
+        {
+            if (enemy.EnemyId == Guid.Empty || !ids.Add(enemy.EnemyId) ||
+                enemy.Revision == 0 || !Enum.IsDefined(enemy.Kind) ||
+                !Enum.IsDefined(enemy.Behavior) ||
+                !float.IsFinite(enemy.SpawnX) ||
+                !float.IsFinite(enemy.SpawnY) || !float.IsFinite(enemy.X) ||
+                !float.IsFinite(enemy.Y) ||
+                !float.IsFinite(enemy.VelocityX) ||
+                !float.IsFinite(enemy.VelocityY) || enemy.PowerLevel <= 0 ||
+                enemy.Health < 0 || enemy.MaximumHealth <= 0 ||
+                enemy.Health > enemy.MaximumHealth ||
+                !float.IsFinite(enemy.SizeScale) || enemy.SizeScale <= 0 ||
+                !double.IsFinite(enemy.SlowedUntil) ||
+                !double.IsFinite(enemy.RootedUntil) ||
+                !double.IsFinite(enemy.PoisonedUntil) ||
+                !double.IsFinite(enemy.NextPoisonTickAt) ||
+                enemy.SlowedUntil < 0 || enemy.RootedUntil < 0 ||
+                enemy.PoisonedUntil < 0 || enemy.NextPoisonTickAt < 0 ||
+                enemy.PoisonDamage < 0 ||
+                enemy.TargetActorId is { } target && !actors.Contains(target) ||
+                enemy.ParentEnemyId == Guid.Empty || enemy.SpawnOrdinal == 0 ||
+                !ordinals.Add(enemy.SpawnOrdinal) || enemy.NextAttackTick < 0 ||
+                enemy.SplitGeneration is < 0 or > 1 ||
+                enemy.DeathRemovalTick < 0 || enemy.ReactionReadyTick < 0 ||
+                enemy.BurrowEmergeTick < 0 ||
+                enemy.BurrowEmergeTick > 0 &&
+                    enemy.ReactionReadyTick == 0 ||
+                enemy.BurrowEmergeTick > enemy.ReactionReadyTick ||
+                (enemy.Health == 0) != (enemy.DeathRemovalTick > 0))
+                throw new InvalidDataException(
+                    "An enemy checkpoint is invalid.");
+        }
+        // ParentEnemyId is immutable historical provenance, not a live foreign
+        // key. Split children intentionally outlive the retired parent corpse.
+        if (actorStates.Any(actor => actor.CombatTargetEnemyId is { } enemy &&
+                !ids.Contains(enemy)))
+            throw new InvalidDataException(
+                "An actor checkpoint references a missing combat target.");
     }
 
     private static void ValidateBoats(

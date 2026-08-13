@@ -210,9 +210,9 @@ internal static class ProtocolChecks
     private static void ProtocolEnforcesInputBounds()
     {
         CheckAssert.Equal(
-            (ushort)8,
+            (ushort)10,
             ProtocolConstants.CurrentVersion,
-            "authoritative boats and fishing require protocol v8");
+            "durable combat targets require protocol v10");
         var multibyteName = string.Concat(
             Enumerable.Repeat("界", ProtocolLimits.PlayerNameBytes));
         CheckAssert.Throws<ProtocolException>(
@@ -343,7 +343,11 @@ internal static class ProtocolChecks
             720,
             830,
             940,
-            1050);
+            1050)
+        {
+            CombatTargetEnemyId = Guid.Parse(
+                "98989898-9898-9898-9898-989898989898")
+        };
         AssertPlayerStateRoundTrip(baseline);
 
         var delta = baseline with
@@ -458,6 +462,24 @@ internal static class ProtocolChecks
         CheckAssert.Throws<ProtocolException>(
             () => ReliableProtocolCodec.Encode(validDelta with { Hunger = float.NaN }),
             "non-finite player survival values must be rejected before encoding");
+
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(validDelta with
+            {
+                Flags = PlayerStateFlags.Inventory,
+                BaselineActorRevision = validDelta.ActorRevision,
+                CombatTargetEnemyId = commandId,
+            }),
+            "combat targets cannot be supplied outside the actor section");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(validDelta with
+            {
+                Health = 0,
+                LifeState = CombatLifeState.Dead,
+                RespawnTick = 10,
+                CombatTargetEnemyId = commandId,
+            }),
+            "dead player state cannot retain a combat target");
 
         var invalidWireHunger = ReliableProtocolCodec.Encode(validDelta);
         BinaryPrimitives.WriteUInt32LittleEndian(

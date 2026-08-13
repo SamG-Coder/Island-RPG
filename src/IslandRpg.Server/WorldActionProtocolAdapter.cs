@@ -197,7 +197,21 @@ public static class WorldActionProtocolAdapter
             gameplay.MiningExperience,
             gameplay.AdventureExperience,
             gameplay.DiggingExperience,
-            gameplay.FishingExperience);
+            gameplay.FishingExperience,
+            gameplay.MaximumHealth,
+            gameplay.AttackExperience,
+            gameplay.StrengthExperience,
+            gameplay.DefenceExperience,
+            CombatActionProtocolAdapter.ToProtocolStance(
+                gameplay.CombatStance),
+            CombatActionProtocolAdapter.ToLifeState(gameplay.LifeState),
+            checked((ulong)gameplay.RespawnAvailableTick),
+            CombatActionProtocolAdapter.ToStatusFlags(
+                gameplay.StatusFlags(
+                    tick / (double)SimulationTiming.TicksPerSecond)),
+            actorChanged
+                ? gameplay.CombatTargetEnemyId?.Value ?? Guid.Empty
+                : Guid.Empty);
     }
 
     /// <summary>
@@ -436,7 +450,7 @@ public static class WorldActionProtocolAdapter
         }
 
         var changed = result.ObjectDeltas.FirstOrDefault(value =>
-            value.ObjectId == container.ObjectId && value.Object is not null);
+            value.ObjectId == container.ObjectId);
         if (changed is not null)
         {
             var chunk = result.ChunkDeltas.SingleOrDefault(value =>

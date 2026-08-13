@@ -43,6 +43,9 @@ internal static class AuthoritativeSessionChecks
         checks.Add(
             "stone tool sharpening is an authoritative combination",
             SharpeningUsesAuthoritativeInventoryState);
+        checks.Add(
+            "fire-and-forget commands reject revisioned gameplay",
+            FireAndForgetRejectsGameplay);
     }
 
     private static void JoinPublishesImmutableServerState()
@@ -658,6 +661,39 @@ internal static class AuthoritativeSessionChecks
             "sharpening must replace the blunt tool");
         CheckAssert.Equal(1, CountItem(after, "stone_axe"),
             "sharpening must create exactly one restored axe");
+    }
+
+    private static void FireAndForgetRejectsGameplay()
+    {
+        var session = NewSession();
+        var connection = ClientConnectionId.New();
+        var joined = Join(session, connection, "Rowan", Vector2.Zero);
+        var before = session.CaptureSnapshot().Actors[0].Gameplay;
+
+        var queued = session.TryEnqueueIntent(new ActorCommand(
+            connection,
+            joined.Identity.PlayerId,
+            1,
+            new SwapInventorySlotsIntent(
+                Guid.Parse("72000000-0000-0000-0000-000000000001"),
+                before.Inventory.Revision,
+                before.ActorRevision,
+                0,
+                1)));
+
+        CheckAssert.False(queued,
+            "revisioned gameplay must use the acknowledged command path");
+        CheckAssert.Equal(0, session.Drain(),
+            "rejected fire-and-forget gameplay must not enter the authority queue");
+        var after = session.CaptureSnapshot().Actors[0].Gameplay;
+        CheckAssert.Equal(
+            before with { Inventory = after.Inventory },
+            after,
+            "rejected fire-and-forget gameplay must not mutate actor state");
+        CheckAssert.SequenceEqual(
+            before.Inventory.Slots,
+            after.Inventory.Slots,
+            "rejected fire-and-forget gameplay must preserve inventory slots");
     }
 
     private static int CountItem(

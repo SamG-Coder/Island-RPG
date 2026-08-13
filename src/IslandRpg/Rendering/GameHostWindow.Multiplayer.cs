@@ -78,6 +78,7 @@ internal sealed partial class GameHostWindow
         _networkConnectStarted = true;
         _networkClient = new NetworkGameClient();
         _networkCancellation = new CancellationTokenSource();
+        SubscribeNetworkCombat(_networkClient);
         _networkClient.StateChanged += (_, value) =>
             _networkEvents.Enqueue(() => HandleNetworkState(value.State));
         _networkClient.ChatReceived += (_, value) =>
@@ -192,7 +193,7 @@ internal sealed partial class GameHostWindow
         _playerDefeated = false;
         _modalScreen.Close(ModalScreenKind.Death);
         _villagers.Clear();
-        _enemies.Clear();
+        InitializeNetworkCombatProjection();
         _queuedAction = null;
         _moveMarker = null;
         _camera = Vector2.Zero;
@@ -219,6 +220,7 @@ internal sealed partial class GameHostWindow
         {
             CancelNetworkCaveInteraction();
             ClearNetworkBoatPresentation();
+            ClearNetworkCombatProjection();
             ClearNetworkResourceProjection();
             ClearNetworkWorldObjects();
         }
@@ -312,8 +314,13 @@ internal sealed partial class GameHostWindow
             AdventureExperience = state.AdventureExperience,
             DiggingExperience = state.DiggingExperience,
             FishingExperience = state.FishingExperience,
+            AttackExperience = state.AttackExperience,
+            StrengthExperience = state.StrengthExperience,
+            DefenceExperience = state.DefenceExperience,
+            CombatStance = FromNetworkCombatStance(state.CombatStance),
             UpdatedUtc = DateTime.UtcNow
         };
+        ApplyNetworkCombatPlayerState(state);
         if (_activeInventorySlot >= 0 &&
             items[_activeInventorySlot] is null)
             _activeInventorySlot = -1;
@@ -337,7 +344,10 @@ internal sealed partial class GameHostWindow
             StopNetworkRepeatedConstruction();
             CancelNetworkCaveInteraction();
             if (_fishingBoatBoarded)
+            {
+                CancelNetworkCombatTarget();
                 SendNetworkBoatStop();
+            }
             else
                 SendNetworkStop();
         }
@@ -345,6 +355,7 @@ internal sealed partial class GameHostWindow
         UpdateNetworkCaveInteraction();
         UpdateNetworkResourceInteraction();
         UpdateNetworkBoatFishingPresentation(elapsed);
+        UpdateNetworkCombatPresentation(elapsed);
         UpdateNativeCursor();
         FollowPlayer();
     }
@@ -359,6 +370,11 @@ internal sealed partial class GameHostWindow
         var seenBoats = new HashSet<ulong>();
         foreach (var snapshot in sampled.Entities)
         {
+            if (snapshot.EntityKind == NetworkEntityKind.Enemy)
+            {
+                ApplyNetworkEnemySnapshot(snapshot, elapsed);
+                continue;
+            }
             if (snapshot.EntityKind == NetworkEntityKind.Boat)
             {
                 seenBoats.Add(snapshot.EntityId);
@@ -471,9 +487,12 @@ internal sealed partial class GameHostWindow
         Vector2 target,
         bool preserveResourceAction = false,
         bool preserveFishingAction = false,
-        bool preserveBoatBoarding = false)
+        bool preserveBoatBoarding = false,
+        bool preserveCombatAction = false)
     {
         if (_networkClient?.IsConnected != true) return;
+        if (!preserveCombatAction)
+            CancelNetworkCombatTarget();
         ReleaseNetworkCookingPresentation();
         if (!preserveResourceAction)
             CancelNetworkResourceInteraction();
@@ -488,9 +507,12 @@ internal sealed partial class GameHostWindow
 
     private void SendNetworkStop(
         bool preserveResourceAction = false,
-        bool preserveFishingAction = false)
+        bool preserveFishingAction = false,
+        bool preserveCombatAction = false)
     {
         if (_networkClient?.IsConnected != true) return;
+        if (!preserveCombatAction)
+            CancelNetworkCombatTarget();
         ReleaseNetworkCookingPresentation();
         if (!preserveResourceAction)
             CancelNetworkResourceInteraction();
@@ -629,6 +651,7 @@ internal sealed partial class GameHostWindow
         _networkCancellation?.Dispose();
         _networkCancellation = null;
         if (_networkClient is null) return;
+        UnsubscribeNetworkCombat(_networkClient);
         try { _networkClient.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
         catch { }
         _networkClient = null;
@@ -638,6 +661,7 @@ internal sealed partial class GameHostWindow
     {
         CancelNetworkCaveInteraction();
         ClearNetworkResourceProjection();
+        ClearNetworkCombatProjection();
         ResetNetworkContainerInteraction();
         ClearNetworkWorldObjects();
         _networkWorldEntered = false;

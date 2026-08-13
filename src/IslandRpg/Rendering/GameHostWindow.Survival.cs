@@ -61,16 +61,14 @@ internal sealed partial class GameHostWindow
             scene,
             SpriteBounds(visual.Frame, visual.World, visual.Mirror),
             _activePlayer.Health /
-            (float)Math.Max(1, AdventureService.MaximumHealth(
-                _activePlayer.AdventureExperience)),
+            (float)Math.Max(1, ActivePlayerMaximumHealth()),
             key);
     }
 
     private void UpdateSurvival(float elapsed)
     {
         if (_activePlayer is null || _playerDefeated || elapsed <= 0) return;
-        var maximumHealth = AdventureService.MaximumHealth(
-            _activePlayer.AdventureExperience);
+        var maximumHealth = ActivePlayerMaximumHealth();
         var update = SurvivalService.Advance(
             _activePlayer.Hunger,
             _activePlayer.WellFedSeconds,
@@ -206,8 +204,7 @@ internal sealed partial class GameHostWindow
         var inventory = ActivePlayerInventory();
         if (inventory[slot]?.ItemId != itemId)
             return;
-        var maximumHealth = AdventureService.MaximumHealth(
-            _activePlayer.AdventureExperience);
+        var maximumHealth = ActivePlayerMaximumHealth();
         if (_activePlayer.Hunger >= SurvivalService.MaximumHunger &&
             _activePlayer.Health >= maximumHealth)
         {
@@ -513,8 +510,7 @@ internal sealed partial class GameHostWindow
             ? 1
             : (_activePlayer.AdventureExperience - adventureFloor) /
               (float)Math.Max(1, adventureCeiling - adventureFloor);
-        var maximumHealth = AdventureService.MaximumHealth(
-            _activePlayer.AdventureExperience);
+        var maximumHealth = ActivePlayerMaximumHealth();
         DrawStatusOrb(
             map, 0, 2, adventureProgress,
             $"Lv {adventureLevel}",

@@ -38,6 +38,43 @@ public sealed class AuthoritativeWorldTransactions
 
     public AuthoritativeWorldObjectSnapshot AddObject(WorldObjectSeed seed)
     {
+        return AddObjectCore(seed).Snapshot;
+    }
+
+    /// <summary>
+    /// Commits a trusted autonomous object and returns the exact public
+    /// revision transition. Other authoritative systems use this for durable
+    /// effects such as deterministic enemy loot bags.
+    /// </summary>
+    public WorldTransactionResult AddObjectCommitted(
+        Guid commandId,
+        WorldObjectSeed seed)
+    {
+        if (commandId == Guid.Empty)
+            throw new ArgumentException(
+                "A stable autonomous command identity is required.",
+                nameof(commandId));
+        var committed = AddObjectCore(seed);
+        return new WorldTransactionResult(
+            commandId,
+            WorldTransactionStatus.Accepted,
+            0,
+            0,
+            [new WorldObjectTransactionDelta(
+                WorldObjectChangeKind.Added,
+                committed.Snapshot.ObjectId,
+                committed.Snapshot.Chunk,
+                0,
+                committed.Snapshot.ObjectRevision,
+                committed.Snapshot)],
+            [committed.ChunkDelta],
+            null,
+            null,
+            "An authoritative world object was created.");
+    }
+
+    private AddedObjectCommit AddObjectCore(WorldObjectSeed seed)
+    {
         EnsureOwner();
         if (seed.ObjectId == Guid.Empty || !IsFinite(seed.Position) ||
             seed.ObjectRevision == 0 || seed.ContainerRevision == 0 ||
@@ -62,26 +99,31 @@ public sealed class AuthoritativeWorldTransactions
             GateState: ToCoreGateState(seed.GateState));
         if (seed.ContainerItems is { Count: > 0 })
         {
-            if (!StorageContainerService.IsStorage(seed.DefinitionId))
+            if (!WorldItemContainerService.IsContainer(seed.DefinitionId))
                 throw new ArgumentException(
-                    "Only storage objects can be seeded with contents.",
+                    "Only container objects can be seeded with contents.",
                     nameof(seed));
-            var container = StorageContainerService.Open(value);
+            var container = WorldItemContainerService.OpenForSeeding(value);
             foreach (var item in seed.ContainerItems)
                 if (item.Quantity <= 0 ||
                     !container.TryAdd(item.ItemId, item.Quantity, item.OwnerId))
                     throw new ArgumentException(
                         "The seeded container contents are invalid or too large.",
                         nameof(seed));
-            value = StorageContainerService.Save(value, container);
+            value = WorldItemContainerService.Save(value, container);
         }
         var chunk = WorldChunkKey.At(seed.Position, seed.WorldLevel);
+        if (ChunkRevision(chunk) == uint.MaxValue)
+            throw new OverflowException(
+                "The world chunk revision cannot advance any further.");
         if (!_objects.TryAdd(seed.ObjectId,
                 new ObjectState(value, chunk, seed.ObjectRevision,
                     seed.ContainerRevision, seed.LinkedObjectId)))
             throw new InvalidOperationException("The world object already exists.");
-        AdvanceChunk(chunk);
-        return Snapshot(_objects[seed.ObjectId]);
+        var chunkDelta = AdvanceChunk(chunk);
+        return new AddedObjectCommit(
+            Snapshot(_objects[seed.ObjectId]),
+            chunkDelta);
     }
 
     public AuthoritativeWorldObjectSnapshot CaptureObject(Guid objectId)
@@ -105,7 +147,7 @@ public sealed class AuthoritativeWorldTransactions
             .OrderBy(static value => value.Value.Id)
             .Select(value => new AuthoritativeWorldObjectCheckpoint(
                 Snapshot(value),
-                StorageContainerService.IsStorage(value.Value.ItemId)
+                WorldItemContainerService.IsContainer(value.Value.ItemId)
                     ? ContainerSnapshot(value)
                     : null))
             .ToImmutableArray();
@@ -187,7 +229,7 @@ public sealed class AuthoritativeWorldTransactions
             }
 
             WorldContainerContents? contents = null;
-            var isStorage = StorageContainerService.IsStorage(
+            var isStorage = WorldItemContainerService.IsContainer(
                 snapshot.DefinitionId);
             if (isStorage != snapshot.HasContainer ||
                 isStorage != (entry.Container is not null))
@@ -552,7 +594,7 @@ public sealed class AuthoritativeWorldTransactions
         var rejected = ValidateObject(actor, command.Context,
             command.Container, out var state);
         if (rejected is not null) return rejected;
-        if (!StorageContainerService.IsStorage(state!.Value.ItemId))
+        if (!WorldItemContainerService.IsContainer(state!.Value.ItemId))
             return Rejected(command.Context, WorldTransactionStatus.NotContainer, actor);
         if (!CanAccess(actor, state.Value))
             return Rejected(command.Context, WorldTransactionStatus.AccessDenied, actor);
@@ -568,13 +610,13 @@ public sealed class AuthoritativeWorldTransactions
         var rejected = ValidateObject(actor, command.Context,
             command.Container, out var state, requireContainerRevision: true);
         if (rejected is not null) return rejected;
-        if (!StorageContainerService.IsStorage(state!.Value.ItemId))
+        if (!WorldItemContainerService.IsContainer(state!.Value.ItemId))
             return Rejected(command.Context, WorldTransactionStatus.NotContainer, actor);
         if (!CanAccess(actor, state.Value))
             return Rejected(command.Context, WorldTransactionStatus.AccessDenied, actor);
 
         var inventory = actor.Inventory.Clone();
-        var container = StorageContainerService.Open(state.Value);
+        var container = WorldItemContainerService.Open(state.Value);
         if (command.Direction == WorldContainerTransferDirection.Deposit)
         {
             if (!container.Definition.AllowsDeposit)
@@ -632,11 +674,31 @@ public sealed class AuthoritativeWorldTransactions
         }
 
         var previous = state.ObjectRevision;
-        state.Value = StorageContainerService.Save(state.Value, container);
+        state.Value = WorldItemContainerService.Save(state.Value, container);
         state.ObjectRevision = checked(state.ObjectRevision + 1);
         state.ContainerRevision = checked(state.ContainerRevision + 1);
         var chunk = AdvanceChunk(state.Chunk);
         CommitInventory(actor, inventory);
+        if (WorldItemContainerService.IsLootBag(state.Value.ItemId) &&
+            container.IsEmpty)
+        {
+            // A loot bag is a transient authoritative container. Its final
+            // withdrawal commits the inventory change and public removal in
+            // one transaction, so an empty bag cannot accumulate or be
+            // reopened between two separately observable mutations.
+            var empty = ContainerSnapshot(state);
+            _objects.Remove(state.Value.Id);
+            return Accepted(command.Context, actor,
+                [new WorldObjectTransactionDelta(
+                    WorldObjectChangeKind.Removed,
+                    state.Value.Id,
+                    state.Chunk,
+                    previous,
+                    state.ObjectRevision,
+                    null)],
+                [chunk],
+                empty);
+        }
         return Accepted(command.Context, actor,
             [UpdatedDelta(state, previous)], [chunk], ContainerSnapshot(state));
     }
@@ -1195,7 +1257,7 @@ public sealed class AuthoritativeWorldTransactions
     }
 
     private static bool IsPortable(WorldGroundObject value) =>
-        !StorageContainerService.IsStorage(value.ItemId) &&
+        !WorldItemContainerService.IsContainer(value.ItemId) &&
         !CampfireService.IsCampfire(value) &&
         !ConstructionService.IsConstructible(value.ItemId) &&
         Kind(value.ItemId) == ExcavationKind.None;
@@ -1403,7 +1465,7 @@ public sealed class AuthoritativeWorldTransactions
             state.Value.VisualFrame, state.Value.Health, state.Value.MaxHealth,
             state.Value.OwnerId, state.Value.GroupOwnerId,
             state.Value.Container is not null ||
-            StorageContainerService.IsStorage(state.Value.ItemId),
+            WorldItemContainerService.IsContainer(state.Value.ItemId),
             state.Value.FuelItemId, state.Value.LitUntilGameSeconds,
             state.Value.FiremakingLevel,
             FromCoreGateState(state.Value),
@@ -1414,7 +1476,7 @@ public sealed class AuthoritativeWorldTransactions
         WorldContainerSnapshot container,
         IReadOnlyDictionary<WorldChunkKey, uint> chunks)
     {
-        var definition = StorageContainerService.Definition(
+        var definition = WorldItemContainerService.Definition(
             snapshot.ObjectId, snapshot.DefinitionId);
         if (container.ObjectId != snapshot.ObjectId ||
             container.Chunk != snapshot.Chunk ||
@@ -1559,7 +1621,7 @@ public sealed class AuthoritativeWorldTransactions
 
     private WorldContainerSnapshot ContainerSnapshot(ObjectState state)
     {
-        var container = StorageContainerService.Open(state.Value);
+        var container = WorldItemContainerService.Open(state.Value);
         var items = container.Items;
         var quantities = container.Quantities;
         var owners = container.OwnerIds;
@@ -1728,4 +1790,8 @@ public sealed class AuthoritativeWorldTransactions
     private sealed record CommandReceipt(
         object Command,
         WorldTransactionResult Result);
+
+    private readonly record struct AddedObjectCommit(
+        AuthoritativeWorldObjectSnapshot Snapshot,
+        WorldChunkRevisionDelta ChunkDelta);
 }

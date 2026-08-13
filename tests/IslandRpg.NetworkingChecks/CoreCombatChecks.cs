@@ -24,6 +24,15 @@ internal static class CoreCombatChecks
         checks.Add(
             "core player death rules clamp damage and recover safely",
             PlayerDeathRulesAreSafe);
+        checks.Add(
+            "core slime statuses preserve effects across fixed-step sizes",
+            SlimeStatusesAreStepIndependent);
+        checks.Add(
+            "core slime splits have stable identities and geometry",
+            SlimeSplitsAreDeterministic);
+        checks.Add(
+            "core enemy attacks and loot replay exactly",
+            EnemyAttackAndLootReplayExactly);
     }
 
     private static void CombatRollsAreDeterministic()
@@ -216,6 +225,114 @@ internal static class CoreCombatChecks
             PlayerDeathService.RecoveryHunger,
             recovery.Hunger,
             "recovery must restore the canonical hunger floor");
+    }
+
+    private static void SlimeStatusesAreStepIndependent()
+    {
+        var status = SlimeCombatRules.Apply(
+            default, EnemyKind.WaterSlime, 10);
+        status = SlimeCombatRules.Apply(
+            status, EnemyKind.GrassSlime, 10);
+        status = SlimeCombatRules.Apply(
+            status, EnemyKind.CaveSlime, 10);
+
+        CheckAssert.Equal(0f, status.MovementMultiplier(10.5),
+            "a grass slime root must take precedence over water slow");
+        CheckAssert.Equal(.58f, status.MovementMultiplier(12),
+            "the water slow must resume after the shorter root expires");
+
+        var single = SlimeCombatRules.Advance(status, 14.75);
+        var steppedStatus = status;
+        var steppedDamage = 0;
+        var steppedTicks = 0;
+        for (var now = 10.25; now <= 14.75; now += .25)
+        {
+            var step = SlimeCombatRules.Advance(steppedStatus, now);
+            steppedStatus = step.Status;
+            steppedDamage += step.PoisonDamage;
+            steppedTicks += step.PoisonTicks;
+        }
+
+        CheckAssert.Equal(single.PoisonDamage, steppedDamage,
+            "poison damage must not depend on simulation update size");
+        CheckAssert.Equal(single.PoisonTicks, steppedTicks,
+            "poison tick count must not depend on simulation update size");
+        CheckAssert.Equal(single.Status, steppedStatus,
+            "poison deadlines must converge after catch-up");
+        CheckAssert.Equal(4, single.PoisonTicks,
+            "a five-second poison must tick at seconds one through four");
+    }
+
+    private static void SlimeSplitsAreDeterministic()
+    {
+        var source = new SlimeSplitSource(
+            Guid.Parse("6f3a4cac-0d0d-47de-97a3-70b19c57007e"),
+            Guid.Parse("43a5f764-9795-4ccd-9ef0-dfab55940627"),
+            EnemyKind.SandSlime,
+            new(8, 12),
+            new(10, 14),
+            WorldLevel: 0,
+            PowerLevel: 6,
+            MaximumHealth: 42,
+            SizeScale: SlimeCombatRules.SizeScale(6),
+            SplitGeneration: 0);
+
+        var first = SlimeCombatRules.Split(source, 2187);
+        var replay = SlimeCombatRules.Split(source, 2187);
+
+        CheckAssert.SequenceEqual(first, replay,
+            "split child IDs and positions must replay exactly");
+        CheckAssert.Equal(2, first.Length,
+            "an eligible large slime must split into two children");
+        CheckAssert.True(first[0].EnemyId != first[1].EnemyId,
+            "split children must receive distinct stable identities");
+        CheckAssert.True(first.All(child => child.EnemyId != Guid.Empty),
+            "split children must never receive the empty identity");
+        CheckAssert.True(first.All(child =>
+                child.PowerLevel == 3 &&
+                child.Health == 14 &&
+                child.SplitGeneration == 1),
+            "split children must preserve established power, health and generation rules");
+        CheckAssert.Equal(0, SlimeCombatRules.Split(
+                source with { SplitGeneration = 1 }, 2187).Length,
+            "a split child must not split recursively");
+    }
+
+    private static void EnemyAttackAndLootReplayExactly()
+    {
+        var request = new EnemyAttackRequest(
+            998_144,
+            Guid.Parse("c108f2bd-298c-48ac-861b-d104716e84a8"),
+            Guid.Parse("bf778cd9-f7b0-4653-ab3d-4c440f94f5d9"),
+            AttackSequence: 12,
+            PowerLevel: 7);
+        var firstAttack = EnemyCombatRules.ResolveAttack(request);
+        var replayAttack = EnemyCombatRules.ResolveAttack(request);
+
+        CheckAssert.Equal(firstAttack, replayAttack,
+            "an accepted enemy attack must replay exactly");
+        CheckAssert.Equal(0, EnemyCombatRules.ApplyDamage(4, 8),
+            "enemy damage must clamp health at zero");
+        var defended = EnemyCombatRules.ResolveAttack(request with
+        {
+            TargetDefenceExperience = SkillService.ExperienceForLevel(20),
+            TargetStance = MeleeCombatStance.Defensive
+        });
+        CheckAssert.True(
+            !defended.Hit || defended.Damage == firstAttack.Damage,
+            "defence may prevent a hit but must not mutate its damage roll");
+
+        var lootSource = new SlimeLootSource(
+            998_144, request.EnemyId, EnemyKind.CaveSlime, 7);
+        var firstLoot = SlimeCombatRules.RollLoot(lootSource);
+        var replayLoot = SlimeCombatRules.RollLoot(lootSource);
+        CheckAssert.SequenceEqual(firstLoot, replayLoot,
+            "loot must replay exactly from the authoritative death identity");
+        CheckAssert.True(firstLoot is [{ ItemId: ItemIds.SlimeGel }, ..],
+            "every defeated slime must drop slime gel first");
+        CheckAssert.Equal(ItemIds.Coal,
+            SlimeCombatRules.BiomeReagent(EnemyKind.CaveSlime),
+            "cave slime reagent identity must be preserved");
     }
 
     private static CombatRollKey FirstHittingKey(

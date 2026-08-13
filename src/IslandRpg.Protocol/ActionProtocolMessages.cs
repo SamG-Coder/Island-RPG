@@ -220,7 +220,16 @@ public sealed record PlayerStateMessage(
     int MiningExperience = 0,
     int AdventureExperience = 0,
     int DiggingExperience = 0,
-    int FishingExperience = 0) : IProtocolMessage
+    int FishingExperience = 0,
+    int MaximumHealth = 100,
+    int AttackExperience = 0,
+    int StrengthExperience = 0,
+    int DefenceExperience = 0,
+    CombatStance CombatStance = CombatStance.Balanced,
+    CombatLifeState LifeState = CombatLifeState.Alive,
+    ulong RespawnTick = 0,
+    CombatStatusFlags CombatStatusFlags = CombatStatusFlags.None,
+    Guid CombatTargetEnemyId = default) : IProtocolMessage
 {
     public ProtocolMessageKind Kind => ProtocolMessageKind.PlayerState;
 }

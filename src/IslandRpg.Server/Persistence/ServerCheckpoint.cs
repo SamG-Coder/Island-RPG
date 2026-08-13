@@ -25,9 +25,10 @@ public sealed record ServerCheckpoint(
     IReadOnlyList<ServerExcavationCadenceCheckpoint>?
         ExcavationCadences = null,
     bool IslandStart = false,
-    IReadOnlyList<ServerBoatCheckpoint>? Boats = null)
+    IReadOnlyList<ServerBoatCheckpoint>? Boats = null,
+    ServerCombatCheckpoint? Combat = null)
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 }
 
 public sealed record ServerActorCheckpoint(
@@ -54,7 +55,24 @@ public sealed record ServerActorCheckpoint(
     int MiningExperience = 0,
     int AdventureExperience = 0,
     int DiggingExperience = 0,
-    int FishingExperience = 0)
+    int FishingExperience = 0,
+    int MaximumHealth = 100,
+    int AttackExperience = 0,
+    int StrengthExperience = 0,
+    int DefenceExperience = 0,
+    IslandRpg.Gameplay.MeleeCombatStance CombatStance =
+        IslandRpg.Gameplay.MeleeCombatStance.Accurate,
+    IslandRpg.Simulation.ActorLifeState LifeState =
+        IslandRpg.Simulation.ActorLifeState.Alive,
+    long RespawnAvailableTick = 0,
+    double SlowedUntil = 0,
+    double RootedUntil = 0,
+    double PoisonedUntil = 0,
+    double NextPoisonTickAt = 0,
+    int PoisonDamage = 0,
+    Guid? CombatTargetEnemyId = null,
+    ulong CombatAttackSequence = 0,
+    long NextCombatAttackTick = 0)
 {
     // Keep credentials out of accidental structured-log interpolation.
     public override string ToString() =>
@@ -174,6 +192,43 @@ public sealed record ServerBoatCheckpoint(
 public readonly record struct ServerBoatRoutePointCheckpoint(
     float X,
     float Y);
+
+public sealed record ServerCombatCheckpoint(
+    long WorldSeed,
+    ulong NextEventOrdinal,
+    uint NextSpawnOrdinal,
+    IReadOnlyList<ServerEnemyCheckpoint> Enemies);
+
+public sealed record ServerEnemyCheckpoint(
+    Guid EnemyId,
+    uint Revision,
+    IslandRpg.Gameplay.EnemyKind Kind,
+    IslandRpg.Gameplay.EnemyBehavior Behavior,
+    float SpawnX,
+    float SpawnY,
+    float X,
+    float Y,
+    float VelocityX,
+    float VelocityY,
+    int WorldLevel,
+    int PowerLevel,
+    int Health,
+    int MaximumHealth,
+    float SizeScale,
+    double SlowedUntil,
+    double RootedUntil,
+    double PoisonedUntil,
+    double NextPoisonTickAt,
+    int PoisonDamage,
+    Guid? TargetActorId,
+    Guid? ParentEnemyId,
+    uint SpawnOrdinal,
+    ulong AttackSequence,
+    long NextAttackTick,
+    int SplitGeneration,
+    long DeathRemovalTick,
+    long ReactionReadyTick,
+    long BurrowEmergeTick);
 
 public sealed record ServerCheckpointLoadResult(
     ServerCheckpoint Checkpoint,

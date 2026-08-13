@@ -180,6 +180,21 @@ public static class GameplayIntentFingerprint
                 writer.Boat(value.Boat);
                 writer.Vector(value.RequestedLanding);
                 break;
+            case SetCombatTargetIntent value:
+                writer.Tag(33);
+                writer.Guid(value.Enemy.EnemyId.Value);
+                writer.UInt32(value.Enemy.ExpectedRevision);
+                break;
+            case CancelCombatIntent:
+                writer.Tag(34);
+                break;
+            case SetCombatStanceIntent value:
+                writer.Tag(35);
+                writer.Int32((int)value.Stance);
+                break;
+            case RespawnIntent:
+                writer.Tag(36);
+                break;
             default:
                 throw new NotSupportedException(
                     $"Gameplay intent type '{intent.GetType().Name}' has no canonical fingerprint.");

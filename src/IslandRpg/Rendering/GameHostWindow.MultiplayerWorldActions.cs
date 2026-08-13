@@ -122,7 +122,10 @@ internal sealed partial class GameHostWindow
             !IsPointerOverGameUi(MouseState.Position))
         {
             var target = ScreenToTerrain(SceneMousePosition());
-            if (TryGetFishUnderMouse(
+            if (TryGetEnemyUnderMouse(
+                    SceneMousePosition(), out var contextEnemy))
+                OpenEnemyContext(contextEnemy, target);
+            else if (TryGetFishUnderMouse(
                     SceneMousePosition(), out var contextFish))
                 OpenFishContext(contextFish, target);
             else if (TryGetNetworkGroundObjectUnderMouse(
@@ -158,6 +161,11 @@ internal sealed partial class GameHostWindow
         }
 
         if (!placingObject && leftDown && !_gameLeftWasDown &&
+            !IsPointerOverGameUi(MouseState.Position) &&
+            TryGetEnemyUnderMouse(
+                SceneMousePosition(), out var combatEnemy))
+            SendNetworkCombatTarget(combatEnemy.Id);
+        else if (!placingObject && leftDown && !_gameLeftWasDown &&
             !IsPointerOverGameUi(MouseState.Position) &&
             TryTargetCaveDig(ScreenToTerrain(SceneMousePosition())))
         {

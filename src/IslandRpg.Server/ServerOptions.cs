@@ -1,5 +1,6 @@
 using System.Net;
 using System.Numerics;
+using IslandRpg.Gameplay;
 using IslandRpg.Simulation;
 
 namespace IslandRpg.Server;
@@ -61,6 +62,13 @@ public sealed record ServerOptions(
     /// </summary>
     public ushort SnapshotPort { get; init; }
 
+    /// <summary>
+    /// Trusted deterministic combat override for integration scenarios. Live
+    /// command-line hosts use the production defaults and respawn at their
+    /// configured starting position.
+    /// </summary>
+    internal AuthoritativeCombatOptions? CombatOptions { get; init; }
+
     public static ServerOptions Parse(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
@@ -114,9 +122,13 @@ public sealed record ServerOptions(
                     break;
                 case "--max-clients":
                     value = RequireValue(option, value);
-                    if (!int.TryParse(value, out maximumClients) || maximumClients is < 1 or > 1_024)
+                    if (!int.TryParse(value, out maximumClients) ||
+                        maximumClients is < 1 or >
+                            NetworkPopulationLimits.MaximumActors)
                     {
-                        throw new ArgumentException("--max-clients must be between 1 and 1024.");
+                        throw new ArgumentException(
+                            $"--max-clients must be between 1 and " +
+                            $"{NetworkPopulationLimits.MaximumActors}.");
                     }
 
                     index++;

@@ -118,6 +118,7 @@
     <Compile Remove="Gameplay\GateCatalog.cs" />
     <Compile Remove="Gameplay\ConstructionService.cs" />
     <Compile Remove="Gameplay\StorageContainerService.cs" />
+    <Compile Remove="Gameplay\WorldItemContainerService.cs" />
     <Compile Remove="Gameplay\GateAccessState.cs" />
     <Compile Remove="Gameplay\GateService.cs" />
     <Compile Remove="World\WorldDomain.cs" />

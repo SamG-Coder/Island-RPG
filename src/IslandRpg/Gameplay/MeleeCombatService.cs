@@ -69,15 +69,20 @@ internal static class MeleeCombatService
         float damageRoll,
         string?[]? inventory = null)
     {
-        var attack = SkillService.LevelForExperience(attackExperience);
         var strength = SkillService.LevelForExperience(strengthExperience);
-        var chance = Math.Clamp(.62f + (attack - 1) * .012f, .62f, .90f);
+        var chance = HitChance(attackExperience);
         if (hitRoll >= chance) return new(false, 0, 0);
         var maximumHit = 1 + (strength - 1) / 3;
         var damage = 1 + (int)MathF.Floor(
             Math.Clamp(damageRoll, 0, .9999f) * maximumHit) +
             KnifeDamageBonus(inventory);
         return new(true, damage, damage * 4);
+    }
+
+    public static float HitChance(int attackExperience)
+    {
+        var attack = SkillService.LevelForExperience(attackExperience);
+        return Math.Clamp(.62f + (attack - 1) * .012f, .62f, .90f);
     }
 
     public static int KnifeDamageBonus(string?[]? inventory) =>

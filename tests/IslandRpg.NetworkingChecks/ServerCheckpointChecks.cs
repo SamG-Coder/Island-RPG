@@ -91,6 +91,34 @@ internal static class ServerCheckpointChecks
                 "partial player inventories must never become durable");
         });
 
+        checks.Add("server checkpoint rejects inconsistent combat life state", () =>
+        {
+            var source = CreateCheckpoint(revision: 1);
+            var invalidDeadActor = source.Actors[0] with
+            {
+                Health = 1,
+                LifeState = ActorLifeState.Dead,
+                RespawnAvailableTick = source.Tick + 60
+            };
+            CheckAssert.Throws<InvalidDataException>(
+                () => ServerCheckpointStore.Validate(
+                    source with { Actors = [invalidDeadActor] },
+                    source.WorldId),
+                "a durable dead actor cannot retain positive health");
+
+            var invalidAliveActor = source.Actors[0] with
+            {
+                Health = 0,
+                LifeState = ActorLifeState.Alive,
+                RespawnAvailableTick = 0
+            };
+            CheckAssert.Throws<InvalidDataException>(
+                () => ServerCheckpointStore.Validate(
+                    source with { Actors = [invalidAliveActor] },
+                    source.WorldId),
+                "a durable living actor must retain positive health");
+        });
+
         checks.Add("server checkpoint never replaces an unreadable world", () =>
         {
             using var folder = TemporaryFolder.Create();

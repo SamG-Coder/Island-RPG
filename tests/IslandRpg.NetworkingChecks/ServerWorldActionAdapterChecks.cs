@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Numerics;
+using IslandRpg.Gameplay;
 using IslandRpg.Protocol;
 using IslandRpg.Server;
 using IslandRpg.Simulation;
@@ -265,6 +266,24 @@ internal static class ServerWorldActionAdapterChecks
             "the private delta must depend on the command inventory revision");
         CheckAssert.Equal(28, player.InventorySlots.Count,
             "the legal full-slot delta must include the bounded player inventory");
+        CheckAssert.Equal(137, player.MaximumHealth,
+            "world actions must preserve the authoritative combat maximum");
+        CheckAssert.Equal(31, player.AttackExperience,
+            "world actions must preserve attack progression");
+        CheckAssert.Equal(32, player.StrengthExperience,
+            "world actions must preserve strength progression");
+        CheckAssert.Equal(33, player.DefenceExperience,
+            "world actions must preserve defence progression");
+        CheckAssert.Equal(CombatStance.Defensive, player.CombatStance,
+            "world actions must preserve the authoritative stance");
+        CheckAssert.Equal(CombatLifeState.Dead, player.LifeState,
+            "world actions must preserve the authoritative life state");
+        CheckAssert.Equal(444ul, player.RespawnTick,
+            "world actions must preserve the authoritative respawn tick");
+        CheckAssert.True(
+            player.CombatStatusFlags.HasFlag(
+                IslandRpg.Protocol.CombatStatusFlags.Slowed),
+            "world actions must preserve active authoritative statuses");
 
         var container = WorldActionProtocolAdapter.ToPrivateContainerBaseline(
             13, 23, command, result);
@@ -378,7 +397,15 @@ internal static class ServerWorldActionAdapterChecks
             0,
             10,
             20,
-            new PlayerInventorySnapshot(3, inventory));
+            new PlayerInventorySnapshot(3, inventory),
+            MaximumHealth: 137,
+            AttackExperience: 31,
+            StrengthExperience: 32,
+            DefenceExperience: 33,
+            CombatStance: MeleeCombatStance.Defensive,
+            LifeState: ActorLifeState.Dead,
+            RespawnAvailableTick: 444,
+            CombatStatus: new SlimeVictimStatus(SlowedUntil: 10));
         return new WorldTransactionResult(
             CommandId,
             WorldTransactionStatus.Accepted,

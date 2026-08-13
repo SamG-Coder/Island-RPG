@@ -158,7 +158,10 @@ internal sealed partial class GameHostWindow
                         request.Complete(ControlSnapshot("walk_queued"));
                         break;
                     case "stop_player":
-                        _worldActions.StopPlayer();
+                        if (IsNetworkWorld)
+                            SendNetworkStop();
+                        else
+                            _worldActions.StopPlayer();
                         request.Complete(ControlSnapshot("player_stopped"));
                         break;
                     case "combat_style":
@@ -175,6 +178,13 @@ internal sealed partial class GameHostWindow
                                 styleText, out var stance))
                         {
                             request.Complete(Error("invalid_combat_style"));
+                            break;
+                        }
+                        if (IsNetworkWorld)
+                        {
+                            SendNetworkCombatStance(stance);
+                            request.Complete(ControlSnapshot(
+                                "combat_style_requested"));
                             break;
                         }
                         _activePlayer = _activePlayer with
@@ -1423,7 +1433,10 @@ internal sealed partial class GameHostWindow
                     error = "enemy_not_found";
                     return false;
                 }
-                _worldActions.QueueEnemyAttack(enemy);
+                if (IsNetworkWorld)
+                    SendNetworkCombatTarget(enemy.Id);
+                else
+                    _worldActions.QueueEnemyAttack(enemy);
                 return true;
             default:
                 return false;
@@ -1778,10 +1791,12 @@ internal sealed partial class GameHostWindow
                 _activePlayer.Id,
                 _activePlayer.Name,
                 _activePlayer.Health,
-                maximumHealth = AdventureService.MaximumHealth(
-                    _activePlayer.AdventureExperience),
+                maximumHealth = ActivePlayerMaximumHealth(),
                 _activePlayer.Hunger,
                 combatStyle = _activePlayer.CombatStance.ToString(),
+                combatStatus = IsNetworkWorld
+                    ? _networkPlayerCombatStatus.ToString()
+                    : "None",
                 _activePlayer.AttackExperience,
                 _activePlayer.StrengthExperience,
                 _activePlayer.DefenceExperience,

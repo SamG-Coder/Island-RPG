@@ -3,9 +3,6 @@ using OpenTK.Mathematics;
 
 namespace IslandRpg.Gameplay;
 
-internal enum EnemyKind { WaterSlime, GrassSlime, SandSlime, CaveSlime }
-internal enum EnemyBehavior { Idle, Roam, Chase, Return, Attack, Dead }
-
 internal readonly record struct EnemySpawnEntry(EnemyKind Kind, int Weight = 1);
 
 internal sealed record EnemySpawnerState(

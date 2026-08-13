@@ -10,6 +10,7 @@ using IslandRpg.Navigation;
 using IslandRpg.Caves;
 using IslandRpg.Boats;
 using IslandRpg.Fishing;
+using IslandRpg.Gameplay;
 using IslandRpg.Protocol;
 using IslandRpg.Resources;
 using IslandRpg.Server.Persistence;
@@ -23,11 +24,18 @@ public sealed class DedicatedServer : IAsyncDisposable
     private readonly TcpListener _listener;
     private readonly Socket _snapshotSocket;
     private readonly AuthoritativeWorldSession _session;
+    private readonly IWorldNavigationQuery _navigation;
     private readonly SemaphoreSlim _clientSlots;
     private readonly ConcurrentDictionary<Guid, ClientConnection> _clients = [];
+    private readonly ConcurrentDictionary<Guid, TaskCompletionSource<bool>>
+        _connectionObservers = [];
     private readonly ConcurrentDictionary<Guid, byte> _activeClientIds = [];
     private readonly ConcurrentDictionary<Guid, string> _connectedPlayers = [];
     private readonly object _publicReplicationSync = new();
+    private readonly OrderedPublications _publications = new();
+    private readonly ConcurrentDictionary<CommandPublicationKey,
+        OrderedPublications.Ticket>
+        _commandPublications = [];
     private readonly CancellationTokenSource _lifetime = new();
     private readonly TaskCompletionSource<IPEndPoint> _startedSignal =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -44,6 +52,8 @@ public sealed class DedicatedServer : IAsyncDisposable
         ResourceBootstrapState.Empty;
     private readonly object _boatBootstrapSync = new();
     private BoatBootstrapState _boatBootstrap = BoatBootstrapState.Empty;
+    private readonly object _enemyBootstrapSync = new();
+    private EnemyBootstrapState _enemyBootstrap = EnemyBootstrapState.Empty;
     private readonly ServerCheckpointStore? _checkpointStore;
     private readonly ServerCheckpointWriter? _checkpointWriter;
     private readonly IDisposable? _worldLease;
@@ -51,6 +61,13 @@ public sealed class DedicatedServer : IAsyncDisposable
     private long _checkpointRevision;
     private long _nextAutosaveTick;
     private int _disposed;
+    private readonly List<PendingCombatPublication> _pendingCombatPublications = [];
+    private List<EnemyStateDelta>? _collectingEnemyDeltas;
+    private List<CombatEventSnapshot>? _collectingCombatEvents;
+    private List<WorldTransactionResult>? _collectingCombatWorldTransactions;
+    private List<BoatStateDelta>? _collectingCombatBoatDeltas;
+    private OrderedPublications.Ticket? _collectingCombatPublication;
+    private bool _seedingEnemyBootstrap;
 
     /// <summary>
     /// Deterministic test seam inside the activation/broadcast barrier and
@@ -61,6 +78,13 @@ public sealed class DedicatedServer : IAsyncDisposable
     internal Action? AfterWorldBootstrapUpdatedForTest { get; set; }
 
     public DedicatedServer(ServerOptions options)
+        : this(options, null)
+    {
+    }
+
+    internal DedicatedServer(
+        ServerOptions options,
+        ISessionIdentitySource? identitySource)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (options.IslandStart &&
@@ -85,6 +109,8 @@ public sealed class DedicatedServer : IAsyncDisposable
                 new SurfaceVegetationResourceDescriptorSource(),
                 new UndergroundMiningResourceDescriptorSource(),
                 new ProceduralFishSchoolSource()));
+        var navigation = new ProceduralWorldNavigationQuery(options.WorldSeed);
+        _navigation = navigation;
         var resourceTransactions = new AuthoritativeResourceTransactions(
             options.WorldSeed,
             resourceCatalog);
@@ -93,19 +119,34 @@ public sealed class DedicatedServer : IAsyncDisposable
                 options.WorldSeed));
         var boatTransactions = new AuthoritativeBoatTransactions(
             new ProceduralBoatNavigationQuery(options.WorldSeed));
+        var combatOptions = options.CombatOptions ??
+            new AuthoritativeCombatOptions
+            {
+                RespawnPosition = options.StartingPosition ?? Vector2.Zero
+            };
+        var combatTransactions = new AuthoritativeCombatTransactions(
+            options.WorldSeed,
+            navigation,
+            combatOptions);
         _session = new AuthoritativeWorldSession(
             SimulationLimits.Default with { MaximumActors = options.MaximumClients },
             sessionId: new SessionId(options.WorldId),
-            navigation: new ProceduralWorldNavigationQuery(options.WorldSeed),
+            navigation: navigation,
+            identitySource: identitySource,
             worldTransactions: worldTransactions,
             resourceTransactions: resourceTransactions,
-            boatTransactions: boatTransactions);
-        _session.WorldTransactionCommitted += ApplyWorldTransactionToBootstrap;
+            boatTransactions: boatTransactions,
+            combatTransactions: combatTransactions);
+        _session.WorldTransactionCommitted += QueueOrApplyWorldTransaction;
         _session.ResourceTransactionCommitted +=
             ApplyResourceTransactionToBootstrap;
         _session.CookingCompleted += BroadcastCookingCompletion;
-        _session.BoatRouteCompleted += BroadcastBoatRouteCompletion;
         _session.BoatStateCommitted += ApplyBoatStateToBootstrap;
+        _session.BoatAutonomousStateCommitted +=
+            BroadcastBoatAutonomousState;
+        _session.EnemyStateCommitted += QueueAutonomousEnemyDelta;
+        _session.CombatEventCommitted += QueueAutonomousCombatEvent;
+        _session.GameplayIntentCommitted += ReserveCommandPublication;
         if (!string.IsNullOrWhiteSpace(options.SaveRoot))
         {
             _checkpointStore = new ServerCheckpointStore(options.SaveRoot);
@@ -186,7 +227,13 @@ public sealed class DedicatedServer : IAsyncDisposable
                     this,
                     linked.Token);
                 _clients.TryAdd(connection.Id.Value, connection);
-                _ = ObserveConnectionAsync(connection);
+                var observed = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                if (!_connectionObservers.TryAdd(
+                        connection.Id.Value, observed))
+                    throw new InvalidOperationException(
+                        "A connection observer identity was reused.");
+                _ = ObserveConnectionAsync(connection, observed);
             }
         }
         catch (OperationCanceledException) when (linked.IsCancellationRequested)
@@ -203,7 +250,13 @@ public sealed class DedicatedServer : IAsyncDisposable
                 foreach (var connection in _clients.Values)
                     connection.Stop();
 
-                await Task.WhenAll(_clients.Values.Select(static value => value.Completion))
+                // Wait for the fault-isolating observer rather than the raw
+                // connection task. A peer can legitimately reset its socket
+                // during shutdown; the observer absorbs that transport fault
+                // and completes authoritative disconnect cleanup before the
+                // final checkpoint is flushed.
+                await Task.WhenAll(_connectionObservers.Values.Select(
+                        static value => value.Task))
                     .ConfigureAwait(false);
                 _lifetime.Cancel();
                 if (simulationStarted &&
@@ -324,7 +377,7 @@ public sealed class DedicatedServer : IAsyncDisposable
                 connection.ConfigureSnapshotTransport(
                     snapshotEndpoint,
                     datagramToken,
-                    StableNetworkId(result.Identity.ActorId.Value),
+                    ActorNetworkEntityIdentity.Derive(result.Identity.ActorId),
                     request.Capabilities.HasFlag(ClientCapabilities.DeltaSnapshots));
                 return authenticated;
             }
@@ -364,7 +417,7 @@ public sealed class DedicatedServer : IAsyncDisposable
             connection.ConfigureSnapshotTransport(
                 snapshotEndpoint,
                 datagramToken,
-                StableNetworkId(join.Identity.ActorId.Value),
+                ActorNetworkEntityIdentity.Derive(join.Identity.ActorId),
                 request.Capabilities.HasFlag(ClientCapabilities.DeltaSnapshots));
             return joinedPlayer;
         }
@@ -387,7 +440,7 @@ public sealed class DedicatedServer : IAsyncDisposable
             _options.ContentVersion,
             _session.Id.Value,
             player.Identity.PlayerId.Value,
-            StableNetworkId(player.Identity.ActorId.Value),
+            ActorNetworkEntityIdentity.Derive(player.Identity.ActorId),
             _options.WorldId,
             _options.WorldSeed,
             player.Position.X,
@@ -420,11 +473,11 @@ public sealed class DedicatedServer : IAsyncDisposable
             failure.Message);
 
     internal PlayerStateMessage CreatePlayerStateBaseline(
-        ClientConnection connection,
+        ulong sequence,
         AuthenticatedPlayer player)
     {
         return ToPlayerStateMessage(
-            connection.NextOutboundSequence(),
+            sequence,
             checked((ulong)CurrentTick),
             player,
             player.Gameplay,
@@ -449,13 +502,16 @@ public sealed class DedicatedServer : IAsyncDisposable
             var world = Volatile.Read(ref _worldBootstrap);
             var resources = Volatile.Read(ref _resourceBootstrap);
             var boats = Volatile.Read(ref _boatBootstrap);
+            var enemies = Volatile.Read(ref _enemyBootstrap);
             connection.SetPublicBaselineHighWater(
                 world.ChunkRevisions,
                 resources.Chunks,
-                boats.Boats);
+                boats.Boats,
+                enemies.Enemies);
             if (!QueueWorldObjectBaselines(connection, world) ||
                 !QueueResourceBaselines(connection, resources) ||
-                !QueueBoatBaseline(connection, boats))
+                !QueueBoatBaseline(connection, boats) ||
+                !QueueEnemyBaseline(connection, enemies))
                 return false;
             connection.Activate();
             return true;
@@ -541,6 +597,22 @@ public sealed class DedicatedServer : IAsyncDisposable
         return true;
     }
 
+    private bool QueueEnemyBaseline(
+        ClientConnection connection,
+        EnemyBootstrapState bootstrap)
+    {
+        if (!connection.TryQueueSequenced(sequence =>
+                CombatActionProtocolAdapter.ToBaseline(
+                    sequence,
+                    checked((ulong)CurrentTick),
+                    bootstrap.Enemies)))
+        {
+            connection.Stop();
+            return false;
+        }
+        return true;
+    }
+
     internal async Task<IntentResult> ProcessCommandAsync(
         ClientConnection connection,
         AuthenticatedPlayer player,
@@ -570,6 +642,8 @@ public sealed class DedicatedServer : IAsyncDisposable
                             ? BoatActionProtocolAdapter.ToIntent(action, boat)
                         : action.Payload is CaveActionPayload cave
                             ? CaveActionProtocolAdapter.ToIntent(action, cave)
+                        : action.Payload is CombatActionPayload combat
+                            ? CombatActionProtocolAdapter.ToIntent(action, combat)
                         : ToGameplayIntent(action),
             _ => throw new CommandFailure(
                 CommandRejectionCode.Invalid,
@@ -615,6 +689,12 @@ public sealed class DedicatedServer : IAsyncDisposable
                 connection, player, command, caveAction, result, tick);
             return;
         }
+        if (command.Payload is CombatActionPayload combatAction)
+        {
+            QueueCombatActionOutcome(
+                connection, player, command, combatAction, result, tick);
+            return;
+        }
         if (result.WorldTransaction is { } transaction)
         {
             QueueWorldActionOutcome(
@@ -622,6 +702,27 @@ public sealed class DedicatedServer : IAsyncDisposable
             return;
         }
 
+        // Send a complete private state after every accepted gameplay
+        // transaction before its receipt. The connection projects only
+        // sections newer than its queued high-water.
+        if (result.Accepted && !result.Duplicate &&
+            !connection.TryQueuePrivateStateSequenced(sequence =>
+                ToPlayerStateMessage(
+                sequence,
+                tick,
+                player,
+                result.Gameplay,
+                PlayerStateFlags.Baseline |
+                PlayerStateFlags.Actor |
+                PlayerStateFlags.Inventory,
+                0,
+                0)))
+        {
+            connection.Stop();
+            ReleaseCommandPublication(
+                player.Identity.PlayerId.Value, command.CommandId, null);
+            return;
+        }
         var rejection = MapRejection(result.Status);
         if (!connection.TryQueueSequenced(sequence => new ActionResultMessage(
                 sequence,
@@ -632,26 +733,90 @@ public sealed class DedicatedServer : IAsyncDisposable
                 result.Error ?? string.Empty,
                 result.ActorRevision,
                 result.InventoryRevision)))
-        {
             connection.Stop();
+    }
+
+    private void ReserveCommandPublication(
+        ActorCommand command,
+        IntentResult result)
+    {
+        if (result.Duplicate || result.CommandId == Guid.Empty ||
+            !HasPublicMutation(result))
+            return;
+        if (result.CombatTransaction?.EnemyDelta is { } enemy)
+            UpdateEnemyBootstrap(enemy);
+        var key = new CommandPublicationKey(
+            command.PlayerId.Value, result.CommandId);
+        if (!_commandPublications.TryAdd(key, _publications.Reserve()))
+            throw new InvalidOperationException(
+                "A command registered more than one public publication ticket.");
+    }
+
+    private static bool HasPublicMutation(IntentResult result) =>
+        result.WorldTransaction is { } world &&
+            WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(1, 0, world) is not null ||
+        result.ResourceTransaction is { } resource &&
+            ResourceActionProtocolAdapter.ToPublicDelta(1, 0, resource) is not null ||
+        result.BoatTransaction?.BoatDelta is { } boat &&
+            BoatActionProtocolAdapter.ToPublicDelta(1, 0, boat) is not null ||
+        result.BoatDelta is { } detached &&
+            BoatActionProtocolAdapter.ToPublicDelta(1, 0, detached) is not null ||
+        result.CombatTransaction?.EnemyDelta is { } enemy &&
+            CombatActionProtocolAdapter.ToPublicDelta(1, 0, enemy) is not null ||
+        result.CombatTransaction?.Event is not null;
+
+    private Action? CreateCommandPublication(IntentResult result, ulong tick)
+    {
+        if (result.Duplicate || !HasPublicMutation(result)) return null;
+        return () =>
+        {
+            if (result.WorldTransaction is { } world &&
+                WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
+                    1, tick, world) is not null)
+                Broadcast((_, sequence) =>
+                    WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
+                        sequence, tick, world)!);
+            if (result.ResourceTransaction is { } resource &&
+                ResourceActionProtocolAdapter.ToPublicDelta(
+                    1, tick, resource) is not null)
+                Broadcast((_, sequence) =>
+                    ResourceActionProtocolAdapter.ToPublicDelta(
+                        sequence, tick, resource)!);
+            if (result.BoatTransaction?.BoatDelta is { } boat &&
+                BoatActionProtocolAdapter.ToPublicDelta(1, tick, boat) is not null)
+                Broadcast((_, sequence) =>
+                    BoatActionProtocolAdapter.ToPublicDelta(
+                        sequence, tick, boat)!);
+            if (result.BoatDelta is { } detached &&
+                BoatActionProtocolAdapter.ToPublicDelta(
+                    1, tick, detached) is not null)
+                Broadcast((_, sequence) =>
+                    BoatActionProtocolAdapter.ToPublicDelta(
+                        sequence, tick, detached)!);
+            if (result.CombatTransaction?.EnemyDelta is { } enemy &&
+                CombatActionProtocolAdapter.ToPublicDelta(
+                    1, tick, enemy) is not null)
+                BroadcastEnemyDelta(enemy, tick);
+            if (result.CombatTransaction?.Event is { } combatEvent)
+                BroadcastCombatEvent(combatEvent, _session.LatestSnapshot);
+        };
+    }
+
+    private void ReleaseCommandPublication(
+        Guid playerId,
+        Guid commandId,
+        Action? publication)
+    {
+        if (!_commandPublications.TryRemove(
+                new CommandPublicationKey(playerId, commandId),
+                out var ticket))
+        {
+            if (publication is not null)
+                throw new InvalidOperationException(
+                    "A public command mutation had no ordered publication ticket.");
             return;
         }
-
-        // Send a complete private state after every accepted gameplay
-        // transaction. The transport can replace this with section deltas
-        // later without changing the authoritative transaction boundary.
-        if (!result.Accepted || result.Duplicate) return;
-        if (!connection.TryQueueSequenced(sequence => ToPlayerStateMessage(
-                sequence,
-                tick,
-                player,
-                result.Gameplay,
-                PlayerStateFlags.Baseline |
-                PlayerStateFlags.Actor |
-                PlayerStateFlags.Inventory,
-                0,
-                0)))
-            connection.Stop();
+        _publications.Release(ticket, publication);
     }
 
     private void QueueResourceActionOutcome(
@@ -662,10 +827,11 @@ public sealed class DedicatedServer : IAsyncDisposable
         IntentResult result,
         ulong tick)
     {
+        var publication = CreateCommandPublication(result, tick);
         // Accepted gameplay state must precede the presentation receipt so a
         // continuous authored action reads the new optimistic revisions.
         if (result.Accepted && !result.Duplicate &&
-            !connection.TryQueueSequenced(sequence =>
+            !connection.TryQueuePrivateStateSequenced(sequence =>
                 ToPlayerStateMessage(
                     sequence,
                     tick,
@@ -678,6 +844,8 @@ public sealed class DedicatedServer : IAsyncDisposable
                     0)))
         {
             connection.Stop();
+            ReleaseCommandPublication(
+                player.Identity.PlayerId.Value, command.CommandId, publication);
             return;
         }
         if (!connection.TryQueueSequenced(sequence =>
@@ -685,17 +853,12 @@ public sealed class DedicatedServer : IAsyncDisposable
                     sequence, tick, command, action, result)))
         {
             connection.Stop();
+            ReleaseCommandPublication(
+                player.Identity.PlayerId.Value, command.CommandId, publication);
             return;
         }
-        if (result.Duplicate) return;
-        if (result.ResourceTransaction is { } transaction &&
-            ResourceActionProtocolAdapter.ToPublicDelta(
-                1, tick, transaction) is not null)
-        {
-            Broadcast((_, sequence) =>
-                ResourceActionProtocolAdapter.ToPublicDelta(
-                    sequence, tick, transaction)!);
-        }
+        ReleaseCommandPublication(
+            player.Identity.PlayerId.Value, command.CommandId, publication);
     }
 
     private void QueueBoatActionOutcome(
@@ -706,11 +869,13 @@ public sealed class DedicatedServer : IAsyncDisposable
         IntentResult result,
         ulong tick)
     {
+        var publication = CreateCommandPublication(result, tick);
         // Private gameplay state and the command receipt precede the public
         // semantic delta. This prevents the requesting client from observing
         // a boat revision it cannot yet correlate to its command.
         if (result.Accepted && !result.Duplicate &&
-            !connection.TryQueueSequenced(sequence => ToPlayerStateMessage(
+            !connection.TryQueuePrivateStateSequenced(sequence =>
+                ToPlayerStateMessage(
                 sequence,
                 tick,
                 player,
@@ -722,6 +887,8 @@ public sealed class DedicatedServer : IAsyncDisposable
                 0)))
         {
             connection.Stop();
+            ReleaseCommandPublication(
+                player.Identity.PlayerId.Value, command.CommandId, publication);
             return;
         }
         if (!connection.TryQueueSequenced(sequence =>
@@ -729,16 +896,12 @@ public sealed class DedicatedServer : IAsyncDisposable
                     sequence, tick, command, action, result)))
         {
             connection.Stop();
+            ReleaseCommandPublication(
+                player.Identity.PlayerId.Value, command.CommandId, publication);
             return;
         }
-        if (result.Duplicate ||
-            result.BoatTransaction?.BoatDelta is not { } delta ||
-            BoatActionProtocolAdapter.ToPublicDelta(
-                1, tick, delta) is null)
-            return;
-        Broadcast((_, sequence) =>
-            BoatActionProtocolAdapter.ToPublicDelta(
-                sequence, tick, delta)!);
+        ReleaseCommandPublication(
+            player.Identity.PlayerId.Value, command.CommandId, publication);
     }
 
     private void QueueCaveActionOutcome(
@@ -749,10 +912,12 @@ public sealed class DedicatedServer : IAsyncDisposable
         IntentResult result,
         ulong tick)
     {
+        var publication = CreateCommandPublication(result, tick);
         // State precedes the receipt so follow-up commands always see the
         // authoritative post-action revisions and digging experience.
         if (result.Accepted && !result.Duplicate &&
-            !connection.TryQueueSequenced(sequence => ToPlayerStateMessage(
+            !connection.TryQueuePrivateStateSequenced(sequence =>
+                ToPlayerStateMessage(
                 sequence,
                 tick,
                 player,
@@ -764,6 +929,8 @@ public sealed class DedicatedServer : IAsyncDisposable
                 0)))
         {
             connection.Stop();
+            ReleaseCommandPublication(
+                player.Identity.PlayerId.Value, command.CommandId, publication);
             return;
         }
         if (!connection.TryQueueSequenced(sequence =>
@@ -771,15 +938,98 @@ public sealed class DedicatedServer : IAsyncDisposable
                     sequence, tick, command, action, result)))
         {
             connection.Stop();
+            ReleaseCommandPublication(
+                player.Identity.PlayerId.Value, command.CommandId, publication);
             return;
         }
-        if (result.Duplicate || result.WorldTransaction is not { } transaction)
+        ReleaseCommandPublication(
+            player.Identity.PlayerId.Value, command.CommandId, publication);
+    }
+
+    private void QueueCombatActionOutcome(
+        ClientConnection connection,
+        AuthenticatedPlayer player,
+        ActionCommandMessage command,
+        CombatActionPayload action,
+        IntentResult result,
+        ulong tick)
+    {
+        var publication = CreateCommandPublication(result, tick);
+        // The requester receives its new health/progression/target revision
+        // and then its receipt before any semantic enemy mutation is public.
+        if (result.Accepted && !result.Duplicate &&
+            !connection.TryQueuePrivateStateSequenced(sequence =>
+                ToPlayerStateMessage(
+                sequence,
+                tick,
+                player,
+                result.Gameplay,
+                PlayerStateFlags.Baseline |
+                PlayerStateFlags.Actor |
+                PlayerStateFlags.Inventory,
+                0,
+                0)))
+        {
+            connection.Stop();
+            ReleaseCommandPublication(
+                player.Identity.PlayerId.Value, command.CommandId, publication);
             return;
-        if (WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
-                1, tick, transaction) is not null)
-            Broadcast((_, sequence) =>
-                WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
-                    sequence, tick, transaction)!);
+        }
+        if (!connection.TryQueueSequenced(sequence =>
+                CombatActionProtocolAdapter.ToPrivateResult(
+                    sequence, tick, command, action, result)))
+        {
+            connection.Stop();
+            ReleaseCommandPublication(
+                player.Identity.PlayerId.Value, command.CommandId, publication);
+            return;
+        }
+        ReleaseCommandPublication(
+            player.Identity.PlayerId.Value, command.CommandId, publication);
+    }
+
+    private void CommitAndBroadcastEnemyDelta(
+        EnemyStateDelta delta,
+        ulong tick)
+    {
+        lock (_publicReplicationSync)
+        {
+            UpdateEnemyBootstrap(delta);
+            foreach (var observer in _clients.Values)
+            {
+                if (!observer.Authenticated) continue;
+                if (!observer.TryQueuePublicSequenced(sequence =>
+                        CombatActionProtocolAdapter.ToPublicDelta(
+                            sequence, tick, delta)!))
+                    observer.Stop();
+            }
+        }
+    }
+
+    private void BroadcastEnemyDelta(EnemyStateDelta delta, ulong tick)
+    {
+        Broadcast((_, sequence) =>
+            CombatActionProtocolAdapter.ToPublicDelta(sequence, tick, delta)!);
+    }
+
+    private void UpdateEnemyBootstrap(EnemyStateDelta delta)
+    {
+        lock (_enemyBootstrapSync)
+        {
+            var enemies = _enemyBootstrap.Enemies.ToDictionary(
+                static enemy => enemy.EnemyId);
+            var id = delta.Current?.EnemyId ?? delta.Previous?.EnemyId ??
+                throw new InvalidOperationException(
+                    "A committed enemy delta omitted both states.");
+            if (delta.Current is { } current)
+                enemies[id] = current;
+            else
+                enemies.Remove(id);
+            Volatile.Write(ref _enemyBootstrap, new EnemyBootstrapState(
+                Array.AsReadOnly(enemies.Values
+                    .OrderBy(static enemy => enemy.EnemyId.Value)
+                    .ToArray())));
+        }
     }
 
     private void QueueWorldActionOutcome(
@@ -790,36 +1040,22 @@ public sealed class DedicatedServer : IAsyncDisposable
         WorldTransactionResult transaction,
         ulong tick)
     {
-        if (!connection.TryQueueSequenced(sequence =>
-                WorldActionProtocolAdapter.ToActionResult(
-                    sequence, tick, transaction)))
-        {
-            connection.Stop();
-            return;
-        }
-
-        // Duplicate receipts acknowledge the requester but never publish the
-        // same public mutation twice. The original receipt already advanced
-        // every observer's chunk/object revisions.
-        if (result.Duplicate) return;
-
-        if (WorldActionProtocolAdapter.ToPrivatePlayerState(
+        var publication = CreateCommandPublication(result, tick);
+        var privatePlayerState = WorldActionProtocolAdapter.ToPrivatePlayerState(
                 1,
                 tick,
                 player.Identity.PlayerId.Value,
-                StableNetworkId(player.Identity.ActorId.Value),
+                ActorNetworkEntityIdentity.Derive(player.Identity.ActorId),
                 command,
-                transaction) is not null &&
-            !connection.TryQueueSequenced(sequence =>
-                WorldActionProtocolAdapter.ToPrivatePlayerState(
-                    sequence,
-                    tick,
-                    player.Identity.PlayerId.Value,
-                    StableNetworkId(player.Identity.ActorId.Value),
-                    command,
-                    transaction)!))
+                transaction,
+                forceBaseline: false);
+        if (privatePlayerState is not null &&
+            !connection.TryQueuePrivateStateSequenced(sequence =>
+                privatePlayerState with { Sequence = sequence }))
         {
             connection.Stop();
+            ReleaseCommandPublication(
+                player.Identity.PlayerId.Value, command.CommandId, publication);
             return;
         }
 
@@ -830,16 +1066,26 @@ public sealed class DedicatedServer : IAsyncDisposable
                     sequence, tick, command, transaction)!))
         {
             connection.Stop();
+            ReleaseCommandPublication(
+                player.Identity.PlayerId.Value, command.CommandId, publication);
             return;
         }
 
-        if (WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
-                1, tick, transaction) is not null)
+        if (!connection.TryQueueSequenced(sequence =>
+                WorldActionProtocolAdapter.ToActionResult(
+                    sequence, tick, transaction)))
         {
-            Broadcast((candidate, sequence) =>
-                WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
-                    sequence, tick, transaction)!);
+            connection.Stop();
+            ReleaseCommandPublication(
+                player.Identity.PlayerId.Value, command.CommandId, publication);
+            return;
         }
+
+        // Duplicate receipts acknowledge the requester but never publish the
+        // same public mutation twice. The original receipt already advanced
+        // every observer's chunk/object revisions.
+        ReleaseCommandPublication(
+            player.Identity.PlayerId.Value, command.CommandId, publication);
     }
 
     internal void BroadcastPlayerJoined(Guid playerId, string playerName) =>
@@ -1015,7 +1261,7 @@ public sealed class DedicatedServer : IAsyncDisposable
             sequence,
             tick,
             player.Identity.PlayerId.Value,
-            StableNetworkId(player.Identity.ActorId.Value),
+            ActorNetworkEntityIdentity.Derive(player.Identity.ActorId),
             flags,
             baselineActorRevision,
             baselineInventoryRevision,
@@ -1035,7 +1281,19 @@ public sealed class DedicatedServer : IAsyncDisposable
             gameplay.MiningExperience,
             gameplay.AdventureExperience,
             gameplay.DiggingExperience,
-            gameplay.FishingExperience);
+            gameplay.FishingExperience,
+            gameplay.MaximumHealth,
+            gameplay.AttackExperience,
+            gameplay.StrengthExperience,
+            gameplay.DefenceExperience,
+            CombatActionProtocolAdapter.ToProtocolStance(
+                gameplay.CombatStance),
+            CombatActionProtocolAdapter.ToLifeState(gameplay.LifeState),
+            checked((ulong)gameplay.RespawnAvailableTick),
+            CombatActionProtocolAdapter.ToStatusFlags(
+                gameplay.StatusFlags(
+                    tick / (double)SimulationTiming.TicksPerSecond)),
+            gameplay.CombatTargetEnemyId?.Value ?? Guid.Empty);
 
     private void BroadcastCookingCompletion(CookingCompletionSnapshot value)
     {
@@ -1045,7 +1303,7 @@ public sealed class DedicatedServer : IAsyncDisposable
             if (!connection.Authenticated ||
                 connection.PlayerId != value.PlayerId.Value)
                 continue;
-            if (!connection.TryQueueSequenced(sequence =>
+            if (!connection.TryQueuePrivateStateSequenced(sequence =>
                     ToPlayerStateMessage(
                         sequence,
                         tick,
@@ -1073,18 +1331,24 @@ public sealed class DedicatedServer : IAsyncDisposable
 
         if (WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
                 1, tick, value.Transaction) is not null)
-            Broadcast((_, sequence) =>
+            _publications.Publish(() => Broadcast((_, sequence) =>
                 WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
-                    sequence, tick, value.Transaction)!);
+                    sequence, tick, value.Transaction)!));
     }
 
-    private void BroadcastBoatRouteCompletion(BoatStateDelta delta)
+    private void BroadcastBoatAutonomousState(BoatStateDelta delta)
     {
+        if (_collectingCombatBoatDeltas is { } collecting)
+        {
+            ReserveAutonomousCombatPublication();
+            collecting.Add(delta);
+            return;
+        }
         var tick = checked((ulong)CurrentTick);
         if (BoatActionProtocolAdapter.ToPublicDelta(1, tick, delta) is null)
             return;
-        Broadcast((_, sequence) =>
-            BoatActionProtocolAdapter.ToPublicDelta(sequence, tick, delta)!);
+        _publications.Publish(() => Broadcast((_, sequence) =>
+            BoatActionProtocolAdapter.ToPublicDelta(sequence, tick, delta)!));
     }
 
     private static PlayerStateMessage ToPlayerStateMessage(
@@ -1117,7 +1381,18 @@ public sealed class DedicatedServer : IAsyncDisposable
         gameplay.MiningExperience,
         gameplay.AdventureExperience,
         gameplay.DiggingExperience,
-        gameplay.FishingExperience);
+        gameplay.FishingExperience,
+        gameplay.MaximumHealth,
+        gameplay.AttackExperience,
+        gameplay.StrengthExperience,
+        gameplay.DefenceExperience,
+        CombatActionProtocolAdapter.ToProtocolStance(gameplay.CombatStance),
+        CombatActionProtocolAdapter.ToLifeState(gameplay.LifeState),
+        checked((ulong)gameplay.RespawnAvailableTick),
+        CombatActionProtocolAdapter.ToStatusFlags(
+            gameplay.StatusFlags(
+                tick / (double)SimulationTiming.TicksPerSecond)),
+        gameplay.CombatTargetEnemyId?.Value ?? Guid.Empty);
 
     internal async Task DisconnectAsync(
         ClientConnection connection,
@@ -1156,11 +1431,20 @@ public sealed class DedicatedServer : IAsyncDisposable
         _clientSlots.Dispose();
     }
 
-    private async Task ObserveConnectionAsync(ClientConnection connection)
+    private async Task ObserveConnectionAsync(
+        ClientConnection connection,
+        TaskCompletionSource<bool> observed)
     {
         try
         {
             await connection.RunAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is IOException or SocketException)
+        {
+            // A peer can close or reset TCP while the server is concurrently
+            // cancelling that connection. The observer still runs the full
+            // authoritative disconnect path below; this is not a server fault.
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -1168,9 +1452,18 @@ public sealed class DedicatedServer : IAsyncDisposable
         }
         finally
         {
-            _clients.TryRemove(connection.Id.Value, out _);
-            _clientSlots.Release();
-            await connection.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                _clients.TryRemove(connection.Id.Value, out _);
+                _clientSlots.Release();
+                await connection.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                observed.TrySetResult(true);
+                _connectionObservers.TryRemove(
+                    connection.Id.Value, out _);
+            }
         }
     }
 
@@ -1197,10 +1490,28 @@ public sealed class DedicatedServer : IAsyncDisposable
             {
                 foreach (var value in _options.StartingWorldObjects)
                     _session.SeedWorldObject(value);
+                var combatOrigin = _options.StartingPosition ??
+                    BoatTravelRules.FindPlayableLandSpawn(
+                        _options.WorldSeed,
+                        cancellationToken);
+                _seedingEnemyBootstrap = true;
+                try
+                {
+                    foreach (var enemy in ProceduralEnemyBootstrap.Create(
+                                 _options.WorldSeed,
+                                 combatOrigin,
+                                 _navigation))
+                        _session.SeedEnemy(enemy);
+                }
+                finally
+                {
+                    _seedingEnemyBootstrap = false;
+                }
             }
             RefreshWorldBootstrap();
             RefreshResourceBootstrap();
             RefreshBoatBootstrap();
+            RefreshEnemyBootstrap();
             _nextAutosaveTick = checked(
                 _session.Clock.Tick + AutosaveTicks(_options.AutosaveInterval));
         }
@@ -1208,9 +1519,40 @@ public sealed class DedicatedServer : IAsyncDisposable
         while (!cancellationToken.IsCancellationRequested)
         {
             nextTick += (long)tickDuration;
-            var tick = _session.Tick();
+            _collectingEnemyDeltas = [];
+            _collectingCombatEvents = [];
+            _collectingCombatWorldTransactions = [];
+            _collectingCombatBoatDeltas = [];
+            _collectingCombatPublication = null;
+            SessionTickResult tick;
+            try
+            {
+                tick = _session.Tick();
+                if (_collectingEnemyDeltas.Count != 0 ||
+                    _collectingCombatEvents.Count != 0 ||
+                    _collectingCombatWorldTransactions.Count != 0 ||
+                    _collectingCombatBoatDeltas.Count != 0)
+                {
+                    _pendingCombatPublications.Add(new(
+                        _collectingCombatPublication ?? throw new(
+                            "Combat replication committed without an ordered publication ticket."),
+                        _collectingEnemyDeltas.ToArray(),
+                        _collectingCombatEvents.ToArray(),
+                        _collectingCombatWorldTransactions.ToArray(),
+                        _collectingCombatBoatDeltas.ToArray()));
+                }
+            }
+            finally
+            {
+                _collectingEnemyDeltas = null;
+                _collectingCombatEvents = null;
+                _collectingCombatWorldTransactions = null;
+                _collectingCombatBoatDeltas = null;
+                _collectingCombatPublication = null;
+            }
             if (tick.PublishedSnapshot is { } snapshot)
             {
+                FlushCombatReplication(snapshot);
                 BroadcastSnapshot(snapshot);
             }
             if (_checkpointWriter is not null &&
@@ -1283,8 +1625,17 @@ public sealed class DedicatedServer : IAsyncDisposable
     }
 
     private void ApplyWorldTransactionToBootstrap(
-        WorldTransactionResult transaction)
+        WorldTransactionResult transaction,
+        bool publishAutonomous = true)
     {
+        // World loot bags are autonomous combat commits. Publish them here;
+        // command-driven world actions publish only after requester-private
+        // state in QueueWorldActionOutcome and therefore carry a command ID.
+        var autonomous = transaction.ActorRevision == 0 &&
+            transaction.InventoryRevision == 0 &&
+            transaction.Gameplay is null &&
+            transaction.ObjectDeltas.Any(delta =>
+                delta.Object?.DefinitionId == ItemIds.LootBag);
         lock (_worldBootstrapSync)
         {
             var current = _worldBootstrap;
@@ -1339,6 +1690,36 @@ public sealed class DedicatedServer : IAsyncDisposable
                 Array.AsReadOnly(nextChunks)));
             AfterWorldBootstrapUpdatedForTest?.Invoke();
         }
+        if (autonomous && publishAutonomous)
+            _publications.Publish(() => BroadcastWorldTransaction(transaction));
+    }
+
+    private void QueueOrApplyWorldTransaction(WorldTransactionResult transaction)
+    {
+        var autonomousCombatLoot = transaction.ActorRevision == 0 &&
+            transaction.InventoryRevision == 0 &&
+            transaction.Gameplay is null &&
+            transaction.ObjectDeltas.Any(delta =>
+                delta.Object?.DefinitionId == ItemIds.LootBag);
+        if (autonomousCombatLoot &&
+            _collectingCombatWorldTransactions is { } collecting)
+        {
+            ReserveAutonomousCombatPublication();
+            collecting.Add(transaction);
+            return;
+        }
+        ApplyWorldTransactionToBootstrap(transaction);
+    }
+
+    private void BroadcastWorldTransaction(
+        WorldTransactionResult transaction)
+    {
+        var tick = checked((ulong)CurrentTick);
+        if (WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
+                1, tick, transaction) is not null)
+            Broadcast((_, sequence) =>
+                WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
+                    sequence, tick, transaction)!);
     }
 
     private void RefreshResourceBootstrap()
@@ -1406,6 +1787,134 @@ public sealed class DedicatedServer : IAsyncDisposable
         }
     }
 
+    private void RefreshEnemyBootstrap()
+    {
+        var enemies = _session.CaptureEnemies().ToArray();
+        lock (_enemyBootstrapSync)
+            Volatile.Write(ref _enemyBootstrap, new EnemyBootstrapState(
+                Array.AsReadOnly(enemies)));
+    }
+
+    private void ApplyEnemyStateToBootstrap(EnemyStateDelta delta)
+    {
+        var tick = checked((ulong)CurrentTick);
+        if (CombatActionProtocolAdapter.ToPublicDelta(1, tick, delta) is null)
+            return;
+        CommitAndBroadcastEnemyDelta(delta, tick);
+    }
+
+    private void QueueAutonomousEnemyDelta(EnemyStateDelta delta)
+    {
+        // Fresh-world SeedEnemy runs before the tick collector exists and no
+        // clients are active yet. RefreshEnemyBootstrap captures those seeds
+        // as one baseline after bootstrap, so there is no delta to publish.
+        if (_collectingEnemyDeltas is null)
+        {
+            if (_seedingEnemyBootstrap)
+                return;
+            throw new InvalidOperationException(
+                "An autonomous enemy delta escaped its simulation tick.");
+        }
+        ReserveAutonomousCombatPublication();
+        _collectingEnemyDeltas.Add(delta);
+    }
+
+    private void QueueAutonomousCombatEvent(CombatEventSnapshot value)
+    {
+        if (_collectingCombatEvents is null)
+            throw new InvalidOperationException(
+                "An autonomous combat event escaped its simulation tick.");
+        ReserveAutonomousCombatPublication();
+        _collectingCombatEvents.Add(value);
+    }
+
+    private void ReserveAutonomousCombatPublication()
+    {
+        _collectingCombatPublication ??= _publications.Reserve();
+    }
+
+    private void FlushCombatReplication(SessionSnapshot snapshot)
+    {
+        var tick = checked((ulong)snapshot.Clock.Tick);
+
+        // Private health, XP, status, and life state lead the public semantic
+        // deltas/effects from the same tick. Per-actor high-water suppresses a
+        // 60 Hz stream when combat did not mutate the requester.
+        foreach (var actor in snapshot.Actors)
+        {
+            foreach (var connection in _clients.Values)
+            {
+                if (!connection.Authenticated ||
+                    connection.PlayerId != actor.PlayerId.Value)
+                    continue;
+                if (!connection.TryQueuePrivateStateSequenced(
+                        sequence => ToPlayerStateMessage(
+                            sequence,
+                            tick,
+                            actor.PlayerId.Value,
+                            connection.PlayerEntityId,
+                            actor.Gameplay,
+                            PlayerStateFlags.Baseline |
+                            PlayerStateFlags.Actor |
+                            PlayerStateFlags.Inventory,
+                            0,
+                            0)))
+                    connection.Stop();
+            }
+        }
+
+        foreach (var publication in _pendingCombatPublications)
+        {
+            _publications.Release(publication.Ticket, () =>
+            {
+                foreach (var transaction in publication.WorldTransactions)
+                {
+                    ApplyWorldTransactionToBootstrap(
+                        transaction, publishAutonomous: false);
+                    BroadcastWorldTransaction(transaction);
+                }
+                foreach (var delta in publication.BoatDeltas)
+                {
+                    var publicationTick = checked((ulong)snapshot.Clock.Tick);
+                    if (BoatActionProtocolAdapter.ToPublicDelta(
+                            1, publicationTick, delta) is not null)
+                        Broadcast((_, sequence) =>
+                            BoatActionProtocolAdapter.ToPublicDelta(
+                                sequence, publicationTick, delta)!);
+                }
+                foreach (var delta in publication.EnemyDeltas)
+                    ApplyEnemyStateToBootstrap(delta);
+                foreach (var combatEvent in publication.Events)
+                    BroadcastCombatEvent(combatEvent, snapshot);
+            });
+        }
+        _pendingCombatPublications.Clear();
+    }
+
+    private void BroadcastCombatEvent(
+        CombatEventSnapshot value,
+        SessionSnapshot snapshot)
+    {
+        var enemies = (snapshot.Enemies.IsDefault
+                ? ImmutableArray<AuthoritativeEnemySnapshot>.Empty
+                : snapshot.Enemies)
+            .ToDictionary(static enemy => enemy.EnemyId);
+        var actors = snapshot.Actors.ToDictionary(
+            static actor => actor.ActorId,
+            static actor => (
+                ActorNetworkEntityIdentity.Derive(actor.ActorId),
+                actor.Position.X,
+                actor.Position.Y,
+                actor.WorldLevel));
+        var projected = CombatActionProtocolAdapter.ToEvent(
+            value, enemies, actors);
+        if (projected is not { } combatEvent) return;
+        Broadcast((_, sequence) => new CombatEventBatchMessage(
+            sequence,
+            checked((ulong)value.Tick),
+            [combatEvent]));
+    }
+
     private void BroadcastBoatProvisioned(AuthoritativeBoatSnapshot boat)
     {
         var tick = checked((ulong)CurrentTick);
@@ -1422,7 +1931,7 @@ public sealed class DedicatedServer : IAsyncDisposable
     {
         var actorEntities = snapshot.Actors
             .Select(actor => new EntitySnapshot(
-                StableNetworkId(actor.ActorId.Value),
+                ActorNetworkEntityIdentity.Derive(actor.ActorId),
                 NetworkEntityKind.Player,
                 0,
                 checked((short)actor.WorldLevel),
@@ -1431,7 +1940,11 @@ public sealed class DedicatedServer : IAsyncDisposable
                 actor.Velocity.X,
                 actor.Velocity.Y,
                 (!actor.Connected ? NetworkEntityState.Hidden : NetworkEntityState.None) |
-                (actor.Velocity != Vector2.Zero ? NetworkEntityState.Moving : NetworkEntityState.None),
+                (actor.Velocity != Vector2.Zero ? NetworkEntityState.Moving : NetworkEntityState.None) |
+                (actor.Gameplay.LifeState == ActorLifeState.Dead ||
+                 actor.Gameplay.Health <= 0
+                    ? NetworkEntityState.Dead
+                    : NetworkEntityState.None),
                 checked((uint)Math.Min(snapshot.Sequence, uint.MaxValue))))
             .ToArray();
         var boatEntities = (snapshot.Boats.IsDefault
@@ -1451,7 +1964,31 @@ public sealed class DedicatedServer : IAsyncDisposable
                     : NetworkEntityState.None,
                 boat.Revision))
             .ToArray();
-        var entities = actorEntities.Concat(boatEntities).ToArray();
+        var enemyEntities = (snapshot.Enemies.IsDefault
+                ? Enumerable.Empty<AuthoritativeEnemySnapshot>()
+                : snapshot.Enemies)
+            .Select(enemy => new EntitySnapshot(
+                enemy.NetworkEntityId,
+                NetworkEntityKind.Enemy,
+                checked((byte)enemy.Kind),
+                checked((short)enemy.WorldLevel),
+                enemy.Position.X,
+                enemy.Position.Y,
+                enemy.Velocity.X,
+                enemy.Velocity.Y,
+                (enemy.Velocity != Vector2.Zero
+                    ? NetworkEntityState.Moving
+                    : NetworkEntityState.None) |
+                (!enemy.Alive
+                    ? NetworkEntityState.Dead
+                    : enemy.TargetActorId is not null
+                        ? NetworkEntityState.InCombat
+                        : NetworkEntityState.None),
+                enemy.Revision))
+            .ToArray();
+        var entities = actorEntities.Concat(boatEntities)
+            .Concat(enemyEntities)
+            .ToArray();
         if (entities.Length > ProtocolLimits.MaxSnapshotEntities)
             throw new InvalidOperationException(
                 "The authoritative snapshot exceeds its protocol entity bound.");
@@ -1542,7 +2079,7 @@ public sealed class DedicatedServer : IAsyncDisposable
         }
     }
 
-    private static ReadOnlySpan<EntitySnapshot> SelectUdpEntities(
+    internal static ReadOnlySpan<EntitySnapshot> SelectUdpEntities(
         ClientConnection connection,
         SessionSnapshot snapshot,
         EntitySnapshot[] entities)
@@ -1562,7 +2099,8 @@ public sealed class DedicatedServer : IAsyncDisposable
             result[count++] = entities[own];
 
         var ownActor = snapshot.Actors.FirstOrDefault(actor =>
-            StableNetworkId(actor.ActorId.Value) == connection.PlayerEntityId);
+            ActorNetworkEntityIdentity.Derive(actor.ActorId) ==
+            connection.PlayerEntityId);
         var occupiedBoatId = ownActor.BoardedBoatId is { } boarded
             ? snapshot.Boats.FirstOrDefault(boat => boat.BoatId == boarded)
                 ?.NetworkEntityId ?? 0
@@ -1574,18 +2112,65 @@ public sealed class DedicatedServer : IAsyncDisposable
             if (occupied >= 0) result[count++] = entities[occupied];
         }
 
-        // Nearby boats are more relevant than round-robin overflow: their
-        // collision and boarding affordances must remain spatially coherent.
+        // Reserve a rotating remote-player slice before dense combat entities.
+        // This preserves social/co-op motion without sacrificing self, ridden
+        // boat, or the majority of the packet for nearby combat and travel.
         if (own >= 0)
         {
-            foreach (var index in Enumerable.Range(0, entities.Length)
-                         .Where(index =>
-                             index != own &&
-                             entities[index].EntityId != occupiedBoatId &&
-                             entities[index].EntityKind ==
-                                 NetworkEntityKind.Boat)
-                         .OrderBy(index => DistanceSquared(
-                             entities[own], entities[index])))
+            var remotePlayers = Enumerable.Range(0, entities.Length)
+                .Where(index => index != own &&
+                                entities[index].EntityKind ==
+                                    NetworkEntityKind.Player)
+                .ToArray();
+            var remoteQuota = Math.Min(
+                remotePlayers.Length,
+                Math.Max(1, result.Length / 8));
+            if (remoteQuota > 0)
+            {
+                var remoteOffset = connection.NextInterestOffset(
+                    remotePlayers.Length, remoteQuota);
+                for (var scanned = 0;
+                     scanned < remotePlayers.Length &&
+                     scanned < remoteQuota && count < result.Length;
+                     scanned++)
+                {
+                    var remoteIndex = remotePlayers[
+                        (remoteOffset + scanned) % remotePlayers.Length];
+                    result[count++] = entities[remoteIndex];
+                }
+            }
+
+            // Same-level nearby enemies are combat-critical. Same-level boats
+            // follow to keep collision and boarding affordances coherent.
+            var nearbyEnemies = Enumerable.Range(0, entities.Length)
+                .Where(index =>
+                    index != own &&
+                    entities[index].WorldLevel == entities[own].WorldLevel &&
+                    entities[index].EntityKind == NetworkEntityKind.Enemy)
+                .OrderBy(index => DistanceSquared(
+                    entities[own], entities[index]))
+                .ToArray();
+            var enemyQuota = Math.Min(
+                nearbyEnemies.Length,
+                Math.Max(1, (result.Length - count) * 3 / 4));
+            foreach (var index in nearbyEnemies.Take(enemyQuota))
+            {
+                if (count >= result.Length) break;
+                result[count++] = entities[index];
+            }
+            var nearbyBoats = Enumerable.Range(0, entities.Length)
+                .Where(index =>
+                    index != own &&
+                    entities[index].EntityId != occupiedBoatId &&
+                    entities[index].WorldLevel == entities[own].WorldLevel &&
+                    entities[index].EntityKind == NetworkEntityKind.Boat)
+                .OrderBy(index => DistanceSquared(
+                    entities[own], entities[index]))
+                .ToArray();
+            var boatQuota = Math.Min(
+                nearbyBoats.Length,
+                result.Length - count);
+            foreach (var index in nearbyBoats.Take(boatQuota))
             {
                 if (count >= result.Length) break;
                 result[count++] = entities[index];
@@ -1643,16 +2228,6 @@ public sealed class DedicatedServer : IAsyncDisposable
         value.Trim().Length <= 40 &&
         value.All(character => !char.IsControl(character) && !char.IsSurrogate(character));
 
-    internal static ulong StableNetworkId(Guid value)
-    {
-        Span<byte> bytes = stackalloc byte[16];
-        value.TryWriteBytes(bytes);
-        var result = (BinaryPrimitives.ReadUInt64LittleEndian(bytes) ^
-            BinaryPrimitives.ReadUInt64LittleEndian(bytes[8..])) &
-            0x7fff_ffff_ffff_ffffUL;
-        return result == 0 ? 1 : result;
-    }
-
     private static ulong CreateDatagramToken()
     {
         Span<byte> bytes = stackalloc byte[sizeof(ulong)];
@@ -1708,6 +2283,24 @@ internal sealed record BoatBootstrapState(
     public static BoatBootstrapState Empty { get; } = new(
         Array.Empty<AuthoritativeBoatSnapshot>());
 }
+
+internal sealed record EnemyBootstrapState(
+    IReadOnlyList<AuthoritativeEnemySnapshot> Enemies)
+{
+    public static EnemyBootstrapState Empty { get; } = new(
+        Array.Empty<AuthoritativeEnemySnapshot>());
+}
+
+internal sealed record PendingCombatPublication(
+    OrderedPublications.Ticket Ticket,
+    IReadOnlyList<EnemyStateDelta> EnemyDeltas,
+    IReadOnlyList<CombatEventSnapshot> Events,
+    IReadOnlyList<WorldTransactionResult> WorldTransactions,
+    IReadOnlyList<BoatStateDelta> BoatDeltas);
+
+internal readonly record struct CommandPublicationKey(
+    Guid PlayerId,
+    Guid CommandId);
 
 internal readonly record struct AuthenticatedPlayer(
     Guid ClientId,

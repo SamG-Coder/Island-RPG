@@ -1,5 +1,6 @@
 using System.Numerics;
 using IslandRpg.Resources;
+using IslandRpg.Gameplay;
 
 namespace IslandRpg.Simulation;
 
@@ -223,7 +224,39 @@ public sealed record DisembarkBoatIntent(
     uint ExpectedActorRevision,
     BoatReference Boat,
     Vector2 RequestedLanding) : BoatGameplayIntent(
-        CommandId, ExpectedInventoryRevision, ExpectedActorRevision, Boat);
+    CommandId, ExpectedInventoryRevision, ExpectedActorRevision, Boat);
+
+public abstract record CombatGameplayIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision) : GameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision);
+
+public sealed record SetCombatTargetIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    EnemyReference Enemy) : CombatGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision);
+
+public sealed record CancelCombatIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision) : CombatGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision);
+
+public sealed record SetCombatStanceIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    MeleeCombatStance Stance) : CombatGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision);
+
+public sealed record RespawnIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision) : CombatGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision);
 
 public sealed record PickUpWorldObjectIntent(
     Guid CommandId,
@@ -560,7 +593,14 @@ public enum IntentStatus
     BoatDestinationTooFar,
     BoatRouteUnreachable,
     InvalidBoatLanding,
-    BoatPlanningLocked
+    BoatPlanningLocked,
+    CombatUnavailable,
+    EnemyNotFound,
+    EnemyDead,
+    StaleEnemyRevision,
+    InvalidCombatStance,
+    RespawnLocked,
+    ActorAlreadyAlive
 }
 
 public readonly record struct CookingCompletionSnapshot(
@@ -612,4 +652,12 @@ public readonly record struct IntentResult(
     public ResourceTransactionResult? ResourceTransaction { get; init; }
 
     public BoatTransactionResult? BoatTransaction { get; init; }
+
+    public CombatTransactionResult? CombatTransaction { get; init; }
+
+    /// <summary>
+    /// Cross-feature boat state committed by a non-boat command. The server
+    /// publishes this only after the requester's private command outcome.
+    /// </summary>
+    public BoatStateDelta? BoatDelta { get; init; }
 }

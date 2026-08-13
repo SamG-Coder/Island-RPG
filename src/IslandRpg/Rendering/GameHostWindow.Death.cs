@@ -38,6 +38,11 @@ internal sealed partial class GameHostWindow
 
     private void RespawnPlayer(bool force = false)
     {
+        if (IsNetworkWorld)
+        {
+            if (!force) SendNetworkRespawn();
+            return;
+        }
         if ((!_playerDefeated && !force) || _activePlayer is null ||
             _activeWorld is null || _player is null)
             return;

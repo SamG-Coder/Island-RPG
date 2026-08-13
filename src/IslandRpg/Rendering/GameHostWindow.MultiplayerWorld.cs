@@ -33,6 +33,9 @@ internal sealed partial class GameHostWindow
             _networkKnownWorldObjectIds.Add(change.ObjectId);
             if (change.Kind == WorldObjectDeltaKind.Remove)
             {
+                if (_openWorldStorageId == change.ObjectId ||
+                    _networkRequestedContainerId == change.ObjectId)
+                    CloseItemContainer();
                 RemoveNetworkWorldObject(change.ObjectId);
                 ObserveNetworkCaveWorldChange(change);
                 continue;

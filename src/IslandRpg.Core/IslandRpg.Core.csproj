@@ -51,6 +51,7 @@
     <Compile Include="..\IslandRpg\Gameplay\GateCatalog.cs" Link="Gameplay\GateCatalog.cs" />
     <Compile Include="..\IslandRpg\Gameplay\ConstructionService.cs" Link="Gameplay\ConstructionService.cs" />
     <Compile Include="..\IslandRpg\Gameplay\StorageContainerService.cs" Link="Gameplay\StorageContainerService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\WorldItemContainerService.cs" Link="Gameplay\WorldItemContainerService.cs" />
     <Compile Include="..\IslandRpg\Gameplay\GateAccessState.cs" Link="Gameplay\GateAccessState.cs" />
     <Compile Include="..\IslandRpg\Gameplay\GateService.cs" Link="Gameplay\GateService.cs" />
     <Compile Include="..\IslandRpg\World\WorldDomain.cs" Link="World\WorldDomain.cs" />

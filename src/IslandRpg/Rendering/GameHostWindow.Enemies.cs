@@ -4,6 +4,7 @@ using IslandRpg.Rendering.Ui;
 using IslandRpg.World;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
+using CombatStatusFlags = IslandRpg.Protocol.CombatStatusFlags;
 
 namespace IslandRpg.Rendering;
 
@@ -251,7 +252,12 @@ internal sealed partial class GameHostWindow
             value.WorldLevel == _activeWorldLevel);
         if (enemy is null) return;
         if (option == EnemyInteractionMenu.AttackIndex)
-            _worldActions.QueueEnemyAttack(enemy);
+        {
+            if (IsNetworkWorld)
+                SendNetworkCombatTarget(enemy.Id);
+            else
+                _worldActions.QueueEnemyAttack(enemy);
+        }
         else if (option == EnemyInteractionMenu.ExamineIndex)
             _chatUi.AddMessage(
                 $"A {EnemyDisplayName(enemy.Kind).ToLowerInvariant()}. " +
@@ -267,6 +273,8 @@ internal sealed partial class GameHostWindow
             var candidate = _enemies[index];
             if (!candidate.Alive ||
                 candidate.WorldLevel != _activeWorldLevel ||
+                IsNetworkWorld && NetworkEnemyHasStatus(
+                    candidate.Id, CombatStatusFlags.Burrowed) ||
                 _slimeRig is null) continue;
             var visual = GetEnemyVisual(candidate);
             if (visual is null) continue;
@@ -441,9 +449,9 @@ internal sealed partial class GameHostWindow
             return enemy;
         var speed = enemy.Behavior switch
         {
-            EnemyBehavior.Chase => 1.35f,
-            EnemyBehavior.Return => 1.05f,
-            _ => .68f
+            EnemyBehavior.Chase or EnemyBehavior.Return or EnemyBehavior.Roam =>
+                SlimeCombatRules.MovementSpeed(enemy.Behavior),
+            _ => 0
         };
         var remaining = Math.Max(0, elapsed) * speed;
         var position = enemy.Position;
@@ -675,13 +683,17 @@ internal sealed partial class GameHostWindow
         var terrain = SamplePlayerTerrain(enemy.Position.X, enemy.Position.Y);
         var world = IsometricTerrainProjection.Project(
             enemy.Position.X, enemy.Position.Y, terrain.Height);
-        var camouflaged = enemy.Kind == EnemyKind.GrassSlime &&
-                          enemy.TargetId is null &&
-                          enemy.Behavior is EnemyBehavior.Idle or
-                              EnemyBehavior.Roam;
-        var burrowing = enemy.Kind == EnemyKind.SandSlime &&
-                        enemy.TargetId is not null &&
-                        _clock < enemy.AggroReadyAt;
+        var camouflaged = IsNetworkWorld
+            ? NetworkEnemyHasStatus(
+                enemy.Id, CombatStatusFlags.Hidden)
+            : SlimeCombatRules.UsesIdleCamouflage(enemy.Kind) &&
+              enemy.TargetId is null &&
+              enemy.Behavior is EnemyBehavior.Idle or EnemyBehavior.Roam;
+        var burrowing = IsNetworkWorld
+            ? NetworkEnemyHasStatus(
+                enemy.Id, CombatStatusFlags.Burrowed)
+            : SlimeCombatRules.UsesAggroBurrow(enemy.Kind) &&
+              enemy.TargetId is not null && _clock < enemy.AggroReadyAt;
         return new(
             frame,
             pose.UsesBackSheet

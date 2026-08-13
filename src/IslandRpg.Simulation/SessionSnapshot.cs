@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Numerics;
+using IslandRpg.Gameplay;
 
 namespace IslandRpg.Simulation;
 
@@ -52,7 +53,28 @@ public readonly record struct PlayerGameplaySnapshot(
     int MiningExperience = 0,
     int AdventureExperience = 0,
     int DiggingExperience = 0,
-    int FishingExperience = 0);
+    int FishingExperience = 0,
+    int MaximumHealth = 100,
+    int AttackExperience = 0,
+    int StrengthExperience = 0,
+    int DefenceExperience = 0,
+    MeleeCombatStance CombatStance = MeleeCombatStance.Accurate,
+    ActorLifeState LifeState = ActorLifeState.Alive,
+    long RespawnAvailableTick = 0,
+    SlimeVictimStatus CombatStatus = default,
+    EnemyId? CombatTargetEnemyId = null,
+    ulong CombatAttackSequence = 0,
+    long NextCombatAttackTick = 0)
+{
+    public CombatStatusFlags StatusFlags(double now)
+    {
+        var flags = CombatStatusFlags.None;
+        if (now < CombatStatus.SlowedUntil) flags |= CombatStatusFlags.Slowed;
+        if (now < CombatStatus.RootedUntil) flags |= CombatStatusFlags.Rooted;
+        if (now < CombatStatus.PoisonedUntil) flags |= CombatStatusFlags.Poisoned;
+        return flags;
+    }
+}
 
 public readonly record struct ChatMessageSnapshot(
     long MessageId,
@@ -71,7 +93,9 @@ public sealed record SessionSnapshot(
     SimulationClockSnapshot Clock,
     ImmutableArray<ActorSnapshot> Actors,
     ImmutableArray<ChatMessageSnapshot> ChatHistory,
-    ImmutableArray<AuthoritativeBoatSnapshot> Boats = default)
+    ImmutableArray<AuthoritativeBoatSnapshot> Boats = default,
+    ImmutableArray<AuthoritativeEnemySnapshot> Enemies = default,
+    ImmutableArray<CombatEventSnapshot> CombatEvents = default)
 {
     public static SessionSnapshot Empty(SessionId sessionId) => new(
         sessionId,
@@ -79,7 +103,9 @@ public sealed record SessionSnapshot(
         default,
         ImmutableArray<ActorSnapshot>.Empty,
         ImmutableArray<ChatMessageSnapshot>.Empty,
-        ImmutableArray<AuthoritativeBoatSnapshot>.Empty);
+        ImmutableArray<AuthoritativeBoatSnapshot>.Empty,
+        ImmutableArray<AuthoritativeEnemySnapshot>.Empty,
+        ImmutableArray<CombatEventSnapshot>.Empty);
 }
 
 public readonly record struct SessionTickResult(

@@ -14,6 +14,8 @@ internal static class WorldTransactionChecks
     private const string Campfire = "campfire";
     private const string Chest = "storage_chest";
     private const string Wall = "wooden_wall";
+    private const string LootBag = "loot_bag";
+    private const string SlimeGel = "slime_gel";
 
     public static void Register(CheckRunner checks)
     {
@@ -23,6 +25,8 @@ internal static class WorldTransactionChecks
             StaleRevisionsAndDuplicateReplay);
         checks.Add("world container transfers are atomic and private",
             ContainerTransfersAreAtomic);
+        checks.Add("world loot bags are authoritative withdraw-only containers",
+            LootBagsAreAuthoritativeWithdrawOnlyContainers);
         checks.Add("world transactions enforce access range and world level",
             AccessRangeAndLevelAreValidated);
         checks.Add("world campfire transactions use shared fire rules",
@@ -238,6 +242,109 @@ internal static class WorldTransactionChecks
         CheckAssert.Equal(fullChest,
             fullAuthority.CaptureObject(fullChest.ObjectId),
             "failed withdraw must not mutate storage");
+    }
+
+    private static void LootBagsAreAuthoritativeWithdrawOnlyContainers()
+    {
+        var actor = Actor(new ActorId(Guid.NewGuid()), [(Log, 1)]);
+        var authority = new AuthoritativeWorldTransactions();
+        var commandId = Guid.NewGuid();
+        var objectId = Guid.NewGuid();
+        var committed = authority.AddObjectCommitted(commandId, new(
+            objectId,
+            LootBag,
+            new(1, 0),
+            ContainerItems: [(SlimeGel, 2, null)]));
+        CheckAssert.True(committed.Accepted,
+            "trusted combat loot creation should commit");
+        CheckAssert.Equal(commandId, committed.CommandId,
+            "the autonomous mutation must retain its stable identity");
+        CheckAssert.Equal(WorldObjectChangeKind.Added,
+            committed.ObjectDeltas.Single().Kind,
+            "loot creation should publish one exact object addition");
+        CheckAssert.Equal(1u,
+            committed.ChunkDeltas.Single().CurrentRevision,
+            "loot creation should advance its chunk exactly once");
+
+        var bag = committed.ObjectDeltas.Single().Object!;
+        var chunkRevision = committed.ChunkDeltas.Single().CurrentRevision;
+        var opened = authority.Execute(actor,
+            new OpenWorldContainerTransaction(
+                Context(actor), Handle(bag, chunkRevision,
+                    bag.ContainerRevision)));
+        CheckAssert.True(opened.Accepted && opened.Container is not null,
+            "a nearby loot bag should expose its private contents");
+        var container = opened.Container!;
+        CheckAssert.False(container.AllowsDeposit,
+            "loot bags must never accept player deposits");
+        CheckAssert.Equal(12, container.Slots.Length,
+            "loot bags should use their bounded shared capacity");
+        CheckAssert.Equal(2,
+            container.Slots.Sum(value =>
+                value.ItemId == SlimeGel ? value.Quantity : 0),
+            "trusted seeding must materialize the exact deterministic loot");
+
+        var rejectedDeposit = authority.Execute(actor,
+            new TransferWorldContainerTransaction(
+                Context(actor), Handle(bag, chunkRevision,
+                    bag.ContainerRevision),
+                WorldContainerTransferDirection.Deposit,
+                Slot(actor.Gameplay, Log), 0, 1));
+        CheckAssert.Equal(WorldTransactionStatus.ContainerDepositDenied,
+            rejectedDeposit.Status,
+            "a client must not disguise arbitrary items as enemy loot");
+        CheckAssert.Equal(chunkRevision,
+            authority.CaptureChunkRevision(bag.Chunk),
+            "a rejected deposit must not advance public state");
+
+        var withdrawn = authority.Execute(actor,
+            new TransferWorldContainerTransaction(
+                Context(actor), Handle(bag, chunkRevision,
+                    bag.ContainerRevision),
+                WorldContainerTransferDirection.Withdraw,
+                SlotOrEmpty(actor.Gameplay), Slot(container, SlimeGel), 1));
+        CheckAssert.True(withdrawn.Accepted,
+            "a valid loot withdrawal should commit atomically");
+        CheckAssert.Equal(1, Count(withdrawn.Gameplay!.Value, SlimeGel),
+            "withdrawal should grant exactly one authoritative item");
+        var emptied = authority.Execute(
+            actor with { Gameplay = withdrawn.Gameplay!.Value },
+            new TransferWorldContainerTransaction(
+                Context(actor with { Gameplay = withdrawn.Gameplay!.Value }),
+                new WorldObjectHandle(
+                    bag.ObjectId,
+                    bag.Chunk,
+                    withdrawn.Container!.ObjectRevision,
+                    withdrawn.ChunkDeltas.Single().CurrentRevision,
+                    withdrawn.Container.ContainerRevision),
+                WorldContainerTransferDirection.Withdraw,
+                SlotOrEmpty(withdrawn.Gameplay.Value),
+                Slot(withdrawn.Container, SlimeGel),
+                1));
+        CheckAssert.True(emptied.Accepted,
+            "the final valid withdrawal should commit");
+        CheckAssert.Equal(0,
+            emptied.Container!.Slots.Sum(value =>
+                value.ItemId == SlimeGel ? value.Quantity : 0),
+            "the final withdrawal should return an empty private projection");
+        CheckAssert.Equal(WorldObjectChangeKind.Removed,
+            emptied.ObjectDeltas.Single().Kind,
+            "an emptied loot bag must be removed in the same transaction");
+        CheckAssert.Equal(2, Count(emptied.Gameplay!.Value, SlimeGel),
+            "both deterministic items should be granted exactly once");
+        CheckAssert.Throws<KeyNotFoundException>(
+            () => authority.CaptureObject(objectId),
+            "an emptied loot bag must no longer exist authoritatively");
+
+        var checkpoint = authority.CaptureCheckpoint();
+        var restored = new AuthoritativeWorldTransactions();
+        restored.RestoreCheckpoint(checkpoint);
+        CheckAssert.Throws<KeyNotFoundException>(
+            () => restored.CaptureObject(objectId),
+            "restart must not resurrect an emptied loot bag");
+        CheckAssert.Equal(emptied.ChunkDeltas.Single().CurrentRevision,
+            restored.CaptureChunkRevision(bag.Chunk),
+            "restart must preserve the removal's exact public chunk revision");
     }
 
     private static void AccessRangeAndLevelAreValidated()

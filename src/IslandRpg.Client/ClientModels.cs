@@ -48,7 +48,16 @@ public sealed record NetworkPlayerGameplayState(
     int MiningExperience = 0,
     int AdventureExperience = 0,
     int DiggingExperience = 0,
-    int FishingExperience = 0);
+    int FishingExperience = 0,
+    int MaximumHealth = 100,
+    int AttackExperience = 0,
+    int StrengthExperience = 0,
+    int DefenceExperience = 0,
+    CombatStance CombatStance = CombatStance.Balanced,
+    CombatLifeState LifeState = CombatLifeState.Alive,
+    ulong RespawnTick = 0,
+    CombatStatusFlags CombatStatusFlags = CombatStatusFlags.None,
+    Guid? CombatTargetEnemyId = null);
 
 /// <summary>
 /// Immutable public projection of a server-authored world object. Container
@@ -112,6 +121,12 @@ public sealed record NetworkBoatChange(
     uint Revision,
     BoatState? State);
 
+public sealed record NetworkEnemyChange(
+    EnemyDeltaKind Kind,
+    Guid EnemyId,
+    uint Revision,
+    EnemyState? State);
+
 public readonly record struct NetworkWorldChunk(
     int ChunkX,
     int ChunkY,
@@ -160,6 +175,8 @@ public sealed record NetworkGameClientState(
         new ReadOnlyDictionary<WorldChunkKey, NetworkResourceChunkState>(new Dictionary<WorldChunkKey, NetworkResourceChunkState>());
     private static readonly IReadOnlyDictionary<Guid, BoatState> EmptyBoats =
         new ReadOnlyDictionary<Guid, BoatState>(new Dictionary<Guid, BoatState>());
+    private static readonly IReadOnlyDictionary<Guid, EnemyState> EmptyEnemies =
+        new ReadOnlyDictionary<Guid, EnemyState>(new Dictionary<Guid, EnemyState>());
 
     /// <summary>
     /// True only for worlds whose trusted server profile uses the island-start
@@ -172,6 +189,9 @@ public sealed record NetworkGameClientState(
     /// available through <see cref="Entities"/> using each boat's EntityId.
     /// </summary>
     public IReadOnlyDictionary<Guid, BoatState> Boats { get; init; } = EmptyBoats;
+
+    /// <summary>Latest reliable semantic enemy descriptors and combat state.</summary>
+    public IReadOnlyDictionary<Guid, EnemyState> Enemies { get; init; } = EmptyEnemies;
 
     public static NetworkGameClientState Disconnected { get; } = new(
         NetworkGameClientStatus.Disconnected,
@@ -243,6 +263,18 @@ public sealed class NetworkBoatActionResultEventArgs(
     public BoatActionResultMessage Result { get; } = result;
 }
 
+public sealed class NetworkCombatActionResultEventArgs(
+    CombatActionResultMessage result) : EventArgs
+{
+    public CombatActionResultMessage Result { get; } = result;
+}
+
+public sealed class NetworkCombatEventsEventArgs(
+    IReadOnlyList<CombatEvent> events) : EventArgs
+{
+    public IReadOnlyList<CombatEvent> Events { get; } = events;
+}
+
 public sealed class NetworkCaveActionResultEventArgs(
     CaveActionResultMessage result) : EventArgs
 {
@@ -309,4 +341,12 @@ public sealed class NetworkBoatsChangedEventArgs(
 {
     public bool IsBaseline { get; } = isBaseline;
     public IReadOnlyList<NetworkBoatChange> Changes { get; } = changes;
+}
+
+public sealed class NetworkEnemiesChangedEventArgs(
+    bool isBaseline,
+    IReadOnlyList<NetworkEnemyChange> changes) : EventArgs
+{
+    public bool IsBaseline { get; } = isBaseline;
+    public IReadOnlyList<NetworkEnemyChange> Changes { get; } = changes;
 }

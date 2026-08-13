@@ -35,6 +35,9 @@ internal static class LoopbackChecks
             "real loopback world actions split public and private state",
             ReplicatesWorldActionsWithoutPrivateLeaksAsync);
         checks.Add(
+            "real loopback removes drained loot bags for observers and late join",
+            RemovesDrainedLootBagAsync);
+        checks.Add(
             "real loopback campfire cooking completes authoritatively",
             CompletesCampfireCookingAuthoritativelyAsync);
         checks.Add(
@@ -368,6 +371,84 @@ internal static class LoopbackChecks
             "the observer retained requester-only container contents");
     }
 
+    private static async ValueTask RemovesDrainedLootBagAsync(
+        CancellationToken cancellationToken)
+    {
+        var bagId = Guid.Parse("84000000-0000-0000-0000-000000000001");
+        await using var fixture = await LoopbackFixture.StartAsync(
+            cancellationToken,
+            [new WorldObjectSeed(
+                bagId,
+                "loot_bag",
+                new(.5f, 0),
+                ContainerItems: [("slime_gel", 1, null)])]);
+        await using var requester = new NetworkGameClient(TimeSpan.Zero);
+        await using var observer = new NetworkGameClient(TimeSpan.Zero);
+        await fixture.ConnectAsync(requester, "Looter", cancellationToken);
+        await fixture.ConnectAsync(observer, "Observer", cancellationToken);
+        await EventuallyAsync(
+            () => requester.State.WorldObjects.ContainsKey(bagId) &&
+                  observer.State.WorldObjects.ContainsKey(bagId),
+            "the loot bag baseline did not reach both clients",
+            cancellationToken);
+
+        var bag = requester.State.WorldObjects[bagId];
+        var opened = await SendAndAwaitActionAsync(
+            requester,
+            new OpenContainerAction(new WorldObjectReference(
+                bagId,
+                bag.ChunkX,
+                bag.ChunkY,
+                bag.WorldLevel,
+                bag.ObjectRevision,
+                bag.ChunkRevision)),
+            cancellationToken);
+        CheckAssert.True(opened.Accepted,
+            $"the loot bag open was rejected: {opened.Detail}");
+        await EventuallyAsync(
+            () => requester.State.Containers.TryGetValue(bagId, out var state) &&
+                  state.Slots.Any(slot =>
+                      slot.ItemId == "slime_gel" && slot.Quantity == 1),
+            "the requester did not receive the private loot contents",
+            cancellationToken);
+        var container = requester.State.Containers[bagId];
+        var gel = container.Slots.Single(slot => slot.ItemId == "slime_gel");
+        var withdrawn = await SendAndAwaitActionAsync(
+            requester,
+            new ContainerTransferAction(
+                container.Reference,
+                container.ContainerRevision,
+                ContainerTransferDirection.Withdraw,
+                requester.State.Gameplay!.InventorySlots.First(slot =>
+                    string.IsNullOrEmpty(slot.ItemId)).Slot,
+                gel.Slot,
+                1),
+            cancellationToken);
+        CheckAssert.True(withdrawn.Accepted,
+            $"the final loot withdrawal was rejected: {withdrawn.Detail}");
+        await EventuallyAsync(
+            () => !observer.State.WorldObjects.ContainsKey(bagId),
+            "the observer did not receive the drained loot-bag removal",
+            cancellationToken);
+        await EventuallyAsync(
+            () => !requester.State.WorldObjects.ContainsKey(bagId),
+            "the requester did not receive the drained loot-bag removal",
+            cancellationToken);
+        await EventuallyAsync(
+            () => !requester.State.Containers.ContainsKey(bagId),
+            "the requester retained the removed loot bag's private container",
+            cancellationToken);
+
+        await using var late = new NetworkGameClient(TimeSpan.Zero);
+        await fixture.ConnectAsync(late, "Late", cancellationToken);
+        await EventuallyAsync(
+            () => late.State.Gameplay is not null,
+            "the late client did not finish bootstrap",
+            cancellationToken);
+        CheckAssert.False(late.State.WorldObjects.ContainsKey(bagId),
+            "late join resurrected a drained loot bag");
+    }
+
     private static int CountItem(
         NetworkPlayerGameplayState state,
         string itemId) => state.InventorySlots.Sum(slot =>
@@ -535,9 +616,30 @@ internal static class LoopbackChecks
         client.ActionCompleted += Handler;
         try
         {
-            await client.SendActionAsync(
-                payload, commandId, cancellationToken);
-            return await completion.Task.WaitAsync(Timeout, cancellationToken);
+            try
+            {
+                await client.SendActionAsync(
+                    payload, commandId, cancellationToken);
+            }
+            catch (InvalidOperationException exception)
+                when (client.State.Status == NetworkGameClientStatus.Faulted &&
+                      !string.IsNullOrWhiteSpace(client.State.LastError))
+            {
+                throw new InvalidOperationException(
+                    $"{exception.Message} Client fault: {client.State.LastError}",
+                    exception);
+            }
+            try
+            {
+                return await completion.Task.WaitAsync(Timeout, cancellationToken);
+            }
+            catch (TimeoutException exception)
+            {
+                throw new TimeoutException(
+                    $"Action result {commandId:N} timed out while client was " +
+                    $"{client.State.Status}: {client.State.LastError}",
+                    exception);
+            }
         }
         finally
         {

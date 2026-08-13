@@ -35,6 +35,8 @@ public sealed class NetworkGameClient : IAsyncDisposable
     private ulong _lastInboundSequence;
     private readonly Dictionary<Guid, uint> _worldObjectRevisions = [];
     private readonly Dictionary<Guid, uint> _boatRevisions = [];
+    private readonly Dictionary<Guid, uint> _enemyRevisions = [];
+    private ulong _lastCombatEventOrdinal;
     private readonly EntitySnapshotReconstructor _snapshotReconstructor = new();
     private int _disposed;
 
@@ -58,6 +60,9 @@ public sealed class NetworkGameClient : IAsyncDisposable
         ResourceActionCompleted;
     public event EventHandler<NetworkBoatActionResultEventArgs>?
         BoatActionCompleted;
+    public event EventHandler<NetworkCombatActionResultEventArgs>?
+        CombatActionCompleted;
+    public event EventHandler<NetworkCombatEventsEventArgs>? CombatEventsReceived;
 
     public event EventHandler<NetworkCaveActionResultEventArgs>?
         CaveActionCompleted;
@@ -65,6 +70,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
     public event EventHandler<NetworkContainerStateEventArgs>? ContainerStateChanged;
     public event EventHandler<NetworkResourcesChangedEventArgs>? ResourcesChanged;
     public event EventHandler<NetworkBoatsChangedEventArgs>? BoatsChanged;
+    public event EventHandler<NetworkEnemiesChangedEventArgs>? EnemiesChanged;
 
     public bool TryGetBoatReference(Guid boatId, out BoatReference reference)
     {
@@ -82,6 +88,24 @@ public sealed class NetworkGameClient : IAsyncDisposable
         TryGetBoatReference(boatId, out var reference)
             ? reference
             : throw new KeyNotFoundException($"Boat {boatId} is not known.");
+
+    public bool TryGetEnemyReference(
+        Guid enemyId,
+        out CombatEnemyReference reference)
+    {
+        if (State.Enemies.TryGetValue(enemyId, out var enemy))
+        {
+            reference = new CombatEnemyReference(enemyId, enemy.Revision);
+            return true;
+        }
+        reference = default;
+        return false;
+    }
+
+    public CombatEnemyReference GetEnemyReference(Guid enemyId) =>
+        TryGetEnemyReference(enemyId, out var reference)
+            ? reference
+            : throw new KeyNotFoundException($"Enemy {enemyId} is not known.");
 
     /// <summary>
     /// Resolves the exact optimistic-concurrency token for one known sparse or
@@ -269,6 +293,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 {
                     IslandStart = accepted.IslandStart,
                     Boats = ReadOnly(new Dictionary<Guid, BoatState>()),
+                    Enemies = ReadOnly(new Dictionary<Guid, EnemyState>()),
                 });
                 _readerTask = RunReaderAsync(stream, _connectionCancellation.Token);
                 _writerTask = RunWriterAsync(stream, _outbound.Reader, _connectionCancellation.Token);
@@ -527,6 +552,11 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 Raise(BoatActionCompleted,
                     new NetworkBoatActionResultEventArgs(result));
                 break;
+            case CombatActionResultMessage result:
+                UpdateTick(result.Tick);
+                Raise(CombatActionCompleted,
+                    new NetworkCombatActionResultEventArgs(result));
+                break;
             case CaveActionResultMessage result:
                 UpdateTick(result.Tick);
                 Raise(CaveActionCompleted,
@@ -586,6 +616,15 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 break;
             case BoatDeltaBatchMessage boats:
                 ConsumeBoatDeltas(boats);
+                break;
+            case EnemyBaselineMessage enemies:
+                ConsumeEnemyBaseline(enemies);
+                break;
+            case EnemyDeltaBatchMessage enemies:
+                ConsumeEnemyDeltas(enemies);
+                break;
+            case CombatEventBatchMessage events:
+                ConsumeCombatEvents(events);
                 break;
             default:
                 throw new ProtocolException($"The server sent invalid reliable message kind {message.Kind} after handshake.");
@@ -735,6 +774,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
         lock (_stateSync)
         {
             var objects = _state.WorldObjects.ToDictionary();
+            var containers = _state.Containers.ToDictionary();
             var chunks = _state.WorldChunkRevisions.ToDictionary();
             var objectRevisions = new Dictionary<Guid, uint>(
                 _worldObjectRevisions);
@@ -803,6 +843,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
                         throw new ProtocolException(
                             "A world-object removal unexpectedly carried state.");
                     objects.Remove(id);
+                    containers.Remove(id);
                     objectRevisions[id] = knownRevision;
                     accepted.Add(new(
                         WorldObjectDeltaKind.Remove,
@@ -820,6 +861,9 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 WorldObjects = accepted.Count == 0
                     ? _state.WorldObjects
                     : ReadOnly(objects),
+                Containers = accepted.Count == 0
+                    ? _state.Containers
+                    : ReadOnly(containers),
                 WorldChunkRevisions = accepted.Count == 0
                     ? _state.WorldChunkRevisions
                     : ReadOnly(chunks),
@@ -1219,6 +1263,115 @@ public sealed class NetworkGameClient : IAsyncDisposable
             _boatRevisions.Add(pair.Key, pair.Value);
     }
 
+    private void ConsumeEnemyBaseline(EnemyBaselineMessage message)
+    {
+        NetworkGameClientState next;
+        IReadOnlyList<NetworkEnemyChange> changes;
+        lock (_stateSync)
+        {
+            var enemies = message.Enemies.ToDictionary(static enemy => enemy.EnemyId);
+            var revisions = new Dictionary<Guid, uint>(_enemyRevisions);
+            var accepted = new List<NetworkEnemyChange>();
+            foreach (var pair in enemies)
+            {
+                revisions.TryGetValue(pair.Key, out var knownRevision);
+                if (pair.Value.Revision < knownRevision)
+                    throw new ProtocolException("An enemy baseline regressed retained revision high-water.");
+                if (knownRevision != 0 &&
+                    pair.Value.Revision == knownRevision &&
+                    !_state.Enemies.ContainsKey(pair.Key))
+                    throw new ProtocolException(
+                        "An enemy baseline resurrected a retained tombstone.");
+                if (pair.Value.Revision == knownRevision &&
+                    _state.Enemies.TryGetValue(pair.Key, out var previous) &&
+                    previous != pair.Value)
+                    throw new ProtocolException("Equal enemy revisions contained different state.");
+                revisions[pair.Key] = pair.Value.Revision;
+                if (!_state.Enemies.TryGetValue(pair.Key, out previous) || previous != pair.Value)
+                    accepted.Add(new NetworkEnemyChange(
+                        EnemyDeltaKind.Upsert, pair.Key, pair.Value.Revision, pair.Value));
+            }
+            foreach (var pair in _state.Enemies)
+                if (!enemies.ContainsKey(pair.Key))
+                    accepted.Add(new NetworkEnemyChange(
+                        EnemyDeltaKind.Remove, pair.Key, pair.Value.Revision, null));
+
+            changes = Array.AsReadOnly(accepted.ToArray());
+            ReplaceEnemyRevisions(revisions);
+            next = _state with
+            {
+                ServerTick = Math.Max(_state.ServerTick, message.Tick),
+                Enemies = ReadOnly(enemies),
+            };
+            Volatile.Write(ref _state, next);
+        }
+        Raise(StateChanged, new NetworkClientStateChangedEventArgs(next));
+        Raise(EnemiesChanged, new NetworkEnemiesChangedEventArgs(true, changes));
+    }
+
+    private void ConsumeEnemyDeltas(EnemyDeltaBatchMessage message)
+    {
+        NetworkGameClientState next;
+        IReadOnlyList<NetworkEnemyChange> changes;
+        lock (_stateSync)
+        {
+            // Validate and stage the full batch before publishing any state.
+            var enemies = _state.Enemies.ToDictionary();
+            var revisions = new Dictionary<Guid, uint>(_enemyRevisions);
+            var accepted = new List<NetworkEnemyChange>(message.Deltas.Count);
+            foreach (var delta in message.Deltas)
+            {
+                revisions.TryGetValue(delta.Reference.EnemyId, out var knownRevision);
+                if (delta.Reference.ExpectedRevision != knownRevision)
+                    throw new ProtocolException("An enemy delta does not match retained revision high-water.");
+                revisions[delta.Reference.EnemyId] = delta.CurrentRevision;
+                if (delta.Kind == EnemyDeltaKind.Upsert)
+                    enemies[delta.Reference.EnemyId] = delta.State!.Value;
+                else
+                    enemies.Remove(delta.Reference.EnemyId);
+                accepted.Add(new NetworkEnemyChange(
+                    delta.Kind, delta.Reference.EnemyId, delta.CurrentRevision, delta.State));
+            }
+            changes = Array.AsReadOnly(accepted.ToArray());
+            ReplaceEnemyRevisions(revisions);
+            next = _state with
+            {
+                ServerTick = Math.Max(_state.ServerTick, message.Tick),
+                Enemies = ReadOnly(enemies),
+            };
+            Volatile.Write(ref _state, next);
+        }
+        Raise(StateChanged, new NetworkClientStateChangedEventArgs(next));
+        Raise(EnemiesChanged, new NetworkEnemiesChangedEventArgs(false, changes));
+    }
+
+    private void ConsumeCombatEvents(CombatEventBatchMessage message)
+    {
+        IReadOnlyList<CombatEvent> accepted;
+        NetworkGameClientState next;
+        lock (_stateSync)
+        {
+            var first = message.Events[0].EventOrdinal;
+            if (first <= _lastCombatEventOrdinal)
+                throw new ProtocolException("Combat event ordinals replayed or regressed.");
+            _lastCombatEventOrdinal = message.Events[^1].EventOrdinal;
+            accepted = Array.AsReadOnly(message.Events.ToArray());
+            next = _state with
+            {
+                ServerTick = Math.Max(_state.ServerTick, message.Tick),
+            };
+            Volatile.Write(ref _state, next);
+        }
+        Raise(StateChanged, new NetworkClientStateChangedEventArgs(next));
+        Raise(CombatEventsReceived, new NetworkCombatEventsEventArgs(accepted));
+    }
+
+    private void ReplaceEnemyRevisions(Dictionary<Guid, uint> revisions)
+    {
+        _enemyRevisions.Clear();
+        foreach (var pair in revisions) _enemyRevisions.Add(pair.Key, pair.Value);
+    }
+
     private static NetworkResourceChunkState ProjectResourceBaseline(
         ResourceChunkBaselineMessage message)
     {
@@ -1501,7 +1654,20 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 : previous!.DiggingExperience,
             actorChanged
                 ? message.FishingExperience
-                : previous!.FishingExperience);
+                : previous!.FishingExperience,
+            actorChanged ? message.MaximumHealth : previous!.MaximumHealth,
+            actorChanged ? message.AttackExperience : previous!.AttackExperience,
+            actorChanged ? message.StrengthExperience : previous!.StrengthExperience,
+            actorChanged ? message.DefenceExperience : previous!.DefenceExperience,
+            actorChanged ? message.CombatStance : previous!.CombatStance,
+            actorChanged ? message.LifeState : previous!.LifeState,
+            actorChanged ? message.RespawnTick : previous!.RespawnTick,
+            actorChanged ? message.CombatStatusFlags : previous!.CombatStatusFlags,
+            actorChanged
+                ? message.CombatTargetEnemyId == Guid.Empty
+                    ? null
+                    : message.CombatTargetEnemyId
+                : previous!.CombatTargetEnemyId);
     }
 
     private void UpdateTick(ulong tick) => UpdateState(current => current with { ServerTick = Math.Max(current.ServerTick, tick) });
@@ -1525,6 +1691,8 @@ public sealed class NetworkGameClient : IAsyncDisposable
         {
             _worldObjectRevisions.Clear();
             _boatRevisions.Clear();
+            _enemyRevisions.Clear();
+            _lastCombatEventOrdinal = 0;
             Volatile.Write(ref _state, state);
         }
         Raise(StateChanged, new NetworkClientStateChangedEventArgs(state));

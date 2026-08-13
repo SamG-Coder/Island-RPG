@@ -44,7 +44,8 @@ public sealed record AuthoritativeSessionCheckpoint(
     AuthoritativeWorldTransactionsCheckpoint World,
     ImmutableArray<AuthoritativeCookingJobCheckpoint> CookingJobs = default,
     AuthoritativeResourceTransactionsCheckpoint? Resources = null,
-    AuthoritativeBoatTransactionsCheckpoint? Boats = null);
+    AuthoritativeBoatTransactionsCheckpoint? Boats = null,
+    AuthoritativeCombatCheckpoint? Combat = null);
 
 public sealed record AuthoritativeCookingJobCheckpoint(
     Guid CommandId,

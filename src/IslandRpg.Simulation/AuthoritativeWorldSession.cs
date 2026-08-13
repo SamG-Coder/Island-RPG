@@ -24,6 +24,7 @@ public sealed class AuthoritativeWorldSession
     private readonly AuthoritativeWorldTransactions _worldTransactions;
     private readonly AuthoritativeResourceTransactions? _resourceTransactions;
     private readonly AuthoritativeBoatTransactions? _boatTransactions;
+    private readonly AuthoritativeCombatTransactions? _combatTransactions;
     private readonly Channel<QueuedOperation> _inbound;
     private readonly Dictionary<ActorId, MutableActor> _actors = [];
     private readonly Dictionary<PlayerId, ActorId> _actorsByPlayer = [];
@@ -43,7 +44,8 @@ public sealed class AuthoritativeWorldSession
         IWorldNavigationObstacleSource? obstacles = null,
         AuthoritativeWorldTransactions? worldTransactions = null,
         AuthoritativeResourceTransactions? resourceTransactions = null,
-        AuthoritativeBoatTransactions? boatTransactions = null)
+        AuthoritativeBoatTransactions? boatTransactions = null,
+        AuthoritativeCombatTransactions? combatTransactions = null)
     {
         _limits = (limits ?? SimulationLimits.Default).ValidatedCopy();
         _identitySource = identitySource ?? new SecureSessionIdentitySource();
@@ -53,6 +55,7 @@ public sealed class AuthoritativeWorldSession
             new AuthoritativeWorldTransactions();
         _resourceTransactions = resourceTransactions;
         _boatTransactions = boatTransactions;
+        _combatTransactions = combatTransactions;
         Id = sessionId is { } provided && provided.Value != Guid.Empty
             ? provided
             : SessionId.New();
@@ -103,13 +106,32 @@ public sealed class AuthoritativeWorldSession
     public event Action<BoatStateDelta>? BoatStateCommitted;
 
     /// <summary>
-    /// Route completion is the only autonomous boat semantic transition.
-    /// Servers subscribe here; command/provision deltas are returned directly
-    /// so requester-private state can be sent before public replication.
+    /// Specialized observer hook for an autonomous route arrival. General
+    /// public replication subscribes to <see cref="BoatAutonomousStateCommitted"/>.
     /// </summary>
     public event Action<BoatStateDelta>? BoatRouteCompleted;
 
+    /// <summary>
+    /// Raised for autonomous semantic boat transitions that must be published
+    /// independently of a command outcome, including route arrival and an
+    /// occupant dying. Command-bound transitions are returned on their result
+    /// so requester-private state can retain precedence.
+    /// </summary>
+    public event Action<BoatStateDelta>? BoatAutonomousStateCommitted;
+
+    public event Action<EnemyStateDelta>? EnemyStateCommitted;
+
+    public event Action<CombatEventSnapshot>? CombatEventCommitted;
+
     public event Action<CookingCompletionSnapshot>? CookingCompleted;
+
+    /// <summary>
+    /// Raised synchronously on the owner thread after a gameplay intent has
+    /// finished committing, but before its acknowledgement task is completed.
+    /// Transport adapters use this boundary to reserve publication order
+    /// without moving private requester state onto the simulation thread.
+    /// </summary>
+    public event Action<ActorCommand, IntentResult>? GameplayIntentCommitted;
 
     public Task<JoinResult> EnqueueJoinAsync(JoinRequest request)
     {
@@ -172,10 +194,13 @@ public sealed class AuthoritativeWorldSession
     }
 
     /// <summary>
-    /// Enqueues a command without allocating an acknowledgement task. This is the
-    /// preferred path for high-frequency movement input.
+    /// Enqueues a non-gameplay command without allocating an acknowledgement
+    /// task. This is the preferred path for high-frequency movement input.
+    /// Revision-checked gameplay always requires an acknowledgement so transport
+    /// adapters can publish its private receipt and ordered public effects.
     /// </summary>
     public bool TryEnqueueIntent(ActorCommand command) =>
+        command.Intent is not GameplayIntent &&
         _inbound.Writer.TryWrite(new IntentOperation(command, null));
 
     public Task<IntentResult> EnqueueIntentAsync(ActorCommand command)
@@ -239,8 +264,10 @@ public sealed class AuthoritativeWorldSession
                 {
                     BoatStateCommitted?.Invoke(delta);
                     BoatRouteCompleted?.Invoke(delta);
+                    BoatAutonomousStateCommitted?.Invoke(delta);
                 }
             SynchronizeBoatOccupants();
+            AdvanceCombat();
             var publish = Clock.AdvanceOneTick();
             AdvanceCookingJobs();
             if (!publish)
@@ -399,6 +426,37 @@ public sealed class AuthoritativeWorldSession
         }
     }
 
+    public AuthoritativeEnemySnapshot SeedEnemy(AuthoritativeEnemySeed seed)
+    {
+        EnterOwner();
+        try
+        {
+            var enemy = _combatTransactions?.Seed(seed) ??
+                throw new InvalidOperationException(
+                    "This session has no authoritative combat aggregate.");
+            EnemyStateCommitted?.Invoke(new(EnemyChangeKind.Added, null, enemy));
+            return enemy;
+        }
+        finally
+        {
+            ExitOwner();
+        }
+    }
+
+    public ImmutableArray<AuthoritativeEnemySnapshot> CaptureEnemies()
+    {
+        EnterOwner();
+        try
+        {
+            return _combatTransactions?.CaptureEnemies(
+                ActorNetworkIds(), Clock.Current.ElapsedSeconds) ?? [];
+        }
+        finally
+        {
+            ExitOwner();
+        }
+    }
+
     /// <summary>
     /// Captures all durable authority state on the owning simulation thread.
     /// Reconnect hashes are copied into immutable storage and never logged.
@@ -433,7 +491,8 @@ public sealed class AuthoritativeWorldSession
                 _worldTransactions.CaptureCheckpoint(),
                 cooking,
                 _resourceTransactions?.CaptureCheckpoint(),
-                _boatTransactions?.CaptureCheckpoint());
+                _boatTransactions?.CaptureCheckpoint(),
+                _combatTransactions?.CaptureCheckpoint());
         }
         finally
         {
@@ -617,6 +676,28 @@ public sealed class AuthoritativeWorldSession
                 }
                 }
             }
+            if (_combatTransactions is not null && checkpoint.Combat is null)
+                throw new InvalidDataException(
+                    "A combat-enabled session requires combat checkpoint state.");
+            if (checkpoint.Combat is { } pendingCombat)
+            {
+                if (_combatTransactions is null)
+                {
+                    if (!pendingCombat.Enemies.IsDefaultOrEmpty)
+                        throw new InvalidDataException(
+                            "The checkpoint has enemies but this session has no combat authority.");
+                }
+                else
+                {
+                    _combatTransactions.ValidateCheckpoint(pendingCombat);
+                    var actorIds = actors.Keys.ToHashSet();
+                    if (pendingCombat.Enemies.Any(value =>
+                            value.TargetActorId is { } target &&
+                            !actorIds.Contains(target)))
+                        throw new InvalidDataException(
+                            "A persisted enemy targets an unknown actor.");
+                }
+            }
             // Resource validation precedes the world commit. Each restorer
             // then validates completely before mutating its own aggregate.
             _worldTransactions.RestoreCheckpoint(checkpoint.World);
@@ -627,6 +708,9 @@ public sealed class AuthoritativeWorldSession
             if (checkpoint.Boats is { } boats)
                 if (_boatTransactions is not null)
                     _boatTransactions.RestoreCheckpoint(boats);
+            if (checkpoint.Combat is { } combat)
+                if (_combatTransactions is not null)
+                    _combatTransactions.RestoreCheckpoint(combat);
             Clock.Restore(checkpoint.Tick, checkpoint.SnapshotSequence);
             foreach (var value in actors) _actors.Add(value.Key, value.Value);
             foreach (var value in actorsByPlayer)
@@ -703,7 +787,10 @@ public sealed class AuthoritativeWorldSession
                 disconnect.Completion.SetResult(ProcessDisconnect(disconnect.Request));
                 break;
             case IntentOperation intent:
-                intent.Completion?.SetResult(ProcessIntent(intent.Command));
+                var result = ProcessIntent(intent.Command);
+                if (intent.Command.Intent is GameplayIntent)
+                    GameplayIntentCommitted?.Invoke(intent.Command, result);
+                intent.Completion?.SetResult(result);
                 break;
             case ProvisionPlayerBoatOperation provision:
                 try
@@ -1104,6 +1191,9 @@ public sealed class AuthoritativeWorldSession
         if (intent is BoatGameplayIntent boat)
             return ProcessBoatIntent(actor, boat);
 
+        if (intent is CombatGameplayIntent combat)
+            return ProcessCombatIntent(actor, combat);
+
         if (intent.ExpectedInventoryRevision !=
             actor.Gameplay.InventoryRevision)
         {
@@ -1120,6 +1210,16 @@ public sealed class AuthoritativeWorldSession
                 IntentStatus.StaleActorRevision,
                 actor,
                 "The actor gameplay revision is stale.",
+                intent.CommandId);
+        }
+
+        if (actor.Gameplay.LifeState == ActorLifeState.Dead ||
+            actor.Gameplay.Health <= 0)
+        {
+            return Rejected(
+                IntentStatus.DeadActor,
+                actor,
+                "A dead actor cannot change inventory, craft, or consume items.",
                 intent.CommandId);
         }
 
@@ -1634,6 +1734,95 @@ public sealed class AuthoritativeWorldSession
             _ => throw new ArgumentOutOfRangeException(nameof(status))
         };
 
+    private IntentResult ProcessCombatIntent(
+        MutableActor actor,
+        CombatGameplayIntent intent)
+    {
+        if (_combatTransactions is null)
+            return Rejected(IntentStatus.CombatUnavailable, actor,
+                "This session has no authoritative combat authority.",
+                intent.CommandId);
+        if (intent is SetCombatTargetIntent &&
+            _boatTransactions?.FindByOccupant(
+                actor.Identity.ActorId) is not null)
+            return Rejected(IntentStatus.AlreadyAboard, actor,
+                "Disembark before entering combat.",
+                intent.CommandId);
+        var context = new WorldTransactionContext(
+            intent.CommandId, actor.Identity.ActorId,
+            intent.ExpectedActorRevision, intent.ExpectedInventoryRevision);
+        var input = CombatInput(actor);
+        var transaction = intent switch
+        {
+            SetCombatTargetIntent target => _combatTransactions.SetTarget(
+                input, context, target.Enemy, Clock.Tick),
+            CancelCombatIntent => _combatTransactions.CancelTarget(
+                input, context, Clock.Tick),
+            SetCombatStanceIntent stance => _combatTransactions.SetStance(
+                input, context, stance.Stance),
+            RespawnIntent => _combatTransactions.Respawn(
+                input, context, Clock.Tick),
+            _ => throw new InvalidOperationException(
+                "The combat gameplay intent type is unsupported.")
+        };
+        BoatStateDelta? detachedBoat = null;
+        if (transaction.Accepted)
+        {
+            actor.Gameplay.ReplaceWith(transaction.Gameplay);
+            if (intent is SetCombatTargetIntent or CancelCombatIntent)
+                actor.ClearRoute();
+            if (intent is RespawnIntent)
+            {
+                detachedBoat = _boatTransactions?.DetachOccupant(
+                    actor.Identity.ActorId);
+                if (detachedBoat is not null)
+                    BoatStateCommitted?.Invoke(detachedBoat);
+                actor.Position = _combatTransactions.RespawnPosition;
+                actor.WorldLevel = 0;
+                actor.ClearRoute();
+            }
+            // Command deltas/events remain on the private result. The server
+            // sends that receipt/player state first, then publishes them so a
+            // reconnecting requester can never observe public combat ahead of
+            // its own authoritative outcome. Autonomous tick transitions use
+            // the session events below.
+        }
+        return new IntentResult(
+            MapCombatStatus(transaction.Status),
+            actor.LastProcessedCommandSequence,
+            transaction.Accepted ? null : transaction.Detail)
+        {
+            CommandId = intent.CommandId,
+            InventoryRevision = actor.Gameplay.InventoryRevision,
+            ActorRevision = actor.Gameplay.ActorRevision,
+            Gameplay = actor.Gameplay.ToSnapshot(),
+            CombatTransaction = transaction,
+            BoatDelta = detachedBoat
+        };
+    }
+
+    private static IntentStatus MapCombatStatus(
+        CombatTransactionStatus status) => status switch
+        {
+            CombatTransactionStatus.Accepted => IntentStatus.Accepted,
+            CombatTransactionStatus.DeadActor => IntentStatus.DeadActor,
+            CombatTransactionStatus.ActorAlive => IntentStatus.ActorAlreadyAlive,
+            CombatTransactionStatus.StaleActorRevision =>
+                IntentStatus.StaleActorRevision,
+            CombatTransactionStatus.StaleInventoryRevision =>
+                IntentStatus.StaleInventoryRevision,
+            CombatTransactionStatus.EnemyNotFound => IntentStatus.EnemyNotFound,
+            CombatTransactionStatus.EnemyDead => IntentStatus.EnemyDead,
+            CombatTransactionStatus.StaleEnemyRevision =>
+                IntentStatus.StaleEnemyRevision,
+            CombatTransactionStatus.WrongWorldLevel =>
+                IntentStatus.WorldLevelMismatch,
+            CombatTransactionStatus.InvalidStance =>
+                IntentStatus.InvalidCombatStance,
+            CombatTransactionStatus.RespawnLocked => IntentStatus.RespawnLocked,
+            _ => IntentStatus.InvalidIntent
+        };
+
     private WorldTransactionResult BeginCooking(
         MutableActor actor,
         WorldTransactionActorInput input,
@@ -1981,7 +2170,7 @@ public sealed class AuthoritativeWorldSession
         }
 
         if (gameplay.Hunger >= SurvivalService.MaximumHunger &&
-            gameplay.Health >= MutablePlayerGameplay.MaximumHealth)
+            gameplay.Health >= gameplay.MaximumHealth)
         {
             return Rejected(
                 IntentStatus.AlreadyFull,
@@ -2005,7 +2194,7 @@ public sealed class AuthoritativeWorldSession
             gameplay.Hunger,
             gameplay.WellFedSeconds,
             gameplay.Health,
-            MutablePlayerGameplay.MaximumHealth);
+            gameplay.MaximumHealth);
         var actorChanged = survival.Health != gameplay.Health ||
             survival.Hunger != gameplay.Hunger ||
             survival.WellFedSeconds != gameplay.WellFedSeconds;
@@ -2055,6 +2244,10 @@ public sealed class AuthoritativeWorldSession
 
     private IntentResult ProcessWalk(MutableActor actor, WalkIntent intent)
     {
+        if (actor.Gameplay.LifeState == ActorLifeState.Dead ||
+            actor.Gameplay.Health <= 0)
+            return Rejected(IntentStatus.DeadActor, actor,
+                "A dead actor cannot move.");
         if (!TrySanitizePosition(intent.Destination, out var destination))
         {
             return Rejected(
@@ -2108,14 +2301,35 @@ public sealed class AuthoritativeWorldSession
                 "The traversable route exceeds the authoritative route limit.");
         }
 
+        // Ordinary movement is an authoritative decision to leave combat.
+        // Commit it only after route validation so a rejected replacement
+        // cannot discard the actor's live target. Both mutations occur on
+        // this single owner thread before the fixed step can observe either.
+        CancelCombatForMovement(actor);
         actor.ReplaceRoute(route);
         return Accepted(actor);
     }
 
     private static IntentResult ProcessStop(MutableActor actor)
     {
+        if (actor.Gameplay.LifeState == ActorLifeState.Dead ||
+            actor.Gameplay.Health <= 0)
+            return Rejected(IntentStatus.DeadActor, actor,
+                "A dead actor cannot move.");
+        CancelCombatForMovement(actor);
         actor.ClearRoute();
         return Accepted(actor);
+    }
+
+    private static void CancelCombatForMovement(MutableActor actor)
+    {
+        if (actor.Gameplay.CombatTargetEnemyId is null &&
+            actor.Gameplay.NextCombatAttackTick == 0)
+            return;
+        actor.Gameplay.CombatTargetEnemyId = null;
+        actor.Gameplay.NextCombatAttackTick = 0;
+        actor.Gameplay.ActorRevision = checked(
+            actor.Gameplay.ActorRevision + 1);
     }
 
     private IntentResult ProcessChat(MutableActor actor, ChatIntent intent)
@@ -2154,6 +2368,12 @@ public sealed class AuthoritativeWorldSession
 
         foreach (var actor in _actors.Values)
         {
+            if (actor.Gameplay.LifeState == ActorLifeState.Dead ||
+                actor.Gameplay.Health <= 0)
+            {
+                actor.ClearRoute();
+                continue;
+            }
             if (_boatTransactions?.FindByOccupant(
                     actor.Identity.ActorId) is not null)
             {
@@ -2166,6 +2386,9 @@ public sealed class AuthoritativeWorldSession
                 continue;
             }
 
+            var combatMovementMultiplier =
+                actor.Gameplay.CombatStatus.MovementMultiplier(
+                    Clock.Current.ElapsedSeconds);
             var remainingSeconds = 1f / SimulationTiming.TicksPerSecond;
             actor.Velocity = Vector2.Zero;
             while (remainingSeconds > 0 &&
@@ -2192,7 +2415,16 @@ public sealed class AuthoritativeWorldSession
                     _navigation.IsWading(actor.Position, actor.WorldLevel),
                     _navigation.HeightAt(actor.Position, actor.WorldLevel),
                     _navigation.HeightAt(waypoint, actor.WorldLevel));
-                var speed = _limits.ActorMovementSpeed * terrainMultiplier;
+                var speed = _limits.ActorMovementSpeed * terrainMultiplier *
+                            combatMovementMultiplier;
+                if (combatMovementMultiplier == 0)
+                {
+                    // Rooting pauses an accepted server route. The route must
+                    // remain installed so movement resumes on the exact fixed
+                    // step at which the absolute deadline expires.
+                    actor.Velocity = Vector2.Zero;
+                    break;
+                }
                 if (!float.IsFinite(speed) || speed <= 0)
                 {
                     actor.ClearRoute();
@@ -2235,6 +2467,80 @@ public sealed class AuthoritativeWorldSession
         }
     }
 
+    private void AdvanceCombat()
+    {
+        if (_combatTransactions is null) return;
+        // A restored or legacy checkpoint may predate the atomic boarding
+        // cancellation rule. Canonicalize any retained target before combat
+        // receives transforms, guaranteeing that it cannot chase an occupant
+        // away from the position synchronized from the boat above.
+        if (_boatTransactions is not null)
+            foreach (var actor in _actors.Values)
+                if (_boatTransactions.FindByOccupant(
+                        actor.Identity.ActorId) is not null)
+                    CancelCombatForMovement(actor);
+        var actors = _actors.Values
+            .OrderBy(static value => value.Identity.ActorId.Value)
+            .Select(CombatInput)
+            .ToArray();
+        var update = _combatTransactions.Advance(
+            SimulationTiming.FixedDeltaSeconds, Clock.Tick, actors);
+        foreach (var mutation in update.ActorMutations)
+        {
+            if (!_actors.TryGetValue(mutation.ActorId, out var actor))
+                throw new InvalidOperationException(
+                    "Combat mutated an actor outside the session registry.");
+            var died = actor.Gameplay.LifeState != ActorLifeState.Dead &&
+                       mutation.Gameplay.LifeState == ActorLifeState.Dead;
+            actor.Gameplay.ReplaceWith(mutation.Gameplay);
+            if (mutation.Position is { } position) actor.Position = position;
+            if (mutation.WorldLevel is { } level) actor.WorldLevel = level;
+            if (mutation.ClearMovement) actor.ClearRoute();
+            if (died && _boatTransactions?.DetachOccupant(
+                    actor.Identity.ActorId) is { } detachedBoat)
+            {
+                BoatStateCommitted?.Invoke(detachedBoat);
+                BoatAutonomousStateCommitted?.Invoke(detachedBoat);
+            }
+        }
+        foreach (var drop in update.LootDrops)
+        {
+            if (drop.Items.IsDefaultOrEmpty) continue;
+            var owner = drop.OwnerActorId?.ToString();
+            var transaction = _worldTransactions.AddObjectCommitted(
+                drop.ObjectId,
+                new WorldObjectSeed(
+                    drop.ObjectId,
+                    ItemIds.LootBag,
+                    drop.Position,
+                    drop.WorldLevel,
+                    OwnerId: owner,
+                    ContainerItems: drop.Items.Select(value =>
+                        (value.ItemId, value.Quantity,
+                            (string?)null)).ToArray()));
+            if (!transaction.Accepted)
+                throw new InvalidOperationException(
+                    "A validated deterministic combat loot bag failed to commit.");
+            WorldTransactionCommitted?.Invoke(transaction);
+        }
+        foreach (var delta in update.EnemyDeltas)
+            EnemyStateCommitted?.Invoke(delta);
+        foreach (var combatEvent in update.Events)
+            CombatEventCommitted?.Invoke(combatEvent);
+    }
+
+    private CombatActorInput CombatInput(MutableActor actor) => new(
+        actor.Identity.ActorId,
+        ActorNetworkEntityIdentity.Derive(actor.Identity.ActorId),
+        actor.Position,
+        actor.WorldLevel,
+        actor.Connected,
+        actor.Gameplay.ToSnapshot());
+
+    private Dictionary<ActorId, ulong> ActorNetworkIds() =>
+        _actors.Keys.ToDictionary(static value => value,
+            static value => ActorNetworkEntityIdentity.Derive(value));
+
     private SessionSnapshot CaptureSnapshotCore(long sequence)
     {
         var actors = _actors.Values
@@ -2251,7 +2557,10 @@ public sealed class AuthoritativeWorldSession
             Clock.Current,
             actors,
             _chatHistory.ToImmutableArray(),
-            _boatTransactions?.CaptureBoats() ?? []);
+            _boatTransactions?.CaptureBoats() ?? [],
+            _combatTransactions?.CaptureEnemies(
+                ActorNetworkIds(), Clock.Current.ElapsedSeconds) ?? [],
+            []);
     }
 
     private PlayerIdentity CreateUniqueIdentity()
@@ -2632,7 +2941,7 @@ public sealed class AuthoritativeWorldSession
 
     private sealed class MutablePlayerGameplay
     {
-        public const int MaximumHealth = 100;
+        public const int BaseMaximumHealth = 100;
 
         public MutablePlayerGameplay()
         {
@@ -2645,7 +2954,7 @@ public sealed class AuthoritativeWorldSession
 
         public uint ActorRevision { get; set; } = 1;
 
-        public int Health { get; set; } = MaximumHealth;
+        public int Health { get; set; } = BaseMaximumHealth;
 
         public float Hunger { get; set; } = SurvivalService.MaximumHunger;
 
@@ -2667,12 +2976,35 @@ public sealed class AuthoritativeWorldSession
 
         public int FishingExperience { get; set; }
 
+        public int MaximumHealth { get; set; } = BaseMaximumHealth;
+
+        public int AttackExperience { get; set; }
+
+        public int StrengthExperience { get; set; }
+
+        public int DefenceExperience { get; set; }
+
+        public MeleeCombatStance CombatStance { get; set; } =
+            MeleeCombatStance.Accurate;
+
+        public ActorLifeState LifeState { get; set; } = ActorLifeState.Alive;
+
+        public long RespawnAvailableTick { get; set; }
+
+        public SlimeVictimStatus CombatStatus { get; set; }
+
+        public EnemyId? CombatTargetEnemyId { get; set; }
+
+        public ulong CombatAttackSequence { get; set; }
+
+        public long NextCombatAttackTick { get; set; }
+
         public void ReplaceWith(PlayerGameplaySnapshot snapshot)
         {
             if (snapshot.ActorRevision == 0 ||
                 snapshot.Inventory.Revision == 0 ||
                 snapshot.Inventory.Capacity != PlayerInventory.Capacity ||
-                snapshot.Health is < 0 or > MaximumHealth ||
+                snapshot.Health < 0 ||
                 !float.IsFinite(snapshot.Hunger) ||
                 snapshot.Hunger is < 0 or > SurvivalService.MaximumHunger ||
                 !float.IsFinite(snapshot.WellFedSeconds) ||
@@ -2684,7 +3016,21 @@ public sealed class AuthoritativeWorldSession
                 snapshot.MiningExperience < 0 ||
                 snapshot.AdventureExperience < 0 ||
                 snapshot.DiggingExperience < 0 ||
-                snapshot.FishingExperience < 0)
+                snapshot.FishingExperience < 0 ||
+                snapshot.MaximumHealth <= 0 ||
+                snapshot.Health > snapshot.MaximumHealth ||
+                snapshot.AttackExperience < 0 ||
+                snapshot.StrengthExperience < 0 ||
+                snapshot.DefenceExperience < 0 ||
+                !Enum.IsDefined(snapshot.CombatStance) ||
+                !Enum.IsDefined(snapshot.LifeState) ||
+                snapshot.RespawnAvailableTick < 0 ||
+                !ValidCombatStatus(snapshot.CombatStatus) ||
+                snapshot.CombatTargetEnemyId is { IsEmpty: true } ||
+                (snapshot.LifeState == ActorLifeState.Dead &&
+                 (snapshot.Health != 0 || snapshot.RespawnAvailableTick == 0)) ||
+                (snapshot.LifeState == ActorLifeState.Alive &&
+                 (snapshot.Health <= 0 || snapshot.RespawnAvailableTick != 0)))
             {
                 throw new InvalidOperationException(
                     "The world transaction returned invalid actor state.");
@@ -2739,6 +3085,17 @@ public sealed class AuthoritativeWorldSession
             AdventureExperience = snapshot.AdventureExperience;
             DiggingExperience = snapshot.DiggingExperience;
             FishingExperience = snapshot.FishingExperience;
+            MaximumHealth = snapshot.MaximumHealth;
+            AttackExperience = snapshot.AttackExperience;
+            StrengthExperience = snapshot.StrengthExperience;
+            DefenceExperience = snapshot.DefenceExperience;
+            CombatStance = snapshot.CombatStance;
+            LifeState = snapshot.LifeState;
+            RespawnAvailableTick = snapshot.RespawnAvailableTick;
+            CombatStatus = snapshot.CombatStatus;
+            CombatTargetEnemyId = snapshot.CombatTargetEnemyId;
+            CombatAttackSequence = snapshot.CombatAttackSequence;
+            NextCombatAttackTick = snapshot.NextCombatAttackTick;
         }
 
         public PlayerGameplaySnapshot ToSnapshot()
@@ -2769,8 +3126,26 @@ public sealed class AuthoritativeWorldSession
                 MiningExperience,
                 AdventureExperience,
                 DiggingExperience,
-                FishingExperience);
+                FishingExperience,
+                MaximumHealth,
+                AttackExperience,
+                StrengthExperience,
+                DefenceExperience,
+                CombatStance,
+                LifeState,
+                RespawnAvailableTick,
+                CombatStatus,
+                CombatTargetEnemyId,
+                CombatAttackSequence,
+                NextCombatAttackTick);
         }
+
+        private static bool ValidCombatStatus(SlimeVictimStatus value) =>
+            double.IsFinite(value.SlowedUntil) && value.SlowedUntil >= 0 &&
+            double.IsFinite(value.RootedUntil) && value.RootedUntil >= 0 &&
+            double.IsFinite(value.PoisonedUntil) && value.PoisonedUntil >= 0 &&
+            double.IsFinite(value.NextPoisonTickAt) &&
+            value.NextPoisonTickAt >= 0 && value.PoisonDamage >= 0;
     }
 
     private sealed record CommandReceipt(

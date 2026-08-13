@@ -416,7 +416,7 @@ internal sealed partial class GameHostWindow
         {
             DropEnemyLoot(enemy);
             var split = SlimeAbilityService.Split(
-                enemy, HashCode.Combine(_worldSeed, enemy.Id));
+                enemy, _worldSeed);
             if (split.Length > 0)
             {
                 _enemies.AddRange(split);
@@ -1089,6 +1089,11 @@ internal sealed partial class GameHostWindow
                 if (!CombatStanceBounds(
                         _gameUi.Panel.Bounds, index).Contains(pointer))
                     continue;
+                if (IsNetworkWorld)
+                {
+                    SendNetworkCombatStance(MeleeStances[index]);
+                    break;
+                }
                 _activePlayer = _activePlayer with
                 {
                     CombatStance = MeleeStances[index],

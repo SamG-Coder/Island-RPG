@@ -5,7 +5,7 @@ public static class ProtocolConstants
 {
     public const uint ReliableMagic = 0x49525047; // IRPG
     public const uint SnapshotMagic = 0x49525544; // IRUD
-    public const ushort CurrentVersion = 8;
+    public const ushort CurrentVersion = 10;
     public const int ReliableHeaderSize = 28;
     public const int TcpLengthPrefixSize = sizeof(uint);
     public const int MaxReliableFrameBytes = 64 * 1024;
@@ -34,12 +34,17 @@ public static class ProtocolLimits
     public const int MaxWorldChunkRevisionsPerBatch = 512;
     public const int MaxResourceNodesPerBatch = 512;
     public const int MaxResourceRewardsPerAction = 8;
-    public const int MaxBoatsPerBatch = 256;
+    public const int MaxBoatsPerBatch =
+        IslandRpg.Gameplay.NetworkPopulationLimits.MaximumBoats;
+    public const int MaxEnemiesPerBatch =
+        IslandRpg.Gameplay.NetworkPopulationLimits.MaximumEnemies;
+    public const int MaxCombatEventsPerBatch = 256;
     public const int GroupOwnerIdBytes = 64;
     public const int MinConstructionRotation = 0;
     public const int MaxConstructionRotation = 3;
     public const float MaxPlayerHunger = 100;
-    public const int MaxSnapshotEntities = 1600;
+    public const int MaxSnapshotEntities =
+        IslandRpg.Gameplay.NetworkPopulationLimits.MaximumSnapshotEntities;
 }
 
 public enum ProtocolMessageKind : byte
@@ -70,6 +75,10 @@ public enum ProtocolMessageKind : byte
     BoatBaseline = 45,
     BoatDeltaBatch = 46,
     BoatActionResult = 47,
+    EnemyBaseline = 48,
+    EnemyDeltaBatch = 49,
+    CombatEventBatch = 50,
+    CombatActionResult = 51,
 }
 
 [Flags]
@@ -158,6 +167,7 @@ public enum ActionCommandKind : byte
     ResourceAction = 16,
     CaveAction = 17,
     BoatAction = 18,
+    CombatAction = 19,
 }
 
 public enum BoatActionKind : byte
@@ -246,4 +256,88 @@ public enum NetworkEntityState : uint
     InCombat = 1 << 2,
     Interacting = 1 << 3,
     Hidden = 1 << 4,
+}
+
+public enum CombatActionKind : byte
+{
+    SetTarget = 1,
+    Cancel = 2,
+    SetStance = 3,
+    Respawn = 4,
+}
+
+public enum CombatStance : byte
+{
+    Balanced = 0,
+    Aggressive = 1,
+    Defensive = 2,
+}
+
+public enum CombatLifeState : byte
+{
+    Alive = 0,
+    Dead = 1,
+}
+
+[Flags]
+public enum CombatStatusFlags : uint
+{
+    None = 0,
+    Slowed = 1 << 0,
+    Rooted = 1 << 1,
+    Poisoned = 1 << 2,
+    Hidden = 1 << 3,
+    Burrowed = 1 << 4,
+}
+
+public enum CombatEnemyArchetype : byte
+{
+    WaterSlime = 1,
+    GrassSlime = 2,
+    SandSlime = 3,
+    CaveSlime = 4,
+}
+
+public enum CombatEnemySize : byte
+{
+    Small = 1,
+    Medium = 2,
+    Large = 3,
+}
+
+public enum CombatEnemyBehavior : byte
+{
+    Idle = 1,
+    Chasing = 2,
+    Attacking = 3,
+    Burrowed = 4,
+    Dead = 5,
+}
+
+public enum EnemyDeltaKind : byte
+{
+    Upsert = 1,
+    Remove = 2,
+}
+
+public enum CombatEventKind : byte
+{
+    AttackStarted = 1,
+    Damage = 2,
+    StatusApplied = 3,
+    StatusExpired = 4,
+    Death = 5,
+    Split = 6,
+    LootDropped = 7,
+    Respawn = 8,
+}
+
+public enum CombatStatusEffect : byte
+{
+    None = 0,
+    Slow = 1,
+    Root = 2,
+    Poison = 3,
+    Hide = 4,
+    Burrow = 5,
 }

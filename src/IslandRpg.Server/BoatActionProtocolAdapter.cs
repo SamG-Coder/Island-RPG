@@ -119,7 +119,7 @@ internal static class BoatActionProtocolAdapter
         value.GroupId ?? string.Empty,
         value.OccupantPlayerId?.Value ?? Guid.Empty,
         value.OccupantActorId is { } actor
-            ? DedicatedServer.StableNetworkId(actor.Value)
+            ? ActorNetworkEntityIdentity.Derive(actor)
             : 0,
         value.Position.X,
         value.Position.Y,

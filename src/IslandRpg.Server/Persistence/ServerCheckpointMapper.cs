@@ -75,7 +75,9 @@ public static class ServerCheckpointMapper
                 .ToArray(),
             options.IslandStart,
             ToDurable(source.Boats ??
-                AuthoritativeBoatTransactionsCheckpoint.Empty));
+                AuthoritativeBoatTransactionsCheckpoint.Empty),
+            ToDurable(source.Combat ??
+                AuthoritativeCombatCheckpoint.Empty(options.WorldSeed)));
     }
 
     public static AuthoritativeSessionCheckpoint ToSimulation(
@@ -142,7 +144,8 @@ public static class ServerCheckpointMapper
                     value.DropObjectId,
                     value.CompletesAtTick)).ToImmutableArray(),
             ToSimulation(source.Resources),
-            ToSimulation(source.Boats));
+            ToSimulation(source.Boats),
+            ToSimulation(source.Combat, source.WorldSeed));
     }
 
     private static ServerActorCheckpoint ToDurable(
@@ -179,7 +182,22 @@ public static class ServerCheckpointMapper
         value.Gameplay.MiningExperience,
         value.Gameplay.AdventureExperience,
         value.Gameplay.DiggingExperience,
-        value.Gameplay.FishingExperience);
+        value.Gameplay.FishingExperience,
+        value.Gameplay.MaximumHealth,
+        value.Gameplay.AttackExperience,
+        value.Gameplay.StrengthExperience,
+        value.Gameplay.DefenceExperience,
+        value.Gameplay.CombatStance,
+        value.Gameplay.LifeState,
+        value.Gameplay.RespawnAvailableTick,
+        value.Gameplay.CombatStatus.SlowedUntil,
+        value.Gameplay.CombatStatus.RootedUntil,
+        value.Gameplay.CombatStatus.PoisonedUntil,
+        value.Gameplay.CombatStatus.NextPoisonTickAt,
+        value.Gameplay.CombatStatus.PoisonDamage,
+        value.Gameplay.CombatTargetEnemyId?.Value,
+        value.Gameplay.CombatAttackSequence,
+        value.Gameplay.NextCombatAttackTick);
 
     private static AuthoritativeActorCheckpoint ToSimulation(
         ServerActorCheckpoint value) => new(
@@ -210,7 +228,25 @@ public static class ServerCheckpointMapper
             value.MiningExperience,
             value.AdventureExperience,
             value.DiggingExperience,
-            value.FishingExperience),
+            value.FishingExperience,
+            value.MaximumHealth,
+            value.AttackExperience,
+            value.StrengthExperience,
+            value.DefenceExperience,
+            value.CombatStance,
+            value.LifeState,
+            value.RespawnAvailableTick,
+            new IslandRpg.Gameplay.SlimeVictimStatus(
+                value.SlowedUntil,
+                value.RootedUntil,
+                value.PoisonedUntil,
+                value.NextPoisonTickAt,
+                value.PoisonDamage),
+            value.CombatTargetEnemyId is { } enemyId
+                ? new EnemyId(enemyId)
+                : null,
+            value.CombatAttackSequence,
+            value.NextCombatAttackTick),
         value.ReconnectTokenHash.ToImmutableArray(),
         value.CommandReceipts.Select(static receipt =>
             new AuthoritativeCommandReceiptCheckpoint(
@@ -315,6 +351,86 @@ public static class ServerCheckpointMapper
                     cadence.Action,
                     cadence.ReadyAtGameSeconds,
                     cadence.ActionOrdinal)).ToImmutableArray());
+    }
+
+    private static ServerCombatCheckpoint ToDurable(
+        AuthoritativeCombatCheckpoint value) => new(
+        value.WorldSeed,
+        value.NextEventOrdinal,
+        value.NextSpawnOrdinal,
+        value.Enemies.Select(static enemy => new ServerEnemyCheckpoint(
+            enemy.EnemyId.Value,
+            enemy.Revision,
+            enemy.Kind,
+            enemy.Behavior,
+            enemy.SpawnPosition.X,
+            enemy.SpawnPosition.Y,
+            enemy.Position.X,
+            enemy.Position.Y,
+            enemy.Velocity.X,
+            enemy.Velocity.Y,
+            enemy.WorldLevel,
+            enemy.PowerLevel,
+            enemy.Health,
+            enemy.MaximumHealth,
+            enemy.SizeScale,
+            enemy.Status.SlowedUntil,
+            enemy.Status.RootedUntil,
+            enemy.Status.PoisonedUntil,
+            enemy.Status.NextPoisonTickAt,
+            enemy.Status.PoisonDamage,
+            enemy.TargetActorId?.Value,
+            enemy.ParentEnemyId?.Value,
+            enemy.SpawnOrdinal,
+            enemy.AttackSequence,
+            enemy.NextAttackTick,
+            enemy.SplitGeneration,
+            enemy.DeathRemovalTick,
+            enemy.ReactionReadyTick,
+            enemy.BurrowEmergeTick)).ToArray());
+
+    private static AuthoritativeCombatCheckpoint ToSimulation(
+        ServerCombatCheckpoint? value,
+        long worldSeed)
+    {
+        value ??= new ServerCombatCheckpoint(worldSeed, 1, 1, []);
+        return new AuthoritativeCombatCheckpoint(
+            value.WorldSeed,
+            value.NextEventOrdinal,
+            value.NextSpawnOrdinal,
+            value.Enemies.Select(static enemy =>
+                new AuthoritativeEnemyCheckpoint(
+                    new EnemyId(enemy.EnemyId),
+                    enemy.Revision,
+                    enemy.Kind,
+                    enemy.Behavior,
+                    new Vector2(enemy.SpawnX, enemy.SpawnY),
+                    new Vector2(enemy.X, enemy.Y),
+                    new Vector2(enemy.VelocityX, enemy.VelocityY),
+                    enemy.WorldLevel,
+                    enemy.PowerLevel,
+                    enemy.Health,
+                    enemy.MaximumHealth,
+                    enemy.SizeScale,
+                    new IslandRpg.Gameplay.SlimeVictimStatus(
+                        enemy.SlowedUntil,
+                        enemy.RootedUntil,
+                        enemy.PoisonedUntil,
+                        enemy.NextPoisonTickAt,
+                        enemy.PoisonDamage),
+                    enemy.TargetActorId is { } target
+                        ? new ActorId(target)
+                        : null,
+                    enemy.ParentEnemyId is { } parent
+                        ? new EnemyId(parent)
+                        : null,
+                    enemy.SpawnOrdinal,
+                    enemy.AttackSequence,
+                    enemy.NextAttackTick,
+                    enemy.SplitGeneration,
+                    enemy.DeathRemovalTick,
+                    enemy.ReactionReadyTick,
+                    enemy.BurrowEmergeTick)).ToImmutableArray());
     }
 
     private static ServerWorldObjectCheckpoint ToDurable(
