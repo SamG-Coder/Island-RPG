@@ -143,6 +143,18 @@ Require(
     "partial harvest collection must preserve stackable-item capacity");
 var craftingStacks = PlayerInventory.CreateContainer();
 craftingStacks.TryAdd(ItemIds.PlantFibres, 5);
+Require(
+    ItemCombinationService.FindRecipe(
+        ItemIds.SharpenedRock, ItemIds.Sticks)?.Id == "stone-axe" &&
+    ItemCombinationService.FindRecipe(
+        ItemIds.Sticks, ItemIds.SharpenedRock)?.Id == "stone-axe" &&
+    ItemCombinationService.FindRecipe(
+        ItemIds.StoneKnife, ItemIds.PalmLogs)?.Id == "plank" &&
+    ItemCombinationService.FindRecipe(
+        ItemIds.PalmLogs, ItemIds.StoneKnife)?.Id == "plank" &&
+    ItemCombinationService.FindRecipe(
+        ItemIds.Sticks, ItemIds.PlantFibres) is null,
+    "item-on-item use must resolve order-independent ingredient and retained-tool recipes without inventing invalid combinations");
 var stackRopeRecipe = CraftingSkill.Recipes.Single(
     recipe => recipe.Id == "rope");
 var stackedCraftResult = CraftingService.TryCraftDetailed(

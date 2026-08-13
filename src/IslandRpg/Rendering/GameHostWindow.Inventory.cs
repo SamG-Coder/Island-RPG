@@ -251,6 +251,33 @@ internal sealed partial class GameHostWindow
             return;
         }
 
+        var sourceSlot = _activeInventorySlot;
+        var source = inventory[sourceSlot]!;
+        var target = inventory[slot]!;
+        if (source == ItemIds.SmallRocks &&
+            ToolUpkeepService.TrySharpenStoneTool(
+                inventory, sourceSlot, slot, out var sharpenedTool))
+        {
+            var toolName = ItemCatalog.Get(sharpenedTool[slot]!).Name;
+            SaveActivePlayerInventory(
+                PlayerInventory.Load(sharpenedTool));
+            _chatUi.AddMessage(
+                $"You use the small rocks to sharpen the {toolName}.",
+                ChatMessageStyle.Action);
+            _activeInventorySlot = -1;
+            return;
+        }
+        var recipe = ItemCombinationService.FindRecipe(source, target);
+        if (recipe is not null)
+        {
+            TryCraftRecipe(recipe);
+            _activeInventorySlot = -1;
+            return;
+        }
+        _chatUi.AddMessage(
+            $"You try to use {ItemCatalog.Get(source).Name} with " +
+            $"{ItemCatalog.Get(target).Name}, but nothing happens.",
+            ChatMessageStyle.Action);
         _activeInventorySlot = slot;
     }
 
