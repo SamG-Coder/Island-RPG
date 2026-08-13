@@ -141,12 +141,9 @@ internal sealed class ItemContainerState
         {
             if (inventory[slot] is not { } stack) continue;
             var quantity = stack.Quantity;
-            if (!TryAdd(stack.ItemId, quantity, stack.OwnerId))
-                continue;
-            if (!inventory.TryTake(slot, quantity, out _))
-                throw new InvalidOperationException(
-                    "Container transfer changed after validation.");
-            moved += quantity;
+            if (ItemContainerTransferService.TryDeposit(
+                    inventory, slot, this, quantity))
+                moved += quantity;
         }
         return moved;
     }
@@ -187,8 +184,9 @@ internal sealed class ItemContainerState
                     StringComparison.OrdinalIgnoreCase))
                 continue;
             var quantity = Math.Min(stack.Quantity, maximum - moved);
-            if (!TryAdd(itemId, quantity, stack.OwnerId)) break;
-            inventory.TryTake(slot, quantity, out _);
+            if (!ItemContainerTransferService.TryDeposit(
+                    inventory, slot, this, quantity))
+                break;
             moved += quantity;
         }
         return moved;
@@ -276,5 +274,82 @@ internal sealed class ItemContainerState
         return container;
     }
 
+    internal InventoryStack? StackAt(int slot) => _inventory[slot];
+
+    internal ItemContainerState Clone()
+    {
+        var clone = new ItemContainerState(Definition);
+        clone._inventory.CopyFrom(_inventory);
+        Array.Copy(_spacers, clone._spacers, _spacers.Length);
+        return clone;
+    }
+
+    internal void CopyFrom(ItemContainerState candidate)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        if (candidate.Definition != Definition)
+            throw new ArgumentException(
+                "Candidate container definition must match the target.",
+                nameof(candidate));
+        _inventory.CopyFrom(candidate._inventory);
+        Array.Copy(candidate._spacers, _spacers, _spacers.Length);
+    }
+
     private bool SlotAvailable(int slot) => !_spacers[slot];
+}
+
+/// <summary>
+/// Moves an exact quantity between a carried inventory and an item container.
+/// Both sides are exercised on clones before either original is committed, so
+/// capacity, access, ownership, and quantity failures leave both unchanged.
+/// </summary>
+internal static class ItemContainerTransferService
+{
+    public static bool TryDeposit(
+        InventoryContainer source,
+        int sourceSlot,
+        ItemContainerState destination,
+        int quantity)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(destination);
+        if (quantity <= 0) return false;
+
+        var sourceCandidate = source.Clone();
+        var destinationCandidate = destination.Clone();
+        if (!sourceCandidate.TryTake(
+                sourceSlot, quantity, out var moved) ||
+            !destinationCandidate.TryAdd(
+                moved.ItemId, moved.Quantity, moved.OwnerId))
+            return false;
+
+        source.CopyFrom(sourceCandidate);
+        destination.CopyFrom(destinationCandidate);
+        return true;
+    }
+
+    public static bool TryWithdraw(
+        ItemContainerState source,
+        int sourceSlot,
+        InventoryContainer destination,
+        int quantity)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(destination);
+        if (quantity <= 0) return false;
+
+        var sourceCandidate = source.Clone();
+        var destinationCandidate = destination.Clone();
+        if (sourceCandidate.StackAt(sourceSlot) is not { } available ||
+            !sourceCandidate.TryTake(
+                sourceSlot, quantity, out var itemId) ||
+            itemId is null ||
+            !destinationCandidate.TryAdd(
+                itemId, quantity, available.OwnerId))
+            return false;
+
+        source.CopyFrom(sourceCandidate);
+        destination.CopyFrom(destinationCandidate);
+        return true;
+    }
 }

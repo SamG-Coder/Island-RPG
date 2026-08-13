@@ -216,6 +216,11 @@ internal sealed partial class GameHostWindow
     {
         if (_activePlayer is null || source == target || target < 0)
             return;
+        if (IsNetworkWorld)
+        {
+            SendNetworkInventorySwap(source, target);
+            return;
+        }
         var inventory = ActivePlayerInventory();
         if (!inventory.TrySwap(source, target))
             return;
@@ -254,6 +259,12 @@ internal sealed partial class GameHostWindow
         var sourceSlot = _activeInventorySlot;
         var source = inventory[sourceSlot]!;
         var target = inventory[slot]!;
+        if (IsNetworkWorld)
+        {
+            SendNetworkItemCombination(sourceSlot, slot);
+            _activeInventorySlot = -1;
+            return;
+        }
         if (source == ItemIds.SmallRocks &&
             ToolUpkeepService.TrySharpenStoneTool(
                 inventory, sourceSlot, slot, out var sharpenedTool))

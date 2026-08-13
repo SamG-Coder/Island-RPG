@@ -144,6 +144,11 @@ internal sealed partial class GameHostWindow
     private bool TryCraftRecipe(CraftingRecipe recipe)
     {
         if (_activePlayer is null) return false;
+        if (IsNetworkWorld)
+        {
+            SendNetworkCraft(recipe.Id);
+            return true;
+        }
         var level = CraftingSkill.LevelForExperience(
             _activePlayer.CraftingExperience);
         var beforeInventory = ActivePlayerInventory();

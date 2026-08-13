@@ -180,7 +180,7 @@ internal static class GateVisuals
     private static GateAnchors MetadataAnchors(
         GateDefinition gate, int rotation)
     {
-        var geometry = GateCatalog.Geometry(gate, rotation);
+        var geometry = GateGeometryCatalog.Geometry(gate, rotation);
         var annexes = geometry.AnnexOffsets;
         Vector2 first;
         Vector2 second;

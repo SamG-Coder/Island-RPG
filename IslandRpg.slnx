@@ -1,6 +1,12 @@
 <Solution>
+  <Project Path="src/IslandRpg.Core/IslandRpg.Core.csproj" />
+  <Project Path="src/IslandRpg.Protocol/IslandRpg.Protocol.csproj" />
+  <Project Path="src/IslandRpg.Client/IslandRpg.Client.csproj" />
+  <Project Path="src/IslandRpg.Simulation/IslandRpg.Simulation.csproj" />
+  <Project Path="src/IslandRpg.Server/IslandRpg.Server.csproj" />
   <Project Path="src/IslandRpg/IslandRpg.csproj" />
   <Project Path="tests/IslandRpg.WorldChecks/IslandRpg.WorldChecks.csproj" />
+  <Project Path="tests/IslandRpg.NetworkingChecks/IslandRpg.NetworkingChecks.csproj" />
   <Project Path="tools/IslandRpg.SpriteTool/IslandRpg.SpriteTool.csproj" />
   <Project Path="tools/IslandRpg.ObjectSpriteTool/IslandRpg.ObjectSpriteTool.csproj" />
   <Project Path="tools/IslandRpg.FaceRemovalTool/IslandRpg.FaceRemovalTool.csproj" />

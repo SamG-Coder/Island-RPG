@@ -13,6 +13,11 @@ internal sealed partial class GameHostWindow
         InventoryContainer inventory,
         bool saveImmediately = true)
     {
+        if (IsNetworkWorld)
+        {
+            WarnNetworkMutationUnavailable();
+            return;
+        }
         if (_activePlayer is null) return;
         _activeInventorySlot = inventory[_activeInventorySlot] is null
             ? -1

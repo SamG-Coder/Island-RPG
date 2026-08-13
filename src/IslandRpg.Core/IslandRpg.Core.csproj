@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!--
+    These files remain in their established Gameplay folder while ownership
+    moves to the headless core assembly. IslandRpg removes them from its own
+    compile items below, so there is one canonical type identity shared by
+    the game client, authoritative simulation and dedicated server.
+  -->
+  <ItemGroup>
+    <Compile Include="..\IslandRpg\Gameplay\ItemDefinition.cs" Link="Gameplay\ItemDefinition.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\InventoryContainer.cs" Link="Gameplay\InventoryContainer.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\ItemContainerService.cs" Link="Gameplay\ItemContainerService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\PlayerInventory.cs" Link="Gameplay\PlayerInventory.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\SkillService.cs" Link="Gameplay\SkillService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\AdventureService.cs" Link="Gameplay\AdventureService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\CraftingSkill.cs" Link="Gameplay\CraftingSkill.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\CraftingService.cs" Link="Gameplay\CraftingService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\CookingSkill.cs" Link="Gameplay\CookingSkill.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\SurvivalService.cs" Link="Gameplay\SurvivalService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\StewCookingService.cs" Link="Gameplay\StewCookingService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\ItemCombinationService.cs" Link="Gameplay\ItemCombinationService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\ToolUpkeepService.cs" Link="Gameplay\ToolUpkeepService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\ActorActionService.cs" Link="Gameplay\ActorActionService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\WoodcuttingSkill.cs" Link="Gameplay\WoodcuttingSkill.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\MiningSkill.cs" Link="Gameplay\MiningSkill.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\ResourceStrikeService.cs" Link="Gameplay\ResourceStrikeService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\MeleeCombatService.cs" Link="Gameplay\MeleeCombatService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\HouseCatalog.cs" Link="Gameplay\HouseCatalog.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\DefenceBuildingCatalog.cs" Link="Gameplay\DefenceBuildingCatalog.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\WallCatalog.cs" Link="Gameplay\WallCatalog.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\GateCatalog.cs" Link="Gameplay\GateCatalog.cs" />
+  </ItemGroup>
+</Project>

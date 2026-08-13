@@ -251,7 +251,7 @@ internal static class PlaceableObjectCatalog
             Definitions[gate.ItemId] = new(
                 gate.ItemId, $"{gate.ItemId}.png",
                 // The fallback matches GTAX's 2.0 x .5 DAT clearance radii.
-                // Runtime placement uses GateCatalog.Geometry so GTB/C/D
+                // Runtime placement uses GateGeometryCatalog.Geometry so GTB/C/D
                 // receive their own authored orientation dimensions.
                 FootprintWidth: 4, FootprintDepth: 1, Height: 3,
                 HotspotX: 96, HotspotY: 150,
@@ -284,7 +284,7 @@ internal static class PlaceableObjectCatalog
         if (!GateCatalog.IsGate(definition.ItemId))
             return definition.Footprint(rotation);
         var gate = GateCatalog.Get(definition.ItemId);
-        var size = GateCatalog.Geometry(gate, rotation).PlacementSize;
+        var size = GateGeometryCatalog.Geometry(gate, rotation).PlacementSize;
         return (size.X, size.Y);
     }
 
@@ -347,7 +347,7 @@ internal static class PlaceableObjectCatalog
     {
         var rotation = NormalizeRotation(value.ItemId, value.VisualFrame);
         var gate = GateCatalog.Get(value.ItemId);
-        var geometry = GateCatalog.Geometry(gate, rotation);
+        var geometry = GateGeometryCatalog.Geometry(gate, rotation);
         var size = geometry.CollisionRadius * 2;
         var center = GateRenderedGroundCenter(value);
         if (rotation is 2 or 3)
@@ -496,7 +496,7 @@ internal static class PlaceableObjectCatalog
 
         var center = GroundContactCenter(itemId, storedPosition);
         var contact = GateCatalog.IsGate(itemId)
-            ? GateCatalog.Geometry(
+            ? GateGeometryCatalog.Geometry(
                 GateCatalog.Get(itemId), rotation).CollisionSize
             : new Vector2(
                 definition.GroundContact(rotation).Width,

@@ -198,6 +198,11 @@ internal sealed partial class GameHostWindow
         if (_activePlayer is null ||
             !SurvivalService.TryFoodEffect(itemId, out var effect))
             return;
+        if (IsNetworkWorld)
+        {
+            SendNetworkConsume(slot);
+            return;
+        }
         var inventory = ActivePlayerInventory();
         if (inventory[slot]?.ItemId != itemId)
             return;

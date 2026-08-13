@@ -13,6 +13,7 @@ using IslandRpg.World;
 using IslandRpg.Rendering.Ui;
 using StbImageSharp;
 using System.Buffers;
+using IslandRpg.Client;
 
 namespace IslandRpg.Rendering;
 
@@ -504,7 +505,8 @@ internal sealed partial class GameHostWindow : GameWindow
         bool useTestAssets = false,
         bool cannotLocateAoeAssets = false,
         ObserveModeOptions? observeMode = null,
-        string? controlPipeName = null) : base(
+        string? controlPipeName = null,
+        NetworkLaunchOptions? network = null) : base(
         GameWindowSettings.Default,
         new NativeWindowSettings
         {
@@ -518,6 +520,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _useTestAssets = useTestAssets;
         _cannotLocateAoeAssets = cannotLocateAoeAssets;
         _observeMode = observeMode;
+        _networkLaunch = network;
         if (!string.IsNullOrWhiteSpace(controlPipeName))
             _gameControlPipe = new(controlPipeName);
         _pauseMenu = new(this);
@@ -538,7 +541,8 @@ internal sealed partial class GameHostWindow : GameWindow
         _chatUi.MessageAdded += ObserveChatMessage;
         _gameUi.CraftingButton.Clicked += () =>
             OpenCraftingWindow();
-        _gameUi.BuildButton.Clicked += ToggleBuildingPanel;
+        _gameUi.BuildButton.Clicked += () =>
+            RunLocalOnlyUiAction(ToggleBuildingPanel);
         _gameUi.QuestButton.Clicked += () =>
             OpenQuestWindow();
         _gameUi.DisembarkButton.Clicked +=
@@ -662,13 +666,17 @@ internal sealed partial class GameHostWindow : GameWindow
     protected override void OnUpdateFrame(FrameEventArgs e)
     {
         base.OnUpdateFrame(e);
+        ProcessNetworkEvents();
         UpdateNpcAi();
         ProcessGameControlPipe();
-        NormalizeActivePlayerInventory();
+        if (!IsNetworkWorld)
+            NormalizeActivePlayerInventory();
         _clock += e.Time;
-        UpdateLootBags();
+        if (!IsNetworkWorld)
+            UpdateLootBags();
         if (FinishLoadingTransition())
         {
+            BeginNetworkConnection();
             TryBeginObserveMode();
             return;
         }
@@ -908,7 +916,10 @@ internal sealed partial class GameHostWindow : GameWindow
             }
         }
         if (_screen == ScreenState.WorldPreview && _mode == PreviewMode.Game)
-            ReconcileInventoryQuestProgress();
+        {
+            if (!IsNetworkWorld)
+                ReconcileInventoryQuestProgress();
+        }
     }
 
     private void UpdateCamera(float elapsed)
@@ -1457,7 +1468,8 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void ReturnToMainMenu()
     {
-        SaveVillagers();
+        if (!IsNetworkWorld)
+            SaveVillagers();
         SaveActivePlayerState();
         CancelWorldLevelWork(clearMinimap: true);
         foreach (var coordinate in _worldChunks.Keys.ToArray())
@@ -1485,6 +1497,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void SaveActivePlayerState()
     {
+        if (IsNetworkWorld) return;
         if (_activePlayer is null || _player is null) return;
         _activePlayer = _activePlayer with
         {
@@ -1737,6 +1750,11 @@ internal sealed partial class GameHostWindow : GameWindow
                 UpdateGameSimulation(observeSimulationStep);
                 _gameSimulationAccumulator -= observeSimulationStep;
             }
+            return;
+        }
+        if (IsNetworkWorld)
+        {
+            UpdateNetworkGame(elapsed);
             return;
         }
         _worldActions.ProcessPendingPath();
@@ -2096,8 +2114,11 @@ internal sealed partial class GameHostWindow : GameWindow
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         UpdateCraftingWindowInput(MouseState.Position, leftDown);
         UpdateSkillsPanelInput(MouseState.Position, leftDown);
-        UpdateCombatPanelInput(MouseState.Position, leftDown);
-        UpdateBuildingPanelInput(MouseState.Position, leftDown);
+        if (!IsNetworkWorld)
+        {
+            UpdateCombatPanelInput(MouseState.Position, leftDown);
+            UpdateBuildingPanelInput(MouseState.Position, leftDown);
+        }
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
         if (_gameUi.ActivePanel == GameUiPanel.Inventory)
             UpdateInventoryInteraction(
@@ -2316,7 +2337,12 @@ internal sealed partial class GameHostWindow : GameWindow
     }
 
     private void QueueWalk(Vector2 target)
-        => _worldActions.QueueWalk(target);
+    {
+        if (IsNetworkWorld)
+            SendNetworkWalk(target);
+        else
+            _worldActions.QueueWalk(target);
+    }
 
     private void QueueTreeAction(
         IslandTree tree, WorldActionType actionType)
@@ -6596,9 +6622,11 @@ internal sealed partial class GameHostWindow : GameWindow
         DrawTreeBatch(shadowVertices);
 
         var atlasVertices = _worldRenderQueue.AtlasVertices;
-        var actors = new List<ActorVisual>(_villagers.Count + 1);
+        var actors = new List<ActorVisual>(
+            _villagers.Count + _networkActors.Count + 1);
         if (player is not null)
             actors.Add(player);
+        AddNetworkActorVisuals(actors);
         foreach (var villager in _villagers)
         {
             if (villager.WorldLevel != _activeWorldLevel ||
@@ -9025,6 +9053,7 @@ internal sealed partial class GameHostWindow : GameWindow
 
     protected override void OnUnload()
     {
+        DisposeNetworkClient();
         _newWorldPreviewCancellation?.Cancel();
         _gameControlPipe?.Dispose();
         _gameControlPipe = null;

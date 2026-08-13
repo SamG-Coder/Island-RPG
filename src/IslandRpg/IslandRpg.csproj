@@ -16,6 +16,8 @@
     <RepositoryUrl>https://github.com/SamG-Coder/Island-RPG</RepositoryUrl>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\IslandRpg.Client\IslandRpg.Client.csproj" />
+    <ProjectReference Include="..\IslandRpg.Core\IslandRpg.Core.csproj" />
     <PackageReference Include="FontStashSharp.PlatformAgnostic" Version="1.5.6" />
     <PackageReference Include="NAudio" Version="2.3.0" />
     <PackageReference Include="OpenTK" Version="4.9.4" />
@@ -77,5 +79,29 @@
     <Content Include="Resources\Images\TestAssets\**\*" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Audio\aoe-sound-cues.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Resources\Audio\thunder.wav" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="Gameplay\ItemDefinition.cs" />
+    <Compile Remove="Gameplay\InventoryContainer.cs" />
+    <Compile Remove="Gameplay\ItemContainerService.cs" />
+    <Compile Remove="Gameplay\PlayerInventory.cs" />
+    <Compile Remove="Gameplay\SkillService.cs" />
+    <Compile Remove="Gameplay\AdventureService.cs" />
+    <Compile Remove="Gameplay\CraftingSkill.cs" />
+    <Compile Remove="Gameplay\CraftingService.cs" />
+    <Compile Remove="Gameplay\CookingSkill.cs" />
+    <Compile Remove="Gameplay\SurvivalService.cs" />
+    <Compile Remove="Gameplay\StewCookingService.cs" />
+    <Compile Remove="Gameplay\ItemCombinationService.cs" />
+    <Compile Remove="Gameplay\ToolUpkeepService.cs" />
+    <Compile Remove="Gameplay\ActorActionService.cs" />
+    <Compile Remove="Gameplay\WoodcuttingSkill.cs" />
+    <Compile Remove="Gameplay\MiningSkill.cs" />
+    <Compile Remove="Gameplay\ResourceStrikeService.cs" />
+    <Compile Remove="Gameplay\MeleeCombatService.cs" />
+    <Compile Remove="Gameplay\HouseCatalog.cs" />
+    <Compile Remove="Gameplay\DefenceBuildingCatalog.cs" />
+    <Compile Remove="Gameplay\WallCatalog.cs" />
+    <Compile Remove="Gameplay\GateCatalog.cs" />
   </ItemGroup>
 </Project>

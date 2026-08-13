@@ -5,6 +5,29 @@ namespace IslandRpg.Gameplay;
 /// </summary>
 internal static class ToolUpkeepService
 {
+    public static bool TrySharpenStoneTool(
+        InventoryContainer inventory,
+        int smallRocksSlot,
+        int toolSlot,
+        out InventoryContainer updated)
+    {
+        ArgumentNullException.ThrowIfNull(inventory);
+        updated = inventory.Clone();
+        if (smallRocksSlot == toolSlot ||
+            updated[smallRocksSlot] is not { ItemId: ItemIds.SmallRocks } ||
+            updated[toolSlot] is not { } tool)
+            return false;
+        var sharpened = tool.ItemId switch
+        {
+            ItemIds.BluntStoneAxe => ItemIds.StoneAxe,
+            ItemIds.BluntStoneHammer => ItemIds.StoneHammer,
+            _ => null
+        };
+        return sharpened is not null &&
+            updated.TryTake(smallRocksSlot, 1, out _) &&
+            updated.TryReplace(toolSlot, sharpened, tool.Quantity);
+    }
+
     public static bool TryBluntStoneTool(
         string?[]? items, string toolId, float roll,
         out string?[] updated)

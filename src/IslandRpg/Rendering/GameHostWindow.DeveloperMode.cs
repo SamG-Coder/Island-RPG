@@ -14,6 +14,7 @@ internal sealed partial class GameHostWindow
     private void HandleChatSubmission(string message)
     {
         var text = message.Trim();
+        if (TryHandleNetworkChatSubmission(text)) return;
         if (!text.StartsWith('/'))
         {
             if (IsObserveWorld)

@@ -122,7 +122,7 @@ try
     // are authored in AoE's unit records. Load them once rather than deriving
     // gameplay geometry from transparent/colored pixels in the SLP frames.
     if (!useTestAssets && File.Exists(datPath))
-        GateCatalog.LoadGeometry(datPath);
+        GateGeometryCatalog.LoadGeometry(datPath);
     if (options.Catalog)
     {
         AssetCatalog assetCatalog;
@@ -147,7 +147,8 @@ try
                 useTestAssets,
                 cannotLocateAoeAssets,
                 observeMode,
-                options.ControlPipeName);
+                options.ControlPipeName,
+                options.Network);
             host.Run();
             assetCatalog = host.Catalog ??
                            throw new InvalidOperationException("The asset catalogue did not finish loading.");
@@ -213,6 +214,7 @@ catch (Exception ex)
     Console.Error.WriteLine(
         "Usage: IslandRpg [--game | --world] [--seed <number>] [--island | --catalog] " +
         "[--observe [--observe-seconds <seconds>] [--observe-log-interval <seconds>] [--observe-output <folder>] [--observe-scenario <name>] [--observe-hunger-rate <multiplier>] [--observe-food-count <count>]] " +
+        "[--connect <host:port> [--network-player <name>] [--network-world <guid>]] " +
         "[--age2-path <folder>] [--graphic <SLP id> | --graphic-name <DAT name>]");
     Environment.ExitCode = 1;
 }
@@ -234,7 +236,8 @@ internal sealed record AppOptions(
     float ObserveHungerRateMultiplier,
     int ObserveStartingFoodCount,
     string? ObserveOutputFolder,
-    string? ControlPipeName)
+    string? ControlPipeName,
+    NetworkLaunchOptions? Network)
 {
     public static AppOptions Parse(string[] args)
     {
@@ -256,6 +259,9 @@ internal sealed record AppOptions(
         var observeStartingFoodCount = 20;
         string? observeOutputFolder = null;
         string? controlPipeName = null;
+        string? networkEndpoint = null;
+        string networkPlayerName = "Adventurer";
+        var networkWorldId = Guid.Empty;
         long seed = 2187;
         for (var i = 0; i < args.Length; i++)
         {
@@ -356,6 +362,24 @@ internal sealed record AppOptions(
                      i + 1 < args.Length &&
                      !string.IsNullOrWhiteSpace(args[i + 1]))
                 controlPipeName = args[++i];
+            else if (args[i] == "--connect" &&
+                     i + 1 < args.Length &&
+                     !string.IsNullOrWhiteSpace(args[i + 1]))
+            {
+                networkEndpoint = args[++i];
+                catalog = true;
+                island = false;
+                world = false;
+                game = true;
+            }
+            else if (args[i] == "--network-player" &&
+                     i + 1 < args.Length &&
+                     !string.IsNullOrWhiteSpace(args[i + 1]))
+                networkPlayerName = args[++i];
+            else if (args[i] == "--network-world" &&
+                     i + 1 < args.Length &&
+                     Guid.TryParse(args[++i], out var parsedNetworkWorld))
+                networkWorldId = parsedNetworkWorld;
             else if (args[i] == "--validate") validateOnly = true;
             else throw new ArgumentException($"Unknown or incomplete argument: {args[i]}");
         }
@@ -365,6 +389,12 @@ internal sealed record AppOptions(
             observe, observeSeconds, observeLogIntervalSeconds,
             observeScenario, observeHungerRateMultiplier,
             observeStartingFoodCount, observeOutputFolder,
-            controlPipeName);
+            controlPipeName,
+            networkEndpoint is null
+                ? null
+                : NetworkLaunchOptions.Parse(
+                    networkEndpoint,
+                    networkPlayerName,
+                    networkWorldId));
     }
 }

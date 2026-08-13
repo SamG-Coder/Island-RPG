@@ -213,6 +213,19 @@ internal sealed class InventoryContainer
         return clone;
     }
 
+    /// <summary>
+    /// Commits a previously validated candidate with the same capacity.
+    /// </summary>
+    internal void CopyFrom(InventoryContainer candidate)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        if (candidate.Capacity != Capacity)
+            throw new ArgumentException(
+                "Candidate inventory capacity must match the target.",
+                nameof(candidate));
+        Array.Copy(candidate._slots, _slots, Capacity);
+    }
+
     public bool CanAdd(
         string itemId,
         int quantity = 1,

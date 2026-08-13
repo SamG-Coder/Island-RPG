@@ -6317,9 +6317,13 @@ Require(
     "moving combat targets must repath on a bounded timer or meaningful displacement");
 Require(
     !MeleeCombatService.ShouldRequestMovingTargetPath(
-        true, 10, 0, Vector2.Zero, Vector2.One) &&
+        true, 10, 0,
+        System.Numerics.Vector2.Zero,
+        System.Numerics.Vector2.One) &&
     MeleeCombatService.ShouldRequestMovingTargetPath(
-        false, 10, 0, Vector2.Zero, Vector2.One),
+        false, 10, 0,
+        System.Numerics.Vector2.Zero,
+        System.Numerics.Vector2.One),
     "moving-target combat must not continuously cancel an unfinished path calculation");
 var conversationState = VillagerSimulation.BeginConversation(
     movementState,

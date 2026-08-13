@@ -223,7 +223,7 @@ internal sealed partial class GameHostWindow
             location.Object.X, location.Object.Y);
         var interactionRange =
             MeleeCombatService.InteractionRange(
-                _player.Position - target);
+                (System.Numerics.Vector2)(_player.Position - target));
         if ((_player.Position - target).Length >
             interactionRange + .22f)
         {
@@ -257,7 +257,10 @@ internal sealed partial class GameHostWindow
             _activePlayer.AttackExperience,
             _activePlayer.StrengthExperience,
             MeleeCombatService.ExperienceForStance(
-                _activePlayer, _activePlayer.CombatStance),
+                _activePlayer.AttackExperience,
+                _activePlayer.StrengthExperience,
+                _activePlayer.DefenceExperience,
+                _activePlayer.CombatStance),
             Random.Shared.NextSingle(),
             Random.Shared.NextSingle(),
             _activePlayer.Inventory);
@@ -346,7 +349,8 @@ internal sealed partial class GameHostWindow
             if (MeleeCombatService.ShouldRequestMovingTargetPath(
                     _pendingPathTask is not null,
                     _clock, _enemyCombatRepathAt,
-                    _enemyCombatPathTarget, target))
+                    (System.Numerics.Vector2)_enemyCombatPathTarget,
+                    (System.Numerics.Vector2)target))
             {
                 _enemyCombatRepathAt = _clock +
                     MeleeCombatService.MovingTargetRepathSeconds;
@@ -380,7 +384,10 @@ internal sealed partial class GameHostWindow
             _activePlayer.AttackExperience,
             _activePlayer.StrengthExperience,
             MeleeCombatService.ExperienceForStance(
-                _activePlayer, _activePlayer.CombatStance),
+                _activePlayer.AttackExperience,
+                _activePlayer.StrengthExperience,
+                _activePlayer.DefenceExperience,
+                _activePlayer.CombatStance),
             Random.Shared.NextSingle(),
             Random.Shared.NextSingle(),
             _activePlayer.Inventory);
@@ -452,8 +459,8 @@ internal sealed partial class GameHostWindow
             if (MeleeCombatService.ShouldRepathMovingTarget(
                     _clock,
                     _villagerCombatRepathAt,
-                    _villagerCombatPathTarget,
-                    target))
+                    (System.Numerics.Vector2)_villagerCombatPathTarget,
+                    (System.Numerics.Vector2)target))
             {
                 _villagerCombatRepathAt =
                     _clock +
@@ -488,7 +495,10 @@ internal sealed partial class GameHostWindow
             _activePlayer.AttackExperience,
             _activePlayer.StrengthExperience,
             MeleeCombatService.ExperienceForStance(
-                _activePlayer, _activePlayer.CombatStance),
+                _activePlayer.AttackExperience,
+                _activePlayer.StrengthExperience,
+                _activePlayer.DefenceExperience,
+                _activePlayer.CombatStance),
             Random.Shared.NextSingle(),
             Random.Shared.NextSingle(),
             _activePlayer.Inventory);

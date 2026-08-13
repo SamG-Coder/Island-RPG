@@ -1,5 +1,4 @@
-using IslandRpg.Persistence;
-using OpenTK.Mathematics;
+using System.Numerics;
 
 namespace IslandRpg.Gameplay;
 
@@ -49,12 +48,12 @@ internal static class MeleeCombatService
 
     public static float InteractionRange(Vector2 direction)
     {
-        if (direction.LengthSquared < .0001f)
+        if (direction.LengthSquared() < .0001f)
             return AttackRange;
-        direction = direction.Normalized();
+        direction = Vector2.Normalize(direction);
         var projectedPixelsPerTile = new Vector2(
             (direction.X - direction.Y) * 48,
-            (direction.X + direction.Y) * 24).Length;
+            (direction.X + direction.Y) * 24).Length();
         const float desiredVisualSeparation = 40;
         return Math.Clamp(
             desiredVisualSeparation /
@@ -85,12 +84,14 @@ internal static class MeleeCombatService
         PlayerInventory.BestKnife(inventory)?.KnifePower ?? 0;
 
     public static int ExperienceForStance(
-        PlayerProfile player,
+        int attackExperience,
+        int strengthExperience,
+        int defenceExperience,
         MeleeCombatStance stance) =>
         stance switch
         {
-            MeleeCombatStance.Accurate => player.AttackExperience,
-            MeleeCombatStance.Aggressive => player.StrengthExperience,
-            _ => player.DefenceExperience
+            MeleeCombatStance.Accurate => attackExperience,
+            MeleeCombatStance.Aggressive => strengthExperience,
+            _ => defenceExperience
         };
 }

@@ -80,7 +80,7 @@ internal sealed partial class GameHostWindow
         QueuePath(
             target,
             MeleeCombatService.InteractionRange(
-                approachDirection),
+                (System.Numerics.Vector2)approachDirection),
             GameHostWindow.WorldActionType.AttackTrainingDummy,
             groundObjectId: groundObject.Id,
             clearTreeActions: true);
