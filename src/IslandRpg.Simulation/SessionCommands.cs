@@ -142,6 +142,38 @@ public sealed record StrikeTreeIntent(
         ExpectedActorRevision,
         Node);
 
+public sealed record GatherFibreIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    ResourceNodeReference Node) : ResourceGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision,
+        Node);
+
+public sealed record GatherBerriesIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    ResourceNodeReference Node,
+    int ToolInventorySlot) : ResourceGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision,
+        Node);
+
+public sealed record MineResourceIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    ResourceNodeReference Node,
+    int ToolInventorySlot) : ResourceGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision,
+        Node);
+
 public sealed record PickUpWorldObjectIntent(
     Guid CommandId,
     uint ExpectedInventoryRevision,

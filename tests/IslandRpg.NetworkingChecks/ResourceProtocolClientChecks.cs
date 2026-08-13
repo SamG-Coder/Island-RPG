@@ -24,14 +24,26 @@ internal static class ResourceProtocolClientChecks
         var id = new ResourceNodeId(Guid.Parse(
             "41414141-4141-4141-4141-414141414141"));
         var reference = new ResourceNodeReference(id, chunk, 4, 8);
-        var action = new ActionCommandMessage(
-            1, 2, Guid.Parse("51515151-5151-5151-5151-515151515151"),
-            3, 5, new ResourceActionPayload(
-                ResourceActionKind.CutTree, reference, 7));
-        var decodedAction = (ActionCommandMessage)ReliableProtocolCodec.Decode(
-            ReliableProtocolCodec.Encode(action));
-        CheckAssert.Equal(action, decodedAction,
-            "a typed tree strike must round trip with exact revisions and tool slot");
+        var actions = new ResourceActionPayload[]
+        {
+            new(ResourceActionKind.CutTree, reference, 7),
+            new(ResourceActionKind.GatherFibre, reference),
+            new(ResourceActionKind.GatherBerries, reference),
+            new(ResourceActionKind.GatherBerries, reference, 9),
+            new(ResourceActionKind.Mine, reference, 4),
+        };
+        for (var index = 0; index < actions.Length; index++)
+        {
+            var action = new ActionCommandMessage(
+                (ulong)(1 + index), 2,
+                Guid.Parse("51515151-5151-5151-5151-515151515151"),
+                3, 5, actions[index]);
+            var decodedAction = (ActionCommandMessage)
+                ReliableProtocolCodec.Decode(
+                    ReliableProtocolCodec.Encode(action));
+            CheckAssert.Equal(action, decodedAction,
+                $"{actions[index].Action} must round trip with its exact tool slot");
+        }
 
         var state = Node(id, chunk, 5, health: 37, remaining: 2);
         var baseline = new ResourceChunkBaselineMessage(
@@ -69,7 +81,7 @@ internal static class ResourceProtocolClientChecks
         var result = new ResourceActionResultMessage(
             4,
             5,
-            action.CommandId,
+            Guid.Parse("51515151-5151-5151-5151-515151515151"),
             true,
             CommandRejectionCode.None,
             string.Empty,
@@ -104,6 +116,28 @@ internal static class ResourceProtocolClientChecks
                     reference,
                     0))),
             "a loose-stick action must reject a forged tool slot");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1, 1, Guid.NewGuid(), 0, 0,
+                new ResourceActionPayload(
+                    ResourceActionKind.GatherFibre,
+                    reference,
+                    0))),
+            "fibre gathering must reject a forged tool slot");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1, 1, Guid.NewGuid(), 0, 0,
+                new ResourceActionPayload(
+                    ResourceActionKind.CutTree,
+                    reference))),
+            "tree strikes must require an exact tool slot");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1, 1, Guid.NewGuid(), 0, 0,
+                new ResourceActionPayload(
+                    ResourceActionKind.Mine,
+                    reference))),
+            "mining strikes must require an exact tool slot");
         CheckAssert.Throws<ProtocolException>(
             () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
                 1, 1, Guid.NewGuid(), 0, 0,
@@ -196,7 +230,10 @@ internal static class ResourceProtocolClientChecks
         {
             NodeRevision = 3,
             Health = 30,
-            ReadyAtGameSeconds = 125,
+            // Tree resources never have a regrowth deadline. The prior
+            // arbitrary ready time became invalid once lifecycle state gained
+            // shared protocol validation.
+            ReadyAtGameSeconds = 0,
         };
         await peer.SendAsync(new ResourceNodeDeltaBatchMessage(
             3, 101,

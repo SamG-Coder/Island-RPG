@@ -43,7 +43,10 @@ public sealed record NetworkPlayerGameplayState(
     int CraftingExperience,
     int CookingExperience,
     IReadOnlyList<InventorySlotState> InventorySlots,
-    int WoodcuttingExperience = 0);
+    int WoodcuttingExperience = 0,
+    int FarmingExperience = 0,
+    int MiningExperience = 0,
+    int AdventureExperience = 0);
 
 /// <summary>
 /// Immutable public projection of a server-authored world object. Container

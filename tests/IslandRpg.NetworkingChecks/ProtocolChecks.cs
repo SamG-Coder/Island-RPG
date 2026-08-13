@@ -198,9 +198,9 @@ internal static class ProtocolChecks
     private static void ProtocolEnforcesInputBounds()
     {
         CheckAssert.Equal(
-            (ushort)5,
+            (ushort)6,
             ProtocolConstants.CurrentVersion,
-            "authoritative procedural resources require protocol v5");
+            "authoritative resource progression requires protocol v6");
         var multibyteName = string.Concat(
             Enumerable.Repeat("界", ProtocolLimits.PlayerNameBytes));
         CheckAssert.Throws<ProtocolException>(
@@ -326,7 +326,11 @@ internal static class ProtocolChecks
             45.5f,
             725,
             480,
-            baselineSlots);
+            baselineSlots,
+            610,
+            720,
+            830,
+            940);
         AssertPlayerStateRoundTrip(baseline);
 
         var delta = baseline with

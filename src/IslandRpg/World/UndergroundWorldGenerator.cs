@@ -1,4 +1,5 @@
 using IslandRpg.Rendering;
+using IslandRpg.Resources;
 
 namespace IslandRpg.World;
 
@@ -171,24 +172,15 @@ internal static class UndergroundWorldGenerator
 
     internal static Biome MaterialAt(long seed, int x, int y)
     {
-        var density = CaveHydrologyField.Density(
-            seed, x + .5f, y + .5f);
-        if (density >= CaveHydrologyField.Boundary + .38f)
+        return ProceduralUndergroundTerrain.MaterialAt(seed, x, y) switch
         {
-            var channel = MathF.Abs(
-                Value(seed ^ 0x7269766572, x / 19f, y / 19f) - .5f);
-            var wetness = Fractal(
-                seed ^ 0x706f6f6c, x / 13f, y / 13f);
-            if (channel < .025f && wetness > .34f)
-                return Biome.RiverWater;
-            if (wetness > .87f)
-                return Biome.ShallowWater;
-        }
-        var variation = Value(seed ^ 0x6D756431, x / 11f, y / 11f);
-        return variation switch
-        {
-            < .28f => Biome.Mud,
-            > .76f => Biome.CrackedEarth,
+            ProceduralUndergroundTerrain.Material.Mud => Biome.Mud,
+            ProceduralUndergroundTerrain.Material.CrackedEarth =>
+                Biome.CrackedEarth,
+            ProceduralUndergroundTerrain.Material.ShallowWater =>
+                Biome.ShallowWater,
+            ProceduralUndergroundTerrain.Material.RiverWater =>
+                Biome.RiverWater,
             _ => Biome.Rock
         };
     }
@@ -253,42 +245,6 @@ internal static class UndergroundWorldGenerator
                 return true;
         return false;
     }
-
-    private static float Fractal(long seed, float x, float y) =>
-        Value(seed, x, y) * .62f +
-        Value(seed + 17, x * 2f, y * 2f) * .27f +
-        Value(seed + 41, x * 4f, y * 4f) * .11f;
-
-    private static float Value(long seed, float x, float y)
-    {
-        var x0 = (int)MathF.Floor(x);
-        var y0 = (int)MathF.Floor(y);
-        var tx = Fade(x - x0);
-        var ty = Fade(y - y0);
-        return Lerp(
-            Lerp(Hash(seed, x0, y0), Hash(seed, x0 + 1, y0), tx),
-            Lerp(Hash(seed, x0, y0 + 1), Hash(seed, x0 + 1, y0 + 1), tx),
-            ty);
-    }
-
-    private static float Hash(long seed, int x, int y)
-    {
-        unchecked
-        {
-            var value = seed;
-            value ^= (long)x *
-                     unchecked((long)0x632BE59BD9B4E019UL);
-            value ^= (long)y *
-                     unchecked((long)0x9E3779B185EBCA87UL);
-            value ^= value >> 27;
-            value *= 0x3C79AC492BA7B653L;
-            value ^= value >> 33;
-            return (value & 0xFFFFFF) / 16777215f;
-        }
-    }
-
-    private static float Fade(float value) =>
-        value * value * (3f - 2f * value);
 
     private static float Lerp(float a, float b, float amount) =>
         a + (b - a) * amount;

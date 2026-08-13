@@ -32,6 +32,8 @@ internal sealed partial class GameHostWindow
                 if (cached.VegetationIndex < 0 ||
                     !MiningNodeCatalog.TryGet(
                         gpu.Chunk.Vegetation[cached.VegetationIndex], out _) ||
+                    IsNetworkWorld &&
+                    IsNetworkMiningDepleted(cached.StableKey) ||
                     !_treeAtlas.TryGetValue(cached.AtlasKey, out var entry))
                     continue;
                 var bounds = SpriteBounds(entry.Frame, cached.World);
@@ -80,6 +82,11 @@ internal sealed partial class GameHostWindow
 
     private void QueueMining(string stableKey)
     {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkMiningAction(stableKey);
+            return;
+        }
         var found = FindMiningNode(stableKey);
         if (found is null) return;
         if (PlayerInventory.BestPickaxe(_activePlayer?.Inventory) is null)
@@ -102,6 +109,7 @@ internal sealed partial class GameHostWindow
 
     internal void BeginMining(string stableKey, Vector2 target)
     {
+        if (IsNetworkWorld) return;
         if (_player is null || FindMiningNode(stableKey) is null) return;
         _activeMiningKey = stableKey;
         _lastMiningStrike = 0;
@@ -110,6 +118,7 @@ internal sealed partial class GameHostWindow
 
     internal void UpdateMining()
     {
+        if (IsNetworkWorld) return;
         if (_activeMiningKey is null || _player is null ||
             _activePlayer is null) return;
         if (_player.Action != EntityAction.Mine)
@@ -224,6 +233,11 @@ internal sealed partial class GameHostWindow
 
     private void RenderMiningHealthBars(Vector4 scene)
     {
+        if (IsNetworkWorld)
+        {
+            RenderNetworkMiningHealthBars(scene);
+            return;
+        }
         if (_activeWorldLevel != (int)WorldLevel.Underground)
             return;
         foreach (var gpu in _worldChunks.Values)

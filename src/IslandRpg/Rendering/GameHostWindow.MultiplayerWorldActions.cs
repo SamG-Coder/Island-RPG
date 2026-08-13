@@ -118,6 +118,12 @@ internal sealed partial class GameHostWindow
             if (TryGetNetworkGroundObjectUnderMouse(
                     SceneMousePosition(), out var contextObject, out _))
                 OpenNetworkGroundObjectContext(contextObject, target);
+            else if (TryGetGatherableVegetationUnderMouse(
+                         SceneMousePosition(),
+                         out var contextVegetation,
+                         out var vegetationKey))
+                OpenVegetationContext(
+                    contextVegetation, vegetationKey, target);
             else if (TryGetTreeUnderMouse(
                          SceneMousePosition(), out var contextTree))
             {
@@ -155,6 +161,20 @@ internal sealed partial class GameHostWindow
                          groundObject.ItemId))
                 QueueNetworkObjectAction(
                     NetworkWorldActionKind.PickUp, groundObject);
+        }
+        else if (!placingObject && leftDown && !_gameLeftWasDown &&
+                 !IsPointerOverGameUi(MouseState.Position) &&
+                 TryGetGatherableVegetationUnderMouse(
+                     SceneMousePosition(),
+                     out var vegetation,
+                     out var vegetationKey))
+        {
+            if (vegetation.Kind == WorldVegetationKind.BerryBush)
+                QueueNetworkVegetationAction(
+                    vegetationKey, ResourceActionKind.GatherBerries);
+            else
+                QueueNetworkVegetationAction(
+                    vegetationKey, ResourceActionKind.GatherFibre);
         }
         else if (!placingObject && leftDown && !_gameLeftWasDown &&
                  !IsPointerOverGameUi(MouseState.Position) &&

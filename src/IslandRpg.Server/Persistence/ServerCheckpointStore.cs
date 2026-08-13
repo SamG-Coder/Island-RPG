@@ -225,6 +225,8 @@ public sealed class ServerCheckpointStore
                 !float.IsFinite(actor.WellFedSeconds) || actor.WellFedSeconds < 0 ||
                 actor.CraftingExperience < 0 || actor.CookingExperience < 0 ||
                 actor.WoodcuttingExperience < 0 ||
+                actor.FarmingExperience < 0 || actor.MiningExperience < 0 ||
+                actor.AdventureExperience < 0 ||
                 actor.ReconnectTokenHash is not { Length: 32 } ||
                 actor.Inventory is null || actor.Inventory.Count != PlayerInventoryCapacity ||
                 actor.CommandReceipts is null ||
@@ -319,7 +321,8 @@ public sealed class ServerCheckpointStore
         resources ??= new ServerResourceCheckpoint([], []);
         if (resources.Chunks is null || resources.ActorCadences is null ||
             resources.Chunks.Count > MaximumChunkRevisions ||
-            resources.ActorCadences.Count > MaximumActors * 2)
+            resources.ActorCadences.Count > MaximumActors *
+                Enum.GetValues<IslandRpg.Resources.ResourceActionKind>().Length)
             throw new InvalidDataException(
                 "The resource checkpoint collection limits are invalid.");
         var chunks = new HashSet<(int X, int Y, int Level)>();
@@ -337,8 +340,17 @@ public sealed class ServerCheckpointStore
                     !Enum.IsDefined(node.Kind) || node.NodeRevision == 0 ||
                     node.NodeRevision > chunk.Revision || node.Health < 0 ||
                     node.Remaining < 0 ||
-                    !double.IsFinite(node.ReadyAtGameSeconds) ||
-                    node.ReadyAtGameSeconds < 0)
+                    !IslandRpg.Resources.ResourceNodeStateRules.IsShapeValid(
+                        new IslandRpg.Resources.ResourceNodeSparseState(
+                            new IslandRpg.Resources.ResourceNodeId(node.NodeId),
+                            node.Kind,
+                            new WorldChunkKey(
+                                chunk.X, chunk.Y, chunk.WorldLevel),
+                            node.NodeRevision,
+                            node.Health,
+                            node.Remaining,
+                            node.ReadyAtGameSeconds,
+                            node.Depleted)))
                     throw new InvalidDataException(
                         "A resource node checkpoint is invalid.");
             }
@@ -348,8 +360,7 @@ public sealed class ServerCheckpointStore
         foreach (var cadence in resources.ActorCadences)
         {
             if (!actors.Contains(cadence.ActorId) ||
-                cadence.Action is not IslandRpg.Resources.ResourceActionKind.CutTree
-                    and not IslandRpg.Resources.ResourceActionKind.GatherTreeStick ||
+                !Enum.IsDefined(cadence.Action) ||
                 !double.IsFinite(cadence.ReadyAtGameSeconds) ||
                 cadence.ReadyAtGameSeconds < 0 ||
                 cadence.ActionOrdinal == 0 ||

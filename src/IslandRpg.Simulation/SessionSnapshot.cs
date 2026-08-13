@@ -45,7 +45,10 @@ public readonly record struct PlayerGameplaySnapshot(
     int CraftingExperience,
     int CookingExperience,
     PlayerInventorySnapshot Inventory,
-    int WoodcuttingExperience = 0);
+    int WoodcuttingExperience = 0,
+    int FarmingExperience = 0,
+    int MiningExperience = 0,
+    int AdventureExperience = 0);
 
 public readonly record struct ChatMessageSnapshot(
     long MessageId,

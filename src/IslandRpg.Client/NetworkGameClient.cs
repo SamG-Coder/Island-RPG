@@ -1315,7 +1315,16 @@ public sealed class NetworkGameClient : IAsyncDisposable
             Array.AsReadOnly(slots),
             actorChanged
                 ? message.WoodcuttingExperience
-                : previous!.WoodcuttingExperience);
+                : previous!.WoodcuttingExperience,
+            actorChanged
+                ? message.FarmingExperience
+                : previous!.FarmingExperience,
+            actorChanged
+                ? message.MiningExperience
+                : previous!.MiningExperience,
+            actorChanged
+                ? message.AdventureExperience
+                : previous!.AdventureExperience);
     }
 
     private void UpdateTick(ulong tick) => UpdateState(current => current with { ServerTick = Math.Max(current.ServerTick, tick) });

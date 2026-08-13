@@ -1,4 +1,5 @@
 using IslandRpg.Gameplay;
+using IslandRpg.Resources;
 using IslandRpg.Rendering.Ui;
 using IslandRpg.World;
 using OpenTK.Mathematics;
@@ -111,6 +112,12 @@ internal sealed partial class GameHostWindow
 
     private void QueueFibreGather(string stableKey)
     {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkVegetationAction(
+                stableKey, ResourceActionKind.GatherFibre);
+            return;
+        }
         var located = FindVegetation(stableKey);
         if (located is not { } target) return;
         if (!VegetationReady(target.Gpu.Chunk, stableKey))

@@ -47,8 +47,10 @@ internal static class WorldVegetationRenderCache
             var tileY = (int)MathF.Floor(item.Y);
             if (excavationTiles.Contains((tileX, tileY)))
                 continue;
-            var stableKey =
-                $"vegetation:{item.X:0.000}:{item.Y:0.000}";
+            var stableKey = MiningNodeCatalog.TryGet(item, out _)
+                ? WorldMiningIdentity.StableKey(item, index)
+                : FormattableString.Invariant(
+                    $"vegetation:{item.X:0.000}:{item.Y:0.000}");
             if (depletedMiningNodes.Contains(stableKey))
                 continue;
             result.Add(Create(
@@ -119,7 +121,8 @@ internal static class WorldVegetationRenderCache
                 tileY,
                 world,
                 stableKey ??
-                $"vegetation:{item.X:0.000}:{item.Y:0.000}",
+                FormattableString.Invariant(
+                    $"vegetation:{item.X:0.000}:{item.Y:0.000}"),
                 $"{item.GraphicName}#{item.FrameIndex}",
                 shadowName is null
                     ? null

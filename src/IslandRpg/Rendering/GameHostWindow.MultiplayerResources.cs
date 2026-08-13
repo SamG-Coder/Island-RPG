@@ -38,6 +38,15 @@ internal sealed partial class GameHostWindow
     private int _networkResourceExperienceGained;
     private int _networkResourcePreviousLevel;
     private int _networkResourceCurrentLevel;
+    private int _networkResourceFarmingExperienceGained;
+    private int _networkResourceFarmingPreviousLevel;
+    private int _networkResourceFarmingCurrentLevel;
+    private int _networkResourceMiningExperienceGained;
+    private int _networkResourceMiningPreviousLevel;
+    private int _networkResourceMiningCurrentLevel;
+    private int _networkResourceAdventureExperienceGained;
+    private int _networkResourceAdventurePreviousLevel;
+    private int _networkResourceAdventureCurrentLevel;
     private readonly Dictionary<long, NetworkTreeTarget>
         _networkTreeTargets = [];
 
@@ -83,6 +92,8 @@ internal sealed partial class GameHostWindow
     private void UpdateNetworkResourceInteraction()
     {
         if (_player is null) return;
+        if (UpdateNetworkVegetationInteraction()) return;
+        if (UpdateNetworkMiningInteraction()) return;
         if (_pendingNetworkTreeAction is { } pending)
         {
             if (!NetworkTreeActionStillValid(pending))
@@ -194,9 +205,7 @@ internal sealed partial class GameHostWindow
         var commandId = Guid.NewGuid();
         _networkResourceCommandId = commandId;
         _networkResourceCommandReference = reference;
-        _networkResourceExperienceGained = 0;
-        _networkResourcePreviousLevel = 0;
-        _networkResourceCurrentLevel = 0;
+        ResetNetworkResourceExperienceObservation();
         if (action.Kind == ResourceActionKind.CutTree)
         {
             _nextNetworkTreeStrikeAt =
@@ -327,6 +336,8 @@ internal sealed partial class GameHostWindow
         NetworkResourcesChangedEventArgs value)
     {
         if (!IsNetworkWorld) return;
+        HandleNetworkVegetationChanged(value);
+        HandleNetworkMiningChanged(value);
         if (_activeNetworkTreeAction is { } active &&
             value.Changes.Any(change =>
                 change.NodeId == active.Target.NodeId &&
@@ -343,12 +354,17 @@ internal sealed partial class GameHostWindow
         ResourceActionResultMessage result)
     {
         if (_networkResourceCommandId != result.CommandId ||
-            _activeNetworkTreeAction is not { } active)
+            (_activeNetworkTreeAction is null &&
+             _activeNetworkVegetationAction is null &&
+             _activeNetworkMiningAction is null))
             return;
         _networkResourceCommandId = null;
         var expectedReference = _networkResourceCommandReference;
         _networkResourceCommandReference = null;
-        if (result.Action != active.Kind ||
+        var activeKind = _activeNetworkTreeAction?.Kind ??
+                         _activeNetworkVegetationAction?.Kind ??
+                         ResourceActionKind.Mine;
+        if (result.Action != activeKind ||
             expectedReference is null ||
             result.Resource != expectedReference.Value)
         {
@@ -372,7 +388,8 @@ internal sealed partial class GameHostWindow
 
         _networkResourceAwaitingActorRevision = result.ActorRevision;
         _networkResourceAwaitingInventoryRevision = result.InventoryRevision;
-        if (result.Action == ResourceActionKind.CutTree)
+        if (result.Action == ResourceActionKind.CutTree &&
+            _activeNetworkTreeAction is { } active)
         {
             ShowEntityImpact(
                 TreeFeedbackKey(active.Target.NodeId.Value),
@@ -392,10 +409,40 @@ internal sealed partial class GameHostWindow
                     "Your stone axe becomes blunt.",
                     ChatMessageStyle.Warning);
         }
-        else
+        else if (result.Action == ResourceActionKind.GatherTreeStick)
             _chatUi.AddMessage(
                 "You gather a stick from beneath the tree.",
                 ChatMessageStyle.Action);
+        else if (_activeNetworkVegetationAction is { } vegetation)
+        {
+            _chatUi.AddMessage(
+                vegetation.Kind == ResourceActionKind.GatherBerries
+                    ? "You pick berries from the bush."
+                    : "You gather usable plant fibres.",
+                ChatMessageStyle.Action);
+            if (!string.IsNullOrWhiteSpace(result.Detail))
+                _chatUi.AddMessage(
+                    result.Detail, ChatMessageStyle.Warning);
+        }
+        else if (result.Action == ResourceActionKind.Mine &&
+                 _activeNetworkMiningAction is { } mining)
+        {
+            ShowEntityImpact(
+                MiningFeedbackKey(mining.Target.StableKey),
+                result.Hit ? result.Damage : 0,
+                result.Hit);
+            _chatUi.AddMessage(
+                result.Hit
+                    ? $"You hit the {mining.Target.Visual.DisplayName} " +
+                      $"for {result.Damage} damage."
+                    : $"You miss the {mining.Target.Visual.DisplayName}.",
+                result.Hit
+                    ? ChatMessageStyle.Damage
+                    : ChatMessageStyle.Miss);
+            if (!string.IsNullOrWhiteSpace(result.Detail))
+                _chatUi.AddMessage(
+                    result.Detail, ChatMessageStyle.Warning);
+        }
 
         foreach (var reward in result.Rewards)
         {
@@ -407,6 +454,10 @@ internal sealed partial class GameHostWindow
                     ? $"You receive {item.Name}."
                     : $"You receive {reward.Quantity} {item.Name}.",
                 ChatMessageStyle.Experience);
+            if (result.Action == ResourceActionKind.Mine)
+                RecordQuestEvent(new(
+                    QuestEventType.MineOre,
+                    reward.ItemId));
         }
         if (_networkResourceExperienceGained > 0)
         {
@@ -420,17 +471,57 @@ internal sealed partial class GameHostWindow
                     $"{_networkResourceCurrentLevel}.",
                     ChatMessageStyle.LevelUp);
         }
-        _networkResourceExperienceGained = 0;
-        _networkResourcePreviousLevel = 0;
-        _networkResourceCurrentLevel = 0;
-        if (result.Action == ResourceActionKind.GatherTreeStick)
+        if (_networkResourceFarmingExperienceGained > 0)
+        {
+            _chatUi.AddMessage(
+                FarmingSkill.ExperienceMessage(
+                    _networkResourceFarmingExperienceGained),
+                ChatMessageStyle.Experience);
+            if (_networkResourceFarmingCurrentLevel >
+                _networkResourceFarmingPreviousLevel)
+                _chatUi.AddMessage(
+                    FarmingSkill.LevelUpMessage(
+                        _networkResourceFarmingCurrentLevel),
+                    ChatMessageStyle.LevelUp);
+        }
+        if (_networkResourceMiningExperienceGained > 0)
+        {
+            _chatUi.AddMessage(
+                $"+{_networkResourceMiningExperienceGained} Mining XP.",
+                ChatMessageStyle.Experience);
+            if (_networkResourceMiningCurrentLevel >
+                _networkResourceMiningPreviousLevel)
+                _chatUi.AddMessage(
+                    $"Your Mining level is now " +
+                    $"{_networkResourceMiningCurrentLevel}.",
+                    ChatMessageStyle.LevelUp);
+        }
+        if (_networkResourceAdventureExperienceGained > 0)
+        {
+            _chatUi.AddMessage(
+                $"+{_networkResourceAdventureExperienceGained} Adventure XP.",
+                ChatMessageStyle.Experience);
+            if (_networkResourceAdventureCurrentLevel >
+                _networkResourceAdventurePreviousLevel)
+                _chatUi.AddMessage(
+                    $"Your Adventure level is now " +
+                    $"{_networkResourceAdventureCurrentLevel}.",
+                    ChatMessageStyle.LevelUp);
+        }
+        ResetNetworkResourceExperienceObservation();
+        if (result.Action is ResourceActionKind.GatherTreeStick or
+            ResourceActionKind.GatherFibre or
+            ResourceActionKind.GatherBerries)
             CancelNetworkResourceInteraction(
                 preserveGameplayRevisionWait: true);
     }
 
     private void ObserveNetworkResourceGameplayState(
         NetworkPlayerGameplayState state,
-        int previousWoodcuttingExperience)
+        int previousWoodcuttingExperience,
+        int previousFarmingExperience,
+        int previousMiningExperience,
+        int previousAdventureExperience)
     {
         if (_networkResourceCommandId is not null &&
             state.WoodcuttingExperience > previousWoodcuttingExperience)
@@ -444,6 +535,38 @@ internal sealed partial class GameHostWindow
             _networkResourceCurrentLevel =
                 WoodcuttingSkill.LevelForExperience(
                     state.WoodcuttingExperience);
+        }
+        if (_networkResourceCommandId is not null &&
+            state.FarmingExperience > previousFarmingExperience)
+        {
+            _networkResourceFarmingExperienceGained =
+                state.FarmingExperience - previousFarmingExperience;
+            _networkResourceFarmingPreviousLevel =
+                FarmingSkill.LevelForExperience(previousFarmingExperience);
+            _networkResourceFarmingCurrentLevel =
+                FarmingSkill.LevelForExperience(state.FarmingExperience);
+        }
+        if (_networkResourceCommandId is not null &&
+            state.MiningExperience > previousMiningExperience)
+        {
+            _networkResourceMiningExperienceGained =
+                state.MiningExperience - previousMiningExperience;
+            _networkResourceMiningPreviousLevel =
+                MiningSkill.LevelForExperience(previousMiningExperience);
+            _networkResourceMiningCurrentLevel =
+                MiningSkill.LevelForExperience(state.MiningExperience);
+        }
+        if (_networkResourceCommandId is not null &&
+            state.AdventureExperience > previousAdventureExperience)
+        {
+            _networkResourceAdventureExperienceGained =
+                state.AdventureExperience - previousAdventureExperience;
+            _networkResourceAdventurePreviousLevel =
+                AdventureService.LevelForExperience(
+                    previousAdventureExperience);
+            _networkResourceAdventureCurrentLevel =
+                AdventureService.LevelForExperience(
+                    state.AdventureExperience);
         }
         if (state.ActorRevision >= _networkResourceAwaitingActorRevision &&
             state.InventoryRevision >=
@@ -478,20 +601,26 @@ internal sealed partial class GameHostWindow
     {
         _pendingNetworkTreeAction = null;
         _activeNetworkTreeAction = null;
+        _pendingNetworkVegetationAction = null;
+        _activeNetworkVegetationAction = null;
+        _pendingNetworkMiningAction = null;
+        _activeNetworkMiningAction = null;
+        _networkVegetationActionDispatched = false;
         _networkResourceCommandId = null;
         _networkResourceCommandReference = null;
         _lastNetworkTreeStrike = 0;
         _nextNetworkTreeStrikeAt = 0;
-        _networkResourceExperienceGained = 0;
-        _networkResourcePreviousLevel = 0;
-        _networkResourceCurrentLevel = 0;
+        ResetNetworkResourceExperienceObservation();
         if (!preserveGameplayRevisionWait)
         {
             _networkResourceAwaitingActorRevision = 0;
             _networkResourceAwaitingInventoryRevision = 0;
         }
+        _lastNetworkMiningStrike = 0;
+        _nextNetworkMiningStrikeAt = 0;
         if (stopPlayer && _networkResourcePresentationOwned &&
-            _player?.Action is EntityAction.Work or EntityAction.Gather)
+            _player?.Action is EntityAction.Work or EntityAction.Gather or
+                EntityAction.Mine)
             _player.Stop();
         _networkResourcePresentationOwned = false;
     }
@@ -500,11 +629,15 @@ internal sealed partial class GameHostWindow
     {
         CancelNetworkResourceInteraction();
         _networkTreeTargets.Clear();
+        ClearNetworkVegetationProjection();
+        ClearNetworkMiningProjection();
     }
 
     private void ForgetNetworkResourceChunk(ChunkCoordinate coordinate)
     {
-        if (!IsNetworkWorld || _networkTreeTargets.Count == 0) return;
+        if (!IsNetworkWorld) return;
+        ForgetNetworkVegetationChunk(coordinate);
+        ForgetNetworkMiningChunk(coordinate);
         foreach (var key in _networkTreeTargets
                      .Where(pair =>
                          pair.Value.Chunk.X == coordinate.X &&
@@ -513,6 +646,22 @@ internal sealed partial class GameHostWindow
                      .Select(static pair => pair.Key)
                      .ToArray())
             _networkTreeTargets.Remove(key);
+    }
+
+    private void ResetNetworkResourceExperienceObservation()
+    {
+        _networkResourceExperienceGained = 0;
+        _networkResourcePreviousLevel = 0;
+        _networkResourceCurrentLevel = 0;
+        _networkResourceFarmingExperienceGained = 0;
+        _networkResourceFarmingPreviousLevel = 0;
+        _networkResourceFarmingCurrentLevel = 0;
+        _networkResourceMiningExperienceGained = 0;
+        _networkResourceMiningPreviousLevel = 0;
+        _networkResourceMiningCurrentLevel = 0;
+        _networkResourceAdventureExperienceGained = 0;
+        _networkResourceAdventurePreviousLevel = 0;
+        _networkResourceAdventureCurrentLevel = 0;
     }
 
     private void RenderNetworkTreeHealthBars(Vector4 scene)

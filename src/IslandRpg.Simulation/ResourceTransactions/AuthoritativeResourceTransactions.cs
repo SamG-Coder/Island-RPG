@@ -55,6 +55,36 @@ public sealed class AuthoritativeResourceTransactions
         return ExecuteStrike(actor, command);
     }
 
+    public ResourceTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        GatherFibreTransaction command)
+    {
+        EnsureOwner();
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(command);
+        return ExecuteFibre(actor, command);
+    }
+
+    public ResourceTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        GatherBerriesTransaction command)
+    {
+        EnsureOwner();
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(command);
+        return ExecuteBerries(actor, command);
+    }
+
+    public ResourceTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        MineResourceTransaction command)
+    {
+        EnsureOwner();
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(command);
+        return ExecuteMiningStrike(actor, command);
+    }
+
     public uint CaptureChunkRevision(WorldChunkKey chunk)
     {
         EnsureOwner();
@@ -159,7 +189,7 @@ public sealed class AuthoritativeResourceTransactions
                     !_catalog.TryResolve(_worldSeed, reference,
                         out var descriptor) ||
                     descriptor.Kind != node.Kind ||
-                    !ValidState(node, descriptor) ||
+                    !ResourceNodeStateRules.IsValid(descriptor, node) ||
                     !nodes.TryAdd(node.Id, node))
                     throw new InvalidDataException(
                         "The resource checkpoint contains an invalid node.");
@@ -176,7 +206,10 @@ public sealed class AuthoritativeResourceTransactions
         {
             if (value.ActorId.Value == Guid.Empty ||
                 value.Action is not ResourceActionKind.CutTree and
-                    not ResourceActionKind.GatherTreeStick ||
+                    not ResourceActionKind.GatherTreeStick and
+                    not ResourceActionKind.GatherFibre and
+                    not ResourceActionKind.GatherBerries and
+                    not ResourceActionKind.Mine ||
                 !double.IsFinite(value.ReadyAtGameSeconds) ||
                 value.ReadyAtGameSeconds < 0 ||
                 value.ActionOrdinal == 0 ||
@@ -235,11 +268,11 @@ public sealed class AuthoritativeResourceTransactions
         }
 
         var previous = current;
-        current = current with
-        {
-            NodeRevision = checked(current.NodeRevision + 1),
-            Remaining = current.Remaining - 1
-        };
+        if (!ResourceNodeStateRules.TryConsumeRemaining(
+                descriptor, current, 1, command.GameSeconds,
+                out current))
+            throw new InvalidOperationException(
+                "Validated tree-stick state could not be consumed.");
         var chunk = AdvanceChunk(descriptor.Chunk);
         _nodes[descriptor.Id] = current;
         CommitCadence(input.ActorId, ResourceActionKind.GatherTreeStick,
@@ -327,12 +360,11 @@ public sealed class AuthoritativeResourceTransactions
         if (strike.Hit)
         {
             var previous = current;
-            current = current with
-            {
-                NodeRevision = checked(current.NodeRevision + 1),
-                Health = strike.Health,
-                Depleted = strike.Depleted
-            };
+            if (!ResourceNodeStateRules.TryApplyDamage(
+                    descriptor, current, strike.Health,
+                    out current))
+                throw new InvalidOperationException(
+                    "Validated tree damage could not be committed.");
             _nodes[descriptor.Id] = current;
             nodeDelta = new(previous, current);
             chunkDelta = AdvanceChunk(descriptor.Chunk);
@@ -371,6 +403,226 @@ public sealed class AuthoritativeResourceTransactions
                 : string.Empty);
     }
 
+    private ResourceTransactionResult ExecuteFibre(
+        WorldTransactionActorInput input,
+        GatherFibreTransaction command)
+    {
+        var validation = Validate(
+            input, command.Context, command.Node,
+            ResourceActionKind.GatherFibre, command.GameSeconds,
+            out var descriptor, out var current, out var cadence,
+            out var regrowth);
+        if (validation is not null) return validation;
+        if (!SurfaceVegetationCatalog.TryGetVisual(
+                descriptor.Variant, out var visual) ||
+            visual.ResourceKind != ResourceNodeKind.FibreShrub ||
+            string.IsNullOrWhiteSpace(visual.GatherItemId))
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.ResourceNotFound,
+                "The fibre shrub variant is not recognized by the authority.");
+        if (current.Remaining <= 0 || current.Depleted)
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.Depleted,
+                "This shrub needs time to regrow.");
+
+        var inventory = LoadInventory(input.Gameplay);
+        var ordinal = checked(cadence.ActionOrdinal + 1);
+        var random = DeterministicRolls(
+            input.ActorId, descriptor.Id, ordinal,
+            ResourceActionKind.GatherFibre);
+        var requested = 1 + (random.Reward < .5f ? 1 : 0) +
+                        GatheringBasketBonus(inventory);
+        var gathered = inventory.AddUpTo(visual.GatherItemId!, requested);
+        if (gathered == 0)
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.InventoryFull,
+                "The carried inventory cannot hold gathered fibre.");
+
+        return CommitRenewableHarvest(
+            input, command.Context, descriptor, current, regrowth,
+            ResourceActionKind.GatherFibre, command.GameSeconds,
+            ordinal, inventory, visual.GatherItemId!, gathered, requested,
+            farmingExperience: input.Gameplay.FarmingExperience,
+            adventureExperience: AwardAdventureExperience(
+                input.Gameplay.AdventureExperience, gathered * 2));
+    }
+
+    private ResourceTransactionResult ExecuteBerries(
+        WorldTransactionActorInput input,
+        GatherBerriesTransaction command)
+    {
+        if (command.ToolInventorySlot < -1)
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.InvalidCommand,
+                "The berry-gathering tool slot is malformed.");
+        var validation = Validate(
+            input, command.Context, command.Node,
+            ResourceActionKind.GatherBerries, command.GameSeconds,
+            out var descriptor, out var current, out var cadence,
+            out var regrowth);
+        if (validation is not null) return validation;
+        if (!SurfaceVegetationCatalog.TryGetVisual(
+                descriptor.Variant, out var visual) ||
+            visual.ResourceKind != ResourceNodeKind.BerryBush ||
+            string.IsNullOrWhiteSpace(visual.GatherItemId))
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.ResourceNotFound,
+                "The berry bush variant is not recognized by the authority.");
+        if (current.Remaining <= 0 || current.Depleted)
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.Depleted,
+                "This bush needs time to grow more berries.");
+        ItemDefinition? sickle = null;
+        if (command.ToolInventorySlot != -1)
+        {
+            var sourceInventory = LoadInventory(input.Gameplay);
+            if ((uint)command.ToolInventorySlot >=
+                    (uint)sourceInventory.Capacity ||
+                sourceInventory[command.ToolInventorySlot] is not
+                    { } selected ||
+                !UsableSickle(selected.ItemId))
+                return Rejected(input, command.Context,
+                    ResourceTransactionStatus.MissingTool,
+                    "The selected inventory slot does not contain a usable sickle.");
+            sickle = ItemCatalog.Get(selected.ItemId);
+        }
+
+        var inventory = LoadInventory(input.Gameplay);
+        var ordinal = checked(cadence.ActionOrdinal + 1);
+        var random = DeterministicRolls(
+            input.ActorId, descriptor.Id, ordinal,
+            ResourceActionKind.GatherBerries);
+        var farmingLevel = FarmingSkill.LevelForExperience(
+            input.Gameplay.FarmingExperience);
+        var sickleBonus = sickle is not null &&
+                          random.Accuracy < Math.Min(
+                              .75f,
+                              .35f + Math.Clamp(farmingLevel - 1, 0, 19) *
+                              .01f + sickle.FarmingPower * .10f)
+            ? 1
+            : 0;
+        var requested = 1 + (int)(random.Reward * 3) + sickleBonus +
+                        GatheringBasketBonus(inventory);
+        var gathered = inventory.AddUpTo(visual.GatherItemId!, requested);
+        if (gathered == 0)
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.InventoryFull,
+                "The carried inventory cannot hold gathered berries.");
+
+        var farming = FarmingSkill.AwardExperience(
+            input.Gameplay.FarmingExperience,
+            checked(18 * gathered)).Experience;
+        var gainedFarming = farming - input.Gameplay.FarmingExperience;
+        return CommitRenewableHarvest(
+            input, command.Context, descriptor, current, regrowth,
+            ResourceActionKind.GatherBerries, command.GameSeconds,
+            ordinal, inventory, visual.GatherItemId!, gathered, requested,
+            farming,
+            AwardAdventureExperience(
+                input.Gameplay.AdventureExperience, gainedFarming));
+    }
+
+    private ResourceTransactionResult ExecuteMiningStrike(
+        WorldTransactionActorInput input,
+        MineResourceTransaction command)
+    {
+        var validation = Validate(
+            input, command.Context, command.Node,
+            ResourceActionKind.Mine, command.GameSeconds,
+            out var descriptor, out var current, out var cadence);
+        if (validation is not null) return validation;
+        if (current.Health <= 0 || current.Depleted)
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.Depleted,
+                "The mining node has already been depleted.");
+        if (!UndergroundMiningCatalog.TryGetVisual(
+                descriptor.Variant, out var visual))
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.ResourceNotFound,
+                "The mining-node variant is not recognized by the authority.");
+
+        var inventory = LoadInventory(input.Gameplay);
+        var toolSlot = command.ToolInventorySlot;
+        if ((uint)toolSlot >= (uint)inventory.Capacity ||
+            inventory[toolSlot] is not { } selectedPickaxe ||
+            !UsablePickaxe(selectedPickaxe.ItemId))
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.MissingTool,
+                "The selected inventory slot does not contain a usable pickaxe.");
+        var pickaxe = ItemCatalog.Get(selectedPickaxe.ItemId);
+        if (visual.RewardItemId is { } rewardItemId &&
+            !inventory.CanAdd(rewardItemId))
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.InventoryFull,
+                "The carried inventory cannot hold this node's mined item.");
+        var ordinal = checked(cadence.ActionOrdinal + 1);
+        var random = DeterministicRolls(
+            input.ActorId, descriptor.Id, ordinal,
+            ResourceActionKind.Mine);
+        var strike = ResourceStrikeService.Mine(
+            input.Gameplay.MiningExperience,
+            current.Health,
+            pickaxe.MiningPower,
+            visual.CompletionExperience,
+            random.Accuracy,
+            random.Damage);
+
+        var grantedRewardQuantity = 0;
+        if (strike.Depleted && visual.RewardItemId is { } completionReward)
+            grantedRewardQuantity = inventory.AddUpTo(completionReward, 1);
+
+        ResourceNodeTransactionDelta? nodeDelta = null;
+        ResourceChunkRevisionDelta? chunkDelta = null;
+        if (strike.Hit)
+        {
+            var previous = current;
+            if (!ResourceNodeStateRules.TryApplyDamage(
+                    descriptor, current, strike.Health,
+                    out current))
+                throw new InvalidOperationException(
+                    "Validated mining damage could not be committed.");
+            _nodes[descriptor.Id] = current;
+            nodeDelta = new(previous, current);
+            chunkDelta = AdvanceChunk(descriptor.Chunk);
+        }
+
+        CommitCadence(input.ActorId, ResourceActionKind.Mine,
+            command.GameSeconds, ordinal);
+        var gainedMining = strike.Experience.Experience -
+                           input.Gameplay.MiningExperience;
+        var adventureExperience = AwardAdventureExperience(
+            input.Gameplay.AdventureExperience, gainedMining);
+        var experienceChanged = gainedMining != 0 ||
+                                adventureExperience !=
+                                input.Gameplay.AdventureExperience;
+        var inventoryChanged = grantedRewardQuantity > 0;
+        var gameplay = UpdatedGameplay(
+            input.Gameplay,
+            inventory,
+            inventoryChanged,
+            input.Gameplay.WoodcuttingExperience,
+            miningExperience: strike.Experience.Experience,
+            adventureExperience: adventureExperience,
+            actorChanged: experienceChanged);
+        var rewards = grantedRewardQuantity > 0
+            ? ImmutableArray.Create(new ResourceItemReward(
+                visual.RewardItemId!, grantedRewardQuantity))
+            : ImmutableArray<ResourceItemReward>.Empty;
+        return new ResourceTransactionResult(
+            command.Context.CommandId,
+            ResourceTransactionStatus.Accepted,
+            gameplay.ActorRevision,
+            gameplay.Inventory.Revision,
+            gameplay,
+            nodeDelta,
+            chunkDelta,
+            rewards,
+            strike.Hit,
+            strike.Damage,
+            ToolWorn: false,
+            Detail: string.Empty);
+    }
+
     private ResourceTransactionResult? Validate(
         WorldTransactionActorInput input,
         WorldTransactionContext context,
@@ -381,9 +633,26 @@ public sealed class AuthoritativeResourceTransactions
         out ResourceNodeSparseState current,
         out CadenceState cadence)
     {
+        return Validate(
+            input, context, reference, action, gameSeconds,
+            out descriptor, out current, out cadence, out _);
+    }
+
+    private ResourceTransactionResult? Validate(
+        WorldTransactionActorInput input,
+        WorldTransactionContext context,
+        ResourceNodeReference reference,
+        ResourceActionKind action,
+        double gameSeconds,
+        out ResourceNodeDescriptor descriptor,
+        out ResourceNodeSparseState current,
+        out CadenceState cadence,
+        out ResourceNodeTransactionDelta? regrowth)
+    {
         descriptor = null!;
         current = null!;
         cadence = default;
+        regrowth = null;
         if (context.CommandId == Guid.Empty ||
             context.ActorId != input.ActorId ||
             !double.IsFinite(gameSeconds) || gameSeconds < 0)
@@ -412,10 +681,10 @@ public sealed class AuthoritativeResourceTransactions
             return Rejected(input, context,
                 ResourceTransactionStatus.ResourceNotFound,
                 "The resource identity is not present in its claimed chunk.");
-        if (descriptor.Kind != ResourceNodeKind.Tree)
+        if (!ResourceNodeStateRules.ActionTargets(action, descriptor.Kind))
             return Rejected(input, context,
                 ResourceTransactionStatus.WrongResourceKind,
-                "This action requires a tree resource.");
+                "This action is not valid for the referenced resource.");
         current = EffectiveState(descriptor);
         if (reference.ExpectedNodeRevision != current.NodeRevision)
             return Rejected(input, context,
@@ -442,20 +711,24 @@ public sealed class AuthoritativeResourceTransactions
             return Rejected(input, context,
                 ResourceTransactionStatus.CadenceLocked,
                 "The resource interaction cadence has not elapsed.");
+
+        // A due regrowth is prepared here but remains uncommitted until every
+        // action-specific tool and inventory check succeeds. The accepted
+        // harvest atomically publishes both logical revisions, avoiding a
+        // hidden mutation when a later validation rejects the command.
+        if (ResourceNodeStateRules.TryRegrow(
+                descriptor, current, gameSeconds, out var regrown))
+        {
+            regrowth = new(current, regrown);
+            current = regrown;
+        }
         return null;
     }
 
     private ResourceNodeSparseState EffectiveState(
         ResourceNodeDescriptor descriptor) =>
-        _nodes.GetValueOrDefault(descriptor.Id) ?? new(
-            descriptor.Id,
-            descriptor.Kind,
-            descriptor.Chunk,
-            0,
-            descriptor.InitialHealth,
-            descriptor.InitialRemaining,
-            0,
-            descriptor.InitialHealth == 0);
+        _nodes.GetValueOrDefault(descriptor.Id) ??
+        ResourceNodeStateRules.CreateDefault(descriptor);
 
     private void CommitCadence(
         ActorId actorId,
@@ -473,8 +746,71 @@ public sealed class AuthoritativeResourceTransactions
             ResourceActionKind.GatherTreeStick =>
                 _options.GatherTreeStickCadence,
             ResourceActionKind.CutTree => _options.StrikeTreeCadence,
+            ResourceActionKind.GatherFibre => _options.GatherFibreCadence,
+            ResourceActionKind.GatherBerries =>
+                _options.GatherBerriesCadence,
+            ResourceActionKind.Mine => _options.MineCadence,
             _ => throw new ArgumentOutOfRangeException(nameof(action))
         };
+
+    private ResourceTransactionResult CommitRenewableHarvest(
+        WorldTransactionActorInput input,
+        WorldTransactionContext context,
+        ResourceNodeDescriptor descriptor,
+        ResourceNodeSparseState current,
+        ResourceNodeTransactionDelta? regrowth,
+        ResourceActionKind action,
+        double gameSeconds,
+        ulong ordinal,
+        InventoryContainer inventory,
+        string itemId,
+        int gathered,
+        int requested,
+        int farmingExperience,
+        int adventureExperience)
+    {
+        var previous = regrowth?.Previous ?? current;
+        if (!ResourceNodeStateRules.TryConsumeRemaining(
+                descriptor, current, current.Remaining, gameSeconds,
+                out current))
+            throw new InvalidOperationException(
+                "Validated renewable resource state could not be harvested.");
+        _nodes[descriptor.Id] = current;
+        var firstChunk = AdvanceChunk(descriptor.Chunk);
+        var chunk = regrowth is null
+            ? firstChunk
+            : new ResourceChunkRevisionDelta(
+                descriptor.Chunk,
+                firstChunk.PreviousRevision,
+                AdvanceChunk(descriptor.Chunk).CurrentRevision);
+        CommitCadence(input.ActorId, action, gameSeconds, ordinal);
+        var gameplay = UpdatedGameplay(
+            input.Gameplay, inventory,
+            inventoryChanged: true,
+            woodcuttingExperience: input.Gameplay.WoodcuttingExperience,
+            farmingExperience,
+            adventureExperience,
+            actorChanged:
+                farmingExperience != input.Gameplay.FarmingExperience ||
+                adventureExperience != input.Gameplay.AdventureExperience);
+        var detail = gathered < requested
+            ? $"{requested - gathered} gathered items could not be carried and were left behind."
+            : string.Empty;
+        if (regrowth is not null)
+            detail = string.IsNullOrEmpty(detail)
+                ? "The resource regrew before this harvest."
+                : $"The resource regrew before this harvest. {detail}";
+        return new ResourceTransactionResult(
+            context.CommandId,
+            ResourceTransactionStatus.Accepted,
+            gameplay.ActorRevision,
+            gameplay.Inventory.Revision,
+            gameplay,
+            new(previous, current),
+            chunk,
+            [new(itemId, gathered)],
+            Detail: detail);
+    }
 
     private ResourceChunkRevisionDelta AdvanceChunk(WorldChunkKey chunk)
     {
@@ -516,6 +852,28 @@ public sealed class AuthoritativeResourceTransactions
                item.WoodcuttingPower > 0;
     }
 
+    private static bool UsableSickle(string itemId)
+    {
+        var item = ItemCatalog.Get(itemId);
+        return item.HasTag(ItemTag.Tool) && item.HasTag(ItemTag.Sickle) &&
+               item.FarmingPower > 0;
+    }
+
+    private static bool UsablePickaxe(string itemId)
+    {
+        var item = ItemCatalog.Get(itemId);
+        return item.HasTag(ItemTag.Tool) && item.HasTag(ItemTag.Pickaxe) &&
+               item.MiningPower > 0;
+    }
+
+    private static int GatheringBasketBonus(InventoryContainer inventory) =>
+        FindSlot(inventory, ItemIds.GatheringBasket) >= 0 ? 1 : 0;
+
+    private static int AwardAdventureExperience(
+        int currentExperience,
+        int actionExperience) => AdventureService.AwardFromAction(
+            currentExperience, actionExperience).Experience;
+
     private static int FindSlot(
         InventoryContainer inventory,
         string itemId)
@@ -555,6 +913,9 @@ public sealed class AuthoritativeResourceTransactions
         InventoryContainer inventory,
         bool inventoryChanged,
         int woodcuttingExperience,
+        int? farmingExperience = null,
+        int? adventureExperience = null,
+        int? miningExperience = null,
         bool actorChanged = false)
     {
         var slots = ImmutableArray.CreateBuilder<InventorySlotSnapshot>(
@@ -574,7 +935,13 @@ public sealed class AuthoritativeResourceTransactions
                     ? checked(source.Inventory.Revision + 1)
                     : source.Inventory.Revision,
                 slots.MoveToImmutable()),
-            WoodcuttingExperience = woodcuttingExperience
+            WoodcuttingExperience = woodcuttingExperience,
+            FarmingExperience = farmingExperience ??
+                                source.FarmingExperience,
+            MiningExperience = miningExperience ??
+                               source.MiningExperience,
+            AdventureExperience = adventureExperience ??
+                                  source.AdventureExperience
         };
     }
 
@@ -632,16 +999,6 @@ public sealed class AuthoritativeResourceTransactions
 
     private static float UnitRoll(ReadOnlySpan<byte> value) =>
         (float)(BinaryPrimitives.ReadUInt32BigEndian(value) / 4294967296d);
-
-    private static bool ValidState(
-        ResourceNodeSparseState state,
-        ResourceNodeDescriptor descriptor) =>
-        state.Health >= 0 && state.Health <= descriptor.MaximumHealth &&
-        state.Remaining >= 0 &&
-        (descriptor.InitialRemaining < 0 ||
-         state.Remaining <= descriptor.InitialRemaining) &&
-        state.ReadyAtGameSeconds == 0 &&
-        state.Depleted == (state.Health == 0);
 
     private static bool IsFinite(Vector2 value) =>
         float.IsFinite(value.X) && float.IsFinite(value.Y);

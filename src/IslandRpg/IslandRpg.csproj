@@ -102,6 +102,7 @@
     <Compile Remove="Gameplay\ToolUpkeepService.cs" />
     <Compile Remove="Gameplay\ActorActionService.cs" />
     <Compile Remove="Gameplay\WoodcuttingSkill.cs" />
+    <Compile Remove="Gameplay\FarmingSkill.cs" />
     <Compile Remove="Gameplay\MiningSkill.cs" />
     <Compile Remove="Gameplay\ResourceStrikeService.cs" />
     <Compile Remove="Gameplay\EntityAction.cs" />

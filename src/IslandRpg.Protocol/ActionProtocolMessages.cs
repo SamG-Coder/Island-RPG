@@ -215,7 +215,10 @@ public sealed record PlayerStateMessage(
     int CraftingExperience,
     int CookingExperience,
     IReadOnlyList<InventorySlotState> InventorySlots,
-    int WoodcuttingExperience = 0) : IProtocolMessage
+    int WoodcuttingExperience = 0,
+    int FarmingExperience = 0,
+    int MiningExperience = 0,
+    int AdventureExperience = 0) : IProtocolMessage
 {
     public ProtocolMessageKind Kind => ProtocolMessageKind.PlayerState;
 }

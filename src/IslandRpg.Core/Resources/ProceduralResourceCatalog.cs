@@ -246,12 +246,18 @@ public sealed class ProceduralResourceCatalog : IResourceDescriptorResolver
             throw new InvalidOperationException(
                 "The procedural resource position is invalid for its chunk.");
         }
-        if (seed.InitialHealth < 0 ||
+        if (!ResourceNodeStateRules.AreValidDefaults(
+                seed.Key.Kind,
+                seed.InitialHealth,
+                seed.MaximumHealth,
+                seed.InitialRemaining,
+                seed.RegrowthGameSeconds) ||
+            seed.InitialHealth < 0 ||
             seed.InitialHealth > _limits.MaximumHealth ||
             seed.MaximumHealth < 0 ||
             seed.MaximumHealth > _limits.MaximumHealth ||
             seed.InitialHealth > seed.MaximumHealth ||
-            seed.InitialRemaining < -1 ||
+            seed.InitialRemaining < 0 ||
             seed.InitialRemaining > _limits.MaximumRemaining ||
             !double.IsFinite(seed.RegrowthGameSeconds) ||
             seed.RegrowthGameSeconds < 0 ||

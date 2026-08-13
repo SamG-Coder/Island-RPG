@@ -517,11 +517,19 @@ public static class ReliableProtocolCodec
             throw new ProtocolException(
                 "Resource-action tool slots must be -1 or a valid inventory slot.");
         }
-        if (action.Action == ResourceActionKind.GatherTreeStick &&
+        if ((action.Action is ResourceActionKind.GatherTreeStick or
+                ResourceActionKind.GatherFibre) &&
             action.ToolInventorySlot != -1)
         {
             throw new ProtocolException(
-                "Gathering a loose tree stick cannot specify a tool slot.");
+                "This resource action cannot specify a tool slot.");
+        }
+        if ((action.Action is ResourceActionKind.CutTree or
+                ResourceActionKind.Mine or ResourceActionKind.Fish) &&
+            action.ToolInventorySlot < 0)
+        {
+            throw new ProtocolException(
+                "This resource action requires an exact tool slot.");
         }
         writer.WriteByte((byte)action.Action);
         writer.WriteInt16((short)action.ToolInventorySlot);
@@ -539,11 +547,18 @@ public static class ReliableProtocolCodec
             throw new ProtocolException(
                 "Resource-action tool slots must be -1 or a valid inventory slot.");
         }
-        if (action == ResourceActionKind.GatherTreeStick &&
-            toolSlot != -1)
+        if ((action is ResourceActionKind.GatherTreeStick or
+                ResourceActionKind.GatherFibre) && toolSlot != -1)
         {
             throw new ProtocolException(
-                "Gathering a loose tree stick cannot specify a tool slot.");
+                "This resource action cannot specify a tool slot.");
+        }
+        if ((action is ResourceActionKind.CutTree or
+                ResourceActionKind.Mine or ResourceActionKind.Fish) &&
+            toolSlot < 0)
+        {
+            throw new ProtocolException(
+                "This resource action requires an exact tool slot.");
         }
         return new ResourceActionPayload(action, resource, toolSlot);
     }
@@ -1151,14 +1166,9 @@ public static class ReliableProtocolCodec
         EnsureDefined(value.Kind, nameof(value.Kind));
         if (value.NodeRevision == 0)
             throw new ProtocolException("Sparse resource node revisions must be positive.");
-        if (value.Health < 0 || value.Remaining < 0)
-            throw new ProtocolException("Resource node quantities cannot be negative.");
-        if (value.Depleted != (value.Health == 0))
+        if (!ResourceNodeStateRules.IsShapeValid(value))
             throw new ProtocolException(
-                "Resource depletion must match zero resource health.");
-        if (!double.IsFinite(value.ReadyAtGameSeconds) ||
-            value.ReadyAtGameSeconds < 0)
-            throw new ProtocolException("Resource node ready time must be finite and non-negative.");
+                "The sparse resource lifecycle state is invalid for its kind.");
     }
 
     private static void WriteContainerState(
@@ -1425,6 +1435,9 @@ public static class ReliableProtocolCodec
             writer.WriteUInt16((ushort)slot.Quantity);
         }
         writer.WriteInt32(value.WoodcuttingExperience);
+        writer.WriteInt32(value.FarmingExperience);
+        writer.WriteInt32(value.MiningExperience);
+        writer.WriteInt32(value.AdventureExperience);
     }
 
     private static PlayerStateMessage ReadPlayerState(
@@ -1460,6 +1473,9 @@ public static class ReliableProtocolCodec
                 reader.ReadUInt16());
         }
         var woodcuttingExperience = reader.ReadInt32();
+        var farmingExperience = reader.ReadInt32();
+        var miningExperience = reader.ReadInt32();
+        var adventureExperience = reader.ReadInt32();
 
         var result = new PlayerStateMessage(
             sequence,
@@ -1477,7 +1493,10 @@ public static class ReliableProtocolCodec
             craftingExperience,
             cookingExperience,
             inventorySlots,
-            woodcuttingExperience);
+            woodcuttingExperience,
+            farmingExperience,
+            miningExperience,
+            adventureExperience);
         ValidatePlayerState(result);
         return result;
     }
@@ -1536,7 +1555,10 @@ public static class ReliableProtocolCodec
         }
 
         if (value.CraftingExperience < 0 || value.CookingExperience < 0 ||
-            value.WoodcuttingExperience < 0)
+            value.WoodcuttingExperience < 0 ||
+            value.FarmingExperience < 0 ||
+            value.MiningExperience < 0 ||
+            value.AdventureExperience < 0)
         {
             throw new ProtocolException("Skill experience cannot be negative.");
         }

@@ -1,4 +1,5 @@
 using IslandRpg.Gameplay;
+using IslandRpg.Resources;
 using IslandRpg.Rendering.Ui;
 using IslandRpg.World;
 using OpenTK.Mathematics;
@@ -14,6 +15,12 @@ internal sealed partial class GameHostWindow
 
     private void QueueBerryGather(string stableKey)
     {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkVegetationAction(
+                stableKey, ResourceActionKind.GatherBerries);
+            return;
+        }
         var located = FindVegetation(stableKey);
         if (located is not { } target ||
             target.Vegetation.Kind != WorldVegetationKind.BerryBush)

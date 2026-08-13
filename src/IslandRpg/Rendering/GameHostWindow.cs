@@ -6598,6 +6598,11 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var gpu in visibleChunks)
         foreach (var vegetation in gpu.VegetationRenderItems)
         {
+            if (IsNetworkWorld && vegetation.VegetationIndex >= 0 &&
+                MiningNodeCatalog.TryGet(
+                    gpu.Chunk.Vegetation[vegetation.VegetationIndex], out _) &&
+                IsNetworkMiningDepleted(vegetation.StableKey))
+                continue;
             if (!IsAtlasItemVisible(vegetation.AtlasKey, vegetation.World))
                 continue;
             if (vegetation.ShadowAtlasKey is { } shadowAtlasKey)

@@ -13,6 +13,7 @@ internal sealed partial class GameHostWindow
         _queuedAction = null;
         _moveMarker = null;
         _activeMiningKey = null;
+        CancelNetworkResourceInteraction();
         _miningContext.Close();
         _levelUpFireworks.Clear();
         _activeBerryVegetationKey = null;

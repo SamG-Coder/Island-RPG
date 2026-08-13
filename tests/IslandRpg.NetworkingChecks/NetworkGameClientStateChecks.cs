@@ -63,6 +63,14 @@ internal static class NetworkGameClientStateChecks
             "the baseline crafting experience must be applied");
         CheckAssert.Equal(210, initial.CookingExperience,
             "the baseline cooking experience must be applied");
+        CheckAssert.Equal(610, initial.WoodcuttingExperience,
+            "the baseline woodcutting experience must be applied");
+        CheckAssert.Equal(720, initial.FarmingExperience,
+            "the baseline farming experience must be applied");
+        CheckAssert.Equal(830, initial.MiningExperience,
+            "the baseline mining experience must be applied");
+        CheckAssert.Equal(940, initial.AdventureExperience,
+            "the baseline adventure experience must be applied");
 
         var deltaSlots = new[]
         {
@@ -85,7 +93,11 @@ internal static class NetworkGameClientStateChecks
             30.5f,
             400,
             275,
-            deltaSlots);
+            deltaSlots,
+            611,
+            721,
+            831,
+            941);
 
         await peer.SendAsync(delta, cancellationToken);
         await EventuallyAsync(
@@ -112,6 +124,12 @@ internal static class NetworkGameClientStateChecks
             "an actor delta must replace crafting experience");
         CheckAssert.Equal(275, merged.CookingExperience,
             "an actor delta must replace cooking experience");
+        CheckAssert.Equal(721, merged.FarmingExperience,
+            "an actor delta must replace farming experience");
+        CheckAssert.Equal(831, merged.MiningExperience,
+            "an actor delta must replace mining experience");
+        CheckAssert.Equal(941, merged.AdventureExperience,
+            "an actor delta must replace adventure experience");
         CheckAssert.Equal(525ul, client.State.ServerTick,
             "player-state application must advance the observed server tick");
 
@@ -329,7 +347,11 @@ internal static class NetworkGameClientStateChecks
             12.25f,
             320,
             210,
-            slots);
+            slots,
+            610,
+            720,
+            830,
+            940);
 
     private static async Task EventuallyAsync(
         Func<bool> condition,

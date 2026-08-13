@@ -10,6 +10,8 @@ using StbImageSharp;
 
 WorldCheckProcess.DisableWindowsCrashDialogs();
 SurfaceTreeResourceChecks.Run();
+SurfaceVegetationResourceChecks.Run();
+UndergroundMiningResourceChecks.Run();
 
 var slimeExportIndex = Array.FindIndex(
     args, value => value.Equals(

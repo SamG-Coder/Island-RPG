@@ -271,7 +271,11 @@ internal sealed partial class GameHostWindow
     {
         if (_activePlayer is null) return;
         ObserveNetworkResourceGameplayState(
-            state, _activePlayer.WoodcuttingExperience);
+            state,
+            _activePlayer.WoodcuttingExperience,
+            _activePlayer.FarmingExperience,
+            _activePlayer.MiningExperience,
+            _activePlayer.AdventureExperience);
         var items = new string?[PlayerInventory.Capacity];
         var quantities = new int[PlayerInventory.Capacity];
         foreach (var slot in state.InventorySlots)
@@ -291,6 +295,9 @@ internal sealed partial class GameHostWindow
             CraftingExperience = state.CraftingExperience,
             CookingExperience = state.CookingExperience,
             WoodcuttingExperience = state.WoodcuttingExperience,
+            FarmingExperience = state.FarmingExperience,
+            MiningExperience = state.MiningExperience,
+            AdventureExperience = state.AdventureExperience,
             UpdatedUtc = DateTime.UtcNow
         };
         if (_activeInventorySlot >= 0 &&
@@ -345,7 +352,8 @@ internal sealed partial class GameHostWindow
                 ((_networkCookingPresentationOwned &&
                   entity.Action == EntityAction.Gather) ||
                  (_networkResourcePresentationOwned &&
-                  entity.Action is EntityAction.Gather or EntityAction.Work));
+                  entity.Action is EntityAction.Gather or EntityAction.Work or
+                      EntityAction.Mine));
             SyncNetworkEntity(entity, position, velocity, snapshot.State,
                 elapsed, preservePresentedAction);
             if (snapshot.EntityId == _networkClient.State.PlayerEntityId)

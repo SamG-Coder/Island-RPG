@@ -55,7 +55,10 @@ public sealed class DedicatedServer : IAsyncDisposable
             SocketType.Dgram,
             ProtocolType.Udp);
         var resourceCatalog = new ProceduralResourceCatalog(
-            new SurfaceTreeResourceDescriptorSource());
+            new CompositeResourceDescriptorSource(
+                new SurfaceTreeResourceDescriptorSource(),
+                new SurfaceVegetationResourceDescriptorSource(),
+                new UndergroundMiningResourceDescriptorSource()));
         var resourceTransactions = new AuthoritativeResourceTransactions(
             options.WorldSeed,
             resourceCatalog);
@@ -817,7 +820,10 @@ public sealed class DedicatedServer : IAsyncDisposable
                 slot.Slot,
                 slot.ItemId ?? string.Empty,
                 slot.Quantity)).ToArray(),
-            gameplay.WoodcuttingExperience);
+            gameplay.WoodcuttingExperience,
+            gameplay.FarmingExperience,
+            gameplay.MiningExperience,
+            gameplay.AdventureExperience);
 
     private void BroadcastCookingCompletion(CookingCompletionSnapshot value)
     {
@@ -885,7 +891,10 @@ public sealed class DedicatedServer : IAsyncDisposable
         gameplay.CookingExperience,
         gameplay.Inventory.Slots.Select(slot => new InventorySlotState(
             slot.Slot, slot.ItemId ?? string.Empty, slot.Quantity)).ToArray(),
-        gameplay.WoodcuttingExperience);
+        gameplay.WoodcuttingExperience,
+        gameplay.FarmingExperience,
+        gameplay.MiningExperience,
+        gameplay.AdventureExperience);
 
     internal Task DisconnectAsync(ClientConnection connection, AuthenticatedPlayer player) =>
         _session.EnqueueDisconnectAsync(new DisconnectRequest(

@@ -29,6 +29,59 @@ internal sealed record WorldMiningState(
     int Health,
     int MaxHealth);
 
+internal static class WorldMiningIdentity
+{
+    public static string StableKey(
+        WorldVegetation value,
+        int ordinal)
+    {
+        var variant = UndergroundMiningCatalog.TryGetVisual(
+            value.GraphicName, out var visual)
+                ? (int)visual.Variant
+                : 0;
+        return string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"mining-v1:{(int)MathF.Floor(value.X)}:" +
+            $"{(int)MathF.Floor(value.Y)}:{ordinal}:{variant}");
+    }
+
+    public static IEnumerable<string> LegacyKeys(WorldVegetation value)
+    {
+        // Older saves used the process culture while interpolating floats.
+        // Accept that spelling plus invariant/English saves during the
+        // one-way upgrade to the typed key.
+        yield return $"vegetation:{value.X:0.000}:{value.Y:0.000}";
+        var invariant = FormattableString.Invariant(
+            $"vegetation:{value.X:0.000}:{value.Y:0.000}");
+        if (!invariant.Equals(
+                $"vegetation:{value.X:0.000}:{value.Y:0.000}",
+                StringComparison.Ordinal))
+            yield return invariant;
+    }
+
+    public static void UpgradeLegacyKeys(WorldChunk chunk)
+    {
+        if (chunk.MiningStates.Count == 0) return;
+        for (var index = 0; index < chunk.Vegetation.Length; index++)
+        {
+            var value = chunk.Vegetation[index];
+            if (!UndergroundMiningCatalog.TryGetVisual(
+                    value.GraphicName, out _))
+                continue;
+            var legacyKeys = LegacyKeys(value).ToHashSet(
+                StringComparer.Ordinal);
+            var stateIndex = chunk.MiningStates.FindIndex(state =>
+                legacyKeys.Contains(state.StableKey));
+            if (stateIndex < 0) continue;
+            chunk.MiningStates[stateIndex] =
+                chunk.MiningStates[stateIndex] with
+                {
+                    StableKey = StableKey(value, index)
+                };
+        }
+    }
+}
+
 internal sealed class WorldChunk
 {
     public const int Size = 32;
@@ -1190,6 +1243,7 @@ internal sealed class WorldChunkStore
                     generated.FishRemaining[school.Key] = school.Value;
                 generated.VegetationFibreStates.AddRange(fibreStates);
                 generated.MiningStates.AddRange(miningStates);
+                WorldMiningIdentity.UpgradeLegacyKeys(generated);
                 return generated;
             }
             var weights = InfiniteWorldGenerator.GenerateBiomeWeights(

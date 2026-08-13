@@ -76,6 +76,23 @@ public sealed record StrikeTreeTransaction(
     int ToolInventorySlot,
     double GameSeconds);
 
+public sealed record GatherFibreTransaction(
+    WorldTransactionContext Context,
+    ResourceNodeReference Node,
+    double GameSeconds);
+
+public sealed record GatherBerriesTransaction(
+    WorldTransactionContext Context,
+    ResourceNodeReference Node,
+    int ToolInventorySlot,
+    double GameSeconds);
+
+public sealed record MineResourceTransaction(
+    WorldTransactionContext Context,
+    ResourceNodeReference Node,
+    int ToolInventorySlot,
+    double GameSeconds);
+
 public sealed record ResourceActorCadenceCheckpoint(
     ActorId ActorId,
     ResourceActionKind Action,
@@ -105,12 +122,24 @@ public sealed record AuthoritativeResourceTransactionOptions
     public ResourceActionCadence StrikeTreeCadence { get; init; } =
         new(1.05);
 
+    public ResourceActionCadence GatherFibreCadence { get; init; } =
+        new(.75);
+
+    public ResourceActionCadence GatherBerriesCadence { get; init; } =
+        new(.75);
+
+    public ResourceActionCadence MineCadence { get; init; } =
+        new(1.05);
+
     internal AuthoritativeResourceTransactionOptions ValidatedCopy()
     {
         if (!float.IsFinite(InteractionRange) || InteractionRange <= 0)
             throw new ArgumentOutOfRangeException(nameof(InteractionRange));
         _ = GatherTreeStickCadence.NextReadyAt(0);
         _ = StrikeTreeCadence.NextReadyAt(0);
+        _ = GatherFibreCadence.NextReadyAt(0);
+        _ = GatherBerriesCadence.NextReadyAt(0);
+        _ = MineCadence.NextReadyAt(0);
         return this with { };
     }
 }

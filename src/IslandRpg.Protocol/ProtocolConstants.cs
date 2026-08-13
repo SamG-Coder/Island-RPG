@@ -5,7 +5,7 @@ public static class ProtocolConstants
 {
     public const uint ReliableMagic = 0x49525047; // IRPG
     public const uint SnapshotMagic = 0x49525544; // IRUD
-    public const ushort CurrentVersion = 5;
+    public const ushort CurrentVersion = 6;
     public const int ReliableHeaderSize = 28;
     public const int TcpLengthPrefixSize = sizeof(uint);
     public const int MaxReliableFrameBytes = 64 * 1024;

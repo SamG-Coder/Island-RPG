@@ -109,6 +109,20 @@ public static class GameplayIntentFingerprint
                 writer.Resource(value.Node);
                 writer.Int32(value.ToolInventorySlot);
                 break;
+            case GatherFibreIntent value:
+                writer.Tag(18);
+                writer.Resource(value.Node);
+                break;
+            case GatherBerriesIntent value:
+                writer.Tag(19);
+                writer.Resource(value.Node);
+                writer.Int32(value.ToolInventorySlot);
+                break;
+            case MineResourceIntent value:
+                writer.Tag(20);
+                writer.Resource(value.Node);
+                writer.Int32(value.ToolInventorySlot);
+                break;
             default:
                 throw new NotSupportedException(
                     $"Gameplay intent type '{intent.GetType().Name}' has no canonical fingerprint.");

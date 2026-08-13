@@ -192,7 +192,10 @@ public static class WorldActionProtocolAdapter
             gameplay.CraftingExperience,
             gameplay.CookingExperience,
             slots,
-            gameplay.WoodcuttingExperience);
+            gameplay.WoodcuttingExperience,
+            gameplay.FarmingExperience,
+            gameplay.MiningExperience,
+            gameplay.AdventureExperience);
     }
 
     /// <summary>

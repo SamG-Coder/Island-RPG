@@ -137,7 +137,7 @@ internal static class ServerResourceIntegrationChecks
                 cancellationToken);
 
             ResourceActionResultMessage? result = null;
-            for (var attempt = 0; attempt < 6; attempt++)
+            for (var attempt = 0; attempt < 12; attempt++)
             {
                 if (attempt > 0)
                     await Task.Delay(TimeSpan.FromMilliseconds(1_100),

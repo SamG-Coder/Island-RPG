@@ -45,7 +45,10 @@ public sealed record ServerActorCheckpoint(
     IReadOnlyList<ServerInventorySlotCheckpoint> Inventory,
     byte[] ReconnectTokenHash,
     IReadOnlyList<ServerCommandReceiptCheckpoint> CommandReceipts,
-    int WoodcuttingExperience = 0)
+    int WoodcuttingExperience = 0,
+    int FarmingExperience = 0,
+    int MiningExperience = 0,
+    int AdventureExperience = 0)
 {
     // Keep credentials out of accidental structured-log interpolation.
     public override string ToString() =>

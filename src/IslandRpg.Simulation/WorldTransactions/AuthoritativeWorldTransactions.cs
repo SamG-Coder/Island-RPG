@@ -1008,6 +1008,9 @@ public sealed class AuthoritativeWorldTransactions
             input.Gameplay.Inventory.Revision == 0 ||
             input.Gameplay.Health < 0 ||
             input.Gameplay.WoodcuttingExperience < 0 ||
+            input.Gameplay.FarmingExperience < 0 ||
+            input.Gameplay.MiningExperience < 0 ||
+            input.Gameplay.AdventureExperience < 0 ||
             input.Gameplay.Inventory.Capacity != PlayerInventory.Capacity)
             return null;
         var inventory = PlayerInventory.CreateContainer();

@@ -153,7 +153,10 @@ public static class ServerCheckpointMapper
                 receipt.PayloadFingerprint,
                 receipt.Status,
                 receipt.Error)).ToArray(),
-        value.Gameplay.WoodcuttingExperience);
+        value.Gameplay.WoodcuttingExperience,
+        value.Gameplay.FarmingExperience,
+        value.Gameplay.MiningExperience,
+        value.Gameplay.AdventureExperience);
 
     private static AuthoritativeActorCheckpoint ToSimulation(
         ServerActorCheckpoint value) => new(
@@ -179,7 +182,10 @@ public static class ServerCheckpointMapper
                         slot.Slot,
                         slot.ItemId,
                         slot.Quantity)).ToImmutableArray()),
-            value.WoodcuttingExperience),
+            value.WoodcuttingExperience,
+            value.FarmingExperience,
+            value.MiningExperience,
+            value.AdventureExperience),
         value.ReconnectTokenHash.ToImmutableArray(),
         value.CommandReceipts.Select(static receipt =>
             new AuthoritativeCommandReceiptCheckpoint(

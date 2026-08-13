@@ -167,15 +167,20 @@ internal sealed partial class GameHostWindow
                     contact));
             }
 
-            foreach (var vegetation in gpu.Chunk.Vegetation)
+            for (var vegetationIndex = 0;
+                 vegetationIndex < gpu.Chunk.Vegetation.Length;
+                 vegetationIndex++)
             {
+                var vegetation = gpu.Chunk.Vegetation[vegetationIndex];
                 if (!MiningNodeCatalog.TryGet(vegetation, out _))
                     continue;
-                var stableKey =
-                    $"vegetation:{vegetation.X:0.000}:{vegetation.Y:0.000}";
-                if (gpu.Chunk.MiningStates.Any(state =>
-                        state.StableKey == stableKey &&
-                        state.Health == 0))
+                var stableKey = WorldMiningIdentity.StableKey(
+                    vegetation, vegetationIndex);
+                if (IsNetworkWorld
+                        ? IsNetworkMiningDepleted(stableKey)
+                        : gpu.Chunk.MiningStates.Any(state =>
+                            state.StableKey == stableKey &&
+                            state.Health == 0))
                     continue;
                 var atlasKey =
                     $"{vegetation.GraphicName}#{vegetation.FrameIndex}";

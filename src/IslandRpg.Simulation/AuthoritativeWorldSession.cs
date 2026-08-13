@@ -1146,6 +1146,20 @@ public sealed class AuthoritativeWorldSession
                 new StrikeTreeTransaction(
                     context, strike.Node, strike.ToolInventorySlot,
                     gameSeconds)),
+            GatherFibreIntent fibre => _resourceTransactions.Execute(
+                input,
+                new GatherFibreTransaction(
+                    context, fibre.Node, gameSeconds)),
+            GatherBerriesIntent berries => _resourceTransactions.Execute(
+                input,
+                new GatherBerriesTransaction(
+                    context, berries.Node, berries.ToolInventorySlot,
+                    gameSeconds)),
+            MineResourceIntent mining => _resourceTransactions.Execute(
+                input,
+                new MineResourceTransaction(
+                    context, mining.Node, mining.ToolInventorySlot,
+                    gameSeconds)),
             _ => throw new InvalidOperationException(
                 "The resource gameplay intent type is unsupported.")
         };
@@ -1154,7 +1168,11 @@ public sealed class AuthoritativeWorldSession
             (gameplay.ActorRevision != actor.Gameplay.ActorRevision ||
              gameplay.Inventory.Revision != actor.Gameplay.InventoryRevision ||
              gameplay.WoodcuttingExperience !=
-             actor.Gameplay.WoodcuttingExperience))
+             actor.Gameplay.WoodcuttingExperience ||
+             gameplay.FarmingExperience != actor.Gameplay.FarmingExperience ||
+             gameplay.MiningExperience != actor.Gameplay.MiningExperience ||
+             gameplay.AdventureExperience !=
+             actor.Gameplay.AdventureExperience))
             actor.Gameplay.ReplaceWith(gameplay);
         // Accepted misses still carry authoritative hit/damage feedback and
         // cadence progression even though no node revision changed.
@@ -2202,6 +2220,12 @@ public sealed class AuthoritativeWorldSession
 
         public int WoodcuttingExperience { get; set; }
 
+        public int FarmingExperience { get; set; }
+
+        public int MiningExperience { get; set; }
+
+        public int AdventureExperience { get; set; }
+
         public void ReplaceWith(PlayerGameplaySnapshot snapshot)
         {
             if (snapshot.ActorRevision == 0 ||
@@ -2214,7 +2238,10 @@ public sealed class AuthoritativeWorldSession
                 snapshot.WellFedSeconds < 0 ||
                 snapshot.CraftingExperience < 0 ||
                 snapshot.CookingExperience < 0 ||
-                snapshot.WoodcuttingExperience < 0)
+                snapshot.WoodcuttingExperience < 0 ||
+                snapshot.FarmingExperience < 0 ||
+                snapshot.MiningExperience < 0 ||
+                snapshot.AdventureExperience < 0)
             {
                 throw new InvalidOperationException(
                     "The world transaction returned invalid actor state.");
@@ -2264,6 +2291,9 @@ public sealed class AuthoritativeWorldSession
             CraftingExperience = snapshot.CraftingExperience;
             CookingExperience = snapshot.CookingExperience;
             WoodcuttingExperience = snapshot.WoodcuttingExperience;
+            FarmingExperience = snapshot.FarmingExperience;
+            MiningExperience = snapshot.MiningExperience;
+            AdventureExperience = snapshot.AdventureExperience;
         }
 
         public PlayerGameplaySnapshot ToSnapshot()
@@ -2289,7 +2319,10 @@ public sealed class AuthoritativeWorldSession
                 new PlayerInventorySnapshot(
                     InventoryRevision,
                     slots.MoveToImmutable()),
-                WoodcuttingExperience);
+                WoodcuttingExperience,
+                FarmingExperience,
+                MiningExperience,
+                AdventureExperience);
         }
     }
 

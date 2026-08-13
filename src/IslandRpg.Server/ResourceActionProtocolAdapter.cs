@@ -25,6 +25,23 @@ internal static class ResourceActionProtocolAdapter
                 command.ActorRevision,
                 action.Resource,
                 action.ToolInventorySlot),
+            ResourceActionKind.GatherFibre => new GatherFibreIntent(
+                command.CommandId,
+                command.InventoryRevision,
+                command.ActorRevision,
+                action.Resource),
+            ResourceActionKind.GatherBerries => new GatherBerriesIntent(
+                command.CommandId,
+                command.InventoryRevision,
+                command.ActorRevision,
+                action.Resource,
+                action.ToolInventorySlot),
+            ResourceActionKind.Mine => new MineResourceIntent(
+                command.CommandId,
+                command.InventoryRevision,
+                command.ActorRevision,
+                action.Resource,
+                action.ToolInventorySlot),
             _ => throw new CommandFailure(
                 CommandRejectionCode.Invalid,
                 "The resource action is not supported by this authority.")
