@@ -218,7 +218,8 @@ public sealed record PlayerStateMessage(
     int WoodcuttingExperience = 0,
     int FarmingExperience = 0,
     int MiningExperience = 0,
-    int AdventureExperience = 0) : IProtocolMessage
+    int AdventureExperience = 0,
+    int DiggingExperience = 0) : IProtocolMessage
 {
     public ProtocolMessageKind Kind => ProtocolMessageKind.PlayerState;
 }
@@ -243,7 +244,8 @@ public readonly record struct WorldObjectState(
     bool HasContainer,
     string FuelItemId,
     double LitUntilGameSeconds,
-    WorldObjectGateState GateState);
+    WorldObjectGateState GateState,
+    Guid LinkedObjectId = default);
 
 public sealed record WorldObjectStateMessage(
     ulong Sequence,

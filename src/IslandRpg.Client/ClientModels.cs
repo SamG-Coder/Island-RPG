@@ -46,7 +46,8 @@ public sealed record NetworkPlayerGameplayState(
     int WoodcuttingExperience = 0,
     int FarmingExperience = 0,
     int MiningExperience = 0,
-    int AdventureExperience = 0);
+    int AdventureExperience = 0,
+    int DiggingExperience = 0);
 
 /// <summary>
 /// Immutable public projection of a server-authored world object. Container
@@ -69,7 +70,8 @@ public sealed record NetworkWorldObjectState(
     bool HasContainer,
     string FuelItemId,
     double LitUntilGameSeconds,
-    WorldObjectGateState GateState);
+    WorldObjectGateState GateState,
+    Guid LinkedObjectId = default);
 
 /// <summary>
 /// Immutable private state for one container currently known to this client.
@@ -212,6 +214,12 @@ public sealed class NetworkResourceActionResultEventArgs(
     ResourceActionResultMessage result) : EventArgs
 {
     public ResourceActionResultMessage Result { get; } = result;
+}
+
+public sealed class NetworkCaveActionResultEventArgs(
+    CaveActionResultMessage result) : EventArgs
+{
+    public CaveActionResultMessage Result { get; } = result;
 }
 
 public sealed class NetworkPlayerEventArgs(NetworkPlayerPresence player) : EventArgs

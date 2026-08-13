@@ -7,6 +7,7 @@ using System.Net.Sockets;
 using System.Numerics;
 using System.Security.Cryptography;
 using IslandRpg.Navigation;
+using IslandRpg.Caves;
 using IslandRpg.Protocol;
 using IslandRpg.Resources;
 using IslandRpg.Server.Persistence;
@@ -62,10 +63,14 @@ public sealed class DedicatedServer : IAsyncDisposable
         var resourceTransactions = new AuthoritativeResourceTransactions(
             options.WorldSeed,
             resourceCatalog);
+        var worldTransactions = new AuthoritativeWorldTransactions(
+            caves: new ProceduralCaveExcavationEnvironment(
+                options.WorldSeed));
         _session = new AuthoritativeWorldSession(
             SimulationLimits.Default with { MaximumActors = options.MaximumClients },
             sessionId: new SessionId(options.WorldId),
             navigation: new ProceduralWorldNavigationQuery(options.WorldSeed),
+            worldTransactions: worldTransactions,
             resourceTransactions: resourceTransactions);
         _session.WorldTransactionCommitted += ApplyWorldTransactionToBootstrap;
         _session.ResourceTransactionCommitted +=
@@ -283,7 +288,9 @@ public sealed class DedicatedServer : IAsyncDisposable
                     request.ReconnectToken,
                     checked((ulong)result.NextCommandSequence),
                     true,
-                    result.Gameplay);
+                    result.Gameplay,
+                    result.Position,
+                    result.WorldLevel);
                 connection.ConfigureSnapshotTransport(
                     snapshotEndpoint,
                     datagramToken,
@@ -313,7 +320,9 @@ public sealed class DedicatedServer : IAsyncDisposable
                 join.ReconnectToken.Value,
                 checked((ulong)join.NextCommandSequence),
                 false,
-                join.Gameplay);
+                join.Gameplay,
+                join.Position,
+                join.WorldLevel);
             connection.ConfigureSnapshotTransport(
                 snapshotEndpoint,
                 datagramToken,
@@ -343,9 +352,9 @@ public sealed class DedicatedServer : IAsyncDisposable
             StableNetworkId(player.Identity.ActorId.Value),
             _options.WorldId,
             _options.WorldSeed,
-            0,
-            0,
-            0,
+            player.Position.X,
+            player.Position.Y,
+            player.WorldLevel,
             connection.DatagramToken,
             request.ClientNonce,
             player.NextCommandSequence,
@@ -471,6 +480,8 @@ public sealed class DedicatedServer : IAsyncDisposable
                     : action.Payload is ResourceActionPayload resource
                         ? ResourceActionProtocolAdapter.ToIntent(
                             action, resource)
+                        : action.Payload is CaveActionPayload cave
+                            ? CaveActionProtocolAdapter.ToIntent(action, cave)
                         : ToGameplayIntent(action),
             _ => throw new CommandFailure(
                 CommandRejectionCode.Invalid,
@@ -502,6 +513,12 @@ public sealed class DedicatedServer : IAsyncDisposable
         {
             QueueResourceActionOutcome(
                 connection, player, command, resourceAction, result, tick);
+            return;
+        }
+        if (command.Payload is CaveActionPayload caveAction)
+        {
+            QueueCaveActionOutcome(
+                connection, player, command, caveAction, result, tick);
             return;
         }
         if (result.WorldTransaction is { } transaction)
@@ -585,6 +602,47 @@ public sealed class DedicatedServer : IAsyncDisposable
                 ResourceActionProtocolAdapter.ToPublicDelta(
                     sequence, tick, transaction)!);
         }
+    }
+
+    private void QueueCaveActionOutcome(
+        ClientConnection connection,
+        AuthenticatedPlayer player,
+        ActionCommandMessage command,
+        CaveActionPayload action,
+        IntentResult result,
+        ulong tick)
+    {
+        // State precedes the receipt so follow-up commands always see the
+        // authoritative post-action revisions and digging experience.
+        if (result.Accepted && !result.Duplicate &&
+            !connection.TryQueueSequenced(sequence => ToPlayerStateMessage(
+                sequence,
+                tick,
+                player,
+                result.Gameplay,
+                PlayerStateFlags.Baseline |
+                PlayerStateFlags.Actor |
+                PlayerStateFlags.Inventory,
+                0,
+                0)))
+        {
+            connection.Stop();
+            return;
+        }
+        if (!connection.TryQueueSequenced(sequence =>
+                CaveActionProtocolAdapter.ToPrivateResult(
+                    sequence, tick, command, action, result)))
+        {
+            connection.Stop();
+            return;
+        }
+        if (result.Duplicate || result.WorldTransaction is not { } transaction)
+            return;
+        if (WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
+                1, tick, transaction) is not null)
+            Broadcast((_, sequence) =>
+                WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
+                    sequence, tick, transaction)!);
     }
 
     private void QueueWorldActionOutcome(
@@ -751,6 +809,8 @@ public sealed class DedicatedServer : IAsyncDisposable
             IntentStatus.CookingLocked or
             IntentStatus.InvalidCampfireState => CommandRejectionCode.Impossible,
         IntentStatus.ResourceCadenceLocked => CommandRejectionCode.RateLimited,
+        IntentStatus.ExcavationCadenceLocked =>
+            CommandRejectionCode.RateLimited,
         IntentStatus.StaleNodeRevision or
             IntentStatus.StaleResourceChunkRevision =>
             CommandRejectionCode.OutOfOrder,
@@ -758,6 +818,9 @@ public sealed class DedicatedServer : IAsyncDisposable
             IntentStatus.WrongResourceKind or
             IntentStatus.MissingTool or
             IntentStatus.ResourceDepleted or
+            IntentStatus.InvalidExcavation or
+            IntentStatus.MissingExcavationTool or
+            IntentStatus.InvalidCaveLink or
             IntentStatus.OutOfRange => CommandRejectionCode.Impossible,
         IntentStatus.QueueFull => CommandRejectionCode.ServerBusy,
         _ => CommandRejectionCode.Invalid
@@ -823,7 +886,8 @@ public sealed class DedicatedServer : IAsyncDisposable
             gameplay.WoodcuttingExperience,
             gameplay.FarmingExperience,
             gameplay.MiningExperience,
-            gameplay.AdventureExperience);
+            gameplay.AdventureExperience,
+            gameplay.DiggingExperience);
 
     private void BroadcastCookingCompletion(CookingCompletionSnapshot value)
     {
@@ -894,7 +958,8 @@ public sealed class DedicatedServer : IAsyncDisposable
         gameplay.WoodcuttingExperience,
         gameplay.FarmingExperience,
         gameplay.MiningExperience,
-        gameplay.AdventureExperience);
+        gameplay.AdventureExperience,
+        gameplay.DiggingExperience);
 
     internal Task DisconnectAsync(ClientConnection connection, AuthenticatedPlayer player) =>
         _session.EnqueueDisconnectAsync(new DisconnectRequest(
@@ -1370,7 +1435,9 @@ internal readonly record struct AuthenticatedPlayer(
     string ReconnectToken,
     ulong NextCommandSequence,
     bool Reconnected,
-    PlayerGameplaySnapshot Gameplay);
+    PlayerGameplaySnapshot Gameplay,
+    Vector2 Position,
+    int WorldLevel);
 
 internal sealed class HandshakeFailure(
     HandshakeRejectionCode code,

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using IslandRpg.Caves;
 using IslandRpg.Gameplay;
 using IslandRpg.Simulation;
 
@@ -227,6 +228,7 @@ public sealed class ServerCheckpointStore
                 actor.WoodcuttingExperience < 0 ||
                 actor.FarmingExperience < 0 || actor.MiningExperience < 0 ||
                 actor.AdventureExperience < 0 ||
+                actor.DiggingExperience < 0 ||
                 actor.ReconnectTokenHash is not { Length: 32 } ||
                 actor.Inventory is null || actor.Inventory.Count != PlayerInventoryCapacity ||
                 actor.CommandReceipts is null ||
@@ -271,6 +273,37 @@ public sealed class ServerCheckpointStore
             if (!item.HasContainer && item.Container.Count != 0)
                 throw new InvalidDataException("A non-container object contains slots.");
             ValidateContainer(item.Container);
+            if (item.LinkedObjectId == item.ObjectId)
+                throw new InvalidDataException(
+                    "A linked world object must use a distinct identity.");
+        }
+
+        foreach (var item in value.WorldObjects)
+        {
+            if (item.LinkedObjectId is not { } linkedId) continue;
+            if (!objectsById.TryGetValue(linkedId, out var linked) ||
+                linked.LinkedObjectId != item.ObjectId ||
+                linked.DefinitionId != item.DefinitionId ||
+                item.DefinitionId is not (
+                    CaveExcavationRules.OpenShaftItemId or
+                    CaveExcavationRules.RopedEntranceItemId) ||
+                linked.WorldLevel == item.WorldLevel ||
+                linked.X != item.X || linked.Y != item.Y)
+                throw new InvalidDataException(
+                    "A persisted cave link is missing its reciprocal portal.");
+        }
+
+        var excavationCadences = new HashSet<(Guid ActorId, Guid ObjectId)>();
+        foreach (var cadence in value.ExcavationCadences ?? [])
+        {
+            if (!actors.Contains(cadence.ActorId) ||
+                !objects.Contains(cadence.ExcavationId) ||
+                !double.IsFinite(cadence.NextAllowedGameSeconds) ||
+                cadence.NextAllowedGameSeconds < 0 ||
+                !excavationCadences.Add(
+                    (cadence.ActorId, cadence.ExcavationId)))
+                throw new InvalidDataException(
+                    "An excavation cadence checkpoint is invalid.");
         }
 
         var chunks = new HashSet<(int X, int Y, int Level)>();

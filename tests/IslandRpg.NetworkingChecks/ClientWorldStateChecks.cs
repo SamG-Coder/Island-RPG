@@ -48,7 +48,8 @@ internal static class ClientWorldStateChecks
             client,
             cancellationToken);
         var id = Guid.NewGuid();
-        var baseline = World(id, 2, 2, 70);
+        var linkedId = Guid.NewGuid();
+        var baseline = World(id, 2, 2, 70, linkedId);
         var observed = 0;
         WorldObjectDeltaKind lastKind = default;
         client.WorldObjectsChanged += (_, args) =>
@@ -65,6 +66,9 @@ internal static class ClientWorldStateChecks
                 value.ObjectRevision == 2,
             "the world-object baseline was not applied",
             cancellationToken);
+        CheckAssert.Equal(linkedId,
+            client.State.WorldObjects[id].LinkedObjectId,
+            "the public projection must retain an exact cave endpoint link");
 
         var upsert = World(id, 3, 3, 85);
         await peer.SendAsync(
@@ -509,7 +513,8 @@ internal static class ClientWorldStateChecks
         Guid id,
         uint chunkRevision,
         uint objectRevision,
-        int health) =>
+        int health,
+        Guid linkedObjectId = default) =>
         new(
             id,
             3,
@@ -526,7 +531,8 @@ internal static class ClientWorldStateChecks
             true,
             string.Empty,
             0,
-            WorldObjectGateState.None);
+            WorldObjectGateState.None,
+            linkedObjectId);
 
     private static WorldObjectReference Reference(WorldObjectState state) =>
         new(

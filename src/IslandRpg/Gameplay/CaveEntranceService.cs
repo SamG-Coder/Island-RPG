@@ -1,22 +1,22 @@
+using IslandRpg.Caves;
 using IslandRpg.World;
+using NumericsVector2 = System.Numerics.Vector2;
 
 namespace IslandRpg.Gameplay;
 
 internal static class CaveEntranceService
 {
-    private const int ProspectRadius = 32;
-
     public static bool IsHole(WorldGroundObject value) =>
-        value.ItemId == ItemIds.CaveHole;
+        Kind(value) == ExcavationKind.OpenShaft;
 
     public static bool IsDigSite(WorldGroundObject value) =>
-        value.ItemId == ItemIds.DigSite;
+        Kind(value) == ExcavationKind.DigSite;
 
     public static bool IsShallowHole(WorldGroundObject value) =>
-        value.ItemId == ItemIds.ShallowHole;
+        Kind(value) == ExcavationKind.ShallowHole;
 
     public static bool IsEntrance(WorldGroundObject value) =>
-        value.ItemId == ItemIds.CaveEntrance;
+        Kind(value) == ExcavationKind.RopedEntrance;
 
     public static bool IsCaveShaft(WorldGroundObject value) =>
         IsHole(value) || IsEntrance(value);
@@ -28,19 +28,16 @@ internal static class CaveEntranceService
         IsEntrance(value);
 
     public static bool CanFill(WorldGroundObject value) =>
-        IsShallowHole(value) || IsHole(value);
+        CaveExcavationRules.CanFill(State(value));
 
     public static float Opacity(WorldGroundObject value)
     {
-        if (!IsDigSite(value) || value.MaxHealth <= 0) return 1f;
-        var progress = 1f -
-            Math.Clamp(value.Health / (float)value.MaxHealth, 0f, 1f);
-        return .22f + progress * .78f;
+        return CaveExcavationRules.Opacity(State(value));
     }
 
     public static bool CaveBelow(long seed, float x, float y) =>
-        CaveHydrologyField.Density(seed, x, y) >=
-        CaveHydrologyField.Boundary;
+        new ProceduralCaveExcavationEnvironment(seed).IsCaveBelow(
+            new(x, y));
 
     /// <summary>
     /// Reads the local cave field after soil has been exposed. This is kept
@@ -50,44 +47,18 @@ internal static class CaveEntranceService
     public static bool TryProspect(
         long seed, float x, float y, out CaveProspect prospect)
     {
-        var sampling = new CaveHydrologyField.SamplingContext(seed);
-        var bestDistanceSquared = float.MaxValue;
-        var bestX = 0f;
-        var bestY = 0f;
-        for (var offsetY = -ProspectRadius;
-             offsetY <= ProspectRadius;
-             offsetY++)
-        for (var offsetX = -ProspectRadius;
-             offsetX <= ProspectRadius;
-             offsetX++)
-        {
-            if (offsetX == 0 && offsetY == 0) continue;
-            var distanceSquared =
-                offsetX * offsetX + offsetY * offsetY;
-            if (distanceSquared > ProspectRadius * ProspectRadius ||
-                distanceSquared >= bestDistanceSquared)
-                continue;
-            var sampleX = x + offsetX;
-            var sampleY = y + offsetY;
-            if (sampling.Density(sampleX, sampleY) <
-                CaveHydrologyField.Boundary)
-                continue;
-            bestDistanceSquared = distanceSquared;
-            bestX = sampleX;
-            bestY = sampleY;
-        }
-
-        if (bestDistanceSquared == float.MaxValue)
+        var environment = new ProceduralCaveExcavationEnvironment(seed);
+        if (!environment.TryProspect(
+                new NumericsVector2(x, y), out var found))
         {
             prospect = default;
             return false;
         }
-
         prospect = new(
-            bestX,
-            bestY,
-            MathF.Sqrt(bestDistanceSquared),
-            CompassDirection(bestX - x, bestY - y));
+            found.Position.X,
+            found.Position.Y,
+            found.Distance,
+            CaveExcavationRules.DirectionName(found.Direction));
         return true;
     }
 
@@ -104,34 +75,28 @@ internal static class CaveEntranceService
     }
 
     public static WorldGroundObject InstallRope(
-        WorldGroundObject hole) =>
-        IsHole(hole)
-            ? hole with { ItemId = ItemIds.CaveEntrance }
-            : throw new InvalidOperationException(
-                "Only a discovered cave hole can accept a rope.");
-
-    private static string CompassDirection(float x, float y)
+        WorldGroundObject hole)
     {
-        var horizontal = x switch
+        if (!CaveExcavationRules.TryInstallRope(
+                State(hole), out var entrance))
+            throw new InvalidOperationException(
+                "Only a discovered cave hole can accept a rope.");
+        return hole with
         {
-            < -.5f => "west",
-            > .5f => "east",
-            _ => ""
-        };
-        var vertical = y switch
-        {
-            < -.5f => "north",
-            > .5f => "south",
-            _ => ""
-        };
-        return (vertical, horizontal) switch
-        {
-            ("", "") => "nearby",
-            ("", _) => horizontal,
-            (_, "") => vertical,
-            _ => $"{vertical}-{horizontal}"
+            ItemId = CaveExcavationRules.ItemIdForKind(entrance.Kind)
         };
     }
+
+    private static ExcavationKind Kind(WorldGroundObject value) =>
+        CaveExcavationRules.KindForItemId(value.ItemId);
+
+    private static CaveExcavationState State(WorldGroundObject value) =>
+        new(
+            value.Id,
+            Kind(value),
+            new NumericsVector2(value.X, value.Y),
+            value.Health,
+            Math.Max(1, value.MaxHealth));
 }
 
 internal readonly record struct CaveProspect(

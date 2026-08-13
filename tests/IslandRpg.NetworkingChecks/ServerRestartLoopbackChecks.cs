@@ -1,6 +1,9 @@
 using System.Net;
+using System.Numerics;
 using IslandRpg.Client;
+using IslandRpg.Caves;
 using IslandRpg.Protocol;
+using IslandRpg.Resources;
 using IslandRpg.Server;
 using IslandRpg.Simulation;
 
@@ -12,9 +15,291 @@ internal static class ServerRestartLoopbackChecks
     private const string BuildVersion = "network-checks";
     private const string ContentVersion = "test-content";
 
-    public static void Register(CheckRunner checks) => checks.Add(
-        "real server restart preserves actor and object-free chunk authority",
-        PreservesWorldAndActorStateAcrossRestartAsync);
+    public static void Register(CheckRunner checks)
+    {
+        checks.Add(
+            "real server restart preserves actor and object-free chunk authority",
+            PreservesWorldAndActorStateAcrossRestartAsync);
+        checks.Add(
+            "real server replicates linked cave traversal and restart",
+            ReplicatesLinkedCaveAcrossRestartAsync);
+    }
+
+    private static async ValueTask ReplicatesLinkedCaveAcrossRestartAsync(
+        CancellationToken cancellationToken)
+    {
+        using var save = TemporarySaveRoot.Create();
+        var worldId = Guid.Parse("93000000-0000-0000-0000-000000000001");
+        var clientId = Guid.Parse("93000000-0000-0000-0000-000000000002");
+        var (seed, position) = FindNearbyCaveSite();
+        var options = new ServerOptions(
+            IPAddress.Loopback, 0, worldId, seed,
+            BuildVersion, ContentVersion, 8)
+        {
+            SaveRoot = save.Path,
+            AutosaveInterval = TimeSpan.FromHours(1),
+            StartingInventory =
+            [
+                new InitialInventoryItem("stone_shovel"),
+                new InitialInventoryItem(CaveExcavationRules.RopeItemId),
+            ],
+        };
+
+        Guid playerId;
+        string reconnectToken;
+        Guid surfaceId;
+        Guid undergroundId;
+        int diggingExperience;
+        await using (var host = await RunningServer.StartAsync(
+                         options, cancellationToken))
+        await using (var actor = new NetworkGameClient(TimeSpan.Zero))
+        await using (var observer = new NetworkGameClient(TimeSpan.Zero))
+        {
+            var accepted = await actor.ConnectAsync(
+                host.Endpoint.Address.ToString(), host.Endpoint.Port,
+                CreateHandshake(worldId, clientId, "Elara") with
+                {
+                    Capabilities = ClientCapabilities.None,
+                },
+                cancellationToken);
+            playerId = accepted.PlayerId;
+            reconnectToken = accepted.ReconnectToken;
+            await observer.ConnectAsync(
+                host.Endpoint.Address.ToString(), host.Endpoint.Port,
+                CreateHandshake(
+                    worldId,
+                    Guid.Parse("93000000-0000-0000-0000-000000000003"),
+                    "Aveline") with
+                {
+                    Capabilities = ClientCapabilities.None,
+                },
+                cancellationToken);
+            await EventuallyAsync(
+                () => actor.State.Gameplay is not null &&
+                      observer.State.Gameplay is not null,
+                "cave clients did not receive player baselines",
+                cancellationToken);
+
+            var start = await SendAndAwaitCaveAsync(
+                actor,
+                new StartExcavationAction(
+                    position.X, position.Y, 0, 0,
+                    ChunkRevision(actor, position, 0)),
+                cancellationToken);
+            CheckAssert.True(start.Accepted,
+                $"the real cave start was rejected: {start.Detail}");
+            await EventuallyAsync(
+                () => FindObject(observer, CaveExcavationRules.DigSiteItemId)
+                    is not null,
+                "observer did not receive the dig-site delta",
+                cancellationToken);
+
+            CaveActionResultMessage work = null!;
+            for (var strike = 0; strike < 20; strike++)
+            {
+                if (strike > 0)
+                    await Task.Delay(TimeSpan.FromMilliseconds(950),
+                        cancellationToken);
+                var site = FindObject(actor,
+                    CaveExcavationRules.DigSiteItemId) ??
+                    throw new InvalidOperationException(
+                        "the requester lost its authoritative dig site");
+                work = await SendAndAwaitCaveAsync(
+                    actor,
+                    new WorkExcavationAction(Reference(site), 0),
+                    cancellationToken);
+                CheckAssert.True(work.Accepted,
+                    $"the real cave strike was rejected: {work.Detail}");
+                CheckAssert.True(work.Damage > 0,
+                    "accepted work must carry exact positive damage");
+                if (work.Completed) break;
+            }
+            CheckAssert.True(work.Completed,
+                "the bounded real strike sequence did not discover a cave");
+            await EventuallyAsync(
+                () => LinkedPair(observer) is not null,
+                "observer did not receive both reciprocal cave endpoints",
+                cancellationToken);
+            var pair = LinkedPair(actor)!.Value;
+            surfaceId = pair.Surface.ObjectId;
+            undergroundId = pair.Underground.ObjectId;
+            CheckAssert.False(surfaceId == undergroundId,
+                "surface and underground endpoints require distinct IDs");
+            CheckAssert.Equal(undergroundId, pair.Surface.LinkedObjectId,
+                "surface endpoint must link to underground");
+            CheckAssert.Equal(surfaceId, pair.Underground.LinkedObjectId,
+                "underground endpoint must link to surface");
+
+            var install = await SendAndAwaitCaveAsync(
+                actor,
+                new InstallCaveRopeAction(Reference(pair.Surface), 1),
+                cancellationToken);
+            CheckAssert.True(install.Accepted,
+                $"rope installation was rejected: {install.Detail}");
+            await EventuallyAsync(
+                () => actor.State.WorldObjects.TryGetValue(
+                          surfaceId, out var value) &&
+                      value.DefinitionId ==
+                          CaveExcavationRules.RopedEntranceItemId,
+                "the requester did not receive the roped portal state",
+                cancellationToken);
+            var entrance = actor.State.WorldObjects[surfaceId];
+            var traverse = await SendAndAwaitCaveAsync(
+                actor,
+                new TraverseCaveAction(Reference(entrance)),
+                cancellationToken);
+            CheckAssert.True(traverse.Accepted && traverse.Transitioned,
+                $"authoritative traversal was rejected: {traverse.Detail}");
+            CheckAssert.Equal(-1, (int)traverse.WorldLevel,
+                "surface traversal must author the underground destination");
+            diggingExperience = actor.State.Gameplay!.DiggingExperience;
+            CheckAssert.True(diggingExperience > 0,
+                "real excavation must publish authoritative digging XP");
+
+            await actor.DisconnectAsync(cancellationToken);
+        }
+
+        await using var restarted = await RunningServer.StartAsync(
+            options, cancellationToken);
+        await using var resumed = new NetworkGameClient(TimeSpan.Zero);
+        var resumedHandshake = await resumed.ConnectAsync(
+            restarted.Endpoint.Address.ToString(), restarted.Endpoint.Port,
+            CreateHandshake(worldId, clientId, "Elara") with
+            {
+                ReconnectPlayerId = playerId,
+                ReconnectToken = reconnectToken,
+                Capabilities = ClientCapabilities.None,
+            },
+            cancellationToken);
+        CheckAssert.Equal(-1, resumedHandshake.SpawnWorldLevel,
+            "restart handshake must report the persisted cave world level");
+        CheckAssert.Equal(position.X, resumedHandshake.SpawnX,
+            "restart handshake must report the persisted traversal X");
+        CheckAssert.Equal(position.Y, resumedHandshake.SpawnY,
+            "restart handshake must report the persisted traversal Y");
+        await EventuallyAsync(
+            () => resumed.State.Gameplay?.DiggingExperience ==
+                      diggingExperience && LinkedPair(resumed) is not null,
+            "restart reconnect lost digging XP or linked cave state",
+            cancellationToken);
+
+        await using var lateJoin = new NetworkGameClient(TimeSpan.Zero);
+        await lateJoin.ConnectAsync(
+            restarted.Endpoint.Address.ToString(), restarted.Endpoint.Port,
+            CreateHandshake(
+                worldId,
+                Guid.Parse("93000000-0000-0000-0000-000000000004"),
+                "Mira") with
+            {
+                Capabilities = ClientCapabilities.None,
+            },
+            cancellationToken);
+        await EventuallyAsync(
+            () => LinkedPair(lateJoin) is not null,
+            "late join did not receive reciprocal cave baselines",
+            cancellationToken);
+        var latePair = LinkedPair(lateJoin)!.Value;
+        CheckAssert.Equal(surfaceId, latePair.Surface.ObjectId,
+            "late join must retain the stable surface identity");
+        CheckAssert.Equal(undergroundId, latePair.Underground.ObjectId,
+            "late join must retain the stable underground identity");
+    }
+
+    private static (long Seed, Vector2 Position) FindNearbyCaveSite()
+    {
+        var resources = new ProceduralResourceCatalog(
+            new SurfaceTreeResourceDescriptorSource());
+        for (var seed = 1L; seed <= 8_192; seed++)
+        {
+            var environment = new ProceduralCaveExcavationEnvironment(seed);
+            for (var y = -2; y <= 2; y++)
+            for (var x = -2; x <= 2; x++)
+            {
+                var position = new Vector2(x + .5f, y + .5f);
+                if (Vector2.DistanceSquared(position, Vector2.Zero) > 9 ||
+                    !environment.IsSurfaceDiggable(position) ||
+                    !environment.IsCaveBelow(position))
+                    continue;
+                var chunk = WorldChunkKey.At(position, 0);
+                if (resources.DescribeChunk(seed, chunk).Any(value =>
+                        value.Kind == ResourceNodeKind.Tree &&
+                        value.Position == position))
+                    continue;
+                return (seed, position);
+            }
+        }
+        throw new InvalidOperationException(
+            "No deterministic nearby cave-bearing site was found.");
+    }
+
+    private static NetworkWorldObjectState? FindObject(
+        NetworkGameClient client, string definitionId) =>
+        client.State.WorldObjects.Values.FirstOrDefault(value =>
+            string.Equals(value.DefinitionId, definitionId,
+                StringComparison.Ordinal));
+
+    private static (NetworkWorldObjectState Surface,
+        NetworkWorldObjectState Underground)? LinkedPair(
+        NetworkGameClient client)
+    {
+        var objects = client.State.WorldObjects;
+        foreach (var surface in objects.Values)
+        {
+            if (surface.WorldLevel != 0 ||
+                surface.LinkedObjectId == Guid.Empty ||
+                !objects.TryGetValue(
+                    surface.LinkedObjectId, out var underground) ||
+                underground.WorldLevel != -1 ||
+                underground.LinkedObjectId != surface.ObjectId)
+                continue;
+            return (surface, underground);
+        }
+        return null;
+    }
+
+    private static WorldObjectReference Reference(
+        NetworkWorldObjectState value) => new(
+        value.ObjectId,
+        value.ChunkX,
+        value.ChunkY,
+        value.WorldLevel,
+        value.ObjectRevision,
+        value.ChunkRevision);
+
+    private static uint ChunkRevision(
+        NetworkGameClient client, Vector2 position, short worldLevel)
+    {
+        var chunk = WorldChunkKey.At(position, worldLevel);
+        return client.State.WorldChunkRevisions.TryGetValue(
+            new NetworkWorldChunk(chunk.X, chunk.Y, worldLevel),
+            out var revision) ? revision : 0;
+    }
+
+    private static async Task<CaveActionResultMessage> SendAndAwaitCaveAsync(
+        NetworkGameClient client,
+        CaveActionPayload payload,
+        CancellationToken cancellationToken)
+    {
+        var commandId = Guid.NewGuid();
+        var completion = new TaskCompletionSource<CaveActionResultMessage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(object? _, NetworkCaveActionResultEventArgs args)
+        {
+            if (args.Result.CommandId == commandId)
+                completion.TrySetResult(args.Result);
+        }
+        client.CaveActionCompleted += Handler;
+        try
+        {
+            await client.SendActionAsync(
+                payload, commandId, cancellationToken);
+            return await completion.Task.WaitAsync(Timeout, cancellationToken);
+        }
+        finally
+        {
+            client.CaveActionCompleted -= Handler;
+        }
+    }
 
     private static async ValueTask PreservesWorldAndActorStateAcrossRestartAsync(
         CancellationToken cancellationToken)

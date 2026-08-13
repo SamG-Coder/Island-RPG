@@ -34,12 +34,14 @@ internal sealed partial class GameHostWindow
             if (change.Kind == WorldObjectDeltaKind.Remove)
             {
                 RemoveNetworkWorldObject(change.ObjectId);
+                ObserveNetworkCaveWorldChange(change);
                 continue;
             }
 
             if (change.State is not { } state) continue;
             UpsertNetworkWorldObject(state);
             ContinueNetworkConstruction(change);
+            ObserveNetworkCaveWorldChange(change);
         }
     }
 

@@ -53,6 +53,9 @@ public sealed class NetworkGameClient : IAsyncDisposable
     public event EventHandler<NetworkCookingResultEventArgs>? CookingCompleted;
     public event EventHandler<NetworkResourceActionResultEventArgs>?
         ResourceActionCompleted;
+
+    public event EventHandler<NetworkCaveActionResultEventArgs>?
+        CaveActionCompleted;
     public event EventHandler<NetworkWorldObjectsChangedEventArgs>? WorldObjectsChanged;
     public event EventHandler<NetworkContainerStateEventArgs>? ContainerStateChanged;
     public event EventHandler<NetworkResourcesChangedEventArgs>? ResourcesChanged;
@@ -491,6 +494,11 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 UpdateTick(result.Tick);
                 Raise(ResourceActionCompleted,
                     new NetworkResourceActionResultEventArgs(result));
+                break;
+            case CaveActionResultMessage result:
+                UpdateTick(result.Tick);
+                Raise(CaveActionCompleted,
+                    new NetworkCaveActionResultEventArgs(result));
                 break;
             case PlayerStateMessage playerState:
             {
@@ -1164,7 +1172,8 @@ public sealed class NetworkGameClient : IAsyncDisposable
             value.HasContainer,
             value.FuelItemId,
             value.LitUntilGameSeconds,
-            value.GateState);
+            value.GateState,
+            value.LinkedObjectId);
 
     private static bool EquivalentObject(
         NetworkWorldObjectState left,
@@ -1324,7 +1333,10 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 : previous!.MiningExperience,
             actorChanged
                 ? message.AdventureExperience
-                : previous!.AdventureExperience);
+                : previous!.AdventureExperience,
+            actorChanged
+                ? message.DiggingExperience
+                : previous!.DiggingExperience);
     }
 
     private void UpdateTick(ulong tick) => UpdateState(current => current with { ServerTick = Math.Max(current.ServerTick, tick) });

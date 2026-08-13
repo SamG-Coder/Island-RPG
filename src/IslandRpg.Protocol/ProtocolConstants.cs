@@ -5,7 +5,7 @@ public static class ProtocolConstants
 {
     public const uint ReliableMagic = 0x49525047; // IRPG
     public const uint SnapshotMagic = 0x49525544; // IRUD
-    public const ushort CurrentVersion = 6;
+    public const ushort CurrentVersion = 7;
     public const int ReliableHeaderSize = 28;
     public const int TcpLengthPrefixSize = sizeof(uint);
     public const int MaxReliableFrameBytes = 64 * 1024;
@@ -64,6 +64,7 @@ public enum ProtocolMessageKind : byte
     ResourceChunkBaseline = 41,
     ResourceNodeDeltaBatch = 42,
     ResourceActionResult = 43,
+    CaveActionResult = 44,
 }
 
 [Flags]
@@ -150,6 +151,18 @@ public enum ActionCommandKind : byte
     DemolishWorldObject = 14,
     CookOnCampfire = 15,
     ResourceAction = 16,
+    CaveAction = 17,
+}
+
+public enum CaveActionKind : byte
+{
+    StartExcavation = 1,
+    WorkExcavation = 2,
+    RestoreExcavation = 3,
+    InstallRope = 4,
+    TakeRope = 5,
+    FillExcavation = 6,
+    Traverse = 7,
 }
 
 public enum ResourceNodeDeltaKind : byte

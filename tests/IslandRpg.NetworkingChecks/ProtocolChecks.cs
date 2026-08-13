@@ -26,6 +26,12 @@ internal static class ProtocolChecks
             "world action commands round trip with exact revisions",
             WorldActionCommandsRoundTrip);
         checks.Add(
+            "cave commands and outcomes round trip with exact revisions",
+            CaveActionMessagesRoundTrip);
+        checks.Add(
+            "cave protocol rejects malformed commands and outcomes",
+            CaveActionProtocolRejectsMalformedState);
+        checks.Add(
             "world state messages round trip without private data leaks",
             WorldStateMessagesRoundTrip);
         checks.Add(
@@ -198,9 +204,9 @@ internal static class ProtocolChecks
     private static void ProtocolEnforcesInputBounds()
     {
         CheckAssert.Equal(
-            (ushort)6,
+            (ushort)7,
             ProtocolConstants.CurrentVersion,
-            "authoritative resource progression requires protocol v6");
+            "authoritative cave progression requires protocol v7");
         var multibyteName = string.Concat(
             Enumerable.Repeat("界", ProtocolLimits.PlayerNameBytes));
         CheckAssert.Throws<ProtocolException>(
@@ -330,7 +336,8 @@ internal static class ProtocolChecks
             610,
             720,
             830,
-            940);
+            940,
+            1050);
         AssertPlayerStateRoundTrip(baseline);
 
         var delta = baseline with
@@ -524,10 +531,112 @@ internal static class ProtocolChecks
         }
     }
 
+    private static void CaveActionMessagesRoundTrip()
+    {
+        var commandId = Guid.Parse(
+            "abababab-abab-abab-abab-abababababab");
+        var excavation = new WorldObjectReference(
+            Guid.Parse("cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcdcd"),
+            -4, 7, 0, 12, 19);
+        CaveActionPayload[] payloads =
+        [
+            new StartExcavationAction(12.5f, -4.25f, 0, 6, 18),
+            new WorkExcavationAction(excavation, 6),
+            new RestoreExcavationAction(excavation),
+            new InstallCaveRopeAction(excavation, 8),
+            new TakeCaveRopeAction(excavation),
+            new FillExcavationAction(excavation, 9),
+            new TraverseCaveAction(excavation),
+        ];
+
+        for (var index = 0; index < payloads.Length; index++)
+        {
+            var expected = new ActionCommandMessage(
+                (ulong)(650 + index), 905, commandId, 23, 41,
+                payloads[index]);
+            var actual = (ActionCommandMessage)ReliableProtocolCodec.Decode(
+                ReliableProtocolCodec.Encode(expected));
+            CheckAssert.Equal(expected, actual,
+                $"{payloads[index].Action} must retain every optimistic lock");
+        }
+
+        CaveActionResultMessage[] results =
+        [
+            new(680, 906, commandId, CaveActionKind.WorkExcavation,
+                true, CommandRejectionCode.None, "excavation_strike", 24, 42,
+                false, 0, 0, 0, 7, false),
+            new(681, 907, commandId, CaveActionKind.WorkExcavation,
+                true, CommandRejectionCode.None, "cave_discovered", 25, 43,
+                false, 0, 0, 0, 9, true),
+            new(682, 908, commandId, CaveActionKind.Traverse,
+                true, CommandRejectionCode.None, "cave_traversed", 26, 43,
+                true, 12.5f, -4.25f, -1),
+            new(683, 909, commandId, CaveActionKind.InstallRope,
+                false, CommandRejectionCode.OutOfOrder,
+                "stale cave reference", 26, 43, false, 0, 0, 0),
+        ];
+        foreach (var expected in results)
+            CheckAssert.Equal(expected, ReliableProtocolCodec.Decode(
+                    ReliableProtocolCodec.Encode(expected)),
+                "typed cave outcomes must round trip without parsing Detail");
+    }
+
+    private static void CaveActionProtocolRejectsMalformedState()
+    {
+        var commandId = Guid.Parse(
+            "abababab-abab-abab-abab-abababababab");
+        var excavation = new WorldObjectReference(
+            Guid.Parse("cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcdcd"),
+            0, 0, 0, 1, 1);
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1, 1, commandId, 1, 1,
+                new StartExcavationAction(float.NaN, 0, 0, 0, 0))),
+            "excavation positions must be finite");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1, 1, commandId, 1, 1,
+                new WorkExcavationAction(
+                    excavation, ProtocolLimits.PlayerInventorySlots))),
+            "cave tool slots must use the bounded player inventory");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new CaveActionResultMessage(
+                1, 1, commandId, CaveActionKind.WorkExcavation,
+                false, CommandRejectionCode.Impossible, "rejected", 1, 1,
+                false, 0, 0, 0, 3, false)),
+            "rejected cave work cannot claim damage");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new CaveActionResultMessage(
+                1, 1, commandId, CaveActionKind.InstallRope,
+                true, CommandRejectionCode.None, string.Empty, 1, 1,
+                false, 0, 0, 0, 0, true)),
+            "non-work cave actions cannot claim excavation completion");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new CaveActionResultMessage(
+                1, 1, commandId, CaveActionKind.WorkExcavation,
+                true, CommandRejectionCode.None, string.Empty, 1, 1,
+                false, 0, 0, 0, -1, false)),
+            "cave damage cannot be negative");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new CaveActionResultMessage(
+                1, 1, commandId, CaveActionKind.Traverse,
+                true, CommandRejectionCode.None, string.Empty, 1, 1,
+                false, 1, 2, -1)),
+            "a non-transition receipt cannot smuggle a destination");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new CaveActionResultMessage(
+                1, 1, commandId, CaveActionKind.InstallRope,
+                true, CommandRejectionCode.None, string.Empty, 1, 1,
+                true, 1, 2, -1)),
+            "only traversal can authoritatively move the player between levels");
+    }
+
     private static void WorldStateMessagesRoundTrip()
     {
         var objectId = Guid.Parse(
             "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee");
+        var linkedObjectId = Guid.Parse(
+            "edededed-eded-eded-eded-edededededed");
         var state = new WorldObjectState(
             objectId,
             5,
@@ -544,7 +653,8 @@ internal static class ProtocolChecks
             true,
             "logs",
             944.5,
-            WorldObjectGateState.None);
+            WorldObjectGateState.None,
+            linkedObjectId);
         var reference = new WorldObjectReference(
             objectId, 5, -8, 0, 11, 32);
 

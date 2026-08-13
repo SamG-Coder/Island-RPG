@@ -25,6 +25,9 @@ internal static class NetworkGameClientStateChecks
         checks.Add(
             "network client publishes concurrent commands in sequence order",
             PublishesConcurrentCommandsInSequenceOrderAsync);
+        checks.Add(
+            "network client publishes typed cave action outcomes",
+            PublishesTypedCaveOutcomeAsync);
     }
 
     private static async ValueTask AppliesBaselineAndDeltaAsync(
@@ -71,6 +74,8 @@ internal static class NetworkGameClientStateChecks
             "the baseline mining experience must be applied");
         CheckAssert.Equal(940, initial.AdventureExperience,
             "the baseline adventure experience must be applied");
+        CheckAssert.Equal(1050, initial.DiggingExperience,
+            "the baseline digging experience must be applied");
 
         var deltaSlots = new[]
         {
@@ -97,7 +102,8 @@ internal static class NetworkGameClientStateChecks
             611,
             721,
             831,
-            941);
+            941,
+            1051);
 
         await peer.SendAsync(delta, cancellationToken);
         await EventuallyAsync(
@@ -130,6 +136,8 @@ internal static class NetworkGameClientStateChecks
             "an actor delta must replace mining experience");
         CheckAssert.Equal(941, merged.AdventureExperience,
             "an actor delta must replace adventure experience");
+        CheckAssert.Equal(1051, merged.DiggingExperience,
+            "an actor delta must replace digging experience");
         CheckAssert.Equal(525ul, client.State.ServerTick,
             "player-state application must advance the observed server tick");
 
@@ -316,6 +324,33 @@ internal static class NetworkGameClientStateChecks
             "every sequence returned to concurrent callers must be published once");
     }
 
+    private static async ValueTask PublishesTypedCaveOutcomeAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var client = new NetworkGameClient(TimeSpan.Zero);
+        await using var peer = await ScriptedPeer.ConnectAsync(
+            client, cancellationToken);
+        var commandId = Guid.Parse(
+            "cacacaca-caca-caca-caca-cacacacacaca");
+        var expected = new CaveActionResultMessage(
+            2, 777, commandId, CaveActionKind.WorkExcavation,
+            true, CommandRejectionCode.None, "cave_discovered", 8, 12,
+            false, 0, 0, 0, 9, true);
+        var completion = new TaskCompletionSource<CaveActionResultMessage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        client.CaveActionCompleted += (_, args) =>
+            completion.TrySetResult(args.Result);
+
+        await peer.SendAsync(expected, cancellationToken);
+        var actual = await completion.Task.WaitAsync(Timeout, cancellationToken);
+        CheckAssert.Equal(expected, actual,
+            "the client event must expose the full typed cave receipt");
+        await EventuallyAsync(
+            () => client.State.ServerTick == expected.Tick,
+            "the cave receipt did not advance the observed server tick",
+            cancellationToken);
+    }
+
     private static InventorySlotState[] CreateFullInventory() =>
         Enumerable.Range(0, ProtocolLimits.PlayerInventorySlots)
             .Select(static slot => new InventorySlotState(
@@ -351,7 +386,8 @@ internal static class NetworkGameClientStateChecks
             610,
             720,
             830,
-            940);
+            940,
+            1050);
 
     private static async Task EventuallyAsync(
         Func<bool> condition,

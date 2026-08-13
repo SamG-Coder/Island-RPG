@@ -1,3 +1,4 @@
+using IslandRpg.Caves;
 using IslandRpg.World;
 
 namespace IslandRpg.Gameplay;
@@ -9,20 +10,23 @@ internal static class DiggingSkill
 {
     public const int MaximumLevel = SkillService.MaximumLevel;
 
-    public static DiggingTerrain Terrain(Biome biome) => biome switch
+    public static DiggingTerrain Terrain(Biome biome)
     {
-        Biome.Beach or Biome.DesertSand =>
-            new(30, ItemIds.Sand),
-        Biome.Mud or Biome.Grassland or Biome.DryGrass =>
-            new(50, ItemIds.Dirt),
-        Biome.Rock or Biome.Highland =>
-            new(100, ItemIds.Dirt),
-        _ => new(70, ItemIds.Dirt)
-    };
+        var terrain = CaveExcavationRules.Terrain(biome switch
+        {
+            Biome.Beach or Biome.DesertSand =>
+                ExcavationTerrainKind.Sand,
+            Biome.Mud or Biome.Grassland or Biome.DryGrass =>
+                ExcavationTerrainKind.Soil,
+            Biome.Rock or Biome.Highland =>
+                ExcavationTerrainKind.Rock,
+            _ => ExcavationTerrainKind.Other
+        });
+        return new(terrain.MaximumHealth, terrain.RewardItemId);
+    }
 
     public static int Damage(int experience, int shovelPower = 1) =>
-        8 + LevelForExperience(experience) / 4 +
-        (Math.Max(1, shovelPower) - 1) * 4;
+        CaveExcavationRules.DiggingDamage(experience, shovelPower);
 
     public static int LevelForExperience(int experience) =>
         SkillService.LevelForExperience(experience);

@@ -23,7 +23,14 @@ internal sealed partial class GameHostWindow
         CookOnCampfire,
         PlaceConstruction,
         BuildConstruction,
-        Demolish
+        Demolish,
+        StartExcavation,
+        WorkExcavation,
+        RestoreExcavation,
+        InstallCaveRope,
+        TakeCaveRope,
+        FillExcavation,
+        TraverseCave
     }
 
     private readonly record struct PendingNetworkWorldAction(
@@ -149,6 +156,11 @@ internal sealed partial class GameHostWindow
 
         if (!placingObject && leftDown && !_gameLeftWasDown &&
             !IsPointerOverGameUi(MouseState.Position) &&
+            TryTargetCaveDig(ScreenToTerrain(SceneMousePosition())))
+        {
+        }
+        else if (!placingObject && leftDown && !_gameLeftWasDown &&
+            !IsPointerOverGameUi(MouseState.Position) &&
             TryGetNetworkGroundObjectUnderMouse(
                 SceneMousePosition(), out var groundObject, out _))
         {
@@ -157,8 +169,13 @@ internal sealed partial class GameHostWindow
                     NetworkWorldActionKind.BuildConstruction, groundObject);
             else if (IsNetworkContainer(groundObject.Id))
                 QueueNetworkOpenContainer(groundObject);
+            else if (CaveEntranceService.IsEntrance(groundObject))
+                QueueCaveEntry(groundObject);
+            else if (CaveEntranceService.IsDigSite(groundObject))
+                QueueContinueCaveDig(groundObject);
             else if (!PlaceableObjectCatalog.IsPlaceable(
-                         groundObject.ItemId))
+                         groundObject.ItemId) &&
+                     !CaveEntranceService.IsExcavation(groundObject))
                 QueueNetworkObjectAction(
                     NetworkWorldActionKind.PickUp, groundObject);
         }
@@ -228,6 +245,30 @@ internal sealed partial class GameHostWindow
                 TrySelectedRawCookingItem(out _, out _))
                 Add("Cook", NetworkWorldActionKind.CookOnCampfire);
         }
+        else if (CaveEntranceService.IsEntrance(value))
+        {
+            Add(_activeWorldLevel == (int)WorldLevel.Overworld
+                    ? "Climb down"
+                    : "Climb up",
+                NetworkWorldActionKind.TraverseCave);
+            if (_activeWorldLevel == (int)WorldLevel.Overworld)
+                Add("Take rope", NetworkWorldActionKind.TakeCaveRope);
+        }
+        else if (CaveEntranceService.IsDigSite(value))
+        {
+            Add("Continue digging", NetworkWorldActionKind.WorkExcavation);
+            Add("Restore ground", NetworkWorldActionKind.RestoreExcavation);
+        }
+        else if (CaveEntranceService.IsHole(value))
+        {
+            if (FindNetworkInventorySlot(ItemIds.Rope) is >= 0)
+                Add("Install rope", NetworkWorldActionKind.InstallCaveRope);
+            if (FindNetworkCaveFillSlot(value) is >= 0)
+                Add("Fill hole", NetworkWorldActionKind.FillExcavation);
+        }
+        else if (CaveEntranceService.IsShallowHole(value) &&
+                 FindNetworkCaveFillSlot(value) is >= 0)
+            Add("Fill hole", NetworkWorldActionKind.FillExcavation);
         else if (!PlaceableObjectCatalog.IsPlaceable(value.ItemId))
             Add("Pick up", NetworkWorldActionKind.PickUp);
 
@@ -252,6 +293,14 @@ internal sealed partial class GameHostWindow
             var action = _networkGroundObjectContextActions[option];
             if (action == NetworkWorldActionKind.OpenContainer)
                 QueueNetworkOpenContainer(value);
+            else if (action == NetworkWorldActionKind.WorkExcavation)
+                QueueContinueCaveDig(value);
+            else if (action == NetworkWorldActionKind.InstallCaveRope)
+                QueueNetworkCaveObjectAction(
+                    action, value, FindNetworkInventorySlot(ItemIds.Rope));
+            else if (action == NetworkWorldActionKind.FillExcavation)
+                QueueNetworkCaveObjectAction(
+                    action, value, FindNetworkCaveFillSlot(value));
             else
                 QueueNetworkObjectAction(
                     action, value,
@@ -364,6 +413,7 @@ internal sealed partial class GameHostWindow
                 pending.InventorySlot);
             _pendingNetworkCookingTarget = pending.Target;
         }
+        PrepareNetworkCaveCommand(commandId, pending, payload);
         if (pending.Kind == NetworkWorldActionKind.BuildConstruction)
         {
             _networkBuildCommandId = commandId;
@@ -438,10 +488,18 @@ internal sealed partial class GameHostWindow
         PendingNetworkWorldAction action)
     {
         if (action.Kind is NetworkWorldActionKind.Drop or
-            NetworkWorldActionKind.PlaceConstruction)
+            NetworkWorldActionKind.PlaceConstruction or
+            NetworkWorldActionKind.StartExcavation)
         {
             var chunkRevision = NetworkChunkRevision(
                 action.Target, _activeWorldLevel);
+            if (action.Kind == NetworkWorldActionKind.StartExcavation)
+                return new StartExcavationAction(
+                    action.Target.X,
+                    action.Target.Y,
+                    checked((short)_activeWorldLevel),
+                    action.InventorySlot,
+                    chunkRevision);
             return action.Kind == NetworkWorldActionKind.Drop
                 ? new DropInventoryItemAction(
                     action.InventorySlot,
@@ -483,6 +541,18 @@ internal sealed partial class GameHostWindow
                 new BuildConstructionAction(reference),
             NetworkWorldActionKind.Demolish =>
                 new DemolishWorldObjectAction(reference),
+            NetworkWorldActionKind.WorkExcavation =>
+                new WorkExcavationAction(reference, action.InventorySlot),
+            NetworkWorldActionKind.RestoreExcavation =>
+                new RestoreExcavationAction(reference),
+            NetworkWorldActionKind.InstallCaveRope =>
+                new InstallCaveRopeAction(reference, action.InventorySlot),
+            NetworkWorldActionKind.TakeCaveRope =>
+                new TakeCaveRopeAction(reference),
+            NetworkWorldActionKind.FillExcavation =>
+                new FillExcavationAction(reference, action.InventorySlot),
+            NetworkWorldActionKind.TraverseCave =>
+                new TraverseCaveAction(reference),
             _ => null
         };
     }

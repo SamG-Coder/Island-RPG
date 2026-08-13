@@ -12,6 +12,7 @@ WorldCheckProcess.DisableWindowsCrashDialogs();
 SurfaceTreeResourceChecks.Run();
 SurfaceVegetationResourceChecks.Run();
 UndergroundMiningResourceChecks.Run();
+CaveCoreChecks.Run();
 
 var slimeExportIndex = Array.FindIndex(
     args, value => value.Equals(

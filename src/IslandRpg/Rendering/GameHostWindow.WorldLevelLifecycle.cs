@@ -14,6 +14,7 @@ internal sealed partial class GameHostWindow
         _moveMarker = null;
         _activeMiningKey = null;
         CancelNetworkResourceInteraction();
+        CancelNetworkCaveInteraction();
         _miningContext.Close();
         _levelUpFireworks.Clear();
         _activeBerryVegetationKey = null;

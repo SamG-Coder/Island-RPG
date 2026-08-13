@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Numerics;
 using IslandRpg.Gameplay;
+using IslandRpg.Caves;
 using IslandRpg.World;
 
 namespace IslandRpg.Simulation;
@@ -13,6 +14,7 @@ namespace IslandRpg.Simulation;
 public sealed class AuthoritativeWorldTransactions
 {
     public const float InteractionRange = 3f;
+    public const double ExcavationCadenceSeconds = .9;
     private const int MaximumRememberedCommands = 4096;
 
     private int? _ownerThreadId;
@@ -22,10 +24,16 @@ public sealed class AuthoritativeWorldTransactions
         CommandReceipt> _commandResults = [];
     private readonly Queue<(ActorId ActorId, Guid CommandId)> _commandOrder = [];
     private readonly Func<Guid> _newObjectId;
+    private readonly ICaveExcavationEnvironment? _caves;
+    private readonly Dictionary<(ActorId ActorId, Guid ExcavationId), double>
+        _excavationCadences = [];
 
-    public AuthoritativeWorldTransactions(Func<Guid>? newObjectId = null)
+    public AuthoritativeWorldTransactions(
+        Func<Guid>? newObjectId = null,
+        ICaveExcavationEnvironment? caves = null)
     {
         _newObjectId = newObjectId ?? Guid.NewGuid;
+        _caves = caves;
     }
 
     public AuthoritativeWorldObjectSnapshot AddObject(WorldObjectSeed seed)
@@ -34,7 +42,9 @@ public sealed class AuthoritativeWorldTransactions
         if (seed.ObjectId == Guid.Empty || !IsFinite(seed.Position) ||
             seed.ObjectRevision == 0 || seed.ContainerRevision == 0 ||
             string.IsNullOrWhiteSpace(seed.DefinitionId) ||
-            !ValidGateState(seed.DefinitionId, seed.GateState))
+            !ValidGateState(seed.DefinitionId, seed.GateState) ||
+            seed.LinkedObjectId == Guid.Empty ||
+            seed.LinkedObjectId == seed.ObjectId)
             throw new ArgumentException("The world-object seed is invalid.", nameof(seed));
         var value = new WorldGroundObject(
             seed.ObjectId,
@@ -68,7 +78,7 @@ public sealed class AuthoritativeWorldTransactions
         var chunk = WorldChunkKey.At(seed.Position, seed.WorldLevel);
         if (!_objects.TryAdd(seed.ObjectId,
                 new ObjectState(value, chunk, seed.ObjectRevision,
-                    seed.ContainerRevision)))
+                    seed.ContainerRevision, seed.LinkedObjectId)))
             throw new InvalidOperationException("The world object already exists.");
         AdvanceChunk(chunk);
         return Snapshot(_objects[seed.ObjectId]);
@@ -106,7 +116,13 @@ public sealed class AuthoritativeWorldTransactions
             .Select(static value => new AuthoritativeChunkRevisionSnapshot(
                 value.Key, value.Value))
             .ToImmutableArray();
-        return new(objects, chunks);
+        var cadences = _excavationCadences
+            .OrderBy(static value => value.Key.ActorId.Value)
+            .ThenBy(static value => value.Key.ExcavationId)
+            .Select(static value => new AuthoritativeExcavationCadenceCheckpoint(
+                value.Key.ActorId, value.Key.ExcavationId, value.Value))
+            .ToImmutableArray();
+        return new(objects, chunks, cadences);
     }
 
     /// <summary>
@@ -126,7 +142,7 @@ public sealed class AuthoritativeWorldTransactions
                 "The world checkpoint is incomplete.");
         }
         if (_objects.Count != 0 || _chunkRevisions.Count != 0 ||
-            _commandResults.Count != 0)
+            _commandResults.Count != 0 || _excavationCadences.Count != 0)
         {
             throw new InvalidOperationException(
                 "World state can only be restored into an empty aggregate.");
@@ -162,6 +178,8 @@ public sealed class AuthoritativeWorldTransactions
                 !chunks.ContainsKey(snapshot.Chunk) ||
                 snapshot.FiremakingLevel is < 1 or > 20 ||
                 !ValidGateState(snapshot.DefinitionId, snapshot.GateState) ||
+                snapshot.LinkedObjectId == Guid.Empty ||
+                snapshot.LinkedObjectId == snapshot.ObjectId ||
                 objects.ContainsKey(snapshot.ObjectId))
             {
                 throw new InvalidDataException(
@@ -202,11 +220,36 @@ public sealed class AuthoritativeWorldTransactions
                 value,
                 snapshot.Chunk,
                 snapshot.ObjectRevision,
-                snapshot.ContainerRevision));
+                snapshot.ContainerRevision,
+                snapshot.LinkedObjectId));
         }
 
+        ValidateCaveLinks(objects);
+        var cadences = checkpoint.ExcavationCadences.IsDefault
+            ? ImmutableArray<AuthoritativeExcavationCadenceCheckpoint>.Empty
+            : checkpoint.ExcavationCadences;
+        var restoredCadences = new Dictionary<
+            (ActorId ActorId, Guid ExcavationId), double>();
+        foreach (var value in cadences)
+        {
+            if (value.ActorId.Value == Guid.Empty ||
+                value.ExcavationId == Guid.Empty ||
+                !double.IsFinite(value.NextAllowedGameSeconds) ||
+                value.NextAllowedGameSeconds < 0 ||
+                !objects.TryGetValue(value.ExcavationId, out var excavation) ||
+                Kind(excavation.Value.ItemId) != ExcavationKind.DigSite ||
+                excavation.Chunk.WorldLevel !=
+                    CaveExcavationRules.SurfaceWorldLevel ||
+                !restoredCadences.TryAdd(
+                    (value.ActorId, value.ExcavationId),
+                    value.NextAllowedGameSeconds))
+                throw new InvalidDataException(
+                    "The world checkpoint contains invalid excavation cadence state.");
+        }
         foreach (var value in chunks) _chunkRevisions.Add(value.Key, value.Value);
         foreach (var value in objects) _objects.Add(value.Key, value.Value);
+        foreach (var value in restoredCadences)
+            _excavationCadences.Add(value.Key, value.Value);
     }
 
     public WorldTransactionResult Execute(
@@ -306,7 +349,7 @@ public sealed class AuthoritativeWorldTransactions
                 output,
                 dropPosition.X,
                 dropPosition.Y,
-                OwnerId: actor.ActorId.ToString()), chunk, 1, 1);
+                OwnerId: actor.ActorId.ToString()), chunk, 1, 1, null);
             _objects.Add(command.DropObjectId, drop);
             var chunkDelta = AdvanceChunk(chunk);
             objectDeltas =
@@ -350,6 +393,48 @@ public sealed class AuthoritativeWorldTransactions
         DemolishWorldObjectTransaction command) =>
         ExecuteCached(actor, command.Context, command,
             state => Demolish(state, command));
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        StartExcavationTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => StartExcavation(state, command));
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        WorkExcavationTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => WorkExcavation(state, command));
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        RestoreExcavationTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => RestoreExcavation(state, command));
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        InstallCaveRopeTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => InstallCaveRope(state, command));
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        TakeCaveRopeTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => TakeCaveRope(state, command));
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        FillExcavationTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => FillExcavation(state, command));
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        TraverseCaveTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => TraverseCave(state, command));
 
     private WorldTransactionResult ExecuteCached(
         WorldTransactionActorInput input,
@@ -448,7 +533,7 @@ public sealed class AuthoritativeWorldTransactions
             additions.Add(new(
                 new(id, taken.ItemId, command.Position.X, command.Position.Y,
                     OwnerId: actor.ActorId.ToString()),
-                chunk, 1, 1));
+                chunk, 1, 1, null));
         }
 
         foreach (var addition in additions) _objects.Add(addition.Value.Id, addition);
@@ -719,7 +804,7 @@ public sealed class AuthoritativeWorldTransactions
         var value = ConstructionService.Begin(new(
             id, command.DefinitionId, command.Position.X, command.Position.Y,
             OwnerId: actor.ActorId.ToString(), VisualFrame: command.Rotation));
-        var state = new ObjectState(value, chunkKey, 1, 1);
+        var state = new ObjectState(value, chunkKey, 1, 1, null);
         _objects.Add(id, state);
         var chunk = AdvanceChunk(chunkKey);
         CommitInventory(actor, inventory);
@@ -782,6 +867,303 @@ public sealed class AuthoritativeWorldTransactions
                 previous, checked(previous + 1), null)], [chunk]);
     }
 
+    private WorldTransactionResult StartExcavation(
+        ActorState actor, StartExcavationTransaction command)
+    {
+        if (_caves is null || !ValidGameSeconds(command.GameSeconds) ||
+            command.WorldLevel != CaveExcavationRules.SurfaceWorldLevel ||
+            command.WorldLevel != actor.WorldLevel ||
+            !IsFinite(command.Position))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidExcavation, actor);
+        var position = _caves.Snap(command.Position);
+        if (!_caves.IsSurfaceDiggable(position))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidPlacement, actor,
+                "The selected ground cannot be excavated.");
+        if (!InRange(actor.Position, position))
+            return Rejected(command.Context,
+                WorldTransactionStatus.OutOfRange, actor);
+        var chunkKey = WorldChunkKey.At(position, command.WorldLevel);
+        if (ChunkRevision(chunkKey) != command.ExpectedChunkRevision)
+            return Rejected(command.Context,
+                WorldTransactionStatus.StaleChunkRevision, actor);
+        if (_objects.Values.Any(value =>
+                value.Chunk.WorldLevel == command.WorldLevel &&
+                Vector2.DistanceSquared(
+                    new(value.Value.X, value.Value.Y), position) < .5f))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidPlacement, actor,
+                "There is already an object on that patch of ground.");
+        if (!TryShovel(actor, command.ShovelInventorySlot, out _))
+            return Rejected(command.Context,
+                WorldTransactionStatus.MissingExcavationTool, actor,
+                "The selected inventory slot does not contain a usable shovel.");
+        var id = _newObjectId();
+        if (id == Guid.Empty || _objects.ContainsKey(id))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCommand, actor,
+                "The object identity source returned a duplicate ID.");
+        var excavation = CaveExcavationRules.Begin(
+            id, position, _caves.TerrainAt(position));
+        var state = NewExcavationState(excavation, chunkKey);
+        _objects.Add(id, state);
+        var chunk = AdvanceChunk(chunkKey);
+        return Accepted(command.Context, actor,
+            [new(WorldObjectChangeKind.Added, id, chunkKey, 0, 1,
+                Snapshot(state))], [chunk]) with
+        {
+            Detail = "excavation_started"
+        };
+    }
+
+    private WorldTransactionResult WorkExcavation(
+        ActorState actor, WorkExcavationTransaction command)
+    {
+        if (_caves is null || !ValidGameSeconds(command.GameSeconds))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidExcavation, actor);
+        var rejected = ValidateObject(actor, command.Context,
+            command.Excavation, out var state);
+        if (rejected is not null) return rejected;
+        var target = state!;
+        var excavation = Excavation(target);
+        if (excavation.Kind != ExcavationKind.DigSite)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidExcavation, actor,
+                "Only an unfinished excavation can be worked.");
+        if (!TryShovel(actor, command.ShovelInventorySlot, out var shovel))
+            return Rejected(command.Context,
+                WorldTransactionStatus.MissingExcavationTool, actor,
+                "The selected inventory slot does not contain a usable shovel.");
+        var cadenceKey = (actor.ActorId, excavation.Id);
+        if (_excavationCadences.TryGetValue(cadenceKey, out var nextAllowed) &&
+            command.GameSeconds < nextAllowed)
+            return Rejected(command.Context,
+                WorldTransactionStatus.ExcavationCadenceLocked, actor,
+                "The next excavation strike is not ready.");
+
+        var strike = CaveExcavationRules.Strike(
+            excavation, actor.DiggingExperience, shovel.DiggingPower,
+            _caves.IsCaveBelow(excavation.Position));
+        // Resolve every generated identity and inventory consequence before
+        // mutating aggregate state. A failing identity source must be a true
+        // rejection, not a partially committed excavation.
+        var nextSurface = ExcavationObject(target.Value, strike.State);
+        Guid? linkedObjectId = null;
+        ObjectState? underground = null;
+        if (strike.State.Kind == ExcavationKind.OpenShaft)
+        {
+            var undergroundId = _newObjectId();
+            if (undergroundId == Guid.Empty ||
+                undergroundId == strike.State.Id ||
+                _objects.ContainsKey(undergroundId) ||
+                !CaveExcavationRules.TryPortalLink(
+                    strike.State, undergroundId, out var portal))
+                return Rejected(command.Context,
+                    WorldTransactionStatus.InvalidCommand, actor,
+                    "The cave portal identity source returned a duplicate ID.");
+            linkedObjectId = portal.UndergroundObjectId;
+            var undergroundChunk = WorldChunkKey.At(
+                portal.Position, portal.UndergroundWorldLevel);
+            underground = NewExcavationState(
+                strike.State with { Id = undergroundId },
+                undergroundChunk,
+                portal.SurfaceObjectId);
+        }
+
+        var inventory = actor.Inventory.Clone();
+        var inventoryChanged = false;
+        ObjectState? rewardDrop = null;
+        if (strike.Completed)
+        {
+            var rewardItemId = _caves.TerrainAt(excavation.Position).RewardItemId;
+            if (inventory.TryAdd(rewardItemId))
+                inventoryChanged = true;
+            else
+            {
+                var dropId = _newObjectId();
+                if (dropId == Guid.Empty || _objects.ContainsKey(dropId) ||
+                    dropId == underground?.Value.Id)
+                    return Rejected(command.Context,
+                        WorldTransactionStatus.InvalidCommand, actor,
+                        "The excavation reward identity source returned a duplicate ID.");
+                var dropPosition = excavation.Position + new Vector2(.38f, 0);
+                rewardDrop = new ObjectState(new WorldGroundObject(
+                    dropId, rewardItemId, dropPosition.X, dropPosition.Y,
+                    OwnerId: actor.ActorId.ToString()),
+                    WorldChunkKey.At(dropPosition, actor.WorldLevel), 1, 1, null);
+            }
+        }
+
+        var previousSurfaceRevision = target.ObjectRevision;
+        target.Value = nextSurface;
+        target.LinkedObjectId = linkedObjectId;
+        target.ObjectRevision = checked(target.ObjectRevision + 1);
+        if (underground is not null)
+            _objects.Add(underground.Value.Id, underground);
+        if (rewardDrop is not null)
+            _objects.Add(rewardDrop.Value.Id, rewardDrop);
+        if (strike.Completed)
+            _excavationCadences.Remove(cadenceKey);
+        else
+            _excavationCadences[cadenceKey] =
+                command.GameSeconds + ExcavationCadenceSeconds;
+        AwardDigging(actor, strike.ExperienceGained);
+        if (inventoryChanged)
+        {
+            actor.Inventory = inventory;
+            actor.InventoryRevision = checked(actor.InventoryRevision + 1);
+        }
+        AdvanceActor(actor);
+
+        var objectDeltas = ImmutableArray.CreateBuilder<
+            WorldObjectTransactionDelta>(strike.Completed ? 3 : 1);
+        objectDeltas.Add(UpdatedDelta(target, previousSurfaceRevision));
+        if (underground is not null)
+        {
+            objectDeltas.Add(new(WorldObjectChangeKind.Added,
+                underground.Value.Id, underground.Chunk, 0, 1,
+                Snapshot(underground)));
+        }
+        if (rewardDrop is not null)
+        {
+            objectDeltas.Add(new(WorldObjectChangeKind.Added,
+                rewardDrop.Value.Id, rewardDrop.Chunk, 0, 1,
+                Snapshot(rewardDrop)));
+        }
+        var chunkDeltas = objectDeltas
+            .Select(static value => value.Chunk)
+            .Distinct()
+            .Select(AdvanceChunk)
+            .ToImmutableArray();
+        return Accepted(command.Context, actor, objectDeltas, chunkDeltas) with
+        {
+            Detail = strike.Completed
+                ? strike.State.Kind == ExcavationKind.OpenShaft
+                    ? "cave_discovered"
+                    : "shallow_hole_completed"
+                : $"excavation_strike:{strike.Damage}",
+            CaveOutcome = new(strike.Damage, strike.Completed)
+        };
+    }
+
+    private WorldTransactionResult RestoreExcavation(
+        ActorState actor, RestoreExcavationTransaction command)
+    {
+        var rejected = ValidateObject(actor, command.Context,
+            command.Excavation, out var state);
+        if (rejected is not null) return rejected;
+        if (!CaveExcavationRules.CanRestore(Excavation(state!)))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidExcavation, actor);
+        return RemoveExcavationPair(
+            actor, command.Context, state!, consumeInventory: null,
+            "excavation_restored");
+    }
+
+    private WorldTransactionResult InstallCaveRope(
+        ActorState actor, InstallCaveRopeTransaction command)
+    {
+        var rejected = ValidateObject(actor, command.Context,
+            command.Shaft, out var state);
+        if (rejected is not null) return rejected;
+        if (state!.Chunk.WorldLevel != CaveExcavationRules.SurfaceWorldLevel ||
+            !CaveExcavationRules.TryInstallRope(
+                Excavation(state), out var entrance) ||
+            !TryLinkedExcavation(state, out var linked))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCaveLink, actor);
+        if (!TryInventoryItem(actor, command.RopeInventorySlot,
+                CaveExcavationRules.RopeItemId))
+            return Rejected(command.Context,
+                WorldTransactionStatus.ItemUnavailable, actor);
+        var inventory = actor.Inventory.Clone();
+        if (!inventory.TryTake(command.RopeInventorySlot, 1, out _))
+            return Rejected(command.Context,
+                WorldTransactionStatus.ItemUnavailable, actor);
+        return UpdateLinkedShafts(
+            actor, command.Context, state, linked, entrance,
+            inventory, "cave_rope_installed");
+    }
+
+    private WorldTransactionResult TakeCaveRope(
+        ActorState actor, TakeCaveRopeTransaction command)
+    {
+        var rejected = ValidateObject(actor, command.Context,
+            command.Entrance, out var state);
+        if (rejected is not null) return rejected;
+        if (state!.Chunk.WorldLevel != CaveExcavationRules.SurfaceWorldLevel ||
+            !CaveExcavationRules.TryTakeRope(
+                Excavation(state), out var openShaft) ||
+            !TryLinkedExcavation(state, out var linked))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCaveLink, actor);
+        var inventory = actor.Inventory.Clone();
+        if (!inventory.TryAdd(CaveExcavationRules.RopeItemId))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InventoryFull, actor);
+        return UpdateLinkedShafts(
+            actor, command.Context, state, linked, openShaft,
+            inventory, "cave_rope_recovered");
+    }
+
+    private WorldTransactionResult FillExcavation(
+        ActorState actor, FillExcavationTransaction command)
+    {
+        if (_caves is null)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidExcavation, actor);
+        var rejected = ValidateObject(actor, command.Context,
+            command.Excavation, out var state);
+        if (rejected is not null) return rejected;
+        if (state!.Chunk.WorldLevel != CaveExcavationRules.SurfaceWorldLevel ||
+            (uint)command.MaterialInventorySlot >=
+                (uint)actor.Inventory.Capacity ||
+            actor.Inventory[command.MaterialInventorySlot] is not { } material ||
+            !CaveExcavationRules.CanFillWith(
+                Excavation(state),
+                _caves.TerrainAt(new(state.Value.X, state.Value.Y)),
+                material.ItemId))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidExcavation, actor,
+                "The excavation cannot be filled with that material.");
+        var inventory = actor.Inventory.Clone();
+        if (!inventory.TryTake(command.MaterialInventorySlot, 1, out _))
+            return Rejected(command.Context,
+                WorldTransactionStatus.ItemUnavailable, actor);
+        return RemoveExcavationPair(
+            actor, command.Context, state, inventory,
+            "excavation_filled");
+    }
+
+    private WorldTransactionResult TraverseCave(
+        ActorState actor, TraverseCaveTransaction command)
+    {
+        var rejected = ValidateObject(actor, command.Context,
+            command.Entrance, out var state);
+        if (rejected is not null) return rejected;
+        var target = state!;
+        if (!TryLinkedExcavation(target, out var linked) ||
+            Excavation(target).Kind != ExcavationKind.RopedEntrance ||
+            Excavation(linked).Kind != ExcavationKind.RopedEntrance ||
+            !CaveExcavationRules.TryDestinationLevel(
+                Excavation(target), actor.WorldLevel, out var destination) ||
+            destination != linked.Chunk.WorldLevel)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCaveLink, actor,
+                "Both ends of the cave entrance must be linked and roped.");
+        AdvanceActor(actor);
+        return Accepted(command.Context, actor, [], []) with
+        {
+            Detail = destination == CaveExcavationRules.UndergroundWorldLevel
+                ? "entered_cave"
+                : "left_cave",
+            ActorTransition = new(
+                new(linked.Value.X, linked.Value.Y), destination)
+        };
+    }
+
     private WorldTransactionResult? ValidateObject(
         ActorState actor,
         WorldTransactionContext context,
@@ -815,7 +1197,165 @@ public sealed class AuthoritativeWorldTransactions
     private static bool IsPortable(WorldGroundObject value) =>
         !StorageContainerService.IsStorage(value.ItemId) &&
         !CampfireService.IsCampfire(value) &&
-        !ConstructionService.IsConstructible(value.ItemId);
+        !ConstructionService.IsConstructible(value.ItemId) &&
+        Kind(value.ItemId) == ExcavationKind.None;
+
+    private static ExcavationKind Kind(string itemId) => itemId switch
+    {
+        CaveExcavationRules.DigSiteItemId => ExcavationKind.DigSite,
+        CaveExcavationRules.ShallowHoleItemId => ExcavationKind.ShallowHole,
+        CaveExcavationRules.OpenShaftItemId => ExcavationKind.OpenShaft,
+        CaveExcavationRules.RopedEntranceItemId => ExcavationKind.RopedEntrance,
+        _ => ExcavationKind.None
+    };
+
+    private static CaveExcavationState Excavation(ObjectState state) => new(
+        state.Value.Id,
+        Kind(state.Value.ItemId),
+        new(state.Value.X, state.Value.Y),
+        state.Value.Health,
+        state.Value.MaxHealth);
+
+    private static string Definition(ExcavationKind kind) => kind switch
+    {
+        ExcavationKind.DigSite => CaveExcavationRules.DigSiteItemId,
+        ExcavationKind.ShallowHole => CaveExcavationRules.ShallowHoleItemId,
+        ExcavationKind.OpenShaft => CaveExcavationRules.OpenShaftItemId,
+        ExcavationKind.RopedEntrance => CaveExcavationRules.RopedEntranceItemId,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind))
+    };
+
+    private static WorldGroundObject ExcavationObject(
+        WorldGroundObject value, CaveExcavationState excavation) =>
+        value with
+        {
+            ItemId = Definition(excavation.Kind),
+            Health = excavation.Health,
+            MaxHealth = excavation.MaximumHealth
+        };
+
+    private static ObjectState NewExcavationState(
+        CaveExcavationState excavation,
+        WorldChunkKey chunk,
+        Guid? linkedId = null) => new(
+            new WorldGroundObject(
+                excavation.Id,
+                Definition(excavation.Kind),
+                excavation.Position.X,
+                excavation.Position.Y,
+                Health: excavation.Health,
+                MaxHealth: excavation.MaximumHealth),
+            chunk, 1, 1, linkedId);
+
+    private bool TryLinkedExcavation(
+        ObjectState state, out ObjectState linked)
+    {
+        linked = null!;
+        if (state.LinkedObjectId is not { } linkedId ||
+            !_objects.TryGetValue(linkedId, out var found))
+            return false;
+        linked = found;
+        return linked.LinkedObjectId == state.Value.Id &&
+               linked.Chunk.WorldLevel != state.Chunk.WorldLevel &&
+               new Vector2(linked.Value.X, linked.Value.Y) ==
+               new Vector2(state.Value.X, state.Value.Y) &&
+               Kind(linked.Value.ItemId) == Kind(state.Value.ItemId);
+    }
+
+    private static bool TryInventoryItem(
+        ActorState actor, int slot, string itemId) =>
+        (uint)slot < (uint)actor.Inventory.Capacity &&
+        actor.Inventory[slot]?.ItemId == itemId;
+
+    private static bool TryShovel(
+        ActorState actor, int slot, out ItemDefinition shovel)
+    {
+        shovel = null!;
+        if ((uint)slot >= (uint)actor.Inventory.Capacity ||
+            actor.Inventory[slot] is not { } stack)
+            return false;
+        shovel = ItemCatalog.Get(stack.ItemId);
+        return shovel.HasTag(ItemTag.Tool) &&
+               shovel.HasTag(ItemTag.Shovel) &&
+               shovel.DiggingPower > 0;
+    }
+
+    private WorldTransactionResult UpdateLinkedShafts(
+        ActorState actor,
+        WorldTransactionContext context,
+        ObjectState surface,
+        ObjectState underground,
+        CaveExcavationState next,
+        InventoryContainer inventory,
+        string detail)
+    {
+        var surfacePrevious = surface.ObjectRevision;
+        var undergroundPrevious = underground.ObjectRevision;
+        surface.Value = ExcavationObject(surface.Value, next);
+        underground.Value = ExcavationObject(
+            underground.Value, next with { Id = underground.Value.Id });
+        surface.ObjectRevision = checked(surface.ObjectRevision + 1);
+        underground.ObjectRevision = checked(underground.ObjectRevision + 1);
+        var firstChunk = AdvanceChunk(surface.Chunk);
+        var secondChunk = AdvanceChunk(underground.Chunk);
+        CommitInventory(actor, inventory);
+        return Accepted(context, actor,
+            [UpdatedDelta(surface, surfacePrevious),
+             UpdatedDelta(underground, undergroundPrevious)],
+            [firstChunk, secondChunk]) with { Detail = detail };
+    }
+
+    private WorldTransactionResult RemoveExcavationPair(
+        ActorState actor,
+        WorldTransactionContext context,
+        ObjectState surface,
+        InventoryContainer? consumeInventory,
+        string detail)
+    {
+        var removed = new List<ObjectState> { surface };
+        if (surface.LinkedObjectId is not null)
+        {
+            if (!TryLinkedExcavation(surface, out var linked))
+                return Rejected(context,
+                    WorldTransactionStatus.InvalidCaveLink, actor);
+            removed.Add(linked);
+        }
+        foreach (var value in removed)
+        {
+            _objects.Remove(value.Value.Id);
+            foreach (var cadence in _excavationCadences.Keys
+                         .Where(key => key.ExcavationId == value.Value.Id)
+                         .ToArray())
+                _excavationCadences.Remove(cadence);
+        }
+        var chunks = removed.Select(static value => value.Chunk)
+            .Distinct()
+            .Select(AdvanceChunk)
+            .ToArray();
+        if (consumeInventory is not null)
+            CommitInventory(actor, consumeInventory);
+        return Accepted(context, actor,
+            removed.Select(value => new WorldObjectTransactionDelta(
+                WorldObjectChangeKind.Removed,
+                value.Value.Id,
+                value.Chunk,
+                value.ObjectRevision,
+                checked(value.ObjectRevision + 1),
+                null)), chunks) with { Detail = detail };
+    }
+
+    private static bool ValidGameSeconds(double value) =>
+        double.IsFinite(value) && value >= 0;
+
+    private static void AwardDigging(ActorState actor, int experience)
+    {
+        var digging = SkillService.AwardExperience(
+            actor.DiggingExperience, experience);
+        var adventure = AdventureService.AwardFromAction(
+            actor.AdventureExperience, digging.Gained);
+        actor.DiggingExperience = digging.Experience;
+        actor.AdventureExperience = adventure.Experience;
+    }
 
     private static bool CanAccess(ActorState actor, WorldGroundObject value) =>
         string.IsNullOrWhiteSpace(value.OwnerId) &&
@@ -866,7 +1406,8 @@ public sealed class AuthoritativeWorldTransactions
             StorageContainerService.IsStorage(state.Value.ItemId),
             state.Value.FuelItemId, state.Value.LitUntilGameSeconds,
             state.Value.FiremakingLevel,
-            FromCoreGateState(state.Value));
+            FromCoreGateState(state.Value),
+            state.LinkedObjectId);
 
     private static WorldContainerContents RestoreContainer(
         AuthoritativeWorldObjectSnapshot snapshot,
@@ -935,6 +1476,59 @@ public sealed class AuthoritativeWorldTransactions
         ? state != WorldGateAccessState.None &&
           Enum.IsDefined(state)
         : state == WorldGateAccessState.None;
+
+    private static void ValidateCaveLinks(
+        IReadOnlyDictionary<Guid, ObjectState> objects)
+    {
+        foreach (var state in objects.Values)
+        {
+            var kind = Kind(state.Value.ItemId);
+            if (kind != ExcavationKind.None &&
+                !CaveExcavationRules.IsValid(Excavation(state)))
+                throw new InvalidDataException(
+                    "The world checkpoint contains invalid excavation state.");
+            if (kind is ExcavationKind.DigSite or ExcavationKind.ShallowHole &&
+                state.Chunk.WorldLevel !=
+                    CaveExcavationRules.SurfaceWorldLevel)
+                throw new InvalidDataException(
+                    "A surface excavation is stored on the wrong world level.");
+            if (kind is ExcavationKind.OpenShaft or
+                ExcavationKind.RopedEntrance &&
+                state.LinkedObjectId is null)
+                throw new InvalidDataException(
+                    "The world checkpoint contains an unlinked cave shaft.");
+            if (kind is ExcavationKind.DigSite or ExcavationKind.ShallowHole &&
+                state.LinkedObjectId is not null)
+                throw new InvalidDataException(
+                    "The world checkpoint links a non-shaft excavation.");
+            if (state.LinkedObjectId is not { } linkedId) continue;
+            if (!objects.TryGetValue(linkedId, out var linked) ||
+                linked.LinkedObjectId != state.Value.Id ||
+                linked.Value.Id == state.Value.Id ||
+                linked.Value.ItemId != state.Value.ItemId ||
+                linked.Value.Health != state.Value.Health ||
+                linked.Value.MaxHealth != state.Value.MaxHealth ||
+                new Vector2(linked.Value.X, linked.Value.Y) !=
+                new Vector2(state.Value.X, state.Value.Y) ||
+                !((state.Chunk.WorldLevel ==
+                       CaveExcavationRules.SurfaceWorldLevel &&
+                   linked.Chunk.WorldLevel ==
+                       CaveExcavationRules.UndergroundWorldLevel) ||
+                  (state.Chunk.WorldLevel ==
+                       CaveExcavationRules.UndergroundWorldLevel &&
+                   linked.Chunk.WorldLevel ==
+                       CaveExcavationRules.SurfaceWorldLevel)) ||
+                !IsCaveShaft(state.Value.ItemId))
+            {
+                throw new InvalidDataException(
+                    "The world checkpoint contains an invalid cave link.");
+            }
+        }
+    }
+
+    private static bool IsCaveShaft(string itemId) =>
+        itemId is CaveExcavationRules.OpenShaftItemId or
+            CaveExcavationRules.RopedEntranceItemId;
 
     private static GateAccessState ToCoreGateState(WorldGateAccessState value) =>
         value switch
@@ -1011,6 +1605,7 @@ public sealed class AuthoritativeWorldTransactions
             input.Gameplay.FarmingExperience < 0 ||
             input.Gameplay.MiningExperience < 0 ||
             input.Gameplay.AdventureExperience < 0 ||
+            input.Gameplay.DiggingExperience < 0 ||
             input.Gameplay.Inventory.Capacity != PlayerInventory.Capacity)
             return null;
         var inventory = PlayerInventory.CreateContainer();
@@ -1071,6 +1666,8 @@ public sealed class AuthoritativeWorldTransactions
                 input.Gameplay.CraftingExperience);
             CraftingExperience = input.Gameplay.CraftingExperience;
             CookingExperience = input.Gameplay.CookingExperience;
+            DiggingExperience = input.Gameplay.DiggingExperience;
+            AdventureExperience = input.Gameplay.AdventureExperience;
             FiremakingLevel = Math.Clamp(input.FiremakingLevel, 1, 20);
             Energy = Math.Clamp(input.Energy, 0, 100);
             GroupId = input.GroupId;
@@ -1086,6 +1683,8 @@ public sealed class AuthoritativeWorldTransactions
         public int CraftingLevel { get; }
         public int CraftingExperience { get; set; }
         public int CookingExperience { get; set; }
+        public int DiggingExperience { get; set; }
+        public int AdventureExperience { get; set; }
         public int FiremakingLevel { get; }
         public float Energy { get; }
         public string? GroupId { get; }
@@ -1105,6 +1704,8 @@ public sealed class AuthoritativeWorldTransactions
                 ActorRevision = ActorRevision,
                 CraftingExperience = CraftingExperience,
                 CookingExperience = CookingExperience,
+                DiggingExperience = DiggingExperience,
+                AdventureExperience = AdventureExperience,
                 Inventory = new(InventoryRevision, slots.MoveToImmutable())
             };
         }
@@ -1114,12 +1715,14 @@ public sealed class AuthoritativeWorldTransactions
         WorldGroundObject value,
         WorldChunkKey chunk,
         uint objectRevision,
-        uint containerRevision)
+        uint containerRevision,
+        Guid? linkedObjectId)
     {
         public WorldGroundObject Value { get; set; } = value;
         public WorldChunkKey Chunk { get; } = chunk;
         public uint ObjectRevision { get; set; } = objectRevision;
         public uint ContainerRevision { get; set; } = containerRevision;
+        public Guid? LinkedObjectId { get; set; } = linkedObjectId;
     }
 
     private sealed record CommandReceipt(

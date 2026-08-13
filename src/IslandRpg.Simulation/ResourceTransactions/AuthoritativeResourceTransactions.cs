@@ -103,6 +103,23 @@ public sealed class AuthoritativeResourceTransactions
                 .ToImmutableArray());
     }
 
+    /// <summary>
+    /// Resolves procedural defaults together with their sparse lifecycle
+    /// overlays so placement authority does not treat a felled tree as a
+    /// permanent obstacle. Resource positions are canonical catalog values;
+    /// callers must supply the exact snapped world position they are testing.
+    /// </summary>
+    public bool HasBlockingTreeAt(Vector2 position, int worldLevel)
+    {
+        EnsureOwner();
+        if (!IsFinite(position)) return false;
+        var chunk = WorldChunkKey.At(position, worldLevel);
+        return _catalog.DescribeChunk(_worldSeed, chunk).Any(value =>
+            value.Kind == ResourceNodeKind.Tree &&
+            value.Position == position &&
+            !EffectiveState(value).Depleted);
+    }
+
     public AuthoritativeResourceTransactionsCheckpoint CaptureCheckpoint()
     {
         EnsureOwner();

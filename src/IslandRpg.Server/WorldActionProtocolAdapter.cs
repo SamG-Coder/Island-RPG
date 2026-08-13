@@ -195,7 +195,8 @@ public static class WorldActionProtocolAdapter
             gameplay.WoodcuttingExperience,
             gameplay.FarmingExperience,
             gameplay.MiningExperience,
-            gameplay.AdventureExperience);
+            gameplay.AdventureExperience,
+            gameplay.DiggingExperience);
     }
 
     /// <summary>
@@ -322,8 +323,14 @@ public static class WorldActionProtocolAdapter
                 WorldTransactionStatus.InvalidItem or
                 WorldTransactionStatus.InvalidQuantity or
                 WorldTransactionStatus.InvalidInventorySlot or
-                WorldTransactionStatus.InvalidPlacement =>
+            WorldTransactionStatus.InvalidPlacement =>
                 CommandRejectionCode.Invalid,
+            WorldTransactionStatus.InvalidExcavation or
+                WorldTransactionStatus.MissingExcavationTool or
+                WorldTransactionStatus.InvalidCaveLink =>
+                CommandRejectionCode.Impossible,
+            WorldTransactionStatus.ExcavationCadenceLocked =>
+                CommandRejectionCode.RateLimited,
             _ => CommandRejectionCode.Impossible,
         };
 
@@ -409,7 +416,8 @@ public static class WorldActionProtocolAdapter
             WorldGateAccessState.Locked => WorldObjectGateState.Locked,
             _ => throw new InvalidOperationException(
                 "The authoritative gate state is invalid."),
-        });
+        },
+        value.LinkedObjectId ?? Guid.Empty);
 
     private static WorldObjectReference ContainerReference(
         ActionCommandMessage command,

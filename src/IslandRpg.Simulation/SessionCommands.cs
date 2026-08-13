@@ -287,6 +287,61 @@ public sealed record DemolishWorldObjectIntent(
         ExpectedInventoryRevision,
         ExpectedActorRevision);
 
+public sealed record StartExcavationIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    Vector2 Position,
+    int WorldLevel,
+    int ShovelInventorySlot,
+    uint ExpectedChunkRevision) : WorldGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision);
+
+public sealed record WorkExcavationIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Excavation,
+    int ShovelInventorySlot) : WorldGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision);
+
+public sealed record RestoreExcavationIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Excavation) : WorldGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision);
+
+public sealed record InstallCaveRopeIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Shaft,
+    int RopeInventorySlot) : WorldGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision);
+
+public sealed record TakeCaveRopeIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Entrance) : WorldGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision);
+
+public sealed record FillExcavationIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Excavation,
+    int MaterialInventorySlot) : WorldGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision);
+
+public sealed record TraverseCaveIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Entrance) : WorldGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision);
+
 public readonly record struct ActorCommand(
     ClientConnectionId ConnectionId,
     PlayerId PlayerId,
@@ -312,6 +367,10 @@ public readonly record struct JoinResult(
     public bool Accepted => Status == JoinStatus.Accepted;
 
     public PlayerGameplaySnapshot Gameplay { get; init; }
+
+    public Vector2 Position { get; init; }
+
+    public int WorldLevel { get; init; }
 }
 
 public enum ReconnectStatus
@@ -334,6 +393,10 @@ public readonly record struct ReconnectResult(
     public bool Accepted => Status == ReconnectStatus.Accepted;
 
     public PlayerGameplaySnapshot Gameplay { get; init; }
+
+    public Vector2 Position { get; init; }
+
+    public int WorldLevel { get; init; }
 }
 
 public enum DisconnectStatus
@@ -418,7 +481,11 @@ public enum IntentStatus
     StaleResourceChunkRevision,
     MissingTool,
     ResourceCadenceLocked,
-    ResourceDepleted
+    ResourceDepleted,
+    InvalidExcavation,
+    MissingExcavationTool,
+    ExcavationCadenceLocked,
+    InvalidCaveLink
 }
 
 public readonly record struct CookingCompletionSnapshot(

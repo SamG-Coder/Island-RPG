@@ -66,6 +66,11 @@ internal sealed partial class GameHostWindow
         target = new(
             MathF.Floor(target.X) + .5f,
             MathF.Floor(target.Y) + .5f);
+        if (IsNetworkWorld)
+        {
+            QueueNetworkCaveStart(target, shovelSlot);
+            return;
+        }
         _worldActions.QueuePath(
             target, .82f, WorldActionType.DigCave,
             inventorySlot: shovelSlot,
@@ -86,25 +91,49 @@ internal sealed partial class GameHostWindow
                 "You need a shovel to continue digging.");
             return;
         }
-        QueueCaveDig(new(site.X, site.Y), shovelSlot);
+        if (IsNetworkWorld)
+            QueueNetworkCaveWork(site, shovelSlot);
+        else
+            QueueCaveDig(new(site.X, site.Y), shovelSlot);
     }
 
-    private void QueueRestoreExcavation(WorldGroundObject site) =>
+    private void QueueRestoreExcavation(WorldGroundObject site)
+    {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkCaveObjectAction(
+                NetworkWorldActionKind.RestoreExcavation, site);
+            return;
+        }
         _worldActions.QueuePath(
             new(site.X, site.Y), .82f,
             WorldActionType.RestoreExcavation,
             groundObjectId: site.Id,
             clearTreeActions: true);
+    }
 
-    private void QueueTakeCaveRope(WorldGroundObject entrance) =>
+    private void QueueTakeCaveRope(WorldGroundObject entrance)
+    {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkCaveObjectAction(
+                NetworkWorldActionKind.TakeCaveRope, entrance);
+            return;
+        }
         _worldActions.QueuePath(
             new(entrance.X, entrance.Y), .82f,
             WorldActionType.TakeCaveRope,
             groundObjectId: entrance.Id,
             clearTreeActions: true);
+    }
 
     internal void TryDigCave(Vector2 target, int shovelSlot)
     {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkCaveStart(target, shovelSlot);
+            return;
+        }
         if (_activeWorldLevel != (int)WorldLevel.Overworld ||
             !InventoryHasTagAt(shovelSlot, ItemTag.Shovel))
             return;
@@ -372,6 +401,11 @@ internal sealed partial class GameHostWindow
 
     private void RenderDigSiteHealthBar(Vector4 scene)
     {
+        if (IsNetworkWorld)
+        {
+            RenderNetworkCaveHealthBar(scene);
+            return;
+        }
         if (ActiveDigSiteLocation() is not { } location ||
             location.Object.MaxHealth <= 0)
             return;
@@ -387,12 +421,20 @@ internal sealed partial class GameHostWindow
             forceHealth: true);
     }
 
-    private void QueueCaveEntry(WorldGroundObject entrance) =>
+    private void QueueCaveEntry(WorldGroundObject entrance)
+    {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkCaveObjectAction(
+                NetworkWorldActionKind.TraverseCave, entrance);
+            return;
+        }
         _worldActions.QueuePath(
             new(entrance.X, entrance.Y), .72f,
             WorldActionType.EnterCave,
             groundObjectId: entrance.Id,
             clearTreeActions: true);
+    }
 
     internal void EnterCave(Guid entranceId)
     {
@@ -561,8 +603,14 @@ internal sealed partial class GameHostWindow
         out string requiredItemId)
     {
         requiredItemId = "";
-        if (!CaveEntranceService.CanFill(hole) ||
-            FindGroundObjectLocation(hole.Id) is not { } location)
+        if (!CaveEntranceService.CanFill(hole))
+            return false;
+        if (IsNetworkWorld)
+        {
+            requiredItemId = NetworkCaveFillItem(hole);
+            return materialItemId == requiredItemId;
+        }
+        if (FindGroundObjectLocation(hole.Id) is not { } location)
             return false;
         var localX = PositiveMod(
             (int)MathF.Floor(hole.X), WorldChunk.Size);

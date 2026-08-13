@@ -54,7 +54,11 @@ public enum WorldTransactionStatus
     NoDemolitionRefund,
     NotCookable,
     CookingLocked,
-    AlreadyCooking
+    AlreadyCooking,
+    InvalidExcavation,
+    MissingExcavationTool,
+    ExcavationCadenceLocked,
+    InvalidCaveLink
 }
 
 public enum WorldObjectChangeKind
@@ -107,7 +111,8 @@ public sealed record AuthoritativeWorldObjectSnapshot(
     string? FuelItemId,
     double LitUntilGameSeconds,
     int FiremakingLevel = 1,
-    WorldGateAccessState GateState = WorldGateAccessState.None);
+    WorldGateAccessState GateState = WorldGateAccessState.None,
+    Guid? LinkedObjectId = null);
 
 public readonly record struct WorldContainerSlotSnapshot(
     int Slot,
@@ -147,10 +152,20 @@ public sealed record WorldTransactionResult(
     ImmutableArray<WorldChunkRevisionDelta> ChunkDeltas,
     PlayerGameplaySnapshot? Gameplay,
     WorldContainerSnapshot? Container,
-    string Detail = "")
+    string Detail = "",
+    WorldActorTransition? ActorTransition = null,
+    CaveActionOutcome? CaveOutcome = null)
 {
     public bool Accepted => Status == WorldTransactionStatus.Accepted;
 }
+
+public readonly record struct WorldActorTransition(
+    Vector2 Position,
+    int WorldLevel);
+
+public readonly record struct CaveActionOutcome(
+    int Damage,
+    bool Completed);
 
 public sealed record WorldObjectSeed(
     Guid ObjectId,
@@ -169,7 +184,8 @@ public sealed record WorldObjectSeed(
     int Rotation = -1,
     WorldGateAccessState GateState = WorldGateAccessState.None,
     IReadOnlyList<(string ItemId, int Quantity, string? OwnerId)>?
-        ContainerItems = null);
+        ContainerItems = null,
+    Guid? LinkedObjectId = null);
 
 public readonly record struct AuthoritativeChunkRevisionSnapshot(
     WorldChunkKey Chunk,
@@ -185,7 +201,14 @@ public sealed record AuthoritativeWorldObjectCheckpoint(
 /// </summary>
 public sealed record AuthoritativeWorldTransactionsCheckpoint(
     ImmutableArray<AuthoritativeWorldObjectCheckpoint> Objects,
-    ImmutableArray<AuthoritativeChunkRevisionSnapshot> ChunkRevisions);
+    ImmutableArray<AuthoritativeChunkRevisionSnapshot> ChunkRevisions,
+    ImmutableArray<AuthoritativeExcavationCadenceCheckpoint>
+        ExcavationCadences = default);
+
+public readonly record struct AuthoritativeExcavationCadenceCheckpoint(
+    ActorId ActorId,
+    Guid ExcavationId,
+    double NextAllowedGameSeconds);
 
 public sealed record PickUpWorldObjectTransaction(
     WorldTransactionContext Context,
@@ -267,3 +290,39 @@ public sealed record BuildConstructionTransaction(
 public sealed record DemolishWorldObjectTransaction(
     WorldTransactionContext Context,
     WorldObjectHandle Object);
+
+public sealed record StartExcavationTransaction(
+    WorldTransactionContext Context,
+    Vector2 Position,
+    int WorldLevel,
+    int ShovelInventorySlot,
+    uint ExpectedChunkRevision,
+    double GameSeconds);
+
+public sealed record WorkExcavationTransaction(
+    WorldTransactionContext Context,
+    WorldObjectHandle Excavation,
+    int ShovelInventorySlot,
+    double GameSeconds);
+
+public sealed record RestoreExcavationTransaction(
+    WorldTransactionContext Context,
+    WorldObjectHandle Excavation);
+
+public sealed record InstallCaveRopeTransaction(
+    WorldTransactionContext Context,
+    WorldObjectHandle Shaft,
+    int RopeInventorySlot);
+
+public sealed record TakeCaveRopeTransaction(
+    WorldTransactionContext Context,
+    WorldObjectHandle Entrance);
+
+public sealed record FillExcavationTransaction(
+    WorldTransactionContext Context,
+    WorldObjectHandle Excavation,
+    int MaterialInventorySlot);
+
+public sealed record TraverseCaveTransaction(
+    WorldTransactionContext Context,
+    WorldObjectHandle Entrance);

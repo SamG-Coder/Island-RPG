@@ -28,6 +28,9 @@ internal static class ServerCheckpointChecks
             CheckAssert.Equal(source.WorldObjects[0].Container[0],
                 loaded.Checkpoint.WorldObjects[0].Container[0],
                 "container contents must be part of the same durable state");
+            CheckAssert.Equal(source.Actors[0].DiggingExperience,
+                loaded.Checkpoint.Actors[0].DiggingExperience,
+                "digging experience must be part of the same durable state");
         });
 
         checks.Add("server checkpoint rejects stale asynchronous writes", () =>
@@ -260,7 +263,137 @@ internal static class ServerCheckpointChecks
                 "mapping must preserve durable gameplay command receipts");
             CheckAssert.Equal(source.CookingJobs![0], roundTrip.CookingJobs![0],
                 "mapping must preserve a deterministic active cooking job");
+            CheckAssert.Equal(source.Actors[0].DiggingExperience,
+                roundTrip.Actors[0].DiggingExperience,
+                "mapping must preserve authoritative digging experience");
         });
+
+        checks.Add("server checkpoint preserves linked caves and dig cadence", () =>
+        {
+            var source = WithCaveState(CreateCheckpoint(3));
+            ServerCheckpointStore.Validate(source, source.WorldId);
+            var options = new IslandRpg.Server.ServerOptions(
+                System.Net.IPAddress.Loopback,
+                38_740,
+                source.WorldId,
+                source.WorldSeed,
+                source.BuildVersion,
+                source.ContentVersion,
+                8);
+            var simulation = ServerCheckpointMapper.ToSimulation(source, options);
+            var roundTrip = ServerCheckpointMapper.ToDurable(
+                simulation, options, 4);
+
+            var actualObjects = roundTrip.WorldObjects.ToDictionary(
+                static value => value.ObjectId);
+            foreach (var expected in source.WorldObjects)
+            {
+                CheckAssert.True(actualObjects.TryGetValue(
+                        expected.ObjectId, out var actual),
+                    "every persisted cave endpoint must survive restart");
+                CheckAssert.Equal(
+                    expected with { Container = actual!.Container }, actual,
+                    "linked cave endpoint metadata must round trip exactly");
+                CheckAssert.SequenceEqual(expected.Container, actual.Container,
+                    "linked cave endpoint containers must round trip exactly");
+            }
+            CheckAssert.SequenceEqual(source.ExcavationCadences!,
+                roundTrip.ExcavationCadences!,
+                "active excavation cadence must survive restart exactly");
+
+            var broken = source with
+            {
+                WorldObjects = source.WorldObjects.Select((value, index) =>
+                    index == 1
+                        ? value with { LinkedObjectId = Guid.NewGuid() }
+                        : value).ToArray()
+            };
+            CheckAssert.Throws<InvalidDataException>(
+                () => ServerCheckpointStore.Validate(broken, source.WorldId),
+                "durable state must reject a non-reciprocal cave portal");
+            var mismatchedDefinition = source with
+            {
+                WorldObjects = source.WorldObjects.Select((value, index) =>
+                    index == 1
+                        ? value with { DefinitionId = "cave_entrance" }
+                        : value).ToArray()
+            };
+            CheckAssert.Throws<InvalidDataException>(
+                () => ServerCheckpointStore.Validate(
+                    mismatchedDefinition, source.WorldId),
+                "durable state must reject portal definitions that disagree");
+            var arbitraryLink = source with
+            {
+                WorldObjects = source.WorldObjects.Select(value =>
+                    value.LinkedObjectId is null
+                        ? value
+                        : value with { DefinitionId = "wooden_chest" })
+                    .ToArray()
+            };
+            CheckAssert.Throws<InvalidDataException>(
+                () => ServerCheckpointStore.Validate(
+                    arbitraryLink, source.WorldId),
+                "durable state must reject links between arbitrary objects");
+            var invalidCadence = source with
+            {
+                ExcavationCadences =
+                [new(source.Actors[0].ActorId, Guid.NewGuid(), 10)]
+            };
+            CheckAssert.Throws<InvalidDataException>(
+                () => ServerCheckpointStore.Validate(
+                    invalidCadence, source.WorldId),
+                "durable state must reject cadence for a missing excavation");
+        });
+    }
+
+    private static ServerCheckpoint WithCaveState(ServerCheckpoint source)
+    {
+        var surfaceId = Guid.Parse(
+            "53000000-0000-0000-0000-000000000001");
+        var undergroundId = Guid.Parse(
+            "53000000-0000-0000-0000-000000000002");
+        ServerWorldObjectCheckpoint Portal(
+            Guid id, Guid link, int worldLevel) => new(
+            id,
+            "cave_hole",
+            .5f,
+            .5f,
+            0,
+            0,
+            worldLevel,
+            4,
+            1,
+            0,
+            0,
+            50,
+            null,
+            null,
+            false,
+            null,
+            0,
+            1,
+            WorldGateAccessState.None,
+            false,
+            [],
+            link);
+        return source with
+        {
+            Actors =
+            [source.Actors[0] with { DiggingExperience = 135 }],
+            WorldObjects =
+            [
+                .. source.WorldObjects,
+                Portal(surfaceId, undergroundId, 0),
+                Portal(undergroundId, surfaceId, -1),
+            ],
+            ChunkRevisions =
+            [
+                .. source.ChunkRevisions,
+                new ServerChunkRevisionCheckpoint(0, 0, -1, 2),
+            ],
+            ExcavationCadences =
+            [new(source.Actors[0].ActorId, surfaceId, 123.75)],
+        };
     }
 
     private static ServerCheckpoint CreateCheckpoint(long revision)
@@ -303,7 +436,8 @@ internal static class ServerCheckpointChecks
                     Guid.Parse("60000000-0000-0000-0000-000000000001"),
                     new string('a', GameplayIntentFingerprint.HexLength),
                     IntentStatus.Accepted,
-                    null)])],
+                    null)],
+                DiggingExperience: 77)],
             [new ServerWorldObjectCheckpoint(
                 Guid.Parse("50000000-0000-0000-0000-000000000001"),
                 "wooden_chest",

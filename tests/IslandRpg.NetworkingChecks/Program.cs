@@ -32,6 +32,7 @@ MiningResourceAuthorityChecks.Register(checks);
 ResourceProtocolClientChecks.Register(checks);
 WorldRuleChecks.Register(checks);
 WorldTransactionChecks.Register(checks);
+CaveAuthorityChecks.Register(checks);
 SessionWorldTransactionChecks.Register(checks);
 ServerWorldActionAdapterChecks.Register(checks);
 ServerCheckpointChecks.Register(checks);

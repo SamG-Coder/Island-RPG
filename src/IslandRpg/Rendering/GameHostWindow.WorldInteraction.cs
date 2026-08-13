@@ -669,15 +669,35 @@ internal sealed partial class GameHostWindow
         {
             if (preview.TargetObjectId is { } targetObjectId &&
                 _networkWorldObjects.TryGetValue(
-                    targetObjectId, out var targetObject) &&
-                CampfireService.IsCampfire(targetObject))
+                    targetObjectId, out var targetObject))
             {
+                if (preview.ItemId == ItemIds.Rope &&
+                    CaveEntranceService.IsHole(targetObject))
+                {
+                    QueueNetworkCaveObjectAction(
+                        NetworkWorldActionKind.InstallCaveRope,
+                        targetObject, preview.InventorySlot);
+                    return;
+                }
+                if (CanFillExcavation(
+                        targetObject, preview.ItemId, out _) &&
+                    FindNetworkCaveFillSlot(targetObject) ==
+                    preview.InventorySlot)
+                {
+                    QueueNetworkCaveObjectAction(
+                        NetworkWorldActionKind.FillExcavation,
+                        targetObject, preview.InventorySlot);
+                    return;
+                }
+                if (!CampfireService.IsCampfire(targetObject))
+                    goto DropToGround;
                 QueueNetworkObjectAction(
                     NetworkWorldActionKind.AddCampfireFuel,
                     targetObject,
                     preview.InventorySlot);
                 return;
             }
+        DropToGround:
             QueueNetworkPointAction(
                 NetworkWorldActionKind.Drop,
                 preview.Target,

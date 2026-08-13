@@ -216,6 +216,9 @@ public static class ReliableProtocolCodec
             case ResourceActionResultMessage value:
                 WriteResourceActionResult(writer, value);
                 break;
+            case CaveActionResultMessage value:
+                WriteCaveActionResult(writer, value);
+                break;
             default:
                 throw new ProtocolException($"Unsupported message type {message.GetType().FullName}.");
         }
@@ -295,6 +298,8 @@ public static class ReliableProtocolCodec
                 ReadResourceNodeDeltaBatch(sequence, tick, ref reader),
             ProtocolMessageKind.ResourceActionResult =>
                 ReadResourceActionResult(sequence, tick, ref reader),
+            ProtocolMessageKind.CaveActionResult =>
+                ReadCaveActionResult(sequence, tick, ref reader),
             _ => throw new ProtocolException($"Unsupported reliable message kind {header.Kind}."),
         };
     }
@@ -413,6 +418,10 @@ public static class ReliableProtocolCodec
                 writer.WriteByte((byte)ActionCommandKind.ResourceAction);
                 WriteResourceAction(writer, action);
                 break;
+            case CaveActionPayload action:
+                writer.WriteByte((byte)ActionCommandKind.CaveAction);
+                WriteCaveAction(writer, action);
+                break;
             default:
                 throw new ProtocolException(
                     $"Unsupported action payload type {value.Payload.GetType().FullName}.");
@@ -478,6 +487,7 @@ public static class ReliableProtocolCodec
                 new DemolishWorldObjectAction(
                     ReadWorldObjectReference(ref reader)),
             ActionCommandKind.ResourceAction => ReadResourceAction(ref reader),
+            ActionCommandKind.CaveAction => ReadCaveAction(ref reader),
             _ => throw new ProtocolException($"Unsupported action command kind {kind}."),
         };
         return new ActionCommandMessage(
@@ -503,6 +513,90 @@ public static class ReliableProtocolCodec
         return new PlaceConstructionAction(
             definitionId, inventorySlot, x, y, worldLevel, rotation,
             reader.ReadUInt32());
+    }
+
+    private static void WriteCaveAction(
+        WireWriter writer,
+        CaveActionPayload action)
+    {
+        EnsureDefined(action.Action, nameof(action.Action));
+        writer.WriteByte((byte)action.Action);
+        switch (action)
+        {
+            case StartExcavationAction start:
+                EnsureFinite(start.X, nameof(start.X));
+                EnsureFinite(start.Y, nameof(start.Y));
+                writer.WriteSingle(start.X);
+                writer.WriteSingle(start.Y);
+                writer.WriteInt16(start.WorldLevel);
+                WriteInventorySlot(
+                    writer, start.ShovelInventorySlot,
+                    nameof(start.ShovelInventorySlot));
+                writer.WriteUInt32(start.ExpectedChunkRevision);
+                break;
+            case WorkExcavationAction work:
+                WriteWorldObjectReference(writer, work.Excavation);
+                WriteInventorySlot(
+                    writer, work.ShovelInventorySlot,
+                    nameof(work.ShovelInventorySlot));
+                break;
+            case RestoreExcavationAction restore:
+                WriteWorldObjectReference(writer, restore.Excavation);
+                break;
+            case InstallCaveRopeAction install:
+                WriteWorldObjectReference(writer, install.Shaft);
+                WriteInventorySlot(
+                    writer, install.RopeInventorySlot,
+                    nameof(install.RopeInventorySlot));
+                break;
+            case TakeCaveRopeAction take:
+                WriteWorldObjectReference(writer, take.Entrance);
+                break;
+            case FillExcavationAction fill:
+                WriteWorldObjectReference(writer, fill.Excavation);
+                WriteInventorySlot(
+                    writer, fill.MaterialInventorySlot,
+                    nameof(fill.MaterialInventorySlot));
+                break;
+            case TraverseCaveAction traverse:
+                WriteWorldObjectReference(writer, traverse.Entrance);
+                break;
+            default:
+                throw new ProtocolException(
+                    $"Unsupported cave action payload {action.GetType().FullName}.");
+        }
+    }
+
+    private static CaveActionPayload ReadCaveAction(ref WireReader reader)
+    {
+        var action = ReadEnum<CaveActionKind>(
+            reader.ReadByte(), nameof(CaveActionKind));
+        return action switch
+        {
+            CaveActionKind.StartExcavation => new StartExcavationAction(
+                ReadFinite(ref reader, "X"),
+                ReadFinite(ref reader, "Y"),
+                reader.ReadInt16(),
+                ReadInventorySlot(ref reader, "ShovelInventorySlot"),
+                reader.ReadUInt32()),
+            CaveActionKind.WorkExcavation => new WorkExcavationAction(
+                ReadWorldObjectReference(ref reader),
+                ReadInventorySlot(ref reader, "ShovelInventorySlot")),
+            CaveActionKind.RestoreExcavation => new RestoreExcavationAction(
+                ReadWorldObjectReference(ref reader)),
+            CaveActionKind.InstallRope => new InstallCaveRopeAction(
+                ReadWorldObjectReference(ref reader),
+                ReadInventorySlot(ref reader, "RopeInventorySlot")),
+            CaveActionKind.TakeRope => new TakeCaveRopeAction(
+                ReadWorldObjectReference(ref reader)),
+            CaveActionKind.FillExcavation => new FillExcavationAction(
+                ReadWorldObjectReference(ref reader),
+                ReadInventorySlot(ref reader, "MaterialInventorySlot")),
+            CaveActionKind.Traverse => new TraverseCaveAction(
+                ReadWorldObjectReference(ref reader)),
+            _ => throw new ProtocolException(
+                $"Unsupported cave action kind {action}.")
+        };
     }
 
     private static void WriteResourceAction(
@@ -652,6 +746,7 @@ public static class ReliableProtocolCodec
             nameof(value.FuelItemId));
         writer.WriteDouble(value.LitUntilGameSeconds);
         writer.WriteByte((byte)value.GateState);
+        writer.WriteGuid(value.LinkedObjectId);
     }
 
     private static WorldObjectState ReadWorldObjectState(
@@ -674,7 +769,8 @@ public static class ReliableProtocolCodec
             reader.ReadBoolean(),
             reader.ReadString(ProtocolLimits.ItemIdBytes, "FuelItemId"),
             reader.ReadDouble(),
-            (WorldObjectGateState)reader.ReadByte());
+            (WorldObjectGateState)reader.ReadByte(),
+            reader.ReadGuid());
         ValidateWorldObjectState(result);
         return result;
     }
@@ -700,6 +796,9 @@ public static class ReliableProtocolCodec
                 "World-object burn time must be finite and non-negative.");
         if (!Enum.IsDefined(value.GateState))
             throw new ProtocolException("World-object gate state is invalid.");
+        if (value.LinkedObjectId == value.ObjectId)
+            throw new ProtocolException(
+                "A linked world object must use a distinct identity.");
     }
 
     private static void WriteWorldObjectDeltaBatch(
@@ -1412,6 +1511,74 @@ public static class ReliableProtocolCodec
             reader.ReadUInt32(), reader.ReadUInt32());
     }
 
+    private static void WriteCaveActionResult(
+        WireWriter writer,
+        CaveActionResultMessage value)
+    {
+        EnsureCommandId(value.CommandId);
+        EnsureDefined(value.Action, nameof(value.Action));
+        ValidateActionResult(value.Accepted, value.RejectionCode);
+        if (value.Transitioned)
+        {
+            if (!value.Accepted || value.Action != CaveActionKind.Traverse)
+                throw new ProtocolException(
+                    "Only an accepted cave traversal can carry a transition.");
+            EnsureFinite(value.X, nameof(value.X));
+            EnsureFinite(value.Y, nameof(value.Y));
+        }
+        else if (value.X != 0 || value.Y != 0 || value.WorldLevel != 0)
+            throw new ProtocolException(
+                "A cave receipt without a transition must clear its destination.");
+        if (value.Damage < 0 ||
+            ((value.Action != CaveActionKind.WorkExcavation ||
+              !value.Accepted) &&
+             (value.Damage != 0 || value.Completed)))
+            throw new ProtocolException(
+                "Only accepted excavation work can carry a cave outcome.");
+        writer.WriteGuid(value.CommandId);
+        writer.WriteByte((byte)value.Action);
+        writer.WriteBoolean(value.Accepted);
+        writer.WriteByte((byte)value.RejectionCode);
+        writer.WriteString(
+            value.Detail, ProtocolLimits.DetailBytes, nameof(value.Detail));
+        writer.WriteUInt32(value.ActorRevision);
+        writer.WriteUInt32(value.InventoryRevision);
+        writer.WriteBoolean(value.Transitioned);
+        writer.WriteSingle(value.X);
+        writer.WriteSingle(value.Y);
+        writer.WriteInt16(value.WorldLevel);
+        writer.WriteInt32(value.Damage);
+        writer.WriteBoolean(value.Completed);
+    }
+
+    private static CaveActionResultMessage ReadCaveActionResult(
+        ulong sequence,
+        ulong tick,
+        ref WireReader reader)
+    {
+        var result = new CaveActionResultMessage(
+            sequence,
+            tick,
+            reader.ReadGuid(),
+            ReadEnum<CaveActionKind>(reader.ReadByte(), nameof(CaveActionKind)),
+            reader.ReadBoolean(),
+            ReadEnum<CommandRejectionCode>(
+                reader.ReadByte(), nameof(CommandRejectionCode)),
+            reader.ReadString(ProtocolLimits.DetailBytes, "Detail"),
+            reader.ReadUInt32(),
+            reader.ReadUInt32(),
+            reader.ReadBoolean(),
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadInt16(),
+            reader.ReadInt32(),
+            reader.ReadBoolean());
+        // Reuse the exact encode-side semantic validation.
+        var discard = new WireWriter();
+        WriteCaveActionResult(discard, result);
+        return result;
+    }
+
     private static void WritePlayerState(WireWriter writer, PlayerStateMessage value)
     {
         ValidatePlayerState(value);
@@ -1438,6 +1605,7 @@ public static class ReliableProtocolCodec
         writer.WriteInt32(value.FarmingExperience);
         writer.WriteInt32(value.MiningExperience);
         writer.WriteInt32(value.AdventureExperience);
+        writer.WriteInt32(value.DiggingExperience);
     }
 
     private static PlayerStateMessage ReadPlayerState(
@@ -1476,6 +1644,7 @@ public static class ReliableProtocolCodec
         var farmingExperience = reader.ReadInt32();
         var miningExperience = reader.ReadInt32();
         var adventureExperience = reader.ReadInt32();
+        var diggingExperience = reader.ReadInt32();
 
         var result = new PlayerStateMessage(
             sequence,
@@ -1496,7 +1665,8 @@ public static class ReliableProtocolCodec
             woodcuttingExperience,
             farmingExperience,
             miningExperience,
-            adventureExperience);
+            adventureExperience,
+            diggingExperience);
         ValidatePlayerState(result);
         return result;
     }
@@ -1558,7 +1728,8 @@ public static class ReliableProtocolCodec
             value.WoodcuttingExperience < 0 ||
             value.FarmingExperience < 0 ||
             value.MiningExperience < 0 ||
-            value.AdventureExperience < 0)
+            value.AdventureExperience < 0 ||
+            value.DiggingExperience < 0)
         {
             throw new ProtocolException("Skill experience cannot be negative.");
         }

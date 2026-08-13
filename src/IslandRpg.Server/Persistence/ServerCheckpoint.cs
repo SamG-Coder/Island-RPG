@@ -21,7 +21,9 @@ public sealed record ServerCheckpoint(
     IReadOnlyList<ServerWorldObjectCheckpoint> WorldObjects,
     IReadOnlyList<ServerChunkRevisionCheckpoint> ChunkRevisions,
     IReadOnlyList<ServerCookingJobCheckpoint>? CookingJobs = null,
-    ServerResourceCheckpoint? Resources = null)
+    ServerResourceCheckpoint? Resources = null,
+    IReadOnlyList<ServerExcavationCadenceCheckpoint>?
+        ExcavationCadences = null)
 {
     public const int CurrentSchemaVersion = 1;
 }
@@ -48,7 +50,8 @@ public sealed record ServerActorCheckpoint(
     int WoodcuttingExperience = 0,
     int FarmingExperience = 0,
     int MiningExperience = 0,
-    int AdventureExperience = 0)
+    int AdventureExperience = 0,
+    int DiggingExperience = 0)
 {
     // Keep credentials out of accidental structured-log interpolation.
     public override string ToString() =>
@@ -87,7 +90,8 @@ public sealed record ServerWorldObjectCheckpoint(
     int FiremakingLevel,
     IslandRpg.Simulation.WorldGateAccessState GateState,
     bool AllowsDeposit,
-    IReadOnlyList<ServerContainerSlotCheckpoint> Container);
+    IReadOnlyList<ServerContainerSlotCheckpoint> Container,
+    Guid? LinkedObjectId = null);
 
 public sealed record ServerContainerSlotCheckpoint(
     int Slot,
@@ -100,6 +104,11 @@ public sealed record ServerChunkRevisionCheckpoint(
     int Y,
     int WorldLevel,
     uint Revision);
+
+public sealed record ServerExcavationCadenceCheckpoint(
+    Guid ActorId,
+    Guid ExcavationId,
+    double NextAllowedGameSeconds);
 
 public sealed record ServerCookingJobCheckpoint(
     Guid CommandId,

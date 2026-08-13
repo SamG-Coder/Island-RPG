@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Channels;
 using IslandRpg.Gameplay;
+using IslandRpg.Caves;
 using IslandRpg.Navigation;
 
 namespace IslandRpg.Simulation;
@@ -650,7 +651,9 @@ public sealed class AuthoritativeWorldSession
             1,
             null)
         {
-            Gameplay = actor.Gameplay.ToSnapshot()
+            Gameplay = actor.Gameplay.ToSnapshot(),
+            Position = actor.Position,
+            WorldLevel = actor.WorldLevel,
         };
     }
 
@@ -713,7 +716,9 @@ public sealed class AuthoritativeWorldSession
             checked(actor.LastProcessedCommandSequence + 1),
             null)
         {
-            Gameplay = actor.Gameplay.ToSnapshot()
+            Gameplay = actor.Gameplay.ToSnapshot(),
+            Position = actor.Position,
+            WorldLevel = actor.WorldLevel,
         };
     }
 
@@ -938,6 +943,27 @@ public sealed class AuthoritativeWorldSession
                 intent.CommandId);
         }
 
+        if (intent is StartExcavationIntent excavation &&
+            (!float.IsFinite(excavation.Position.X) ||
+             !float.IsFinite(excavation.Position.Y) ||
+             !_navigation.SupportsWorldLevel(excavation.WorldLevel) ||
+             !_navigation.CanStandAt(
+                 CaveExcavationRules.Snap(excavation.Position),
+                 excavation.WorldLevel) ||
+             _resourceTransactions?.HasBlockingTreeAt(
+                 CaveExcavationRules.Snap(excavation.Position),
+                 excavation.WorldLevel) == true ||
+             _obstacles.GetObstacles(excavation.WorldLevel).Any(value =>
+                 value.Contains(CaveExcavationRules.Snap(
+                     excavation.Position)))))
+        {
+            return Rejected(
+                IntentStatus.InvalidPlacement,
+                actor,
+                "Excavation must begin on clear traversable ground.",
+                intent.CommandId);
+        }
+
         var gameSeconds = Clock.Current.ElapsedSeconds;
         var context = new WorldTransactionContext(
             intent.CommandId,
@@ -1013,6 +1039,37 @@ public sealed class AuthoritativeWorldSession
             DemolishWorldObjectIntent demolish => _worldTransactions.Execute(
                 input,
                 new DemolishWorldObjectTransaction(context, demolish.Object)),
+            StartExcavationIntent start => _worldTransactions.Execute(
+                input,
+                new StartExcavationTransaction(
+                    context, start.Position, start.WorldLevel,
+                    start.ShovelInventorySlot,
+                    start.ExpectedChunkRevision, gameSeconds)),
+            WorkExcavationIntent work => _worldTransactions.Execute(
+                input,
+                new WorkExcavationTransaction(
+                    context, work.Excavation,
+                    work.ShovelInventorySlot, gameSeconds)),
+            RestoreExcavationIntent restore => _worldTransactions.Execute(
+                input,
+                new RestoreExcavationTransaction(
+                    context, restore.Excavation)),
+            InstallCaveRopeIntent install => _worldTransactions.Execute(
+                input,
+                new InstallCaveRopeTransaction(
+                    context, install.Shaft,
+                    install.RopeInventorySlot)),
+            TakeCaveRopeIntent take => _worldTransactions.Execute(
+                input,
+                new TakeCaveRopeTransaction(context, take.Entrance)),
+            FillExcavationIntent fill => _worldTransactions.Execute(
+                input,
+                new FillExcavationTransaction(
+                    context, fill.Excavation,
+                    fill.MaterialInventorySlot)),
+            TraverseCaveIntent traverse => _worldTransactions.Execute(
+                input,
+                new TraverseCaveTransaction(context, traverse.Entrance)),
             _ => throw new InvalidOperationException(
                 "The world gameplay intent type is unsupported.")
         };
@@ -1025,6 +1082,14 @@ public sealed class AuthoritativeWorldSession
              gameplay.Inventory.Revision != actor.Gameplay.InventoryRevision))
         {
             actor.Gameplay.ReplaceWith(gameplay);
+        }
+
+        if (transaction.Accepted &&
+            transaction.ActorTransition is { } transition)
+        {
+            actor.Position = transition.Position;
+            actor.WorldLevel = transition.WorldLevel;
+            actor.ClearRoute();
         }
 
         if (transaction.Accepted &&
@@ -1108,6 +1173,14 @@ public sealed class AuthoritativeWorldSession
             WorldTransactionStatus.NotCookable => IntentStatus.NotCookable,
             WorldTransactionStatus.CookingLocked => IntentStatus.CookingLocked,
             WorldTransactionStatus.AlreadyCooking => IntentStatus.AlreadyCooking,
+            WorldTransactionStatus.InvalidExcavation =>
+                IntentStatus.InvalidExcavation,
+            WorldTransactionStatus.MissingExcavationTool =>
+                IntentStatus.MissingExcavationTool,
+            WorldTransactionStatus.ExcavationCadenceLocked =>
+                IntentStatus.ExcavationCadenceLocked,
+            WorldTransactionStatus.InvalidCaveLink =>
+                IntentStatus.InvalidCaveLink,
             _ => throw new ArgumentOutOfRangeException(nameof(status))
         };
 
@@ -2050,7 +2123,7 @@ public sealed class AuthoritativeWorldSession
 
         public Vector2? Destination { get; set; }
 
-        public int WorldLevel { get; }
+        public int WorldLevel { get; set; }
 
         public ClientConnectionId ConnectionId { get; set; }
 
@@ -2226,6 +2299,8 @@ public sealed class AuthoritativeWorldSession
 
         public int AdventureExperience { get; set; }
 
+        public int DiggingExperience { get; set; }
+
         public void ReplaceWith(PlayerGameplaySnapshot snapshot)
         {
             if (snapshot.ActorRevision == 0 ||
@@ -2241,7 +2316,8 @@ public sealed class AuthoritativeWorldSession
                 snapshot.WoodcuttingExperience < 0 ||
                 snapshot.FarmingExperience < 0 ||
                 snapshot.MiningExperience < 0 ||
-                snapshot.AdventureExperience < 0)
+                snapshot.AdventureExperience < 0 ||
+                snapshot.DiggingExperience < 0)
             {
                 throw new InvalidOperationException(
                     "The world transaction returned invalid actor state.");
@@ -2294,6 +2370,7 @@ public sealed class AuthoritativeWorldSession
             FarmingExperience = snapshot.FarmingExperience;
             MiningExperience = snapshot.MiningExperience;
             AdventureExperience = snapshot.AdventureExperience;
+            DiggingExperience = snapshot.DiggingExperience;
         }
 
         public PlayerGameplaySnapshot ToSnapshot()
@@ -2322,7 +2399,8 @@ public sealed class AuthoritativeWorldSession
                 WoodcuttingExperience,
                 FarmingExperience,
                 MiningExperience,
-                AdventureExperience);
+                AdventureExperience,
+                DiggingExperience);
         }
     }
 

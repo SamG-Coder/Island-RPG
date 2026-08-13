@@ -123,6 +123,40 @@ public static class GameplayIntentFingerprint
                 writer.Resource(value.Node);
                 writer.Int32(value.ToolInventorySlot);
                 break;
+            case StartExcavationIntent value:
+                writer.Tag(21);
+                writer.Vector(value.Position);
+                writer.Int32(value.WorldLevel);
+                writer.Int32(value.ShovelInventorySlot);
+                writer.UInt32(value.ExpectedChunkRevision);
+                break;
+            case WorkExcavationIntent value:
+                writer.Tag(22);
+                writer.Handle(value.Excavation);
+                writer.Int32(value.ShovelInventorySlot);
+                break;
+            case RestoreExcavationIntent value:
+                writer.Tag(23);
+                writer.Handle(value.Excavation);
+                break;
+            case InstallCaveRopeIntent value:
+                writer.Tag(24);
+                writer.Handle(value.Shaft);
+                writer.Int32(value.RopeInventorySlot);
+                break;
+            case TakeCaveRopeIntent value:
+                writer.Tag(25);
+                writer.Handle(value.Entrance);
+                break;
+            case FillExcavationIntent value:
+                writer.Tag(26);
+                writer.Handle(value.Excavation);
+                writer.Int32(value.MaterialInventorySlot);
+                break;
+            case TraverseCaveIntent value:
+                writer.Tag(27);
+                writer.Handle(value.Entrance);
+                break;
             default:
                 throw new NotSupportedException(
                     $"Gameplay intent type '{intent.GetType().Name}' has no canonical fingerprint.");

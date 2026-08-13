@@ -63,7 +63,16 @@ public static class ServerCheckpointMapper
                     value.DropObjectId,
                     value.CompletesAtTick)).ToArray(),
             ToDurable(source.Resources ??
-                AuthoritativeResourceTransactionsCheckpoint.Empty));
+                AuthoritativeResourceTransactionsCheckpoint.Empty),
+            (source.World.ExcavationCadences.IsDefault
+                    ? ImmutableArray<AuthoritativeExcavationCadenceCheckpoint>.Empty
+                    : source.World.ExcavationCadences)
+                .Select(static value =>
+                    new ServerExcavationCadenceCheckpoint(
+                        value.ActorId.Value,
+                        value.ExcavationId,
+                        value.NextAllowedGameSeconds))
+                .ToArray());
     }
 
     public static AuthoritativeSessionCheckpoint ToSimulation(
@@ -103,7 +112,14 @@ public static class ServerCheckpointMapper
                             value.X,
                             value.Y,
                             value.WorldLevel),
-                        value.Revision)).ToImmutableArray()),
+                        value.Revision)).ToImmutableArray(),
+                (source.ExcavationCadences ?? [])
+                    .Select(static value =>
+                        new AuthoritativeExcavationCadenceCheckpoint(
+                            new ActorId(value.ActorId),
+                            value.ExcavationId,
+                            value.NextAllowedGameSeconds))
+                    .ToImmutableArray()),
             (source.CookingJobs ?? [])
                 .Select(static value => new AuthoritativeCookingJobCheckpoint(
                     value.CommandId,
@@ -156,7 +172,8 @@ public static class ServerCheckpointMapper
         value.Gameplay.WoodcuttingExperience,
         value.Gameplay.FarmingExperience,
         value.Gameplay.MiningExperience,
-        value.Gameplay.AdventureExperience);
+        value.Gameplay.AdventureExperience,
+        value.Gameplay.DiggingExperience);
 
     private static AuthoritativeActorCheckpoint ToSimulation(
         ServerActorCheckpoint value) => new(
@@ -185,7 +202,8 @@ public static class ServerCheckpointMapper
             value.WoodcuttingExperience,
             value.FarmingExperience,
             value.MiningExperience,
-            value.AdventureExperience),
+            value.AdventureExperience,
+            value.DiggingExperience),
         value.ReconnectTokenHash.ToImmutableArray(),
         value.CommandReceipts.Select(static receipt =>
             new AuthoritativeCommandReceiptCheckpoint(
@@ -277,7 +295,8 @@ public static class ServerCheckpointMapper
                     slot.Slot,
                     slot.ItemId,
                     slot.Quantity,
-                    slot.OwnerId)).ToArray() ?? []);
+                    slot.OwnerId)).ToArray() ?? [],
+            item.LinkedObjectId);
     }
 
     private static AuthoritativeWorldObjectCheckpoint ToSimulation(
@@ -304,7 +323,8 @@ public static class ServerCheckpointMapper
             value.FuelItemId,
             value.LitUntilGameSeconds,
             value.FiremakingLevel,
-            value.GateState);
+            value.GateState,
+            value.LinkedObjectId);
         var container = !value.HasContainer
             ? null
             : new WorldContainerSnapshot(

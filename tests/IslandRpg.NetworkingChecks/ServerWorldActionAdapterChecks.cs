@@ -19,6 +19,8 @@ internal static class ServerWorldActionAdapterChecks
     {
         checks.Add("server maps every world action to a session intent",
             MapsEveryWorldAction);
+        checks.Add("server maps every cave action and typed outcome exactly",
+            MapsEveryCaveActionAndOutcome);
         checks.Add("server projects revisioned public world deltas without private slots",
             ProjectsPublicDeltasWithoutPrivateState);
         checks.Add("server projects player and container state only as private messages",
@@ -90,6 +92,79 @@ internal static class ServerWorldActionAdapterChecks
             "ordinary inventory actions must remain on their existing path");
         CheckAssert.True(nonWorld is null,
             "a rejected non-world projection must not return an intent");
+    }
+
+    private static void MapsEveryCaveActionAndOutcome()
+    {
+        CaveActionPayload[] payloads =
+        [
+            new StartExcavationAction(65, -95, 0, 4, 8),
+            new WorkExcavationAction(ObjectReference, 4),
+            new RestoreExcavationAction(ObjectReference),
+            new InstallCaveRopeAction(ObjectReference, 5),
+            new TakeCaveRopeAction(ObjectReference),
+            new FillExcavationAction(ObjectReference, 6),
+            new TraverseCaveAction(ObjectReference),
+        ];
+        Type[] expectedTypes =
+        [
+            typeof(StartExcavationIntent),
+            typeof(WorkExcavationIntent),
+            typeof(RestoreExcavationIntent),
+            typeof(InstallCaveRopeIntent),
+            typeof(TakeCaveRopeIntent),
+            typeof(FillExcavationIntent),
+            typeof(TraverseCaveIntent),
+        ];
+
+        for (var index = 0; index < payloads.Length; index++)
+        {
+            var intent = CaveActionProtocolAdapter.ToIntent(
+                Command(payloads[index]), payloads[index]);
+            CheckAssert.Equal(expectedTypes[index], intent.GetType(),
+                $"{payloads[index].Action} must map to its exact session intent");
+            CheckAssert.Equal(CommandId, intent.CommandId,
+                "cave command correlation must survive projection");
+            CheckAssert.Equal(2u, intent.ExpectedInventoryRevision,
+                "cave inventory optimistic locks must survive projection");
+            CheckAssert.Equal(3u, intent.ExpectedActorRevision,
+                "cave actor optimistic locks must survive projection");
+        }
+
+        var workTransaction = Result() with
+        {
+            Detail = "excavation_strike:7",
+            CaveOutcome = new CaveActionOutcome(7, false),
+        };
+        var work = CaveActionProtocolAdapter.ToPrivateResult(
+            30, 40, Command(payloads[1]), payloads[1],
+            Intent(workTransaction));
+        CheckAssert.True(work.Accepted,
+            "accepted authoritative cave work must remain accepted");
+        CheckAssert.Equal(7, work.Damage,
+            "the requester must receive typed strike damage");
+        CheckAssert.False(work.Completed,
+            "an incomplete strike must not claim discovery");
+        CheckAssert.False(work.Transitioned,
+            "ordinary cave work cannot move the actor");
+
+        var traversalTransaction = Result() with
+        {
+            Detail = "cave_traversed",
+            ActorTransition = new WorldActorTransition(
+                new Vector2(65, -95), -1),
+        };
+        var traversal = CaveActionProtocolAdapter.ToPrivateResult(
+            31, 41, Command(payloads[6]), payloads[6],
+            Intent(traversalTransaction));
+        CheckAssert.True(traversal.Transitioned,
+            "accepted traversal must publish its authoritative destination");
+        CheckAssert.Equal(-1, (int)traversal.WorldLevel,
+            "the server must choose the destination world level");
+        CheckAssert.Equal(65f, traversal.X,
+            "the transition must retain its exact X coordinate");
+        CheckAssert.Equal(-95f, traversal.Y,
+            "the transition must retain its exact Y coordinate");
     }
 
     private static void ProjectsPublicDeltasWithoutPrivateState()
@@ -252,6 +327,16 @@ internal static class ServerWorldActionAdapterChecks
 
     private static ActionCommandMessage Command(IActionCommandPayload payload) =>
         new(1, 2, CommandId, 3, 2, payload);
+
+    private static IntentResult Intent(WorldTransactionResult transaction) =>
+        new(IntentStatus.Accepted, 1, null)
+        {
+            CommandId = CommandId,
+            ActorRevision = transaction.ActorRevision,
+            InventoryRevision = transaction.InventoryRevision,
+            Gameplay = transaction.Gameplay!.Value,
+            WorldTransaction = transaction,
+        };
 
     private static WorldTransactionResult Result()
     {
