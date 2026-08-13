@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Numerics;
+using System.Security.Cryptography;
+using IslandRpg.Navigation;
 using IslandRpg.Protocol;
 using IslandRpg.Simulation;
 
@@ -13,6 +15,7 @@ public sealed class DedicatedServer : IAsyncDisposable
 {
     private readonly ServerOptions _options;
     private readonly TcpListener _listener;
+    private readonly Socket _snapshotSocket;
     private readonly AuthoritativeWorldSession _session;
     private readonly SemaphoreSlim _clientSlots;
     private readonly ConcurrentDictionary<Guid, ClientConnection> _clients = [];
@@ -22,15 +25,21 @@ public sealed class DedicatedServer : IAsyncDisposable
     private readonly TaskCompletionSource<IPEndPoint> _startedSignal =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Thread _simulationThread;
+    private ushort _boundSnapshotPort;
     private int _started;
 
     public DedicatedServer(ServerOptions options)
     {
         _options = options;
         _listener = new TcpListener(options.ListenAddress, options.ListenPort);
+        _snapshotSocket = new Socket(
+            options.ListenAddress.AddressFamily,
+            SocketType.Dgram,
+            ProtocolType.Udp);
         _session = new AuthoritativeWorldSession(
             SimulationLimits.Default with { MaximumActors = options.MaximumClients },
-            sessionId: new SessionId(options.WorldId));
+            sessionId: new SessionId(options.WorldId),
+            navigation: new ProceduralSurfaceNavigationQuery(options.WorldSeed));
         _clientSlots = new SemaphoreSlim(options.MaximumClients, options.MaximumClients);
         _simulationThread = new Thread(SimulationLoop)
         {
@@ -61,6 +70,11 @@ public sealed class DedicatedServer : IAsyncDisposable
             cancellationToken,
             _lifetime.Token);
         _listener.Start(_options.MaximumClients);
+        _snapshotSocket.Bind(new IPEndPoint(
+            _options.ListenAddress,
+            _options.SnapshotPort));
+        _boundSnapshotPort = checked((ushort)
+            ((IPEndPoint)_snapshotSocket.LocalEndPoint!).Port);
         var boundEndpoint = (IPEndPoint)_listener.LocalEndpoint;
         BoundEndpoint = boundEndpoint;
         _startedSignal.TrySetResult(boundEndpoint);
@@ -111,6 +125,7 @@ public sealed class DedicatedServer : IAsyncDisposable
                 .ConfigureAwait(false);
             _lifetime.Cancel();
             _simulationThread.Join(TimeSpan.FromSeconds(5));
+            _snapshotSocket.Close();
             Console.WriteLine("Island RPG server stopped.");
         }
     }
@@ -172,6 +187,18 @@ public sealed class DedicatedServer : IAsyncDisposable
                 "This client is already connected.");
         }
 
+        var udpRequested =
+            request.Capabilities.HasFlag(ClientCapabilities.UdpSnapshots) &&
+            request.ClientSnapshotPort != 0 &&
+            _boundSnapshotPort != 0;
+        var remoteAddress = NormalizeAddress(
+            ((IPEndPoint)connection.RemoteEndPoint).Address,
+            _snapshotSocket.AddressFamily);
+        var snapshotEndpoint = udpRequested
+            ? new IPEndPoint(remoteAddress, request.ClientSnapshotPort)
+            : null;
+        var datagramToken = udpRequested ? CreateDatagramToken() : 0;
+
         try
         {
             if (request.ReconnectPlayerId != Guid.Empty &&
@@ -188,7 +215,7 @@ public sealed class DedicatedServer : IAsyncDisposable
                         result.Error ?? "Reconnect was rejected.");
                 }
 
-                return new AuthenticatedPlayer(
+                var authenticated = new AuthenticatedPlayer(
                     request.ClientId,
                     result.Identity,
                     request.PlayerName.Trim(),
@@ -196,6 +223,12 @@ public sealed class DedicatedServer : IAsyncDisposable
                     checked((ulong)result.NextCommandSequence),
                     true,
                     result.Gameplay);
+                connection.ConfigureSnapshotTransport(
+                    snapshotEndpoint,
+                    datagramToken,
+                    StableNetworkId(result.Identity.ActorId.Value),
+                    request.Capabilities.HasFlag(ClientCapabilities.DeltaSnapshots));
+                return authenticated;
             }
 
             var join = await _session.EnqueueJoinAsync(new JoinRequest(
@@ -212,7 +245,7 @@ public sealed class DedicatedServer : IAsyncDisposable
                 throw new HandshakeFailure(code, join.Error ?? "Join was rejected.");
             }
 
-            return new AuthenticatedPlayer(
+            var joinedPlayer = new AuthenticatedPlayer(
                 request.ClientId,
                 join.Identity,
                 request.PlayerName.Trim(),
@@ -220,6 +253,12 @@ public sealed class DedicatedServer : IAsyncDisposable
                 checked((ulong)join.NextCommandSequence),
                 false,
                 join.Gameplay);
+            connection.ConfigureSnapshotTransport(
+                snapshotEndpoint,
+                datagramToken,
+                StableNetworkId(join.Identity.ActorId.Value),
+                request.Capabilities.HasFlag(ClientCapabilities.DeltaSnapshots));
+            return joinedPlayer;
         }
         catch
         {
@@ -246,13 +285,18 @@ public sealed class DedicatedServer : IAsyncDisposable
             0,
             0,
             0,
-            0,
+            connection.DatagramToken,
             request.ClientNonce,
             player.NextCommandSequence,
             player.ReconnectToken,
-            0,
+            connection.UdpSnapshotsEnabled ? _boundSnapshotPort : (ushort)0,
             SimulationTiming.TicksPerSecond,
-            ServerCapabilities.None);
+            connection.UdpSnapshotsEnabled
+                ? ServerCapabilities.UdpSnapshots |
+                  (connection.DeltaSnapshotsEnabled
+                      ? ServerCapabilities.DeltaSnapshots
+                      : ServerCapabilities.None)
+                : ServerCapabilities.None);
 
     internal HandshakeRejectedMessage CreateHandshakeRejected(
         ClientConnection connection,
@@ -293,11 +337,9 @@ public sealed class DedicatedServer : IAsyncDisposable
 
         SessionIntent intent = message switch
         {
-            WalkCommandMessage walk when walk.WorldLevel == 0 =>
-                new WalkIntent(new Vector2(walk.DestinationX, walk.DestinationY)),
-            WalkCommandMessage => throw new CommandFailure(
-                CommandRejectionCode.Impossible,
-                "This server foundation currently hosts world level 0."),
+            WalkCommandMessage walk => new WalkIntent(
+                new Vector2(walk.DestinationX, walk.DestinationY),
+                walk.WorldLevel),
             StopCommandMessage => StopIntent.Instance,
             ChatCommandMessage chat => new ChatIntent(chat.Text),
             ActionCommandMessage action => ToGameplayIntent(action),
@@ -596,7 +638,7 @@ public sealed class DedicatedServer : IAsyncDisposable
                 StableNetworkId(actor.ActorId.Value),
                 NetworkEntityKind.Player,
                 0,
-                0,
+                checked((short)actor.WorldLevel),
                 actor.Position.X,
                 actor.Position.Y,
                 actor.Velocity.X,
@@ -607,18 +649,126 @@ public sealed class DedicatedServer : IAsyncDisposable
             .ToArray();
         var snapshotSequence = unchecked((ushort)snapshot.Sequence);
 
-        Broadcast(connection => new EntitySnapshotMessage(
-            connection.NextOutboundSequence(),
+        foreach (var connection in _clients.Values)
+        {
+            if (!connection.Authenticated)
+            {
+                continue;
+            }
+
+            var reliableRecovery = connection.UdpSnapshotsEnabled &&
+                snapshot.Clock.Tick % SimulationTiming.TicksPerSecond == 0;
+            if (connection.UdpSnapshotsEnabled && !reliableRecovery)
+            {
+                SendUdpSnapshot(connection, snapshot, entities);
+            }
+
+            // Reliable keyframes remain a recovery path when UDP packets are
+            // lost, reordered, filtered, or a client cannot use UDP at all.
+            if (!connection.UdpSnapshotsEnabled || reliableRecovery)
+            {
+                if (!connection.TryQueue(new EntitySnapshotMessage(
+                        connection.NextOutboundSequence(),
+                        checked((ulong)snapshot.Clock.Tick),
+                        new SnapshotMetadata(
+                            connection.DatagramToken,
+                            snapshotSequence,
+                            0,
+                            0,
+                            checked((ulong)snapshot.Clock.Tick),
+                            0,
+                            SnapshotFlags.Keyframe),
+                        entities)))
+                {
+                    connection.Stop();
+                }
+            }
+        }
+    }
+
+    private void SendUdpSnapshot(
+        ClientConnection connection,
+        SessionSnapshot snapshot,
+        EntitySnapshot[] entities)
+    {
+        var endpoint = connection.SnapshotEndpoint;
+        if (endpoint is null)
+        {
+            return;
+        }
+
+        var selected = SelectUdpEntities(connection, entities);
+        if (selected.IsEmpty)
+            return;
+        var metadata = new SnapshotMetadata(
+            connection.DatagramToken,
+            connection.NextSnapshotSequence(),
+            0,
+            0,
             checked((ulong)snapshot.Clock.Tick),
-            new SnapshotMetadata(
-                0,
-                snapshotSequence,
-                0,
-                0,
-                checked((ulong)snapshot.Clock.Tick),
-                0,
-                SnapshotFlags.Keyframe),
-            entities));
+            0,
+            selected.Length == entities.Length
+                ? SnapshotFlags.Keyframe
+                : SnapshotFlags.Delta);
+        Span<byte> sendBuffer = stackalloc byte[ProtocolConstants.MaxUdpDatagramBytes];
+        if (!UdpSnapshotCodec.TryEncode(
+                metadata,
+                selected,
+                sendBuffer,
+                out var bytesWritten))
+        {
+            return;
+        }
+
+        try
+        {
+            _snapshotSocket.SendTo(
+                sendBuffer[..bytesWritten],
+                SocketFlags.None,
+                endpoint);
+        }
+        catch (SocketException) when (!_lifetime.IsCancellationRequested)
+        {
+            // UDP is opportunistic. The reliable keyframe will recover and
+            // the next publication will try again without stopping authority.
+        }
+    }
+
+    private static ReadOnlySpan<EntitySnapshot> SelectUdpEntities(
+        ClientConnection connection,
+        EntitySnapshot[] entities)
+    {
+        if (entities.Length <= UdpSnapshotCodec.MaxEntitiesPerDatagram)
+            return entities;
+
+        if (!connection.DeltaSnapshotsEnabled)
+            return ReadOnlySpan<EntitySnapshot>.Empty;
+
+        var result = connection.SnapshotSelectionBuffer;
+        var own = Array.FindIndex(
+            entities,
+            entity => entity.EntityId == connection.PlayerEntityId);
+        var count = 0;
+        if (own >= 0)
+            result[count++] = entities[own];
+
+        // Rotate the overflow window every publication. This keeps the local
+        // actor present while ensuring every other entity receives fresh UDP
+        // state even in worlds larger than one 1200-byte packet.
+        var offset = connection.NextInterestOffset(
+            entities.Length,
+            UdpSnapshotCodec.MaxEntitiesPerDatagram - count);
+        for (var scanned = 0;
+             scanned < entities.Length && count < result.Length;
+             scanned++)
+        {
+            var index = (offset + scanned) % entities.Length;
+            if (index == own)
+                continue;
+            result[count++] = entities[index];
+        }
+
+        return result[..count];
     }
 
     private void Broadcast(Func<ClientConnection, IProtocolMessage> createMessage)
@@ -643,6 +793,34 @@ public sealed class DedicatedServer : IAsyncDisposable
         value.TryWriteBytes(bytes);
         return BinaryPrimitives.ReadUInt64LittleEndian(bytes) ^
             BinaryPrimitives.ReadUInt64LittleEndian(bytes[8..]);
+    }
+
+    private static ulong CreateDatagramToken()
+    {
+        Span<byte> bytes = stackalloc byte[sizeof(ulong)];
+        do
+        {
+            RandomNumberGenerator.Fill(bytes);
+        }
+        while (BinaryPrimitives.ReadUInt64LittleEndian(bytes) == 0);
+
+        return BinaryPrimitives.ReadUInt64LittleEndian(bytes);
+    }
+
+    private static IPAddress NormalizeAddress(
+        IPAddress address,
+        AddressFamily socketFamily)
+    {
+        if (socketFamily == AddressFamily.InterNetwork)
+        {
+            return address.AddressFamily == AddressFamily.InterNetwork
+                ? address
+                : address.MapToIPv4();
+        }
+
+        return address.AddressFamily == AddressFamily.InterNetworkV6
+            ? address
+            : address.MapToIPv6();
     }
 }
 

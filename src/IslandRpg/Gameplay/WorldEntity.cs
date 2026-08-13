@@ -4,16 +4,18 @@ namespace IslandRpg.Gameplay;
 
 internal static class ActorMovementService
 {
-    public const float BaseMoveSpeed = 2.8f;
+    public const float BaseMoveSpeed =
+        IslandRpg.Navigation.ActorMovementService.BaseMoveSpeed;
 
     public static float TerrainSpeedMultiplier(
         bool wading,
         float currentHeight,
         float targetHeight)
     {
-        var uphill = Math.Max(0, targetHeight - currentHeight);
-        return (wading ? .62f : 1f) /
-               (1f + uphill * .18f);
+        return IslandRpg.Navigation.ActorMovementService.TerrainSpeedMultiplier(
+            wading,
+            currentHeight,
+            targetHeight);
     }
 }
 

@@ -81,6 +81,8 @@
     <Content Include="Resources\Audio\thunder.wav" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Remove="World\MacroHydrology.cs" />
+    <Compile Remove="World\ProceduralSurfaceTerrain.cs" />
     <Compile Remove="Gameplay\ItemDefinition.cs" />
     <Compile Remove="Gameplay\InventoryContainer.cs" />
     <Compile Remove="Gameplay\ItemContainerService.cs" />

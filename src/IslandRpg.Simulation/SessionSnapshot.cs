@@ -10,6 +10,7 @@ public readonly record struct ActorSnapshot(
     Vector2 Position,
     Vector2 Velocity,
     Vector2? Destination,
+    int WorldLevel,
     bool Connected,
     long LastProcessedCommandSequence,
     long? DisconnectedAtTick)

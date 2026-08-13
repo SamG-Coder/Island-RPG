@@ -22,6 +22,15 @@ internal static class ProtocolChecks
         checks.Add(
             "authoritative action protocol rejects malformed state",
             AuthoritativeActionProtocolRejectsMalformedState);
+        checks.Add(
+            "world action commands round trip with exact revisions",
+            WorldActionCommandsRoundTrip);
+        checks.Add(
+            "world state messages round trip without private data leaks",
+            WorldStateMessagesRoundTrip);
+        checks.Add(
+            "world action protocol rejects malformed and oversized state",
+            WorldActionProtocolRejectsMalformedState);
     }
 
     private static void ReliableMessagesRoundTrip()
@@ -182,6 +191,10 @@ internal static class ProtocolChecks
 
     private static void ProtocolEnforcesInputBounds()
     {
+        CheckAssert.Equal(
+            (ushort)2,
+            ProtocolConstants.CurrentVersion,
+            "the expanded world-action wire contract must use protocol v2");
         var multibyteName = string.Concat(
             Enumerable.Repeat("界", ProtocolLimits.PlayerNameBytes));
         CheckAssert.Throws<ProtocolException>(
@@ -443,5 +456,411 @@ internal static class ProtocolChecks
             expected.InventorySlots,
             actual.InventorySlots,
             "player inventory slot changes must round trip exactly");
+    }
+
+    private static void WorldActionCommandsRoundTrip()
+    {
+        var objectReference = new WorldObjectReference(
+            Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+            -12,
+            19,
+            -1,
+            47,
+            71);
+        IActionCommandPayload[] payloads =
+        [
+            new PickUpWorldObjectAction(objectReference),
+            new DropInventoryItemAction(4, 3, 12.5f, -9.25f, 0, 72),
+            new OpenContainerAction(objectReference),
+            new ContainerTransferAction(
+                objectReference,
+                52,
+                ContainerTransferDirection.Withdraw,
+                7,
+                31,
+                5),
+            new AddCampfireFuelAction(objectReference, 9),
+            new TakeCampfireFuelAction(objectReference),
+            new LightCampfireAction(objectReference),
+            new PlaceConstructionAction(
+                "wooden_wall", 11, 22.75f, -3.5f, 0, 3, 73),
+            new BuildConstructionAction(objectReference),
+            new DemolishWorldObjectAction(objectReference),
+        ];
+
+        for (var index = 0; index < payloads.Length; index++)
+        {
+            var expected = new ActionCommandMessage(
+                (ulong)(600 + index),
+                900,
+                Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd"),
+                23,
+                41,
+                payloads[index]);
+            var encoded = ReliableProtocolCodec.Encode(expected);
+            CheckAssert.Equal(
+                expected,
+                (ActionCommandMessage)ReliableProtocolCodec.Decode(encoded),
+                $"{payloads[index].Kind} must round trip exactly");
+        }
+    }
+
+    private static void WorldStateMessagesRoundTrip()
+    {
+        var objectId = Guid.Parse(
+            "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee");
+        var state = new WorldObjectState(
+            objectId,
+            5,
+            -8,
+            0,
+            33,
+            12,
+            "storage_chest",
+            160.5f,
+            -255.25f,
+            2,
+            80,
+            120,
+            true);
+        var reference = new WorldObjectReference(
+            objectId, 5, -8, 0, 11, 32);
+
+        IProtocolMessage[] publicMessages =
+        [
+            new WorldObjectStateMessage(700, 910, state),
+            new WorldObjectDeltaBatchMessage(
+                701,
+                911,
+                [
+                    new(
+                        WorldObjectDeltaKind.Upsert,
+                        reference,
+                        33,
+                        state),
+                    new(
+                        WorldObjectDeltaKind.Remove,
+                        new(
+                            Guid.Parse(
+                                "ffffffff-ffff-ffff-ffff-ffffffffffff"),
+                            6,
+                            -8,
+                            0,
+                            99,
+                            33),
+                        34,
+                        null),
+                ]),
+        ];
+
+        foreach (var expected in publicMessages)
+        {
+            var encoded = ReliableProtocolCodec.Encode(expected);
+            var decoded = ReliableProtocolCodec.Decode(encoded);
+            switch (expected, decoded)
+            {
+                case (WorldObjectStateMessage expectedState,
+                      WorldObjectStateMessage actualState):
+                    CheckAssert.Equal(
+                        expectedState,
+                        actualState,
+                        "public world-object state must round trip exactly");
+                    break;
+                case (WorldObjectDeltaBatchMessage expectedBatch,
+                      WorldObjectDeltaBatchMessage actualBatch):
+                    CheckAssert.Equal(
+                        expectedBatch with { Deltas = actualBatch.Deltas },
+                        actualBatch,
+                        "world-object delta metadata must round trip exactly");
+                    CheckAssert.SequenceEqual(
+                        expectedBatch.Deltas,
+                        actualBatch.Deltas,
+                        "world-object deltas must round trip exactly");
+                    break;
+                default:
+                    throw new InvalidOperationException(
+                        "world-object message decoded as the wrong type");
+            }
+
+            CheckAssert.False(
+                encoded.AsSpan().IndexOf("slime_gel"u8) >= 0,
+                "public world-object messages must not contain private slots");
+        }
+
+        var slots = Enumerable.Range(0, 4)
+            .Select(static slot => slot switch
+            {
+                1 => new ContainerSlotState(slot, "slime_gel", 12),
+                _ => new ContainerSlotState(slot, string.Empty, 0),
+            })
+            .ToArray();
+        var expectedContainer = new ContainerStateMessage(
+            702,
+            912,
+            reference with { ExpectedObjectRevision = 4 },
+            0,
+            4,
+            "storage_chest",
+            ContainerAccessMode.DepositAndWithdraw,
+            4,
+            true,
+            slots);
+        var encodedContainer = ReliableProtocolCodec.Encode(expectedContainer);
+        var actualContainer = (ContainerStateMessage)
+            ReliableProtocolCodec.Decode(encodedContainer);
+        CheckAssert.Equal(
+            expectedContainer with { Slots = actualContainer.Slots },
+            actualContainer,
+            "private container metadata must round trip exactly");
+        CheckAssert.SequenceEqual(
+            expectedContainer.Slots,
+            actualContainer.Slots,
+            "private container slots must round trip exactly");
+        CheckAssert.True(
+            encodedContainer.AsSpan().IndexOf("slime_gel"u8) >= 0,
+            "only the private container message should carry slot item IDs");
+    }
+
+    private static void WorldActionProtocolRejectsMalformedState()
+    {
+        var reference = new WorldObjectReference(
+            Guid.Parse("12121212-1212-1212-1212-121212121212"),
+            0,
+            0,
+            0,
+            1,
+            1);
+        var commandId = Guid.Parse(
+            "34343434-3434-3434-3434-343434343434");
+
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1,
+                1,
+                commandId,
+                0,
+                0,
+                new PickUpWorldObjectAction(
+                    reference with { ObjectId = Guid.Empty }))),
+            "world-object references must reject empty IDs");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1,
+                1,
+                commandId,
+                0,
+                0,
+                new DropInventoryItemAction(0, 1, float.NaN, 0, 0, 1))),
+            "world actions must reject non-finite positions");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1,
+                1,
+                commandId,
+                0,
+                0,
+                new ContainerTransferAction(
+                    reference,
+                    2,
+                    (ContainerTransferDirection)byte.MaxValue,
+                    0,
+                    0,
+                    1))),
+            "container transfers must reject unknown directions");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1,
+                1,
+                commandId,
+                0,
+                0,
+                new ContainerTransferAction(
+                    reference,
+                    2,
+                    ContainerTransferDirection.Deposit,
+                    0,
+                    ProtocolLimits.MaxContainerSlots,
+                    1))),
+            "container transfers must reject out-of-range container slots");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1,
+                1,
+                commandId,
+                0,
+                0,
+                new ContainerTransferAction(
+                    reference,
+                    2,
+                    ContainerTransferDirection.Deposit,
+                    0,
+                    0,
+                    0))),
+            "container transfers must reject zero quantities");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1,
+                1,
+                commandId,
+                0,
+                0,
+                new PlaceConstructionAction(
+                    "wooden_wall", 0, 0, 0, 0, 4, 1))),
+            "construction rotations outside quarter turns must be rejected");
+
+        var oversizedDefinition = string.Concat(
+            Enumerable.Repeat(
+                "ç•Œ",
+                ProtocolLimits.DefinitionIdBytes));
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1,
+                1,
+                commandId,
+                0,
+                0,
+                new PlaceConstructionAction(
+                    oversizedDefinition, 0, 0, 0, 0, 0, 1))),
+            "definition IDs must use bounded UTF-8 byte lengths");
+
+        var validDrop = ReliableProtocolCodec.Encode(new ActionCommandMessage(
+            1,
+            1,
+            commandId,
+            0,
+            0,
+            new DropInventoryItemAction(0, 1, 2, 3, 0, 1)));
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            validDrop.AsSpan(ProtocolConstants.ReliableHeaderSize + 28),
+            BitConverter.SingleToUInt32Bits(float.PositiveInfinity));
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Decode(validDrop),
+            "non-finite wire coordinates must be rejected while decoding");
+
+        var state = new WorldObjectState(
+            reference.ObjectId,
+            0,
+            0,
+            0,
+            2,
+            1,
+            "campfire",
+            0,
+            0,
+            0,
+            1,
+            10,
+            false);
+        var tooManyDeltas = Enumerable.Range(
+                0,
+                ProtocolLimits.MaxWorldObjectsPerBatch + 1)
+            .Select(index => new WorldObjectDelta(
+                WorldObjectDeltaKind.Upsert,
+                reference with
+                {
+                    ObjectId = Guid.NewGuid(),
+                    ExpectedObjectRevision = (uint)(index + 1),
+                    ExpectedChunkRevision = (uint)(index + 1),
+                },
+                (uint)(index + 2),
+                state with
+                {
+                    ObjectId = Guid.Empty,
+                    ChunkRevision = (uint)(index + 2),
+                    ObjectRevision = (uint)(index + 2),
+                }))
+            .ToArray();
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(
+                new WorldObjectDeltaBatchMessage(1, 1, tooManyDeltas)),
+            "public world-object batches must enforce their hard count limit");
+
+        var invalidContainer = new ContainerStateMessage(
+            1,
+            1,
+            reference,
+            0,
+            1,
+            "storage_chest",
+            ContainerAccessMode.DepositAndWithdraw,
+            ProtocolLimits.MaxContainerSlots + 1,
+            true,
+            []);
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(invalidContainer),
+            "private container slot counts must enforce their hard limit");
+
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ContainerStateMessage(
+                1,
+                1,
+                reference with { ExpectedObjectRevision = 2 },
+                0,
+                2,
+                "storage_chest",
+                ContainerAccessMode.DepositAndWithdraw,
+                2,
+                true,
+                [new(0, string.Empty, 0), new(0, string.Empty, 0)])),
+            "private container states must reject duplicate slots");
+
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ContainerStateMessage(
+                1,
+                1,
+                reference with { ExpectedObjectRevision = 3 },
+                2,
+                3,
+                "storage_chest",
+                ContainerAccessMode.DepositAndWithdraw,
+                2,
+                false,
+                [new(1, "slime_gel", 1), new(1, "rope", 1)])),
+            "private container states must reject duplicate changed slots");
+
+        var validContainer = new ContainerStateMessage(
+            1,
+            1,
+            reference,
+            0,
+            1,
+            "storage_chest",
+            ContainerAccessMode.DepositAndWithdraw,
+            1,
+            true,
+            [new(0, string.Empty, 0)]);
+        var invalidAccess = ReliableProtocolCodec.Encode(validContainer);
+        invalidAccess[ProtocolConstants.ReliableHeaderSize + 43] =
+            byte.MaxValue;
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Decode(invalidAccess),
+            "unknown private container access modes must be rejected");
+
+        var validBatch = ReliableProtocolCodec.Encode(
+            new WorldObjectDeltaBatchMessage(
+                1,
+                1,
+                [new(WorldObjectDeltaKind.Remove, reference, 2, null)]));
+        validBatch[ProtocolConstants.ReliableHeaderSize + 2] = byte.MaxValue;
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Decode(validBatch),
+            "unknown public delta kinds must be rejected");
+
+        var validState = ReliableProtocolCodec.Encode(
+            new WorldObjectStateMessage(1, 1, state));
+        var xOffset = ProtocolConstants.ReliableHeaderSize +
+                      sizeof(ulong) + // tick
+                      16 +            // object id
+                      sizeof(int) * 2 +
+                      sizeof(short) +
+                      sizeof(uint) * 2 +
+                      sizeof(ushort) +
+                      System.Text.Encoding.UTF8.GetByteCount(state.DefinitionId);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            validState.AsSpan(xOffset),
+            BitConverter.SingleToUInt32Bits(float.NaN));
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Decode(validState),
+            "non-finite public object positions must be rejected from wire data");
     }
 }

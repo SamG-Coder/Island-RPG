@@ -21,7 +21,9 @@ public sealed record ClientHandshakeOptions(
     Guid ReconnectPlayerId = default,
     string ReconnectToken = "",
     ushort ClientSnapshotPort = 0,
-    ClientCapabilities Capabilities = ClientCapabilities.None);
+    ClientCapabilities Capabilities =
+        ClientCapabilities.UdpSnapshots |
+        ClientCapabilities.DeltaSnapshots);
 
 public sealed record NetworkPlayerPresence(Guid PlayerId, string PlayerName);
 
@@ -40,6 +42,49 @@ public sealed record NetworkPlayerGameplayState(
     int CookingExperience,
     IReadOnlyList<InventorySlotState> InventorySlots);
 
+/// <summary>
+/// Immutable public projection of a server-authored world object. Container
+/// contents are deliberately excluded and are available only through the
+/// private <see cref="NetworkContainerState"/> projection.
+/// </summary>
+public sealed record NetworkWorldObjectState(
+    Guid ObjectId,
+    int ChunkX,
+    int ChunkY,
+    short WorldLevel,
+    uint ChunkRevision,
+    uint ObjectRevision,
+    string DefinitionId,
+    float X,
+    float Y,
+    int Rotation,
+    int Health,
+    int MaximumHealth,
+    bool HasContainer);
+
+/// <summary>
+/// Immutable private state for one container currently known to this client.
+/// Slot indexes remain stable and the list is replaced atomically per update.
+/// </summary>
+public sealed record NetworkContainerState(
+    Guid ObjectId,
+    uint ContainerRevision,
+    string DefinitionId,
+    ContainerAccessMode Access,
+    IReadOnlyList<ContainerSlotState> Slots);
+
+public readonly record struct NetworkWorldChunk(
+    int ChunkX,
+    int ChunkY,
+    short WorldLevel);
+
+public sealed record NetworkWorldObjectChange(
+    WorldObjectDeltaKind Kind,
+    Guid ObjectId,
+    uint ChunkRevision,
+    uint ObjectRevision,
+    NetworkWorldObjectState? State);
+
 public sealed record NetworkGameClientState(
     NetworkGameClientStatus Status,
     Guid SessionId,
@@ -56,12 +101,21 @@ public sealed record NetworkGameClientState(
     string? LastError,
     IReadOnlyDictionary<Guid, NetworkPlayerPresence> Players,
     IReadOnlyDictionary<ulong, EntitySnapshot> Entities,
-    NetworkPlayerGameplayState? Gameplay)
+    NetworkPlayerGameplayState? Gameplay,
+    IReadOnlyDictionary<Guid, NetworkWorldObjectState> WorldObjects,
+    IReadOnlyDictionary<NetworkWorldChunk, uint> WorldChunkRevisions,
+    IReadOnlyDictionary<Guid, NetworkContainerState> Containers)
 {
     private static readonly IReadOnlyDictionary<Guid, NetworkPlayerPresence> EmptyPlayers =
         new ReadOnlyDictionary<Guid, NetworkPlayerPresence>(new Dictionary<Guid, NetworkPlayerPresence>());
     private static readonly IReadOnlyDictionary<ulong, EntitySnapshot> EmptyEntities =
         new ReadOnlyDictionary<ulong, EntitySnapshot>(new Dictionary<ulong, EntitySnapshot>());
+    private static readonly IReadOnlyDictionary<Guid, NetworkWorldObjectState> EmptyWorldObjects =
+        new ReadOnlyDictionary<Guid, NetworkWorldObjectState>(new Dictionary<Guid, NetworkWorldObjectState>());
+    private static readonly IReadOnlyDictionary<NetworkWorldChunk, uint> EmptyWorldChunkRevisions =
+        new ReadOnlyDictionary<NetworkWorldChunk, uint>(new Dictionary<NetworkWorldChunk, uint>());
+    private static readonly IReadOnlyDictionary<Guid, NetworkContainerState> EmptyContainers =
+        new ReadOnlyDictionary<Guid, NetworkContainerState>(new Dictionary<Guid, NetworkContainerState>());
 
     public static NetworkGameClientState Disconnected { get; } = new(
         NetworkGameClientStatus.Disconnected,
@@ -79,7 +133,10 @@ public sealed record NetworkGameClientState(
         null,
         EmptyPlayers,
         EmptyEntities,
-        null);
+        null,
+        EmptyWorldObjects,
+        EmptyWorldChunkRevisions,
+        EmptyContainers);
 }
 
 public sealed record NetworkChatEvent(
@@ -141,4 +198,16 @@ public sealed class NetworkActionResultEventArgs(
     ActionResultMessage result) : EventArgs
 {
     public ActionResultMessage Result { get; } = result;
+}
+
+public sealed class NetworkWorldObjectsChangedEventArgs(
+    IReadOnlyList<NetworkWorldObjectChange> changes) : EventArgs
+{
+    public IReadOnlyList<NetworkWorldObjectChange> Changes { get; } = changes;
+}
+
+public sealed class NetworkContainerStateEventArgs(
+    NetworkContainerState state) : EventArgs
+{
+    public NetworkContainerState State { get; } = state;
 }

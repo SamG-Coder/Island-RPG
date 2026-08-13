@@ -350,38 +350,10 @@ internal static class InfiniteWorldGenerator
     }
 
     internal static byte SampleSurfaceHeight(long seed, int x, int y) =>
-        Surface(HeightAt(seed, x, y));
+        ProceduralSurfaceTerrain.SampleSurfaceHeight(seed, x, y);
 
-    internal static float SampleRenderedHeight(long seed, float x, float y)
-    {
-        var tileX = (int)MathF.Floor(x);
-        var tileY = (int)MathF.Floor(y);
-        var fractionX = x - tileX;
-        var fractionY = y - tileY;
-        var northWest = SmoothedVertex(tileX, tileY);
-        var northEast = SmoothedVertex(tileX + 1, tileY);
-        var southWest = SmoothedVertex(tileX, tileY + 1);
-        var southEast = SmoothedVertex(tileX + 1, tileY + 1);
-        var north = northWest + (northEast - northWest) * fractionX;
-        var south = southWest + (southEast - southWest) * fractionX;
-        return north + (south - north) * fractionY;
-
-        float SmoothedVertex(int vertexX, int vertexY)
-        {
-            var weightedHeight = 0f;
-            var totalWeight = 0f;
-            for (var offsetY = -1; offsetY <= 1; offsetY++)
-            for (var offsetX = -1; offsetX <= 1; offsetX++)
-            {
-                var weight = (offsetX == 0 ? 2 : 1) *
-                             (offsetY == 0 ? 2 : 1);
-                weightedHeight += SampleSurfaceHeight(
-                    seed, vertexX + offsetX, vertexY + offsetY) * weight;
-                totalWeight += weight;
-            }
-            return weightedHeight / totalWeight;
-        }
-    }
+    internal static float SampleRenderedHeight(long seed, float x, float y) =>
+        ProceduralSurfaceTerrain.SampleRenderedHeight(seed, x, y);
 
     internal static (byte[] A, byte[] B, byte[] C, byte[] D, byte[] Shore) GenerateBiomeWeights(
         long seed, ChunkCoordinate coordinate)
@@ -457,54 +429,11 @@ internal static class InfiniteWorldGenerator
         }
     }
 
-    internal static Biome BiomeAt(long seed, int x, int y)
-    {
-        var average = (HeightAt(seed, x, y) + HeightAt(seed, x + 1, y) +
-                       HeightAt(seed, x + 1, y + 1) + HeightAt(seed, x, y + 1)) / 4f;
-        return ClassifyAt(seed, x, y, average).Material;
-    }
+    internal static Biome BiomeAt(long seed, int x, int y) =>
+        (Biome)ProceduralSurfaceTerrain.ClassifyAt(seed, x, y).Material;
 
-    internal static float BaseElevationAt(long seed, int x, int y)
-    {
-        var continental = FractalNoise(seed ^ 0x6a09e667f3bcc909L, x / 720f, y / 720f, 4);
-        var continentalDetail = FractalNoise(
-            seed ^ unchecked((long)0xbb67ae8584caa73bUL), x / 280f, y / 280f, 3);
-        var continentHeight = (continental + continentalDetail * .22f + .12f) * 5.4f;
-
-        var cellX = FloorDiv(x, IslandCellSize);
-        var cellY = FloorDiv(y, IslandCellSize);
-        var island = -1f;
-        for (var cy = cellY - 1; cy <= cellY + 1; cy++)
-        for (var cx = cellX - 1; cx <= cellX + 1; cx++)
-        {
-            var centerX = (cx + .18f + UnitHash(seed, cx, cy, 11) * .64f) * IslandCellSize;
-            var centerY = (cy + .18f + UnitHash(seed, cx, cy, 17) * .64f) * IslandCellSize;
-            var radiusX = IslandCellSize * (.25f + UnitHash(seed, cx, cy, 23) * .20f);
-            var radiusY = IslandCellSize * (.23f + UnitHash(seed, cx, cy, 29) * .19f);
-            var dx = (x - centerX) / radiusX;
-            var dy = (y - centerY) / radiusY;
-            var distance = MathF.Sqrt(dx * dx + dy * dy);
-            var warp = FractalNoise(seed ^ 0x243f6a8885a308d3L, x / 48f, y / 48f, 3) * .28f;
-            island = MathF.Max(island, 1f - distance + warp);
-        }
-
-        var islandHeight = (island - .08f) * 7.2f;
-        // Oriented tectonic spines establish coherent ranges. Their wide distance
-        // field becomes foothills; a narrower profile becomes the steep core.
-        var (rangeRamp, mountainCore) = MountainProfileAt(seed, x, y);
-        var mountainGate = Math.Clamp((continental + .15f) * 1.7f, 0, 1);
-        var passNoise = FractalNoise(seed ^ 0x428a2f98d728ae22L, x / 115f, y / 115f, 2);
-        var passCut = Math.Clamp((passNoise - .42f) * 2.3f, 0, .72f);
-        var mountains = mountainCore * mountainGate * 12.5f * (1f - passCut);
-        var foothills = rangeRamp * mountainGate * 6.0f * (1f - passCut * .55f);
-        var hillNoise = MathF.Max(0,
-            FractalNoise(seed ^ 0x7137449123ef65cdL, x / 92f, y / 92f, 3));
-        var hills = hillNoise * hillNoise *
-                    Math.Clamp((continental + .3f) * 1.25f, 0, 1) * 2.6f;
-        var detail = FractalNoise(seed ^ 0x13198a2e03707344L, x / 22f, y / 22f, 3) * .8f;
-        return MathF.Max(continentHeight, islandHeight) +
-               mountains + foothills + hills + detail;
-    }
+    internal static float BaseElevationAt(long seed, int x, int y) =>
+        ProceduralSurfaceTerrain.BaseElevationAt(seed, x, y);
 
     private static (float Ramp, float Core) MountainProfileAt(long seed, int x, int y)
     {
@@ -543,106 +472,19 @@ internal static class InfiniteWorldGenerator
         return (ramp, core);
     }
 
-    private static byte HeightAt(long seed, int x, int y)
-    {
-        var elevation = BaseElevationAt(seed, x, y);
-        var drainage = MacroHydrology.At(seed, x, y);
-        if (elevation > .35f)
-        {
-            var channelCarve = drainage.River * MathF.Min(6.5f, elevation - .25f);
-            var lakeCarve = drainage.Lake * MathF.Min(3.2f, elevation - .2f);
-            elevation -= Math.Max(channelCarve, lakeCarve);
-        }
-        return (byte)Math.Clamp((int)MathF.Floor(elevation), 0, 22);
-    }
+    private static byte HeightAt(long seed, int x, int y) =>
+        ProceduralSurfaceTerrain.RawHeightAt(seed, x, y);
 
     private static (Biome Material, WorldBiome Region) ClassifyAt(
         long seed, int x, int y, float elevation)
     {
-        var baseElevation = BaseElevationAt(seed, x, y);
-        // Keep the bright continental shelf close to land. The renderer adds a
-        // mid-water stage between this boundary and the light coastal fringe.
-        if (baseElevation < -.35f) return (Biome.DeepWater, WorldBiome.Ocean);
-        if (baseElevation < .9f) return (Biome.ShallowWater, WorldBiome.Ocean);
-
-        var drainage = MacroHydrology.At(seed, x, y);
-        var river = drainage.River;
-        var continental = FractalNoise(seed ^ 0x6a09e667f3bcc909L, x / 720f, y / 720f, 4);
-        if (drainage.Lake > .48f && elevation < 5.5f)
-        {
-            var warmBand = MathF.Sin((y + seed % 10000) / 1450f) > -.05f;
-            var coastalMangrove = baseElevation < 1.7f && warmBand &&
-                                   RainfallAt(seed, x, y) > .72f;
-            return (coastalMangrove ? Biome.MangroveShallows : Biome.RiverWater,
-                WorldBiome.Wetland);
-        }
-        if (river > .48f && continental > -.18f)
-            return (Biome.RiverWater, WorldBiome.River);
-        if (elevation < 1.45f) return (Biome.Beach, WorldBiome.Coast);
-
-        var moisture = Math.Clamp(
-            .5f + FractalNoise(seed ^ 0x5deece66dL, x / 430f, y / 430f, 4) * .34f +
-            FractalNoise(seed ^ unchecked((long)0xa54ff53a5f1d36f1UL),
-                x / 105f, y / 105f, 2) * .16f +
-            river * .24f, 0, 1);
-        var climateBand = MathF.Sin((y + seed % 10000) / 1450f);
-        var temperature = Math.Clamp(
-            .55f + climateBand * .24f +
-            FractalNoise(seed ^ 0x510e527fade682d1L, x / 610f, y / 610f, 3) * .22f -
-            MathF.Max(0, elevation - 3) * .032f, 0, 1);
-
-        if (elevation > 13.0f)
-            return temperature < .43f && moisture > .34f
-                ? (Biome.Snow, WorldBiome.Alpine)
-                : (Biome.Rock, WorldBiome.Alpine);
-        if (elevation > 9.0f)
-            return temperature < .30f && moisture > .42f
-                ? (Biome.Snow, WorldBiome.Alpine)
-                : (Biome.Rock, WorldBiome.Alpine);
-        if (elevation > 6.0f)
-            return temperature < .24f && moisture > .48f
-                ? (Biome.Snow, WorldBiome.Alpine)
-                : (Biome.Highland, WorldBiome.TemperateGrassland);
-        if (temperature < .20f) return (Biome.Tundra, WorldBiome.Tundra);
-        if (temperature < .36f)
-            return moisture > .43f
-                ? (Biome.Forest, WorldBiome.Taiga)
-                : (Biome.Tundra, WorldBiome.Tundra);
-        if (moisture < .18f && temperature > .58f)
-            return (Biome.CrackedEarth, WorldBiome.Desert);
-        if (moisture < .30f && temperature > .5f)
-            return (Biome.DesertSand, WorldBiome.Desert);
-        if (moisture < .43f && temperature > .55f)
-            return (Biome.DryGrass, WorldBiome.Savanna);
-        if (river > .24f && moisture > .62f) return (Biome.Mud, WorldBiome.Wetland);
-        if (moisture > .72f && temperature > .58f)
-            return (Biome.JungleFloor, WorldBiome.Rainforest);
-        if (moisture > .53f) return (Biome.Forest, WorldBiome.TemperateForest);
-        return (Biome.Grassland, WorldBiome.TemperateGrassland);
+        var classification = ProceduralSurfaceTerrain.ClassifyAt(
+            seed, x, y, elevation);
+        return ((Biome)classification.Material, (WorldBiome)classification.Region);
     }
 
-    private static float RiverStrength(long seed, int x, int y) =>
-        MacroHydrology.At(seed, x, y).River;
-
-    internal static float RainfallAt(long seed, int x, int y)
-    {
-        var broad = FractalNoise(seed ^ 0x5deece66dL, x / 430f, y / 430f, 4);
-        var detail = FractalNoise(seed ^ unchecked((long)0xa54ff53a5f1d36f1UL),
-            x / 105f, y / 105f, 2);
-        var windAngle = UnitHash(seed, 0, 0, 557) * MathF.PI * 2;
-        var windX = MathF.Cos(windAngle);
-        var windY = MathF.Sin(windAngle);
-        var localElevation = BaseElevationAt(seed, x, y);
-        var upwindNear = BaseElevationAt(
-            seed, (int)(x - windX * 72), (int)(y - windY * 72));
-        var upwindFar = BaseElevationAt(
-            seed, (int)(x - windX * 152), (int)(y - windY * 152));
-        var barrier = MathF.Max(upwindNear, upwindFar) - localElevation;
-        var rainShadow = Math.Clamp(barrier * .045f, 0, .48f);
-        var oceanMoisture = upwindFar < .5f ? .16f : 0;
-        return Math.Clamp(.65f + broad * .28f + detail * .12f +
-                          oceanMoisture - rainShadow, .10f, 1.2f);
-    }
+    internal static float RainfallAt(long seed, int x, int y) =>
+        ProceduralSurfaceTerrain.RainfallAt(seed, x, y);
 
     private static byte Surface(byte height) => height <= 2 ? (byte)0 : height;
 

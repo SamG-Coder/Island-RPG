@@ -190,6 +190,15 @@ public static class ReliableProtocolCodec
             case PlayerStateMessage value:
                 WritePlayerState(writer, value);
                 break;
+            case WorldObjectStateMessage value:
+                WriteWorldObjectState(writer, value.Object);
+                break;
+            case WorldObjectDeltaBatchMessage value:
+                WriteWorldObjectDeltaBatch(writer, value);
+                break;
+            case ContainerStateMessage value:
+                WriteContainerState(writer, value);
+                break;
             default:
                 throw new ProtocolException($"Unsupported message type {message.GetType().FullName}.");
         }
@@ -253,6 +262,12 @@ public static class ReliableProtocolCodec
             ProtocolMessageKind.ActionCommand => ReadActionCommand(sequence, tick, ref reader),
             ProtocolMessageKind.ActionResult => ReadActionResult(sequence, tick, ref reader),
             ProtocolMessageKind.PlayerState => ReadPlayerState(sequence, tick, ref reader),
+            ProtocolMessageKind.WorldObjectState => new WorldObjectStateMessage(
+                sequence, tick, ReadWorldObjectState(ref reader)),
+            ProtocolMessageKind.WorldObjectDeltaBatch =>
+                ReadWorldObjectDeltaBatch(sequence, tick, ref reader),
+            ProtocolMessageKind.ContainerState =>
+                ReadContainerState(sequence, tick, ref reader),
             _ => throw new ProtocolException($"Unsupported reliable message kind {header.Kind}."),
         };
     }
@@ -289,6 +304,78 @@ public static class ReliableProtocolCodec
                 writer.WriteByte((byte)ActionCommandKind.ConsumeItem);
                 WriteInventorySlot(writer, action.Slot, nameof(action.Slot));
                 break;
+            case PickUpWorldObjectAction action:
+                writer.WriteByte((byte)ActionCommandKind.PickUpWorldObject);
+                WriteWorldObjectReference(writer, action.Object);
+                break;
+            case DropInventoryItemAction action:
+                writer.WriteByte((byte)ActionCommandKind.DropInventoryItem);
+                WriteInventorySlot(
+                    writer, action.InventorySlot, nameof(action.InventorySlot));
+                WriteQuantity(writer, action.Quantity, nameof(action.Quantity));
+                EnsureFinite(action.X, nameof(action.X));
+                EnsureFinite(action.Y, nameof(action.Y));
+                writer.WriteSingle(action.X);
+                writer.WriteSingle(action.Y);
+                writer.WriteInt16(action.WorldLevel);
+                writer.WriteUInt32(action.ExpectedChunkRevision);
+                break;
+            case OpenContainerAction action:
+                writer.WriteByte((byte)ActionCommandKind.OpenContainer);
+                WriteWorldObjectReference(writer, action.Object);
+                break;
+            case ContainerTransferAction action:
+                writer.WriteByte((byte)ActionCommandKind.ContainerTransfer);
+                WriteWorldObjectReference(writer, action.Container);
+                writer.WriteUInt32(action.ExpectedContainerRevision);
+                EnsureDefined(action.Direction, nameof(action.Direction));
+                writer.WriteByte((byte)action.Direction);
+                WriteInventorySlot(
+                    writer, action.InventorySlot, nameof(action.InventorySlot));
+                WriteContainerSlot(
+                    writer, action.ContainerSlot, nameof(action.ContainerSlot));
+                WriteQuantity(writer, action.Quantity, nameof(action.Quantity));
+                break;
+            case AddCampfireFuelAction action:
+                writer.WriteByte((byte)ActionCommandKind.AddCampfireFuel);
+                WriteWorldObjectReference(writer, action.Campfire);
+                WriteInventorySlot(
+                    writer, action.InventorySlot, nameof(action.InventorySlot));
+                break;
+            case TakeCampfireFuelAction action:
+                writer.WriteByte((byte)ActionCommandKind.TakeCampfireFuel);
+                WriteWorldObjectReference(writer, action.Campfire);
+                break;
+            case LightCampfireAction action:
+                writer.WriteByte((byte)ActionCommandKind.LightCampfire);
+                WriteWorldObjectReference(writer, action.Campfire);
+                break;
+            case PlaceConstructionAction action:
+                EnsureIdentifier(action.DefinitionId, nameof(action.DefinitionId));
+                EnsureConstructionRotation(action.Rotation);
+                EnsureFinite(action.X, nameof(action.X));
+                EnsureFinite(action.Y, nameof(action.Y));
+                writer.WriteByte((byte)ActionCommandKind.PlaceConstruction);
+                writer.WriteString(
+                    action.DefinitionId,
+                    ProtocolLimits.DefinitionIdBytes,
+                    nameof(action.DefinitionId));
+                WriteInventorySlot(
+                    writer, action.InventorySlot, nameof(action.InventorySlot));
+                writer.WriteSingle(action.X);
+                writer.WriteSingle(action.Y);
+                writer.WriteInt16(action.WorldLevel);
+                writer.WriteByte((byte)action.Rotation);
+                writer.WriteUInt32(action.ExpectedChunkRevision);
+                break;
+            case BuildConstructionAction action:
+                writer.WriteByte((byte)ActionCommandKind.BuildConstruction);
+                WriteWorldObjectReference(writer, action.Construction);
+                break;
+            case DemolishWorldObjectAction action:
+                writer.WriteByte((byte)ActionCommandKind.DemolishWorldObject);
+                WriteWorldObjectReference(writer, action.Object);
+                break;
             default:
                 throw new ProtocolException(
                     $"Unsupported action payload type {value.Payload.GetType().FullName}.");
@@ -317,6 +404,39 @@ public static class ReliableProtocolCodec
                 ReadIdentifier(ref reader, ProtocolLimits.RecipeIdBytes, "RecipeId")),
             ActionCommandKind.ConsumeItem => new ConsumeItemAction(
                 ReadInventorySlot(ref reader, "Slot")),
+            ActionCommandKind.PickUpWorldObject => new PickUpWorldObjectAction(
+                ReadWorldObjectReference(ref reader)),
+            ActionCommandKind.DropInventoryItem => new DropInventoryItemAction(
+                ReadInventorySlot(ref reader, "InventorySlot"),
+                ReadQuantity(ref reader, "Quantity"),
+                ReadFinite(ref reader, "X"),
+                ReadFinite(ref reader, "Y"),
+                reader.ReadInt16(),
+                reader.ReadUInt32()),
+            ActionCommandKind.OpenContainer => new OpenContainerAction(
+                ReadWorldObjectReference(ref reader)),
+            ActionCommandKind.ContainerTransfer => new ContainerTransferAction(
+                ReadWorldObjectReference(ref reader),
+                reader.ReadUInt32(),
+                ReadEnum<ContainerTransferDirection>(
+                    reader.ReadByte(), "ContainerTransferDirection"),
+                ReadInventorySlot(ref reader, "InventorySlot"),
+                ReadContainerSlot(ref reader, "ContainerSlot"),
+                ReadQuantity(ref reader, "Quantity")),
+            ActionCommandKind.AddCampfireFuel => new AddCampfireFuelAction(
+                ReadWorldObjectReference(ref reader),
+                ReadInventorySlot(ref reader, "InventorySlot")),
+            ActionCommandKind.TakeCampfireFuel => new TakeCampfireFuelAction(
+                ReadWorldObjectReference(ref reader)),
+            ActionCommandKind.LightCampfire => new LightCampfireAction(
+                ReadWorldObjectReference(ref reader)),
+            ActionCommandKind.PlaceConstruction => ReadPlaceConstruction(
+                ref reader),
+            ActionCommandKind.BuildConstruction => new BuildConstructionAction(
+                ReadWorldObjectReference(ref reader)),
+            ActionCommandKind.DemolishWorldObject =>
+                new DemolishWorldObjectAction(
+                    ReadWorldObjectReference(ref reader)),
             _ => throw new ProtocolException($"Unsupported action command kind {kind}."),
         };
         return new ActionCommandMessage(
@@ -326,6 +446,373 @@ public static class ReliableProtocolCodec
             actorRevision,
             inventoryRevision,
             payload);
+    }
+
+    private static PlaceConstructionAction ReadPlaceConstruction(
+        ref WireReader reader)
+    {
+        var definitionId = ReadIdentifier(
+            ref reader, ProtocolLimits.DefinitionIdBytes, "DefinitionId");
+        var inventorySlot = ReadInventorySlot(ref reader, "InventorySlot");
+        var x = ReadFinite(ref reader, "X");
+        var y = ReadFinite(ref reader, "Y");
+        var worldLevel = reader.ReadInt16();
+        var rotation = reader.ReadByte();
+        EnsureConstructionRotation(rotation);
+        return new PlaceConstructionAction(
+            definitionId, inventorySlot, x, y, worldLevel, rotation,
+            reader.ReadUInt32());
+    }
+
+    private static void WriteWorldObjectReference(
+        WireWriter writer,
+        WorldObjectReference value)
+    {
+        EnsureWorldObjectId(value.ObjectId);
+        writer.WriteGuid(value.ObjectId);
+        writer.WriteInt32(value.ChunkX);
+        writer.WriteInt32(value.ChunkY);
+        writer.WriteInt16(value.WorldLevel);
+        writer.WriteUInt32(value.ExpectedObjectRevision);
+        writer.WriteUInt32(value.ExpectedChunkRevision);
+    }
+
+    private static WorldObjectReference ReadWorldObjectReference(
+        ref WireReader reader)
+    {
+        var result = new WorldObjectReference(
+            reader.ReadGuid(),
+            reader.ReadInt32(),
+            reader.ReadInt32(),
+            reader.ReadInt16(),
+            reader.ReadUInt32(),
+            reader.ReadUInt32());
+        EnsureWorldObjectId(result.ObjectId);
+        return result;
+    }
+
+    private static void WriteWorldObjectState(
+        WireWriter writer,
+        WorldObjectState value)
+    {
+        ValidateWorldObjectState(value);
+        writer.WriteGuid(value.ObjectId);
+        writer.WriteInt32(value.ChunkX);
+        writer.WriteInt32(value.ChunkY);
+        writer.WriteInt16(value.WorldLevel);
+        writer.WriteUInt32(value.ChunkRevision);
+        writer.WriteUInt32(value.ObjectRevision);
+        writer.WriteString(
+            value.DefinitionId,
+            ProtocolLimits.DefinitionIdBytes,
+            nameof(value.DefinitionId));
+        writer.WriteSingle(value.X);
+        writer.WriteSingle(value.Y);
+        writer.WriteByte((byte)value.Rotation);
+        writer.WriteInt32(value.Health);
+        writer.WriteInt32(value.MaximumHealth);
+        writer.WriteBoolean(value.HasContainer);
+    }
+
+    private static WorldObjectState ReadWorldObjectState(
+        ref WireReader reader)
+    {
+        var result = new WorldObjectState(
+            reader.ReadGuid(),
+            reader.ReadInt32(),
+            reader.ReadInt32(),
+            reader.ReadInt16(),
+            reader.ReadUInt32(),
+            reader.ReadUInt32(),
+            reader.ReadString(
+                ProtocolLimits.DefinitionIdBytes, "DefinitionId"),
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadByte(),
+            reader.ReadInt32(),
+            reader.ReadInt32(),
+            reader.ReadBoolean());
+        ValidateWorldObjectState(result);
+        return result;
+    }
+
+    private static void ValidateWorldObjectState(WorldObjectState value)
+    {
+        EnsureWorldObjectId(value.ObjectId);
+        EnsureIdentifier(value.DefinitionId, nameof(value.DefinitionId));
+        EnsureFinite(value.X, nameof(value.X));
+        EnsureFinite(value.Y, nameof(value.Y));
+        EnsureConstructionRotation(value.Rotation);
+        if (value.Health < 0 || value.MaximumHealth < 0 ||
+            value.Health > value.MaximumHealth)
+        {
+            throw new ProtocolException(
+                "World-object health must be between zero and its maximum.");
+        }
+    }
+
+    private static void WriteWorldObjectDeltaBatch(
+        WireWriter writer,
+        WorldObjectDeltaBatchMessage value)
+    {
+        if (value.Deltas is null)
+        {
+            throw new ProtocolException("World-object deltas cannot be null.");
+        }
+
+        if (value.Deltas.Count is < 1 or > ProtocolLimits.MaxWorldObjectsPerBatch)
+        {
+            throw new ProtocolException(
+                $"World-object delta count must be between 1 and " +
+                $"{ProtocolLimits.MaxWorldObjectsPerBatch}.");
+        }
+
+        writer.WriteUInt16((ushort)value.Deltas.Count);
+        foreach (var delta in value.Deltas)
+        {
+            EnsureDefined(delta.Kind, nameof(delta.Kind));
+            writer.WriteByte((byte)delta.Kind);
+            WriteWorldObjectReference(writer, delta.Reference);
+            writer.WriteUInt32(delta.CurrentChunkRevision);
+            if (delta.CurrentChunkRevision <= delta.Reference.ExpectedChunkRevision)
+            {
+                throw new ProtocolException(
+                    "A world-object delta must advance its chunk revision.");
+            }
+            if (delta.Kind == WorldObjectDeltaKind.Upsert)
+            {
+                if (delta.State is not { } state ||
+                    state.ObjectId != delta.Reference.ObjectId ||
+                    state.ChunkX != delta.Reference.ChunkX ||
+                    state.ChunkY != delta.Reference.ChunkY ||
+                    state.WorldLevel != delta.Reference.WorldLevel ||
+                    state.ChunkRevision != delta.CurrentChunkRevision ||
+                    state.ObjectRevision <=
+                    delta.Reference.ExpectedObjectRevision)
+                {
+                    throw new ProtocolException(
+                        "An upsert delta state must match its reference.");
+                }
+
+                WriteWorldObjectState(writer, state);
+            }
+            else if (delta.State is not null)
+            {
+                throw new ProtocolException(
+                    "A removal delta cannot include object state.");
+            }
+        }
+    }
+
+    private static WorldObjectDeltaBatchMessage ReadWorldObjectDeltaBatch(
+        ulong sequence,
+        ulong tick,
+        ref WireReader reader)
+    {
+        var count = reader.ReadUInt16();
+        if (count is < 1 or > ProtocolLimits.MaxWorldObjectsPerBatch)
+        {
+            throw new ProtocolException(
+                $"World-object delta count must be between 1 and " +
+                $"{ProtocolLimits.MaxWorldObjectsPerBatch}.");
+        }
+
+        var deltas = new WorldObjectDelta[count];
+        for (var index = 0; index < count; index++)
+        {
+            var kind = ReadEnum<WorldObjectDeltaKind>(
+                reader.ReadByte(), "WorldObjectDeltaKind");
+            var reference = ReadWorldObjectReference(ref reader);
+            var currentChunkRevision = reader.ReadUInt32();
+            if (currentChunkRevision <= reference.ExpectedChunkRevision)
+            {
+                throw new ProtocolException(
+                    "A world-object delta must advance its chunk revision.");
+            }
+            var state = kind == WorldObjectDeltaKind.Upsert
+                ? ReadWorldObjectState(ref reader)
+                : (WorldObjectState?)null;
+            var delta = new WorldObjectDelta(
+                kind, reference, currentChunkRevision, state);
+            if (state is { } upsert &&
+                (upsert.ObjectId != reference.ObjectId ||
+                 upsert.ChunkX != reference.ChunkX ||
+                 upsert.ChunkY != reference.ChunkY ||
+                  upsert.WorldLevel != reference.WorldLevel ||
+                  upsert.ChunkRevision != currentChunkRevision ||
+                  upsert.ObjectRevision <= reference.ExpectedObjectRevision))
+            {
+                throw new ProtocolException(
+                    "An upsert delta state must match its reference.");
+            }
+
+            deltas[index] = delta;
+        }
+
+        return new WorldObjectDeltaBatchMessage(sequence, tick, deltas);
+    }
+
+    private static void WriteContainerState(
+        WireWriter writer,
+        ContainerStateMessage value)
+    {
+        ValidateContainerState(value);
+        WriteWorldObjectReference(writer, value.Container);
+        writer.WriteUInt32(value.BaselineContainerRevision);
+        writer.WriteUInt32(value.ContainerRevision);
+        writer.WriteString(
+            value.DefinitionId,
+            ProtocolLimits.DefinitionIdBytes,
+            nameof(value.DefinitionId));
+        writer.WriteByte((byte)value.Access);
+        writer.WriteByte((byte)value.SlotCount);
+        writer.WriteBoolean(value.IsBaseline);
+        writer.WriteByte((byte)value.Slots.Count);
+        foreach (var slot in value.Slots)
+        {
+            writer.WriteByte((byte)slot.Slot);
+            writer.WriteString(
+                slot.ItemId, ProtocolLimits.ItemIdBytes, nameof(slot.ItemId));
+            writer.WriteUInt16((ushort)slot.Quantity);
+        }
+    }
+
+    private static ContainerStateMessage ReadContainerState(
+        ulong sequence,
+        ulong tick,
+        ref WireReader reader)
+    {
+        var container = ReadWorldObjectReference(ref reader);
+        var baselineRevision = reader.ReadUInt32();
+        var revision = reader.ReadUInt32();
+        var definitionId = reader.ReadString(
+            ProtocolLimits.DefinitionIdBytes, "DefinitionId");
+        var access = ReadEnum<ContainerAccessMode>(
+            reader.ReadByte(), "ContainerAccessMode");
+        var slotCount = reader.ReadByte();
+        var isBaseline = reader.ReadBoolean();
+        var changedCount = reader.ReadByte();
+        if (changedCount > ProtocolLimits.MaxContainerSlots)
+        {
+            throw new ProtocolException(
+                $"Container slot count exceeds " +
+                $"{ProtocolLimits.MaxContainerSlots}.");
+        }
+
+        var slots = new ContainerSlotState[changedCount];
+        for (var index = 0; index < changedCount; index++)
+        {
+            slots[index] = new ContainerSlotState(
+                reader.ReadByte(),
+                reader.ReadString(ProtocolLimits.ItemIdBytes, "ItemId"),
+                reader.ReadUInt16());
+        }
+
+        var result = new ContainerStateMessage(
+            sequence,
+            tick,
+            container,
+            baselineRevision,
+            revision,
+            definitionId,
+            access,
+            slotCount,
+            isBaseline,
+            slots);
+        ValidateContainerState(result);
+        return result;
+    }
+
+    private static void ValidateContainerState(ContainerStateMessage value)
+    {
+        EnsureWorldObjectId(value.Container.ObjectId);
+        EnsureIdentifier(value.DefinitionId, nameof(value.DefinitionId));
+        EnsureDefined(value.Access, nameof(value.Access));
+        if (value.SlotCount is < 1 or > ProtocolLimits.MaxContainerSlots)
+        {
+            throw new ProtocolException(
+                $"Container SlotCount must be between 1 and " +
+                $"{ProtocolLimits.MaxContainerSlots}.");
+        }
+
+        if (value.Slots is null)
+        {
+            throw new ProtocolException("Container Slots cannot be null.");
+        }
+
+        if (value.Slots.Count > value.SlotCount)
+        {
+            throw new ProtocolException(
+                "Container changes cannot exceed the declared slot count.");
+        }
+
+        if (value.IsBaseline)
+        {
+            if (value.BaselineContainerRevision != 0 ||
+                value.Slots.Count != value.SlotCount)
+            {
+                throw new ProtocolException(
+                    "A container baseline must have no baseline revision and " +
+                    "must contain every slot.");
+            }
+        }
+        else
+        {
+            if (value.Slots.Count == 0 ||
+                value.ContainerRevision <= value.BaselineContainerRevision)
+            {
+                throw new ProtocolException(
+                    "A container delta must advance its revision and contain " +
+                    "at least one changed slot.");
+            }
+        }
+
+        if (value.Container.ExpectedObjectRevision != value.ContainerRevision)
+        {
+            throw new ProtocolException(
+                "Container object and container-state revisions must match.");
+        }
+
+        Span<bool> seen = stackalloc bool[value.SlotCount];
+        foreach (var slot in value.Slots)
+        {
+            if ((uint)slot.Slot >= value.SlotCount)
+            {
+                throw new ProtocolException(
+                    $"Container slot {slot.Slot} is outside SlotCount.");
+            }
+
+            if (seen[slot.Slot])
+            {
+                throw new ProtocolException(
+                    $"Container slot {slot.Slot} appears more than once.");
+            }
+
+            seen[slot.Slot] = true;
+            if (slot.ItemId is null)
+            {
+                throw new ProtocolException("Container ItemId cannot be null.");
+            }
+
+            if (slot.ItemId.Length == 0)
+            {
+                if (slot.Quantity != 0)
+                {
+                    throw new ProtocolException(
+                        "An empty container slot must have quantity zero.");
+                }
+            }
+            else
+            {
+                EnsureIdentifier(slot.ItemId, nameof(slot.ItemId));
+                if (slot.Quantity is < 1 or >
+                    ProtocolLimits.MaxContainerTransferQuantity)
+                {
+                    throw new ProtocolException(
+                        "Container quantity is outside its wire bounds.");
+                }
+            }
+        }
     }
 
     private static void WriteActionResult(WireWriter writer, ActionResultMessage value)
@@ -579,6 +1066,30 @@ public static class ReliableProtocolCodec
         }
     }
 
+    private static void EnsureWorldObjectId(Guid objectId)
+    {
+        if (objectId == Guid.Empty)
+        {
+            throw new ProtocolException("World object ID cannot be empty.");
+        }
+    }
+
+    private static void EnsureDefined<TEnum>(TEnum value, string fieldName)
+        where TEnum : struct, Enum =>
+        _ = ReadEnum<TEnum>(Convert.ToUInt32(value), fieldName);
+
+    private static void EnsureConstructionRotation(int rotation)
+    {
+        if (rotation is < ProtocolLimits.MinConstructionRotation or
+            > ProtocolLimits.MaxConstructionRotation)
+        {
+            throw new ProtocolException(
+                $"Rotation must be between " +
+                $"{ProtocolLimits.MinConstructionRotation} and " +
+                $"{ProtocolLimits.MaxConstructionRotation}.");
+        }
+    }
+
     private static void EnsureIdentifier(string? value, string fieldName)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -601,6 +1112,62 @@ public static class ReliableProtocolCodec
     {
         EnsureInventorySlot(slot, fieldName);
         writer.WriteByte((byte)slot);
+    }
+
+    private static void WriteContainerSlot(
+        WireWriter writer,
+        int slot,
+        string fieldName)
+    {
+        EnsureContainerSlot(slot, fieldName);
+        writer.WriteByte((byte)slot);
+    }
+
+    private static int ReadContainerSlot(
+        ref WireReader reader,
+        string fieldName)
+    {
+        var slot = reader.ReadByte();
+        EnsureContainerSlot(slot, fieldName);
+        return slot;
+    }
+
+    private static void EnsureContainerSlot(int slot, string fieldName)
+    {
+        if ((uint)slot >= ProtocolLimits.MaxContainerSlots)
+        {
+            throw new ProtocolException(
+                $"{fieldName} must be between 0 and " +
+                $"{ProtocolLimits.MaxContainerSlots - 1}.");
+        }
+    }
+
+    private static void WriteQuantity(
+        WireWriter writer,
+        int quantity,
+        string fieldName)
+    {
+        EnsureQuantity(quantity, fieldName);
+        writer.WriteUInt16((ushort)quantity);
+    }
+
+    private static int ReadQuantity(
+        ref WireReader reader,
+        string fieldName)
+    {
+        var quantity = reader.ReadUInt16();
+        EnsureQuantity(quantity, fieldName);
+        return quantity;
+    }
+
+    private static void EnsureQuantity(int quantity, string fieldName)
+    {
+        if (quantity is < 1 or > ProtocolLimits.MaxContainerTransferQuantity)
+        {
+            throw new ProtocolException(
+                $"{fieldName} must be between 1 and " +
+                $"{ProtocolLimits.MaxContainerTransferQuantity}.");
+        }
     }
 
     private static int ReadInventorySlot(ref WireReader reader, string fieldName)

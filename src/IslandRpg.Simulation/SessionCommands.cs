@@ -7,7 +7,8 @@ public readonly record struct JoinRequest(
     string DisplayName,
     Vector2 SpawnPosition,
     IReadOnlyList<InitialInventoryItem>? InitialInventory = null,
-    float InitialHunger = 100f);
+    float InitialHunger = 100f,
+    int SpawnWorldLevel = 0);
 
 /// <summary>
 /// Server-authored join inventory, supplied only by the trusted host. Network
@@ -36,7 +37,10 @@ public abstract record SessionIntent;
 /// </summary>
 public abstract record ActorIntent : SessionIntent;
 
-public sealed record WalkIntent(Vector2 Destination) : ActorIntent;
+public sealed record WalkIntent(
+    Vector2 Destination,
+    int WorldLevel = (int)IslandRpg.Navigation.NavigationWorldLevel.Overworld) :
+    ActorIntent;
 
 public sealed record StopIntent : ActorIntent
 {
@@ -172,6 +176,8 @@ public enum IntentStatus
     InvalidIntent,
     InvalidDestination,
     DestinationTooFar,
+    WorldLevelMismatch,
+    PathUnreachable,
     InvalidChat,
     InvalidCommandId,
     CommandIdConflict,

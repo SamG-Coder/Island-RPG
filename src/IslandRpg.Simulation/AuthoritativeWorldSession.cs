@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Channels;
 using IslandRpg.Gameplay;
+using IslandRpg.Navigation;
 
 namespace IslandRpg.Simulation;
 
@@ -16,6 +17,8 @@ public sealed class AuthoritativeWorldSession
 {
     private readonly SimulationLimits _limits;
     private readonly ISessionIdentitySource _identitySource;
+    private readonly IWorldNavigationQuery _navigation;
+    private readonly IWorldNavigationObstacleSource _obstacles;
     private readonly Channel<QueuedOperation> _inbound;
     private readonly Dictionary<ActorId, MutableActor> _actors = [];
     private readonly Dictionary<PlayerId, ActorId> _actorsByPlayer = [];
@@ -29,10 +32,14 @@ public sealed class AuthoritativeWorldSession
     public AuthoritativeWorldSession(
         SimulationLimits? limits = null,
         ISessionIdentitySource? identitySource = null,
-        SessionId? sessionId = null)
+        SessionId? sessionId = null,
+        IWorldNavigationQuery? navigation = null,
+        IWorldNavigationObstacleSource? obstacles = null)
     {
         _limits = (limits ?? SimulationLimits.Default).ValidatedCopy();
         _identitySource = identitySource ?? new SecureSessionIdentitySource();
+        _navigation = navigation ?? OpenWorldNavigationQuery.Instance;
+        _obstacles = obstacles ?? EmptyWorldNavigationObstacleSource.Instance;
         Id = sessionId is { } provided && provided.Value != Guid.Empty
             ? provided
             : SessionId.New();
@@ -282,7 +289,8 @@ public sealed class AuthoritativeWorldSession
             !TryNormalizeDisplayName(request.DisplayName, out var displayName) ||
             !TrySanitizePosition(request.SpawnPosition, out var spawn) ||
             !float.IsFinite(request.InitialHunger) ||
-            request.InitialHunger is < 0 or > SurvivalService.MaximumHunger)
+            request.InitialHunger is < 0 or > SurvivalService.MaximumHunger ||
+            !_navigation.SupportsWorldLevel(request.SpawnWorldLevel))
         {
             return new JoinResult(
                 JoinStatus.InvalidRequest,
@@ -323,6 +331,7 @@ public sealed class AuthoritativeWorldSession
             identity,
             displayName,
             spawn,
+            request.SpawnWorldLevel,
             request.ConnectionId,
             HashToken(reconnectToken));
         actor.Gameplay.Hunger = request.InitialHunger;
@@ -448,8 +457,7 @@ public sealed class AuthoritativeWorldSession
 
         actor.Connected = false;
         actor.ConnectionId = default;
-        actor.Destination = null;
-        actor.Velocity = Vector2.Zero;
+        actor.ClearRoute();
         actor.DisconnectedAtTick = Clock.Tick;
         _playersByConnection.Remove(request.ConnectionId);
         return new DisconnectResult(DisconnectStatus.Accepted, null);
@@ -879,14 +887,49 @@ public sealed class AuthoritativeWorldSession
                 "The destination exceeds the maximum command distance.");
         }
 
-        actor.Destination = destination;
+
+        if (intent.WorldLevel != actor.WorldLevel ||
+            !_navigation.SupportsWorldLevel(intent.WorldLevel))
+        {
+            return Rejected(
+                IntentStatus.WorldLevelMismatch,
+                actor,
+                "The destination belongs to a different world level.");
+        }
+
+        var route = GridPathfinder.Find(
+            _navigation,
+            actor.Position,
+            destination,
+            _limits.MaximumPathSearchVisited,
+            worldLevel: actor.WorldLevel,
+            obstacles: _obstacles.GetObstacles(actor.WorldLevel));
+        if (route.Count == 0 &&
+            Vector2.DistanceSquared(actor.Position, destination) >
+            _limits.DestinationArrivalDistance *
+            _limits.DestinationArrivalDistance)
+        {
+            return Rejected(
+                IntentStatus.PathUnreachable,
+                actor,
+                "No traversable route reaches that destination.");
+        }
+
+        if (route.Count > _limits.MaximumPathWaypoints)
+        {
+            return Rejected(
+                IntentStatus.PathUnreachable,
+                actor,
+                "The traversable route exceeds the authoritative route limit.");
+        }
+
+        actor.ReplaceRoute(route);
         return Accepted(actor);
     }
 
     private static IntentResult ProcessStop(MutableActor actor)
     {
-        actor.Destination = null;
-        actor.Velocity = Vector2.Zero;
+        actor.ClearRoute();
         return Accepted(actor);
     }
 
@@ -921,42 +964,68 @@ public sealed class AuthoritativeWorldSession
 
     private void AdvanceActors()
     {
-        var maximumStep = _limits.ActorMovementSpeed / SimulationTiming.TicksPerSecond;
         var arrivalDistanceSquared =
             _limits.DestinationArrivalDistance * _limits.DestinationArrivalDistance;
 
         foreach (var actor in _actors.Values)
         {
-            if (!actor.Connected || actor.Destination is not { } destination)
+            if (!actor.Connected || actor.CurrentWaypoint is not { } destination)
             {
                 actor.Velocity = Vector2.Zero;
                 continue;
             }
 
-            var difference = destination - actor.Position;
-            var distanceSquared = difference.LengthSquared();
-            if (!float.IsFinite(distanceSquared) || distanceSquared <= arrivalDistanceSquared)
+            var remainingSeconds = 1f / SimulationTiming.TicksPerSecond;
+            actor.Velocity = Vector2.Zero;
+            while (remainingSeconds > 0 &&
+                   actor.CurrentWaypoint is { } waypoint)
             {
-                actor.Position = destination;
-                actor.Destination = null;
-                actor.Velocity = Vector2.Zero;
-                continue;
+                var difference = waypoint - actor.Position;
+                var distanceSquared = difference.LengthSquared();
+                if (!float.IsFinite(distanceSquared))
+                {
+                    actor.ClearRoute();
+                    break;
+                }
+
+                if (distanceSquared <= arrivalDistanceSquared)
+                {
+                    actor.Position = waypoint;
+                    actor.CompleteWaypoint();
+                    continue;
+                }
+
+                var distance = MathF.Sqrt(distanceSquared);
+                var direction = difference / distance;
+                var terrainMultiplier = ActorMovementService.TerrainSpeedMultiplier(
+                    _navigation.IsWading(actor.Position, actor.WorldLevel),
+                    _navigation.HeightAt(actor.Position, actor.WorldLevel),
+                    _navigation.HeightAt(waypoint, actor.WorldLevel));
+                var speed = _limits.ActorMovementSpeed * terrainMultiplier;
+                if (!float.IsFinite(speed) || speed <= 0)
+                {
+                    actor.ClearRoute();
+                    break;
+                }
+                var availableDistance = speed * remainingSeconds;
+                actor.Velocity = direction * speed;
+                if (availableDistance + _limits.DestinationArrivalDistance < distance)
+                {
+                    actor.Position = ClampToWorld(
+                        actor.Position + direction * availableDistance);
+                    remainingSeconds = 0;
+                    continue;
+                }
+
+                actor.Position = waypoint;
+                remainingSeconds = Math.Max(
+                    0,
+                    remainingSeconds - distance / speed);
+                actor.CompleteWaypoint();
             }
 
-            var distance = MathF.Sqrt(distanceSquared);
-            var step = MathF.Min(maximumStep, distance);
-            var direction = difference / distance;
-            actor.Velocity = direction * _limits.ActorMovementSpeed;
-            actor.Position += direction * step;
-            actor.Position = ClampToWorld(actor.Position);
-
-            if (step >= distance ||
-                Vector2.DistanceSquared(actor.Position, destination) <= arrivalDistanceSquared)
-            {
-                actor.Position = destination;
-                actor.Destination = null;
+            if (actor.CurrentWaypoint is null)
                 actor.Velocity = Vector2.Zero;
-            }
         }
     }
 
@@ -1126,17 +1195,21 @@ public sealed class AuthoritativeWorldSession
     {
         private readonly Dictionary<Guid, CommandReceipt> _receipts = [];
         private readonly Queue<Guid> _receiptOrder = [];
+        private readonly List<Vector2> _route = [];
+        private int _routeIndex;
 
         public MutableActor(
             PlayerIdentity identity,
             string displayName,
             Vector2 position,
+            int worldLevel,
             ClientConnectionId connectionId,
             byte[] reconnectTokenHash)
         {
             Identity = identity;
             DisplayName = displayName;
             Position = position;
+            WorldLevel = worldLevel;
             ConnectionId = connectionId;
             ReconnectTokenHash = reconnectTokenHash;
             Connected = true;
@@ -1153,6 +1226,8 @@ public sealed class AuthoritativeWorldSession
 
         public Vector2? Destination { get; set; }
 
+        public int WorldLevel { get; }
+
         public ClientConnectionId ConnectionId { get; set; }
 
         public byte[] ReconnectTokenHash { get; }
@@ -1164,6 +1239,35 @@ public sealed class AuthoritativeWorldSession
         public long? DisconnectedAtTick { get; set; }
 
         public MutablePlayerGameplay Gameplay { get; }
+
+        public Vector2? CurrentWaypoint =>
+            _routeIndex < _route.Count ? _route[_routeIndex] : null;
+
+        public void ReplaceRoute(IReadOnlyList<Vector2> route)
+        {
+            _route.Clear();
+            _route.AddRange(route);
+            _routeIndex = 0;
+            Destination = route.Count == 0 ? null : route[^1];
+            Velocity = Vector2.Zero;
+        }
+
+        public void CompleteWaypoint()
+        {
+            if (_routeIndex < _route.Count) _routeIndex++;
+            if (_routeIndex < _route.Count) return;
+            _route.Clear();
+            _routeIndex = 0;
+            Destination = null;
+        }
+
+        public void ClearRoute()
+        {
+            _route.Clear();
+            _routeIndex = 0;
+            Destination = null;
+            Velocity = Vector2.Zero;
+        }
 
         public bool TryGetReceipt(Guid commandId, out CommandReceipt receipt) =>
             _receipts.TryGetValue(commandId, out receipt!);
@@ -1197,6 +1301,7 @@ public sealed class AuthoritativeWorldSession
                 Position,
                 Velocity,
                 Destination,
+                WorldLevel,
                 Connected,
                 LastProcessedCommandSequence,
                 DisconnectedAtTick)

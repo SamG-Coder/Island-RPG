@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
 using IslandRpg.Protocol;
@@ -12,6 +13,8 @@ internal sealed class ClientConnection : IAsyncDisposable
     private readonly DedicatedServer _server;
     private readonly CancellationTokenSource _lifetime;
     private readonly Channel<IProtocolMessage> _outbound;
+    private readonly EntitySnapshot[] _snapshotSelection =
+        new EntitySnapshot[UdpSnapshotCodec.MaxEntitiesPerDatagram];
     private long _nextOutboundSequence;
     private int _disposed;
 
@@ -41,6 +44,21 @@ internal sealed class ClientConnection : IAsyncDisposable
 
     public Guid PlayerId { get; private set; }
 
+    public EndPoint RemoteEndPoint => _client.Client.RemoteEndPoint ??
+        throw new InvalidOperationException("Connection has no remote endpoint.");
+
+    public ulong PlayerEntityId { get; private set; }
+
+    public IPEndPoint? SnapshotEndpoint { get; private set; }
+
+    public ulong DatagramToken { get; private set; }
+
+    public bool UdpSnapshotsEnabled => SnapshotEndpoint is not null && DatagramToken != 0;
+
+    public bool DeltaSnapshotsEnabled { get; private set; }
+
+    public Span<EntitySnapshot> SnapshotSelectionBuffer => _snapshotSelection;
+
     public Task Completion { get; private set; }
 
     public async Task RunAsync()
@@ -51,6 +69,34 @@ internal sealed class ClientConnection : IAsyncDisposable
 
     public ulong NextOutboundSequence() =>
         checked((ulong)Interlocked.Increment(ref _nextOutboundSequence));
+
+    public ushort NextSnapshotSequence() =>
+        unchecked((ushort)Interlocked.Increment(ref _nextSnapshotSequence));
+
+    public int NextInterestOffset(int entityCount, int selectedCount)
+    {
+        var overflow = entityCount - selectedCount;
+        if (overflow <= 0)
+            return 0;
+        return (int)((uint)Interlocked.Add(
+            ref _interestCursor,
+            selectedCount) % (uint)entityCount);
+    }
+
+    private int _nextSnapshotSequence;
+    private int _interestCursor;
+
+    public void ConfigureSnapshotTransport(
+        IPEndPoint? endpoint,
+        ulong datagramToken,
+        ulong playerEntityId,
+        bool deltaSnapshotsEnabled)
+    {
+        SnapshotEndpoint = endpoint;
+        DatagramToken = endpoint is null ? 0 : datagramToken;
+        PlayerEntityId = playerEntityId;
+        DeltaSnapshotsEnabled = endpoint is not null && deltaSnapshotsEnabled;
+    }
 
     public bool TryQueue(IProtocolMessage message) =>
         !_lifetime.IsCancellationRequested && _outbound.Writer.TryWrite(message);

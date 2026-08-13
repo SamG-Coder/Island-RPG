@@ -17,10 +17,14 @@ checks.Add("check runner executes deterministic assertions", () =>
 });
 
 AuthoritativeSessionChecks.Register(checks);
+AuthoritativeNavigationChecks.Register(checks);
 ProtocolChecks.Register(checks);
+UdpSnapshotTransportChecks.Register(checks);
 NetworkGameClientStateChecks.Register(checks);
+ClientWorldStateChecks.Register(checks);
 ItemContainerChecks.Register(checks);
 WorldRuleChecks.Register(checks);
+WorldTransactionChecks.Register(checks);
 LoopbackChecks.Register(checks);
 
 return await checks.RunAsync(CancellationToken.None);

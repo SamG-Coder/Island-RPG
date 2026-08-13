@@ -4,24 +4,26 @@ namespace IslandRpg.Gameplay;
 
 internal static class WorldPlacementGrid
 {
-    public const float CellSize = .25f;
-    public const int CellsPerTerrainTile = 4;
+    public const float CellSize =
+        IslandRpg.Navigation.WorldPlacementGrid.CellSize;
+    public const int CellsPerTerrainTile =
+        IslandRpg.Navigation.WorldPlacementGrid.CellsPerTerrainTile;
 
     public static int Cell(float coordinate) =>
-        (int)MathF.Floor(coordinate / CellSize);
+        IslandRpg.Navigation.WorldPlacementGrid.Cell(coordinate);
 
     public static float CellCenter(int cell) =>
-        (cell + .5f) * CellSize;
+        IslandRpg.Navigation.WorldPlacementGrid.CellCenter(cell);
 
     public static Vector2 CellCenter(int x, int y) =>
         new(CellCenter(x), CellCenter(y));
 
     public static float Snap(float coordinate) =>
-        MathF.Round(coordinate / CellSize) * CellSize;
+        IslandRpg.Navigation.WorldPlacementGrid.Snap(coordinate);
 
     public static float SnapWithFootprint(float coordinate, float footprint)
     {
-        var half = footprint * .5f;
-        return MathF.Round((coordinate - half) / CellSize) * CellSize + half;
+        return IslandRpg.Navigation.WorldPlacementGrid.SnapWithFootprint(
+            coordinate, footprint);
     }
 }

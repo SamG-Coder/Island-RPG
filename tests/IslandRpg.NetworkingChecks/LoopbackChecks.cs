@@ -26,6 +26,9 @@ internal static class LoopbackChecks
         checks.Add(
             "real loopback inventory crafting and eating stay authoritative",
             ReplicatesAuthoritativePlayerActionsAsync);
+        checks.Add(
+            "real loopback negotiates UDP snapshots with TCP recovery",
+            NegotiatesUdpSnapshotsAsync);
     }
 
     private static async ValueTask ReplicatesTwoClientsAsync(CancellationToken cancellationToken)
@@ -239,6 +242,42 @@ internal static class LoopbackChecks
             "the client must receive the canonical survival effect");
     }
 
+    private static async ValueTask NegotiatesUdpSnapshotsAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var fixture = await LoopbackFixture.StartAsync(cancellationToken);
+        await using var client = new NetworkGameClient(TimeSpan.Zero);
+        var udpSnapshots = 0;
+        var tcpSnapshots = 0;
+        client.SnapshotReceived += (_, args) =>
+        {
+            if (args.Snapshot.Sequence == 0) Interlocked.Increment(ref udpSnapshots);
+            else Interlocked.Increment(ref tcpSnapshots);
+        };
+
+        var accepted = await fixture.ConnectAsync(client, "Udp Client", cancellationToken);
+        CheckAssert.True(
+            accepted.Capabilities.HasFlag(ServerCapabilities.UdpSnapshots),
+            "the server should negotiate UDP when the client offers it");
+        CheckAssert.True(accepted.DatagramToken != 0,
+            "the handshake must issue a non-zero session datagram token");
+        CheckAssert.True(accepted.ServerSnapshotPort != 0,
+            "the handshake must advertise the bound UDP port");
+
+        await EventuallyAsync(
+            () => Volatile.Read(ref udpSnapshots) >= 3,
+            "the client did not receive the 20 Hz UDP snapshot stream",
+            cancellationToken);
+        await EventuallyAsync(
+            () => Volatile.Read(ref tcpSnapshots) >= 1,
+            "the client did not retain its reliable recovery keyframe",
+            cancellationToken);
+        CheckAssert.Equal(
+            NetworkGameClientStatus.Connected,
+            client.State.Status,
+            "UDP snapshot receipt must not disturb the reliable session");
+    }
+
     private static int CountItem(
         NetworkPlayerGameplayState state,
         string itemId) => state.InventorySlots.Sum(slot =>
@@ -420,7 +459,10 @@ internal static class LoopbackChecks
             ContentVersion,
             clientId ?? Guid.NewGuid(),
             name,
-            WorldId);
+            WorldId,
+            Capabilities:
+                ClientCapabilities.UdpSnapshots |
+                ClientCapabilities.DeltaSnapshots);
 
         public Task<HandshakeAcceptedMessage> ConnectAsync(
             NetworkGameClient client,

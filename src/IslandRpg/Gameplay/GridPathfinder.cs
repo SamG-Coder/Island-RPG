@@ -1,299 +1,148 @@
-using OpenTK.Mathematics;
 using IslandRpg.World;
+using OpenTK.Mathematics;
+using CoreNavigation = IslandRpg.Navigation;
+using NumericsVector2 = System.Numerics.Vector2;
 
 namespace IslandRpg.Gameplay;
 
+/// <summary>
+/// OpenTK compatibility value used by existing client call sites. Core
+/// navigation owns the actual geometry and path search.
+/// </summary>
 internal readonly record struct NavigationObstacle(
     Vector2 Center,
     float Width,
     float Depth,
     float RotationRadians = 0)
 {
-    public bool Contains(Vector2 point, float clearance = .18f)
-    {
-        var relative = point - Center;
-        if (MathF.Abs(RotationRadians) > .0001f)
-        {
-            var cosine = MathF.Cos(RotationRadians);
-            var sine = MathF.Sin(RotationRadians);
-            relative = new(
-                relative.X * cosine + relative.Y * sine,
-                -relative.X * sine + relative.Y * cosine);
-        }
-
-        return MathF.Abs(relative.X) < Width * .5f + clearance &&
-               MathF.Abs(relative.Y) < Depth * .5f + clearance;
-    }
+    public bool Contains(Vector2 point, float clearance = .18f) =>
+        ToCore().Contains(ToNumerics(point), clearance);
 
     public Vector2 AxisAlignedHalfExtents(float clearance = 0)
     {
-        var halfWidth = Width * .5f + clearance;
-        var halfDepth = Depth * .5f + clearance;
-        if (MathF.Abs(RotationRadians) <= .0001f)
-            return new(halfWidth, halfDepth);
-
-        var cosine = MathF.Abs(MathF.Cos(RotationRadians));
-        var sine = MathF.Abs(MathF.Sin(RotationRadians));
-        return new(
-            halfWidth * cosine + halfDepth * sine,
-            halfWidth * sine + halfDepth * cosine);
+        var result = ToCore().AxisAlignedHalfExtents(clearance);
+        return new Vector2(result.X, result.Y);
     }
+
+    internal CoreNavigation.NavigationObstacle ToCore() => new(
+        ToNumerics(Center),
+        Width,
+        Depth,
+        RotationRadians);
+
+    private static NumericsVector2 ToNumerics(Vector2 value) =>
+        new(value.X, value.Y);
 }
 
 internal static class ActionPathSearchPolicy
 {
-    public const int MaximumVisited = 16384;
-    public const float AlternativeApproachDistance = 12f;
+    public const int MaximumVisited =
+        CoreNavigation.ActionPathSearchPolicy.MaximumVisited;
+    public const float AlternativeApproachDistance =
+        CoreNavigation.ActionPathSearchPolicy.AlternativeApproachDistance;
 
     public static bool ShouldTryAlternativeApproach(
-        in Vector2 start, in Vector2 target) =>
-        Vector2.DistanceSquared(start, target) <=
-        AlternativeApproachDistance * AlternativeApproachDistance;
+        in Vector2 start,
+        in Vector2 target) =>
+        CoreNavigation.ActionPathSearchPolicy.ShouldTryAlternativeApproach(
+            new NumericsVector2(start.X, start.Y),
+            new NumericsVector2(target.X, target.Y));
 }
 
+/// <summary>
+/// Preserves the established OpenTK API while delegating deterministic path
+/// search to the headless Core implementation shared with the server.
+/// </summary>
 internal static class GridPathfinder
 {
-    private static readonly (int X, int Y, float Cost)[] Neighbours =
-    [
-        (1, 0, 1), (-1, 0, 1), (0, 1, 1), (0, -1, 1),
-        (1, 1, 1.41421356f), (1, -1, 1.41421356f),
-        (-1, 1, 1.41421356f), (-1, -1, 1.41421356f)
-    ];
-
     public static IReadOnlyList<Vector2> Find(
         long seed,
         Vector2 startPosition,
         Vector2 requestedTarget,
-        int maximumVisited = 65536,
+        int maximumVisited = 65_536,
         CancellationToken cancellationToken = default,
         int worldLevel = (int)WorldLevel.Overworld,
         IReadOnlyList<NavigationObstacle>? obstacles = null)
     {
-        // Interaction stand-off points can legitimately finish just inside a
-        // resource's conservative navigation footprint. Do not let that
-        // footprint imprison the actor on the next route; it remains solid
-        // for every path that starts outside it.
-        var routeObstacles = obstacles is null
-            ? null
-            : obstacles.Where(obstacle =>
-                    !obstacle.Contains(startPosition))
-                .ToArray();
-        var start = (
-            WorldPlacementGrid.Cell(startPosition.X),
-            WorldPlacementGrid.Cell(startPosition.Y));
-        var requestedGoal = (
-            WorldPlacementGrid.Cell(requestedTarget.X),
-            WorldPlacementGrid.Cell(requestedTarget.Y));
-        var caveContext = worldLevel == (int)WorldLevel.Underground
-            ? new CaveHydrologyField.SamplingContext(seed)
-            : null;
-        var caveDensity = new Dictionary<(int X, int Y), float>();
-        var passability = new Dictionary<(int X, int Y), bool>();
-        var heights = new Dictionary<(int X, int Y), int>();
-        float Density(int x, int y)
-        {
-            if (caveDensity.TryGetValue((x, y), out var density))
-                return density;
-            var center = WorldPlacementGrid.CellCenter(x, y);
-            density = caveContext!.Density(center.X, center.Y);
-            caveDensity[(x, y)] = density;
-            return density;
-        }
-        bool CanPass(int x, int y)
-        {
-            if (passability.TryGetValue((x, y), out var value))
-                return value;
-            value = Passable(
-                seed, x, y, worldLevel, Density, routeObstacles);
-            passability[(x, y)] = value;
-            return value;
-        }
-        int CellHeight(int x, int y)
-        {
-            if (heights.TryGetValue((x, y), out var value))
-                return value;
-            value = Height(seed, x, y, worldLevel, Density);
-            heights[(x, y)] = value;
-            return value;
-        }
-        var exactTarget = PassablePoint(
-            seed, requestedTarget, worldLevel, caveContext, routeObstacles);
-        var goal = ResolveGoal(
-            seed,
-            requestedGoal,
-            requestedTarget,
-            worldLevel,
-            CanPass);
-        if (goal is null)
-            return [];
-        var resolvedGoal = goal.Value;
-
-        var resolvedStart = CanPass(start.Item1, start.Item2)
-            ? start
-            : ResolveGoal(
-                seed, start, startPosition, worldLevel, CanPass);
-        if (resolvedStart is null)
-            return [];
-        var searchStart = resolvedStart.Value;
-        var frontier = new PriorityQueue<(int X, int Y), float>();
-        var cameFrom = new Dictionary<(int X, int Y), (int X, int Y)>();
-        var costs = new Dictionary<(int X, int Y), float>
-        {
-            [searchStart] = 0
-        };
-        frontier.Enqueue(searchStart, 0);
-        var visited = 0;
-        while (frontier.Count > 0 && visited++ < maximumVisited)
-        {
-            if ((visited & 63) == 0) cancellationToken.ThrowIfCancellationRequested();
-            var current = frontier.Dequeue();
-            if (current == resolvedGoal) return Reconstruct(current);
-            foreach (var neighbour in Neighbours)
-            {
-                var next = (current.X + neighbour.X, current.Y + neighbour.Y);
-                if (!CanPass(next.Item1, next.Item2))
-                    continue;
-                if (neighbour.X != 0 && neighbour.Y != 0 &&
-                    (!CanPass(current.X + neighbour.X, current.Y) ||
-                     !CanPass(current.X, current.Y + neighbour.Y)))
-                    continue;
-                var slope = Math.Abs(
-                    CellHeight(next.Item1, next.Item2) -
-                    CellHeight(current.X, current.Y));
-                if (slope > 4) continue;
-                var nextCost = costs[current] +
-                               neighbour.Cost * WorldPlacementGrid.CellSize +
-                               slope * .32f;
-                if (costs.TryGetValue(next, out var previous) && previous <= nextCost) continue;
-                costs[next] = nextCost;
-                cameFrom[next] = current;
-                var deltaX = Math.Abs(resolvedGoal.Item1 - next.Item1);
-                var deltaY = Math.Abs(resolvedGoal.Item2 - next.Item2);
-                var diagonal = Math.Min(deltaX, deltaY);
-                var straight = Math.Max(deltaX, deltaY) - diagonal;
-                var heuristic =
-                    (diagonal * 1.41421356f + straight) *
-                    WorldPlacementGrid.CellSize;
-                frontier.Enqueue(next, nextCost + heuristic);
-            }
-        }
-        return [];
-
-        IReadOnlyList<Vector2> Reconstruct((int X, int Y) current)
-        {
-            var result = new List<Vector2>();
-            while (current != searchStart)
-            {
-                result.Add(WorldPlacementGrid.CellCenter(
-                    current.X, current.Y));
-                current = cameFrom[current];
-            }
-            result.Reverse();
-            if (exactTarget)
-            {
-                if (result.Count == 0)
-                    result.Add(requestedTarget);
-                else
-                    result[^1] = requestedTarget;
-            }
-            return result;
-        }
+        var coreObstacles = obstacles?.Select(static obstacle =>
+            obstacle.ToCore()).ToArray();
+        return CoreNavigation.GridPathfinder.Find(
+                new SoloWorldNavigationQuery(seed),
+                ToNumerics(startPosition),
+                ToNumerics(requestedTarget),
+                maximumVisited,
+                cancellationToken,
+                worldLevel,
+                coreObstacles)
+            .Select(static point => new Vector2(point.X, point.Y))
+            .ToArray();
     }
 
     public static bool CanStandAt(
         long seed,
         Vector2 point,
         int worldLevel,
-        IReadOnlyList<NavigationObstacle>? obstacles = null)
-    {
-        var caveContext = worldLevel == (int)WorldLevel.Underground
-            ? new CaveHydrologyField.SamplingContext(seed)
-            : null;
-        return PassablePoint(
-            seed, point, worldLevel, caveContext, obstacles);
-    }
+        IReadOnlyList<NavigationObstacle>? obstacles = null) =>
+        CoreNavigation.GridPathfinder.CanStandAt(
+            new SoloWorldNavigationQuery(seed),
+            ToNumerics(point),
+            worldLevel,
+            obstacles?.Select(static obstacle => obstacle.ToCore()).ToArray());
 
-    private static (int X, int Y)? ResolveGoal(
-        long seed,
-        (int X, int Y) requestedGoal,
-        Vector2 requestedTarget,
-        int worldLevel,
-        Func<int, int, bool> passable)
+    private static NumericsVector2 ToNumerics(Vector2 value) =>
+        new(value.X, value.Y);
+}
+
+/// <summary>
+/// Client-only adapter adds caves to the surface query used by the dedicated
+/// server. It has no render or loaded-chunk dependency.
+/// </summary>
+internal sealed class SoloWorldNavigationQuery :
+    CoreNavigation.IWorldNavigationQuery
+{
+    [ThreadStatic]
+    private static Dictionary<long, CaveHydrologyField.SamplingContext>?
+        _caveContexts;
+    private readonly CoreNavigation.ProceduralSurfaceNavigationQuery _surface;
+    private readonly CaveHydrologyField.SamplingContext _cave;
+
+    public SoloWorldNavigationQuery(long seed)
     {
-        const int searchRadius = 12;
-        (int X, int Y)? nearest = null;
-        var nearestDistance = float.MaxValue;
-        for (var y = -searchRadius; y <= searchRadius; y++)
-        for (var x = -searchRadius; x <= searchRadius; x++)
+        _surface = new CoreNavigation.ProceduralSurfaceNavigationQuery(seed);
+        var contexts = _caveContexts ??= [];
+        if (contexts.TryGetValue(seed, out var cave))
         {
-            var candidate = (
-                requestedGoal.X + x,
-                requestedGoal.Y + y);
-            if (!passable(candidate.Item1, candidate.Item2))
-                continue;
-            var center = WorldPlacementGrid.CellCenter(
-                candidate.Item1, candidate.Item2);
-            var distance = (center - requestedTarget).LengthSquared;
-            if (distance >= nearestDistance) continue;
-            nearest = candidate;
-            nearestDistance = distance;
+            _cave = cave;
         }
-        return nearest;
+        else
+        {
+            _cave = new CaveHydrologyField.SamplingContext(seed);
+            if (contexts.Count >= 4) contexts.Clear();
+            contexts[seed] = _cave;
+        }
     }
 
-    private static bool PassablePoint(
-        long seed,
-        Vector2 point,
-        int worldLevel,
-        CaveHydrologyField.SamplingContext? caveContext,
-        IReadOnlyList<NavigationObstacle>? obstacles)
+    public bool SupportsWorldLevel(int worldLevel) =>
+        worldLevel is (int)WorldLevel.Overworld or
+            (int)WorldLevel.Underground;
+
+    public bool CanStandAt(NumericsVector2 point, int worldLevel)
     {
-        if (obstacles is not null)
-            foreach (var obstacle in obstacles)
-                if (obstacle.Contains(point))
-                    return false;
         if (worldLevel == (int)WorldLevel.Underground)
-            return caveContext!.Density(point.X, point.Y) >=
-                CaveHydrologyField.Boundary;
-        return InfiniteWorldGenerator.BiomeAt(
-            seed,
-            (int)MathF.Floor(point.X),
-            (int)MathF.Floor(point.Y)) != Biome.DeepWater;
+            return _cave.Density(point.X, point.Y) >=
+                   CaveHydrologyField.Boundary;
+        return _surface.CanStandAt(point, worldLevel);
     }
 
-    private static bool Passable(
-        long seed, int x, int y, int worldLevel,
-        Func<int, int, float> density,
-        IReadOnlyList<NavigationObstacle>? obstacles)
+    public float HeightAt(NumericsVector2 point, int worldLevel)
     {
-        var center = WorldPlacementGrid.CellCenter(x, y);
-        if (obstacles is not null)
-            foreach (var obstacle in obstacles)
-                if (obstacle.Contains(center))
-                    return false;
         if (worldLevel == (int)WorldLevel.Underground)
-            return density(x, y) >=
-                CaveHydrologyField.Boundary;
-        var biome = InfiniteWorldGenerator.BiomeAt(
-            seed,
-            (int)MathF.Floor(center.X),
-            (int)MathF.Floor(center.Y));
-        return biome != Biome.DeepWater;
+            return MathF.Round(UndergroundWorldGenerator.Height(
+                _cave.Density(point.X, point.Y)));
+        return _surface.HeightAt(point, worldLevel);
     }
 
-    private static int Height(
-        long seed, int x, int y, int worldLevel,
-        Func<int, int, float> density) =>
-        worldLevel == (int)WorldLevel.Underground
-            ? (int)MathF.Round(UndergroundWorldGenerator.Height(density(x, y)))
-            : SampleSurfaceHeight(seed, x, y);
-
-    private static int SampleSurfaceHeight(long seed, int x, int y)
-    {
-        var center = WorldPlacementGrid.CellCenter(x, y);
-        return InfiniteWorldGenerator.SampleSurfaceHeight(
-            seed,
-            (int)MathF.Floor(center.X),
-            (int)MathF.Floor(center.Y));
-    }
+    public bool IsWading(NumericsVector2 point, int worldLevel) =>
+        worldLevel == (int)WorldLevel.Overworld &&
+        _surface.IsWading(point, worldLevel);
 }

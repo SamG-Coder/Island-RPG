@@ -13,6 +13,8 @@
     the game client, authoritative simulation and dedicated server.
   -->
   <ItemGroup>
+    <Compile Include="..\IslandRpg\World\MacroHydrology.cs" Link="World\MacroHydrology.cs" />
+    <Compile Include="..\IslandRpg\World\ProceduralSurfaceTerrain.cs" Link="World\ProceduralSurfaceTerrain.cs" />
     <Compile Include="..\IslandRpg\Gameplay\ItemDefinition.cs" Link="Gameplay\ItemDefinition.cs" />
     <Compile Include="..\IslandRpg\Gameplay\InventoryContainer.cs" Link="Gameplay\InventoryContainer.cs" />
     <Compile Include="..\IslandRpg\Gameplay\ItemContainerService.cs" Link="Gameplay\ItemContainerService.cs" />

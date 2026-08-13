@@ -145,9 +145,11 @@ internal static class MacroHydrology
             var worldX = originX + x * CellSize;
             var worldY = originY + y * CellSize;
             var index = y * GridSize + x;
-            original[index] = InfiniteWorldGenerator.BaseElevationAt(seed, worldX, worldY);
+            original[index] = ProceduralSurfaceTerrain.BaseElevationAt(
+                seed, worldX, worldY);
             filled[index] = original[index];
-            accumulation[index] = InfiniteWorldGenerator.RainfallAt(seed, worldX, worldY);
+            accumulation[index] = ProceduralSurfaceTerrain.RainfallAt(
+                seed, worldX, worldY);
             receiver[index] = -1;
         }
 

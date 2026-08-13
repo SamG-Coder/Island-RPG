@@ -5,7 +5,7 @@ public static class ProtocolConstants
 {
     public const uint ReliableMagic = 0x49525047; // IRPG
     public const uint SnapshotMagic = 0x49525544; // IRUD
-    public const ushort CurrentVersion = 1;
+    public const ushort CurrentVersion = 2;
     public const int ReliableHeaderSize = 28;
     public const int TcpLengthPrefixSize = sizeof(uint);
     public const int MaxReliableFrameBytes = 64 * 1024;
@@ -24,9 +24,15 @@ public static class ProtocolLimits
     public const int LeaveReasonBytes = 128;
     public const int ReconnectTokenBytes = 128;
     public const int ItemIdBytes = 64;
+    public const int DefinitionIdBytes = 64;
     public const int RecipeIdBytes = 64;
     public const int PlayerInventorySlots = 28;
     public const int MaxInventoryQuantity = ushort.MaxValue;
+    public const int MaxContainerSlots = 128;
+    public const int MaxContainerTransferQuantity = ushort.MaxValue;
+    public const int MaxWorldObjectsPerBatch = 512;
+    public const int MinConstructionRotation = 0;
+    public const int MaxConstructionRotation = 3;
     public const float MaxPlayerHunger = 100;
     public const int MaxSnapshotEntities = 1600;
 }
@@ -47,6 +53,9 @@ public enum ProtocolMessageKind : byte
     ActionCommand = 33,
     ActionResult = 34,
     PlayerState = 35,
+    WorldObjectState = 36,
+    WorldObjectDeltaBatch = 37,
+    ContainerState = 38,
 }
 
 [Flags]
@@ -112,6 +121,34 @@ public enum ActionCommandKind : byte
     CombineItems = 2,
     CraftRecipe = 3,
     ConsumeItem = 4,
+    PickUpWorldObject = 5,
+    DropInventoryItem = 6,
+    OpenContainer = 7,
+    ContainerTransfer = 8,
+    AddCampfireFuel = 9,
+    TakeCampfireFuel = 10,
+    LightCampfire = 11,
+    PlaceConstruction = 12,
+    BuildConstruction = 13,
+    DemolishWorldObject = 14,
+}
+
+public enum ContainerTransferDirection : byte
+{
+    Deposit = 1,
+    Withdraw = 2,
+}
+
+public enum ContainerAccessMode : byte
+{
+    DepositAndWithdraw = 1,
+    WithdrawOnly = 2,
+}
+
+public enum WorldObjectDeltaKind : byte
+{
+    Upsert = 1,
+    Remove = 2,
 }
 
 [Flags]

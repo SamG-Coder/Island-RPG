@@ -23,6 +23,12 @@ public sealed record ServerOptions(
 
     public float StartingHunger { get; init; } = 100f;
 
+    /// <summary>
+    /// UDP snapshot port. Zero asks the operating system for an available port;
+    /// the selected value is returned in the reliable handshake.
+    /// </summary>
+    public ushort SnapshotPort { get; init; }
+
     public static ServerOptions Parse(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);

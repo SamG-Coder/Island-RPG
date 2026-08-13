@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Collections.ObjectModel;
+using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Threading.Channels;
@@ -19,12 +20,16 @@ public sealed class NetworkGameClient : IAsyncDisposable
     private NetworkGameClientState _state = NetworkGameClientState.Disconnected;
     private TcpClient? _tcpClient;
     private NetworkStream? _stream;
+    private Socket? _snapshotSocket;
+    private Task? _snapshotReaderTask;
+    private UdpSnapshotReceiver? _snapshotReceiver;
     private Channel<IProtocolMessage>? _outbound;
     private CancellationTokenSource? _connectionCancellation;
     private Task? _readerTask;
     private Task? _writerTask;
     private long _outboundSequence;
     private ulong _lastInboundSequence;
+    private readonly Dictionary<Guid, uint> _worldObjectRevisions = [];
     private int _disposed;
 
     public NetworkGameClient(TimeSpan? interpolationDelay = null) =>
@@ -42,6 +47,8 @@ public sealed class NetworkGameClient : IAsyncDisposable
     public event EventHandler<NetworkSnapshotEventArgs>? SnapshotReceived;
     public event EventHandler<NetworkPlayerStateEventArgs>? PlayerStateChanged;
     public event EventHandler<NetworkActionResultEventArgs>? ActionCompleted;
+    public event EventHandler<NetworkWorldObjectsChangedEventArgs>? WorldObjectsChanged;
+    public event EventHandler<NetworkContainerStateEventArgs>? ContainerStateChanged;
 
     public async Task<HandshakeAcceptedMessage> ConnectAsync(
         string host,
@@ -67,10 +74,33 @@ public sealed class NetworkGameClient : IAsyncDisposable
             SnapshotBuffer.Clear();
             _lastInboundSequence = 0;
             var tcpClient = new TcpClient { NoDelay = true };
+            Socket? snapshotSocket = null;
             try
             {
                 await tcpClient.ConnectAsync(host, port, cancellationToken).ConfigureAwait(false);
                 var stream = tcpClient.GetStream();
+                var requestedCapabilities = options.Capabilities;
+                ushort snapshotPort = 0;
+                if (requestedCapabilities.HasFlag(ClientCapabilities.UdpSnapshots))
+                {
+                    var remoteAddress =
+                        ((IPEndPoint)tcpClient.Client.RemoteEndPoint!).Address;
+                    var snapshotFamily = remoteAddress.AddressFamily == AddressFamily.InterNetwork ||
+                        remoteAddress.IsIPv4MappedToIPv6
+                            ? AddressFamily.InterNetwork
+                            : AddressFamily.InterNetworkV6;
+                    snapshotSocket = new Socket(
+                        snapshotFamily,
+                        SocketType.Dgram,
+                        ProtocolType.Udp);
+                    snapshotSocket.Bind(new IPEndPoint(
+                        snapshotFamily == AddressFamily.InterNetworkV6
+                            ? IPAddress.IPv6Any
+                            : IPAddress.Any,
+                        options.ClientSnapshotPort));
+                    snapshotPort = checked((ushort)
+                        ((IPEndPoint)snapshotSocket.LocalEndPoint!).Port);
+                }
                 var nonceBytes = RandomNumberGenerator.GetBytes(sizeof(ulong));
                 var nonce = BinaryPrimitives.ReadUInt64LittleEndian(nonceBytes);
                 var request = new HandshakeRequestMessage(
@@ -83,8 +113,8 @@ public sealed class NetworkGameClient : IAsyncDisposable
                     options.RequestedWorldId,
                     options.PlayerName,
                     nonce,
-                    options.ClientSnapshotPort,
-                    options.Capabilities,
+                    snapshotPort,
+                    requestedCapabilities,
                     options.ReconnectPlayerId,
                     options.ReconnectToken);
                 await TcpFrameCodec.WriteAsync(stream, request, cancellationToken).ConfigureAwait(false);
@@ -100,6 +130,40 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 Interlocked.Exchange(ref _outboundSequence, checked((long)accepted.NextCommandSequence - 1));
                 _tcpClient = tcpClient;
                 _stream = stream;
+                if (accepted.Capabilities.HasFlag(ServerCapabilities.UdpSnapshots))
+                {
+                    if (snapshotSocket is null || accepted.DatagramToken == 0 ||
+                        accepted.ServerSnapshotPort == 0)
+                        throw new ProtocolException(
+                            "Server negotiated incomplete UDP snapshot transport.");
+                    var snapshotAddress = NormalizeAddress(
+                        ((IPEndPoint)tcpClient.Client.RemoteEndPoint!).Address,
+                        snapshotSocket.AddressFamily);
+                    var snapshotEndpoint = new IPEndPoint(
+                        snapshotAddress,
+                        accepted.ServerSnapshotPort);
+                    try
+                    {
+                        snapshotSocket.Connect(snapshotEndpoint);
+                    }
+                    catch (SocketException exception)
+                    {
+                        throw new ProtocolException(
+                            $"Unable to connect UDP {snapshotSocket.LocalEndPoint} " +
+                            $"({snapshotSocket.AddressFamily}) to {snapshotEndpoint} " +
+                            $"({snapshotAddress.AddressFamily}).",
+                            exception);
+                    }
+                    _snapshotSocket = snapshotSocket;
+                    snapshotSocket = null;
+                    _snapshotReceiver = new UdpSnapshotReceiver(
+                        accepted.DatagramToken);
+                }
+                else
+                {
+                    snapshotSocket?.Dispose();
+                    snapshotSocket = null;
+                }
                 _outbound = CreateOutboundChannel();
                 _connectionCancellation = new CancellationTokenSource();
                 var localPlayer = new NetworkPlayerPresence(accepted.PlayerId, options.PlayerName);
@@ -120,14 +184,22 @@ public sealed class NetworkGameClient : IAsyncDisposable
                     null,
                     players,
                     ReadOnly(new Dictionary<ulong, EntitySnapshot>()),
-                    null));
+                    null,
+                    ReadOnly(new Dictionary<Guid, NetworkWorldObjectState>()),
+                    ReadOnly(new Dictionary<NetworkWorldChunk, uint>()),
+                    ReadOnly(new Dictionary<Guid, NetworkContainerState>())));
                 _readerTask = RunReaderAsync(stream, _connectionCancellation.Token);
                 _writerTask = RunWriterAsync(stream, _outbound.Reader, _connectionCancellation.Token);
+                if (_snapshotSocket is not null)
+                    _snapshotReaderTask = RunSnapshotReaderAsync(
+                        _snapshotSocket,
+                        _connectionCancellation.Token);
                 return accepted;
             }
             catch (Exception exception)
             {
                 tcpClient.Dispose();
+                snapshotSocket?.Dispose();
                 SetState(NetworkGameClientState.Disconnected with
                 {
                     Status = exception is OperationCanceledException
@@ -187,6 +259,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
         await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
         Task? reader;
         Task? writer;
+        Task? snapshotReader = null;
         try
         {
             if (State.Status == NetworkGameClientStatus.Disconnected) return;
@@ -194,8 +267,10 @@ public sealed class NetworkGameClient : IAsyncDisposable
             _outbound?.Writer.TryComplete();
             _connectionCancellation?.Cancel();
             _tcpClient?.Close();
+            _snapshotSocket?.Close();
             reader = _readerTask;
             writer = _writerTask;
+            snapshotReader = _snapshotReaderTask;
         }
         finally
         {
@@ -204,6 +279,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
 
         await IgnoreCancellationAsync(reader).ConfigureAwait(false);
         await IgnoreCancellationAsync(writer).ConfigureAwait(false);
+        await IgnoreCancellationAsync(snapshotReader).ConfigureAwait(false);
         CleanupConnection();
         SetState(NetworkGameClientState.Disconnected);
     }
@@ -273,6 +349,45 @@ public sealed class NetworkGameClient : IAsyncDisposable
         }
     }
 
+    private async Task RunSnapshotReaderAsync(
+        Socket socket,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[ProtocolConstants.MaxUdpDatagramBytes];
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var received = await socket.ReceiveAsync(
+                    buffer,
+                    SocketFlags.None,
+                    cancellationToken).ConfigureAwait(false);
+                if (received <= 0 || _snapshotReceiver is null ||
+                    !_snapshotReceiver.TryDecode(
+                        buffer.AsSpan(0, received),
+                        out var snapshot))
+                {
+                    continue;
+                }
+
+                ConsumeSnapshot(snapshot!);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (SocketException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            EndConnection(exception);
+        }
+    }
+
     private void Consume(IProtocolMessage message)
     {
         switch (message)
@@ -314,23 +429,389 @@ public sealed class NetworkGameClient : IAsyncDisposable
                     chat.Channel, chat.TargetPlayerId, chat.Text)));
                 break;
             case EntitySnapshotMessage snapshot:
-            {
-                var entities = snapshot.Entities.ToDictionary(static entity => entity.EntityId);
-                SnapshotBuffer.Add(snapshot);
-                UpdateState(current => current with
-                {
-                    ServerTick = snapshot.Metadata.ServerTick,
-                    Entities = ReadOnly(entities),
-                });
-                Raise(SnapshotReceived, new NetworkSnapshotEventArgs(snapshot with
-                {
-                    Entities = Array.AsReadOnly(snapshot.Entities.ToArray()),
-                }));
+                ConsumeSnapshot(snapshot);
                 break;
-            }
+            case WorldObjectStateMessage worldObject:
+                ConsumeWorldObject(worldObject);
+                break;
+            case WorldObjectDeltaBatchMessage worldObjects:
+                ConsumeWorldObjects(worldObjects);
+                break;
+            case ContainerStateMessage container:
+                ConsumeContainer(container);
+                break;
             default:
                 throw new ProtocolException($"The server sent invalid reliable message kind {message.Kind} after handshake.");
         }
+    }
+
+    private void ConsumeWorldObject(WorldObjectStateMessage message)
+    {
+        NetworkGameClientState next;
+        NetworkWorldObjectChange? accepted = null;
+        lock (_stateSync)
+        {
+            var projected = Project(message.Object);
+            var chunk = Chunk(message.Object);
+            _state.WorldChunkRevisions.TryGetValue(chunk, out var knownChunk);
+            var hasKnownObject = _worldObjectRevisions.TryGetValue(
+                message.Object.ObjectId,
+                out var knownObject);
+            if (message.Object.ChunkRevision < knownChunk ||
+                message.Object.ObjectRevision < knownObject)
+            {
+                next = _state with
+                {
+                    ServerTick = Math.Max(_state.ServerTick, message.Tick),
+                };
+            }
+            else if (message.Object.ObjectRevision == knownObject &&
+                     _state.WorldObjects.TryGetValue(
+                         message.Object.ObjectId,
+                         out var existing))
+            {
+                if (!EquivalentObject(existing, projected))
+                    throw new ProtocolException(
+                        "Equal world-object revisions contained different state.");
+                next = AdvanceChunkRevision(
+                    _state,
+                    message.Tick,
+                    chunk,
+                    message.Object.ChunkRevision);
+            }
+            else if (message.Object.ObjectRevision == knownObject &&
+                     hasKnownObject)
+            {
+                // Equal to a retained tombstone: never resurrect it.
+                next = _state with
+                {
+                    ServerTick = Math.Max(_state.ServerTick, message.Tick),
+                };
+            }
+            else
+            {
+                var objects = _state.WorldObjects.ToDictionary();
+                objects[projected.ObjectId] = projected;
+                _worldObjectRevisions[projected.ObjectId] =
+                    projected.ObjectRevision;
+                var chunks = _state.WorldChunkRevisions.ToDictionary();
+                chunks[chunk] = Math.Max(
+                    knownChunk,
+                    message.Object.ChunkRevision);
+                next = _state with
+                {
+                    ServerTick = Math.Max(_state.ServerTick, message.Tick),
+                    WorldObjects = ReadOnly(objects),
+                    WorldChunkRevisions = ReadOnly(chunks),
+                };
+                accepted = new(
+                    WorldObjectDeltaKind.Upsert,
+                    projected.ObjectId,
+                    projected.ChunkRevision,
+                    projected.ObjectRevision,
+                    projected);
+            }
+
+            Volatile.Write(ref _state, next);
+        }
+
+        Raise(StateChanged, new NetworkClientStateChangedEventArgs(next));
+        if (accepted is not null)
+            Raise(
+                WorldObjectsChanged,
+                new NetworkWorldObjectsChangedEventArgs(
+                    Array.AsReadOnly(new[] { accepted })));
+    }
+
+    private void ConsumeWorldObjects(WorldObjectDeltaBatchMessage message) =>
+        ApplyWorldObjectChanges(message.Tick, message.Deltas);
+
+    private void ApplyWorldObjectChanges(
+        ulong tick,
+        IReadOnlyList<WorldObjectDelta> deltas)
+    {
+        NetworkGameClientState next;
+        List<NetworkWorldObjectChange> accepted = [];
+        lock (_stateSync)
+        {
+            var objects = _state.WorldObjects.ToDictionary();
+            var chunks = _state.WorldChunkRevisions.ToDictionary();
+            var objectRevisions = new Dictionary<Guid, uint>(
+                _worldObjectRevisions);
+            foreach (var delta in deltas)
+            {
+                var id = delta.Reference.ObjectId;
+                var chunk = Chunk(delta.Reference);
+                chunks.TryGetValue(chunk, out var knownChunk);
+                objectRevisions.TryGetValue(id, out var knownRevision);
+                if (delta.CurrentChunkRevision <= knownChunk)
+                    continue;
+                if (delta.Reference.ExpectedChunkRevision != knownChunk)
+                    throw new ProtocolException(
+                        "A world-object delta does not match the current chunk revision.");
+                if (delta.CurrentChunkRevision <=
+                    delta.Reference.ExpectedChunkRevision)
+                {
+                    throw new ProtocolException(
+                        "A world-object delta did not advance its chunk revision.");
+                }
+                if (delta.Reference.ExpectedObjectRevision != knownRevision)
+                    throw new ProtocolException(
+                        "A world-object delta does not match the current object revision.");
+
+                if (delta.Kind == WorldObjectDeltaKind.Upsert)
+                {
+                    if (delta.State is not { } state)
+                        throw new ProtocolException(
+                            "A world-object upsert omitted its state.");
+                    if (state.ChunkRevision != delta.CurrentChunkRevision ||
+                        state.ObjectRevision <= knownRevision)
+                    {
+                        throw new ProtocolException(
+                            "A world-object upsert did not advance its revisions.");
+                    }
+                    var projected = Project(state);
+                    objects[id] = projected;
+                    objectRevisions[id] = state.ObjectRevision;
+                    chunks[chunk] = delta.CurrentChunkRevision;
+                    accepted.Add(new(
+                        WorldObjectDeltaKind.Upsert,
+                        id,
+                        delta.CurrentChunkRevision,
+                        state.ObjectRevision,
+                        projected));
+                    continue;
+                }
+
+                objects.Remove(id);
+                objectRevisions[id] = knownRevision;
+                chunks[chunk] = delta.CurrentChunkRevision;
+                accepted.Add(new(
+                    WorldObjectDeltaKind.Remove,
+                    id,
+                    delta.CurrentChunkRevision,
+                    knownRevision,
+                    null));
+            }
+
+            next = _state with
+            {
+                ServerTick = Math.Max(_state.ServerTick, tick),
+                WorldObjects = accepted.Count == 0
+                    ? _state.WorldObjects
+                    : ReadOnly(objects),
+                WorldChunkRevisions = accepted.Count == 0
+                    ? _state.WorldChunkRevisions
+                    : ReadOnly(chunks),
+            };
+            if (accepted.Count > 0)
+            {
+                _worldObjectRevisions.Clear();
+                foreach (var pair in objectRevisions)
+                    _worldObjectRevisions.Add(pair.Key, pair.Value);
+            }
+            Volatile.Write(ref _state, next);
+        }
+
+        Raise(StateChanged, new NetworkClientStateChangedEventArgs(next));
+        if (accepted.Count > 0)
+            Raise(
+                WorldObjectsChanged,
+                new NetworkWorldObjectsChangedEventArgs(
+                    Array.AsReadOnly(accepted.ToArray())));
+    }
+
+    private static NetworkGameClientState AdvanceChunkRevision(
+        NetworkGameClientState state,
+        ulong tick,
+        NetworkWorldChunk chunk,
+        uint revision)
+    {
+        state.WorldChunkRevisions.TryGetValue(chunk, out var known);
+        if (revision <= known)
+            return state with { ServerTick = Math.Max(state.ServerTick, tick) };
+        var chunks = state.WorldChunkRevisions.ToDictionary();
+        chunks[chunk] = revision;
+        return state with
+        {
+            ServerTick = Math.Max(state.ServerTick, tick),
+            WorldChunkRevisions = ReadOnly(chunks),
+        };
+    }
+
+    private void ConsumeContainer(ContainerStateMessage message)
+    {
+        NetworkGameClientState next;
+        NetworkContainerState? accepted = null;
+        lock (_stateSync)
+        {
+            var containers = _state.Containers;
+            containers.TryGetValue(message.Container.ObjectId, out var previous);
+            if (message.IsBaseline)
+            {
+                if (previous is not null &&
+                    message.ContainerRevision <= previous.ContainerRevision)
+                {
+                    if (message.ContainerRevision ==
+                            previous.ContainerRevision &&
+                        !EquivalentContainer(previous, message))
+                    {
+                        throw new ProtocolException(
+                            "Equal container revisions contained different state.");
+                    }
+                    next = _state with
+                    {
+                        ServerTick = Math.Max(_state.ServerTick, message.Tick),
+                    };
+                    Volatile.Write(ref _state, next);
+                }
+                else
+                {
+                    accepted = ProjectBaseline(message);
+                    next = WithContainer(_state, message.Tick, accepted);
+                    Volatile.Write(ref _state, next);
+                }
+            }
+            else
+            {
+                // Validate the complete chain before copying or publishing any
+                // slot. A malformed delta therefore leaves the old projection
+                // intact and faults the transport reader.
+                if (previous is null)
+                    throw new ProtocolException(
+                        "A container delta arrived before its baseline.");
+                if (message.BaselineContainerRevision !=
+                    previous.ContainerRevision)
+                {
+                    throw new ProtocolException(
+                        "A container delta does not match the current revision.");
+                }
+                if (message.ContainerRevision <= previous.ContainerRevision)
+                    throw new ProtocolException(
+                        "A container delta did not advance its revision.");
+                if (message.SlotCount != previous.Slots.Count ||
+                    !string.Equals(
+                        message.DefinitionId,
+                        previous.DefinitionId,
+                        StringComparison.Ordinal))
+                {
+                    throw new ProtocolException(
+                        "A container delta changed its baseline shape.");
+                }
+
+                var slots = previous.Slots.ToArray();
+                foreach (var slot in message.Slots) slots[slot.Slot] = slot;
+                accepted = new NetworkContainerState(
+                    message.Container.ObjectId,
+                    message.ContainerRevision,
+                    message.DefinitionId,
+                    message.Access,
+                    Array.AsReadOnly(slots));
+                next = WithContainer(_state, message.Tick, accepted);
+                Volatile.Write(ref _state, next);
+            }
+        }
+
+        Raise(StateChanged, new NetworkClientStateChangedEventArgs(next));
+        if (accepted is not null)
+            Raise(
+                ContainerStateChanged,
+                new NetworkContainerStateEventArgs(accepted));
+    }
+
+    private static NetworkGameClientState WithContainer(
+        NetworkGameClientState state,
+        ulong tick,
+        NetworkContainerState container)
+    {
+        var containers = state.Containers.ToDictionary();
+        containers[container.ObjectId] = container;
+        return state with
+        {
+            ServerTick = Math.Max(state.ServerTick, tick),
+            Containers = ReadOnly(containers),
+        };
+    }
+
+    private static NetworkContainerState ProjectBaseline(
+        ContainerStateMessage message)
+    {
+        var slots = new ContainerSlotState[message.SlotCount];
+        foreach (var slot in message.Slots) slots[slot.Slot] = slot;
+        return new NetworkContainerState(
+            message.Container.ObjectId,
+            message.ContainerRevision,
+            message.DefinitionId,
+            message.Access,
+            Array.AsReadOnly(slots));
+    }
+
+    private static NetworkWorldObjectState Project(WorldObjectState value) =>
+        new(
+            value.ObjectId,
+            value.ChunkX,
+            value.ChunkY,
+            value.WorldLevel,
+            value.ChunkRevision,
+            value.ObjectRevision,
+            value.DefinitionId,
+            value.X,
+            value.Y,
+            value.Rotation,
+            value.Health,
+            value.MaximumHealth,
+            value.HasContainer);
+
+    private static bool EquivalentObject(
+        NetworkWorldObjectState left,
+        NetworkWorldObjectState right) =>
+        left with { ChunkRevision = right.ChunkRevision } == right;
+
+    private static bool EquivalentContainer(
+        NetworkContainerState previous,
+        ContainerStateMessage message) =>
+        previous.ObjectId == message.Container.ObjectId &&
+        previous.ContainerRevision == message.ContainerRevision &&
+        string.Equals(
+            previous.DefinitionId,
+            message.DefinitionId,
+            StringComparison.Ordinal) &&
+        previous.Access == message.Access &&
+        previous.Slots.SequenceEqual(message.Slots);
+
+    private static NetworkWorldChunk Chunk(WorldObjectState value) =>
+        new(value.ChunkX, value.ChunkY, value.WorldLevel);
+
+    private static NetworkWorldChunk Chunk(WorldObjectReference value) =>
+        new(value.ChunkX, value.ChunkY, value.WorldLevel);
+
+    private void ConsumeSnapshot(EntitySnapshotMessage snapshot)
+    {
+        // The interpolation buffer owns chronological rejection across both
+        // UDP publications and reliable recovery keyframes.
+        if (!SnapshotBuffer.Add(snapshot))
+            return;
+        UpdateState(current => current with
+        {
+            ServerTick = Math.Max(current.ServerTick, snapshot.Metadata.ServerTick),
+            Entities = MergeEntities(current.Entities, snapshot),
+        });
+        Raise(SnapshotReceived, new NetworkSnapshotEventArgs(snapshot with
+        {
+            Entities = Array.AsReadOnly(snapshot.Entities.ToArray()),
+        }));
+    }
+
+    private static IReadOnlyDictionary<ulong, EntitySnapshot> MergeEntities(
+        IReadOnlyDictionary<ulong, EntitySnapshot> previous,
+        EntitySnapshotMessage snapshot)
+    {
+        var entities = snapshot.Metadata.Flags.HasFlag(SnapshotFlags.Delta)
+            ? previous.ToDictionary()
+            : new Dictionary<ulong, EntitySnapshot>();
+        foreach (var entity in snapshot.Entities)
+            entities[entity.EntityId] = entity;
+        return ReadOnly(entities);
     }
 
     private void EndConnection(Exception exception)
@@ -431,7 +912,11 @@ public sealed class NetworkGameClient : IAsyncDisposable
 
     private void SetState(NetworkGameClientState state)
     {
-        lock (_stateSync) Volatile.Write(ref _state, state);
+        lock (_stateSync)
+        {
+            _worldObjectRevisions.Clear();
+            Volatile.Write(ref _state, state);
+        }
         Raise(StateChanged, new NetworkClientStateChangedEventArgs(state));
     }
 
@@ -456,6 +941,22 @@ public sealed class NetworkGameClient : IAsyncDisposable
     private static IReadOnlyDictionary<TKey, TValue> ReadOnly<TKey, TValue>(Dictionary<TKey, TValue> values)
         where TKey : notnull => new ReadOnlyDictionary<TKey, TValue>(values);
 
+    private static IPAddress NormalizeAddress(
+        IPAddress address,
+        AddressFamily socketFamily)
+    {
+        if (socketFamily == AddressFamily.InterNetwork)
+        {
+            return address.AddressFamily == AddressFamily.InterNetwork
+                ? address
+                : address.MapToIPv4();
+        }
+
+        return address.AddressFamily == AddressFamily.InterNetworkV6
+            ? address
+            : address.MapToIPv6();
+    }
+
     private ulong NextSequence() => unchecked((ulong)Interlocked.Increment(ref _outboundSequence));
 
     private static Channel<IProtocolMessage> CreateOutboundChannel() => Channel.CreateBounded<IProtocolMessage>(
@@ -472,11 +973,15 @@ public sealed class NetworkGameClient : IAsyncDisposable
         _connectionCancellation?.Dispose();
         _connectionCancellation = null;
         _tcpClient?.Dispose();
+        _snapshotSocket?.Dispose();
+        _snapshotSocket = null;
+        _snapshotReceiver = null;
         _tcpClient = null;
         _stream = null;
         _outbound = null;
         _readerTask = null;
         _writerTask = null;
+        _snapshotReaderTask = null;
         SnapshotBuffer.Clear();
     }
 

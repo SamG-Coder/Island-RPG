@@ -26,7 +26,13 @@ public sealed record SimulationLimits
     /// </summary>
     public int CommandReceiptCapacity { get; init; } = 256;
 
-    public float ActorMovementSpeed { get; init; } = 4f;
+    public float ActorMovementSpeed { get; init; } =
+        IslandRpg.Navigation.ActorMovementService.BaseMoveSpeed;
+
+    public int MaximumPathSearchVisited { get; init; } =
+        IslandRpg.Navigation.ActionPathSearchPolicy.MaximumVisited;
+
+    public int MaximumPathWaypoints { get; init; } = 4_096;
 
     public float MaximumWalkIntentDistance { get; init; } = 512f;
 
@@ -76,6 +82,17 @@ public sealed record SimulationLimits
         if (!float.IsFinite(ActorMovementSpeed) || ActorMovementSpeed <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(ActorMovementSpeed));
+        }
+
+        if (MaximumPathSearchVisited <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaximumPathSearchVisited));
+        }
+
+        if (MaximumPathWaypoints <= 0 ||
+            MaximumPathWaypoints > MaximumPathSearchVisited)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaximumPathWaypoints));
         }
 
         if (!float.IsFinite(MaximumWalkIntentDistance) || MaximumWalkIntentDistance <= 0)

@@ -154,7 +154,7 @@ internal static class AuthoritativeSessionChecks
         var actor = session.CaptureSnapshot().Actors[0];
         CheckAssert.True(
             MathF.Abs(actor.Position.X - 1) < 0.0001f,
-            "movement distance must be speed multiplied by fixed server time");
+            $"movement distance must be speed multiplied by fixed server time; actual {actor.Position}");
         CheckAssert.True(
             actor.Destination is null && actor.Velocity == Vector2.Zero,
             "arrival must clear authoritative movement state");
