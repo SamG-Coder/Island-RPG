@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Numerics;
 using IslandRpg.Client;
 using IslandRpg.Protocol;
 using IslandRpg.Server;
@@ -36,6 +37,9 @@ internal static class LoopbackChecks
         checks.Add(
             "real loopback campfire cooking completes authoritatively",
             CompletesCampfireCookingAuthoritativelyAsync);
+        checks.Add(
+            "late join activation closes the public bootstrap revision gap",
+            LateJoinActivationClosesPublicRevisionGapAsync);
     }
 
     private static async ValueTask ReplicatesTwoClientsAsync(CancellationToken cancellationToken)
@@ -429,6 +433,92 @@ internal static class LoopbackChecks
             "the server must produce exactly one cooking output");
     }
 
+    private static async ValueTask LateJoinActivationClosesPublicRevisionGapAsync(
+        CancellationToken cancellationToken)
+    {
+        var pickupId = Guid.Parse(
+            "82000000-0000-0000-0000-000000000001");
+        await using var fixture = await LoopbackFixture.StartAsync(
+            cancellationToken,
+            [new WorldObjectSeed(pickupId, "large_rock", Vector2.Zero)]);
+        await using var actor = new NetworkGameClient(TimeSpan.Zero);
+        await fixture.ConnectAsync(actor, "Actor", cancellationToken);
+        await EventuallyAsync(
+            () => actor.State.Gameplay is not null &&
+                  actor.State.WorldObjects.ContainsKey(pickupId),
+            "the actor did not receive the seeded public object",
+            cancellationToken);
+        var seeded = actor.State.WorldObjects[pickupId];
+        var expectedPostPickupChunkRevision = checked(seeded.ChunkRevision + 1);
+
+        await using var late = new NetworkGameClient(TimeSpan.Zero);
+        var enteredWindow = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var cacheUpdated = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseActivation = new ManualResetEventSlim();
+        var pauseNextActivation = 0;
+        fixture.Server.DuringBootstrapActivation = _ =>
+        {
+            if (Interlocked.Exchange(ref pauseNextActivation, 0) == 0) return;
+            enteredWindow.TrySetResult();
+            if (!releaseActivation.Wait(Timeout, cancellationToken))
+                throw new TimeoutException(
+                    "the deterministic bootstrap activation was not released");
+        };
+        fixture.Server.AfterWorldBootstrapUpdatedForTest = () =>
+            cacheUpdated.TrySetResult();
+
+        Volatile.Write(ref pauseNextActivation, 1);
+        var lateJoin = fixture.ConnectAsync(late, "Late", cancellationToken);
+        Task<ActionResultMessage>? pickupTask = null;
+        try
+        {
+            await enteredWindow.Task.WaitAsync(Timeout, cancellationToken);
+            pickupTask = SendAndAwaitActionAsync(
+                actor,
+                new PickUpWorldObjectAction(
+                    new WorldObjectReference(
+                        pickupId,
+                        seeded.ChunkX,
+                        seeded.ChunkY,
+                        seeded.WorldLevel,
+                        seeded.ObjectRevision,
+                        seeded.ChunkRevision)),
+                cancellationToken);
+            await cacheUpdated.Task.WaitAsync(Timeout, cancellationToken);
+        }
+        finally
+        {
+            // Never leave the server connection thread parked inside the test
+            // seam, even when the mutation itself rejects or times out.
+            releaseActivation.Set();
+        }
+
+        var pickup = await pickupTask!.WaitAsync(Timeout, cancellationToken);
+        CheckAssert.True(pickup.Accepted,
+            $"the forced bootstrap-window mutation failed: {pickup.Detail}");
+        await lateJoin.WaitAsync(Timeout, cancellationToken);
+        await EventuallyAsync(
+            () => !actor.State.WorldObjects.ContainsKey(pickupId),
+            "the existing client did not observe the bootstrap-window mutation",
+            cancellationToken);
+        await EventuallyAsync(
+            () => late.State.Gameplay is not null &&
+                  late.State.WorldChunkRevisions.TryGetValue(
+                      new NetworkWorldChunk(
+                          seeded.ChunkX,
+                          seeded.ChunkY,
+                          seeded.WorldLevel), out var revision) &&
+                  revision == expectedPostPickupChunkRevision,
+            "the late client did not receive the post-mutation chunk revision",
+            cancellationToken);
+        CheckAssert.False(late.State.WorldObjects.ContainsKey(pickupId),
+            "the late baseline resurrected an object removed during bootstrap");
+        CheckAssert.Equal(NetworkGameClientStatus.Connected, late.State.Status,
+            "the late client faulted on its revision-consistent baseline");
+    }
+
     private static async Task<ActionResultMessage> SendAndAwaitActionAsync(
         NetworkGameClient client,
         IActionCommandPayload payload,
@@ -585,6 +675,7 @@ internal static class LoopbackChecks
                         new("wild_berries", 1)
                     }.Concat(extraInventory ?? []).ToArray(),
                 StartingHunger = 80f,
+                StartingPosition = Vector2.Zero,
                 StartingWorldObjects = startingWorldObjects ??
                     Array.Empty<WorldObjectSeed>()
             });

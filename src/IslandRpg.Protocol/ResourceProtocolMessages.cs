@@ -1,5 +1,6 @@
 using IslandRpg.Resources;
 using IslandRpg.Simulation;
+using IslandRpg.Fishing;
 
 namespace IslandRpg.Protocol;
 
@@ -63,6 +64,15 @@ public readonly record struct ResourceItemRewardState(
     int Quantity);
 
 /// <summary>
+/// Typed fishing presentation outcome. Chance is server-authored diagnostic
+/// context; clients must use Caught rather than parsing Detail or rerolling.
+/// </summary>
+public readonly record struct FishingOutcomeState(
+    FishSpecies Species,
+    bool Caught,
+    float Chance);
+
+/// <summary>
 /// Requester-private outcome for a resource action. Public node state travels
 /// separately so observers never receive inventory or tool-wear details.
 /// </summary>
@@ -80,7 +90,8 @@ public sealed record ResourceActionResultMessage(
     IReadOnlyList<ResourceItemRewardState> Rewards,
     bool Hit,
     int Damage,
-    bool ToolWorn) : IProtocolMessage
+    bool ToolWorn,
+    FishingOutcomeState? FishingOutcome = null) : IProtocolMessage
 {
     public ProtocolMessageKind Kind => ProtocolMessageKind.ResourceActionResult;
 }

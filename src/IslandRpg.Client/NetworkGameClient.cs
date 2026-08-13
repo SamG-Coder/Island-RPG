@@ -18,6 +18,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
 {
     private const int OutboundCapacity = 256;
     private readonly object _stateSync = new();
+    private readonly object _snapshotSync = new();
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly SemaphoreSlim _commandAuthorship = new(1, 1);
     private NetworkGameClientState _state = NetworkGameClientState.Disconnected;
@@ -33,6 +34,8 @@ public sealed class NetworkGameClient : IAsyncDisposable
     private long _outboundSequence;
     private ulong _lastInboundSequence;
     private readonly Dictionary<Guid, uint> _worldObjectRevisions = [];
+    private readonly Dictionary<Guid, uint> _boatRevisions = [];
+    private readonly EntitySnapshotReconstructor _snapshotReconstructor = new();
     private int _disposed;
 
     public NetworkGameClient(TimeSpan? interpolationDelay = null) =>
@@ -53,12 +56,32 @@ public sealed class NetworkGameClient : IAsyncDisposable
     public event EventHandler<NetworkCookingResultEventArgs>? CookingCompleted;
     public event EventHandler<NetworkResourceActionResultEventArgs>?
         ResourceActionCompleted;
+    public event EventHandler<NetworkBoatActionResultEventArgs>?
+        BoatActionCompleted;
 
     public event EventHandler<NetworkCaveActionResultEventArgs>?
         CaveActionCompleted;
     public event EventHandler<NetworkWorldObjectsChangedEventArgs>? WorldObjectsChanged;
     public event EventHandler<NetworkContainerStateEventArgs>? ContainerStateChanged;
     public event EventHandler<NetworkResourcesChangedEventArgs>? ResourcesChanged;
+    public event EventHandler<NetworkBoatsChangedEventArgs>? BoatsChanged;
+
+    public bool TryGetBoatReference(Guid boatId, out BoatReference reference)
+    {
+        if (State.Boats.TryGetValue(boatId, out var boat))
+        {
+            reference = new BoatReference(boatId, boat.Revision);
+            return true;
+        }
+
+        reference = default;
+        return false;
+    }
+
+    public BoatReference GetBoatReference(Guid boatId) =>
+        TryGetBoatReference(boatId, out var reference)
+            ? reference
+            : throw new KeyNotFoundException($"Boat {boatId} is not known.");
 
     /// <summary>
     /// Resolves the exact optimistic-concurrency token for one known sparse or
@@ -125,7 +148,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
             if (State.Status == NetworkGameClientStatus.Faulted) CleanupConnection();
             Interlocked.Exchange(ref _outboundSequence, 0);
             SetState(NetworkGameClientState.Disconnected with { Status = NetworkGameClientStatus.Connecting });
-            SnapshotBuffer.Clear();
+            ClearSnapshotProjection();
             _lastInboundSequence = 0;
             var tcpClient = new TcpClient { NoDelay = true };
             Socket? snapshotSocket = null;
@@ -242,7 +265,11 @@ public sealed class NetworkGameClient : IAsyncDisposable
                     ReadOnly(new Dictionary<Guid, NetworkWorldObjectState>()),
                     ReadOnly(new Dictionary<NetworkWorldChunk, uint>()),
                     ReadOnly(new Dictionary<Guid, NetworkContainerState>()),
-                    ReadOnly(new Dictionary<WorldChunkKey, NetworkResourceChunkState>())));
+                    ReadOnly(new Dictionary<WorldChunkKey, NetworkResourceChunkState>()))
+                {
+                    IslandStart = accepted.IslandStart,
+                    Boats = ReadOnly(new Dictionary<Guid, BoatState>()),
+                });
                 _readerTask = RunReaderAsync(stream, _connectionCancellation.Token);
                 _writerTask = RunWriterAsync(stream, _outbound.Reader, _connectionCancellation.Token);
                 if (_snapshotSocket is not null)
@@ -495,6 +522,11 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 Raise(ResourceActionCompleted,
                     new NetworkResourceActionResultEventArgs(result));
                 break;
+            case BoatActionResultMessage result:
+                UpdateTick(result.Tick);
+                Raise(BoatActionCompleted,
+                    new NetworkBoatActionResultEventArgs(result));
+                break;
             case CaveActionResultMessage result:
                 UpdateTick(result.Tick);
                 Raise(CaveActionCompleted,
@@ -548,6 +580,12 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 break;
             case ResourceNodeDeltaBatchMessage resources:
                 ConsumeResourceDeltas(resources);
+                break;
+            case BoatBaselineMessage boats:
+                ConsumeBoatBaseline(boats);
+                break;
+            case BoatDeltaBatchMessage boats:
+                ConsumeBoatDeltas(boats);
                 break;
             default:
                 throw new ProtocolException($"The server sent invalid reliable message kind {message.Kind} after handshake.");
@@ -1073,6 +1111,114 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 item.Chunk, false, item.Changes));
     }
 
+    private void ConsumeBoatBaseline(BoatBaselineMessage message)
+    {
+        NetworkGameClientState next;
+        IReadOnlyList<NetworkBoatChange> changes;
+        lock (_stateSync)
+        {
+            var boats = message.Boats.ToDictionary(static boat => boat.BoatId);
+            var revisions = new Dictionary<Guid, uint>(_boatRevisions);
+            var accepted = new List<NetworkBoatChange>();
+            foreach (var pair in boats)
+            {
+                revisions.TryGetValue(pair.Key, out var knownRevision);
+                if (pair.Value.Revision < knownRevision)
+                    throw new ProtocolException(
+                        "A boat baseline regressed a retained boat revision.");
+                if (pair.Value.Revision == knownRevision &&
+                    _state.Boats.TryGetValue(pair.Key, out var previous) &&
+                    previous != pair.Value)
+                    throw new ProtocolException(
+                        "Equal boat revisions contained different state.");
+                revisions[pair.Key] = pair.Value.Revision;
+                if (!_state.Boats.TryGetValue(pair.Key, out previous) ||
+                    previous != pair.Value)
+                {
+                    accepted.Add(new NetworkBoatChange(
+                        BoatDeltaKind.Upsert,
+                        pair.Key,
+                        pair.Value.Revision,
+                        pair.Value));
+                }
+            }
+
+            foreach (var pair in _state.Boats)
+            {
+                if (!boats.ContainsKey(pair.Key))
+                    accepted.Add(new NetworkBoatChange(
+                        BoatDeltaKind.Remove,
+                        pair.Key,
+                        pair.Value.Revision,
+                        null));
+            }
+
+            changes = Array.AsReadOnly(accepted.ToArray());
+            next = _state with
+            {
+                ServerTick = Math.Max(_state.ServerTick, message.Tick),
+                Boats = ReadOnly(boats),
+            };
+            ReplaceBoatRevisions(revisions);
+            Volatile.Write(ref _state, next);
+        }
+
+        Raise(StateChanged, new NetworkClientStateChangedEventArgs(next));
+        Raise(BoatsChanged, new NetworkBoatsChangedEventArgs(true, changes));
+    }
+
+    private void ConsumeBoatDeltas(BoatDeltaBatchMessage message)
+    {
+        NetworkGameClientState next;
+        IReadOnlyList<NetworkBoatChange> changes;
+        lock (_stateSync)
+        {
+            var boats = _state.Boats.ToDictionary();
+            var revisions = new Dictionary<Guid, uint>(_boatRevisions);
+            var accepted = new List<NetworkBoatChange>(message.Deltas.Count);
+            foreach (var delta in message.Deltas)
+            {
+                revisions.TryGetValue(
+                    delta.Reference.BoatId, out var knownRevision);
+                if (delta.Reference.ExpectedRevision != knownRevision)
+                    throw new ProtocolException(
+                        "A boat delta does not match the retained boat revision.");
+
+                revisions[delta.Reference.BoatId] =
+                    delta.CurrentRevision;
+                if (delta.Kind == BoatDeltaKind.Upsert)
+                    boats[delta.Reference.BoatId] = delta.State!.Value;
+                else
+                    boats.Remove(delta.Reference.BoatId);
+                accepted.Add(new NetworkBoatChange(
+                    delta.Kind,
+                    delta.Reference.BoatId,
+                    delta.CurrentRevision,
+                    delta.State));
+            }
+
+            changes = Array.AsReadOnly(accepted.ToArray());
+            next = _state with
+            {
+                ServerTick = Math.Max(_state.ServerTick, message.Tick),
+                Boats = accepted.Count == 0 ? _state.Boats : ReadOnly(boats),
+            };
+            ReplaceBoatRevisions(revisions);
+            Volatile.Write(ref _state, next);
+        }
+
+        Raise(StateChanged, new NetworkClientStateChangedEventArgs(next));
+        if (changes.Count != 0)
+            Raise(BoatsChanged, new NetworkBoatsChangedEventArgs(false, changes));
+    }
+
+    private void ReplaceBoatRevisions(Dictionary<Guid, uint> revisions)
+    {
+        _boatRevisions.Clear();
+        foreach (var pair in revisions)
+            _boatRevisions.Add(pair.Key, pair.Value);
+    }
+
     private static NetworkResourceChunkState ProjectResourceBaseline(
         ResourceChunkBaselineMessage message)
     {
@@ -1214,33 +1360,49 @@ public sealed class NetworkGameClient : IAsyncDisposable
     private static NetworkWorldChunk Chunk(WorldObjectReference value) =>
         new(value.ChunkX, value.ChunkY, value.WorldLevel);
 
-    private void ConsumeSnapshot(EntitySnapshotMessage snapshot)
+    internal void ConsumeSnapshot(EntitySnapshotMessage snapshot)
     {
-        // The interpolation buffer owns chronological rejection across both
-        // UDP publications and reliable recovery keyframes.
-        if (!SnapshotBuffer.Add(snapshot))
-            return;
-        UpdateState(current => current with
+        EntitySnapshotMessage complete;
+        NetworkGameClientState next;
+        lock (_snapshotSync)
         {
-            ServerTick = Math.Max(current.ServerTick, snapshot.Metadata.ServerTick),
-            Entities = MergeEntities(current.Entities, snapshot),
-        });
-        Raise(SnapshotReceived, new NetworkSnapshotEventArgs(snapshot with
-        {
-            Entities = Array.AsReadOnly(snapshot.Entities.ToArray()),
-        }));
-    }
+            if (!_snapshotReconstructor.TryReconstruct(
+                    snapshot,
+                    out var reconstructed))
+            {
+                return;
+            }
 
-    private static IReadOnlyDictionary<ulong, EntitySnapshot> MergeEntities(
-        IReadOnlyDictionary<ulong, EntitySnapshot> previous,
-        EntitySnapshotMessage snapshot)
-    {
-        var entities = snapshot.Metadata.Flags.HasFlag(SnapshotFlags.Delta)
-            ? previous.ToDictionary()
-            : new Dictionary<ulong, EntitySnapshot>();
-        foreach (var entity in snapshot.Entities)
-            entities[entity.EntityId] = entity;
-        return ReadOnly(entities);
+            complete = reconstructed.Snapshot;
+            // Both transport readers serialize reconstruction and buffer
+            // publication here. Event callbacks run after the lock and may
+            // arrive later than a subsequent state update, which is acceptable
+            // because each callback carries its own immutable complete frame.
+            var buffered = reconstructed.ReplacesLatestFrame
+                ? SnapshotBuffer.ReplaceLatest(complete)
+                : SnapshotBuffer.Add(complete);
+            if (!buffered) return;
+
+            var entities = ReadOnly(complete.Entities.ToDictionary(
+                static entity => entity.EntityId));
+            lock (_stateSync)
+            {
+                next = _state with
+                {
+                    ServerTick = Math.Max(
+                        _state.ServerTick,
+                        complete.Metadata.ServerTick),
+                    Entities = entities,
+                };
+                Volatile.Write(ref _state, next);
+            }
+        }
+
+        // Never invoke external subscribers under the TCP/UDP ordering lock.
+        // Production rendering consumes the serialized interpolation buffer;
+        // this event is an observation hook for complete frames only.
+        Raise(StateChanged, new NetworkClientStateChangedEventArgs(next));
+        Raise(SnapshotReceived, new NetworkSnapshotEventArgs(complete));
     }
 
     private void EndConnection(Exception exception)
@@ -1336,7 +1498,10 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 : previous!.AdventureExperience,
             actorChanged
                 ? message.DiggingExperience
-                : previous!.DiggingExperience);
+                : previous!.DiggingExperience,
+            actorChanged
+                ? message.FishingExperience
+                : previous!.FishingExperience);
     }
 
     private void UpdateTick(ulong tick) => UpdateState(current => current with { ServerTick = Math.Max(current.ServerTick, tick) });
@@ -1359,6 +1524,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
         lock (_stateSync)
         {
             _worldObjectRevisions.Clear();
+            _boatRevisions.Clear();
             Volatile.Write(ref _state, state);
         }
         Raise(StateChanged, new NetworkClientStateChangedEventArgs(state));
@@ -1428,7 +1594,16 @@ public sealed class NetworkGameClient : IAsyncDisposable
         _readerTask = null;
         _writerTask = null;
         _snapshotReaderTask = null;
-        SnapshotBuffer.Clear();
+        ClearSnapshotProjection();
+    }
+
+    private void ClearSnapshotProjection()
+    {
+        lock (_snapshotSync)
+        {
+            _snapshotReconstructor.Clear();
+            SnapshotBuffer.Clear();
+        }
     }
 
     private static async Task IgnoreCancellationAsync(Task? task)

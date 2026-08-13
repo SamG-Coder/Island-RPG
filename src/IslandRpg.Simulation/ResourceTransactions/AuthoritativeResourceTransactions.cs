@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Numerics;
 using System.Security.Cryptography;
 using IslandRpg.Gameplay;
+using IslandRpg.Fishing;
 using IslandRpg.Resources;
 
 namespace IslandRpg.Simulation;
@@ -83,6 +84,16 @@ public sealed class AuthoritativeResourceTransactions
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(command);
         return ExecuteMiningStrike(actor, command);
+    }
+
+    public ResourceTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        CatchFishTransaction command)
+    {
+        EnsureOwner();
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(command);
+        return ExecuteFishing(actor, command);
     }
 
     public uint CaptureChunkRevision(WorldChunkKey chunk)
@@ -226,7 +237,8 @@ public sealed class AuthoritativeResourceTransactions
                     not ResourceActionKind.GatherTreeStick and
                     not ResourceActionKind.GatherFibre and
                     not ResourceActionKind.GatherBerries and
-                    not ResourceActionKind.Mine ||
+                    not ResourceActionKind.Mine and
+                    not ResourceActionKind.Fish ||
                 !double.IsFinite(value.ReadyAtGameSeconds) ||
                 value.ReadyAtGameSeconds < 0 ||
                 value.ActionOrdinal == 0 ||
@@ -640,6 +652,122 @@ public sealed class AuthoritativeResourceTransactions
             Detail: string.Empty);
     }
 
+    private ResourceTransactionResult ExecuteFishing(
+        WorldTransactionActorInput input,
+        CatchFishTransaction command)
+    {
+        if (!float.IsFinite(command.MaximumReach) ||
+            command.MaximumReach is <= 0 or > 8)
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.InvalidCommand,
+                "The fishing reach is invalid.");
+        var validation = Validate(
+            input, command.Context, command.Node,
+            ResourceActionKind.Fish, command.GameSeconds,
+            out var descriptor, out var current, out var cadence);
+        if (validation is not null) return validation;
+        if (Vector2.DistanceSquared(
+                input.Position, descriptor.Position) >
+            command.MaximumReach * command.MaximumReach)
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.OutOfRange,
+                "The fish school is beyond the fishing net's reach.");
+        if (current.Remaining <= 0 || current.Depleted)
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.Depleted,
+                "The fish school has been exhausted.");
+        if (!Enum.IsDefined((FishSpecies)descriptor.Variant))
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.ResourceNotFound,
+                "The fish species is not recognized by the authority.");
+
+        var inventory = LoadInventory(input.Gameplay);
+        if ((uint)command.FishingNetInventorySlot >=
+                (uint)inventory.Capacity ||
+            inventory[command.FishingNetInventorySlot] is not { } netStack)
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.MissingTool,
+                "The selected inventory slot has no fishing net.");
+        var net = ItemCatalog.Get(netStack.ItemId);
+        if (!net.HasTag(ItemTag.FishingNet) || net.FishingPower <= 0)
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.MissingTool,
+                "The selected inventory slot has no usable fishing net.");
+
+        var species = (FishSpecies)descriptor.Variant;
+        var profile = FishingRules.Profile(species);
+        var fishingLevel = FishingRules.LevelForExperience(
+            input.Gameplay.FishingExperience);
+        if (!FishingRules.CanCatch(species, fishingLevel, net.FishingPower))
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.MissingTool,
+                fishingLevel < profile.RequiredLevel
+                    ? $"Fishing level {profile.RequiredLevel} is required."
+                    : $"A fishing net with power {profile.RequiredNetPower} is required.");
+        if (!inventory.CanAdd(profile.ItemId))
+            return Rejected(input, command.Context,
+                ResourceTransactionStatus.InventoryFull,
+                "The carried inventory cannot hold another catch.");
+
+        var ordinal = checked(cadence.ActionOrdinal + 1);
+        var chance = FishingRules.CatchChance(
+            species, fishingLevel, net.FishingPower);
+        var caught = DeterministicRolls(
+            input.ActorId, descriptor.Id, ordinal,
+            ResourceActionKind.Fish).Accuracy < chance;
+        CommitCadence(input.ActorId, ResourceActionKind.Fish,
+            command.GameSeconds, ordinal);
+        if (!caught)
+            return new ResourceTransactionResult(
+                command.Context.CommandId,
+                ResourceTransactionStatus.Accepted,
+                input.Gameplay.ActorRevision,
+                input.Gameplay.Inventory.Revision,
+                input.Gameplay,
+                null,
+                null,
+                ImmutableArray<ResourceItemReward>.Empty,
+                Hit: false,
+                Detail: string.Empty,
+                FishingOutcome: new(species, false, chance));
+
+        if (!inventory.TryAdd(profile.ItemId))
+            throw new InvalidOperationException(
+                "Validated fish reward could not be added.");
+        var previous = current;
+        if (!ResourceNodeStateRules.TryConsumeRemaining(
+                descriptor, current, 1, command.GameSeconds, out current))
+            throw new InvalidOperationException(
+                "Validated fish stock could not be consumed.");
+        _nodes[descriptor.Id] = current;
+        var chunk = AdvanceChunk(descriptor.Chunk);
+        var award = FishingRules.AwardExperience(
+            input.Gameplay.FishingExperience, species);
+        var adventure = AwardAdventureExperience(
+            input.Gameplay.AdventureExperience, award.Gained);
+        var gameplay = UpdatedGameplay(
+            input.Gameplay,
+            inventory,
+            inventoryChanged: true,
+            input.Gameplay.WoodcuttingExperience,
+            adventureExperience: adventure,
+            fishingExperience: award.Experience,
+            actorChanged: award.Gained != 0 ||
+                          adventure != input.Gameplay.AdventureExperience);
+        return new ResourceTransactionResult(
+            command.Context.CommandId,
+            ResourceTransactionStatus.Accepted,
+            gameplay.ActorRevision,
+            gameplay.Inventory.Revision,
+            gameplay,
+            new(previous, current),
+            chunk,
+            [new(profile.ItemId, 1)],
+            Hit: true,
+            Detail: string.Empty,
+            FishingOutcome: new(species, true, chance));
+    }
+
     private ResourceTransactionResult? Validate(
         WorldTransactionActorInput input,
         WorldTransactionContext context,
@@ -767,6 +895,7 @@ public sealed class AuthoritativeResourceTransactions
             ResourceActionKind.GatherBerries =>
                 _options.GatherBerriesCadence,
             ResourceActionKind.Mine => _options.MineCadence,
+            ResourceActionKind.Fish => _options.FishCadence,
             _ => throw new ArgumentOutOfRangeException(nameof(action))
         };
 
@@ -933,6 +1062,7 @@ public sealed class AuthoritativeResourceTransactions
         int? farmingExperience = null,
         int? adventureExperience = null,
         int? miningExperience = null,
+        int? fishingExperience = null,
         bool actorChanged = false)
     {
         var slots = ImmutableArray.CreateBuilder<InventorySlotSnapshot>(
@@ -957,6 +1087,8 @@ public sealed class AuthoritativeResourceTransactions
                                 source.FarmingExperience,
             MiningExperience = miningExperience ??
                                source.MiningExperience,
+            FishingExperience = fishingExperience ??
+                                source.FishingExperience,
             AdventureExperience = adventureExperience ??
                                   source.AdventureExperience
         };

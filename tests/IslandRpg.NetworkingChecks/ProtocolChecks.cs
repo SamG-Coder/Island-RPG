@@ -32,6 +32,12 @@ internal static class ProtocolChecks
             "cave protocol rejects malformed commands and outcomes",
             CaveActionProtocolRejectsMalformedState);
         checks.Add(
+            "boat commands state and outcomes round trip exactly",
+            BoatActionMessagesRoundTrip);
+        checks.Add(
+            "boat protocol rejects malformed commands and state",
+            BoatProtocolRejectsMalformedState);
+        checks.Add(
             "world state messages round trip without private data leaks",
             WorldStateMessagesRoundTrip);
         checks.Add(
@@ -204,9 +210,9 @@ internal static class ProtocolChecks
     private static void ProtocolEnforcesInputBounds()
     {
         CheckAssert.Equal(
-            (ushort)7,
+            (ushort)8,
             ProtocolConstants.CurrentVersion,
-            "authoritative cave progression requires protocol v7");
+            "authoritative boats and fishing require protocol v8");
         var multibyteName = string.Concat(
             Enumerable.Repeat("界", ProtocolLimits.PlayerNameBytes));
         CheckAssert.Throws<ProtocolException>(
@@ -629,6 +635,171 @@ internal static class ProtocolChecks
                 true, CommandRejectionCode.None, string.Empty, 1, 1,
                 true, 1, 2, -1)),
             "only traversal can authoritatively move the player between levels");
+    }
+
+    private static void BoatActionMessagesRoundTrip()
+    {
+        var commandId = Guid.Parse(
+            "b0a70000-0000-0000-0000-000000000010");
+        var boatId = Guid.Parse(
+            "b0a70000-0000-0000-0000-000000000011");
+        var ownerId = Guid.Parse(
+            "b0a70000-0000-0000-0000-000000000012");
+        var occupantId = Guid.Parse(
+            "b0a70000-0000-0000-0000-000000000013");
+        var reference = new BoatReference(boatId, 7);
+        BoatActionPayload[] payloads =
+        [
+            new BoardBoatAction(reference),
+            new MoveBoatAction(reference, 42.5f, -18.25f),
+            new StopBoatAction(reference),
+            new DisembarkBoatAction(reference, 44.25f, -17.5f),
+        ];
+
+        for (var index = 0; index < payloads.Length; index++)
+        {
+            var expected = new ActionCommandMessage(
+                (ulong)(690 + index), 910, commandId, 23, 41,
+                payloads[index]);
+            CheckAssert.Equal(expected, ReliableProtocolCodec.Decode(
+                    ReliableProtocolCodec.Encode(expected)),
+                $"{payloads[index].Action} must retain its exact boat reference");
+        }
+
+        var state = new BoatState(
+            boatId,
+            0x8000_0000_0000_0042,
+            8,
+            ownerId,
+            string.Empty,
+            occupantId,
+            42,
+            42.5f,
+            -18.25f,
+            .6f,
+            .8f,
+            0,
+            true);
+        var baseline = new BoatBaselineMessage(700, 911, [state]);
+        var decodedBaseline = (BoatBaselineMessage)ReliableProtocolCodec.Decode(
+            ReliableProtocolCodec.Encode(baseline));
+        CheckAssert.SequenceEqual(baseline.Boats, decodedBaseline.Boats,
+            "boat baselines must retain identity ownership occupancy and transform");
+
+        var delta = new BoatDeltaBatchMessage(
+            701,
+            912,
+            [new BoatDelta(
+                BoatDeltaKind.Upsert,
+                reference,
+                8,
+                state)]);
+        var decodedDelta = (BoatDeltaBatchMessage)ReliableProtocolCodec.Decode(
+            ReliableProtocolCodec.Encode(delta));
+        CheckAssert.SequenceEqual(delta.Deltas, decodedDelta.Deltas,
+            "boat deltas must retain their complete optimistic revision chain");
+
+        var result = new BoatActionResultMessage(
+            702,
+            913,
+            commandId,
+            BoatActionKind.Board,
+            reference,
+            true,
+            CommandRejectionCode.None,
+            "boarded",
+            24,
+            41,
+            8,
+            true,
+            42.5f,
+            -18.25f,
+            0);
+        CheckAssert.Equal(result, ReliableProtocolCodec.Decode(
+                ReliableProtocolCodec.Encode(result)),
+            "private boat outcomes must retain their authoritative transition");
+    }
+
+    private static void BoatProtocolRejectsMalformedState()
+    {
+        var commandId = Guid.Parse(
+            "b0a70000-0000-0000-0000-000000000020");
+        var boatId = Guid.Parse(
+            "b0a70000-0000-0000-0000-000000000021");
+        var ownerId = Guid.Parse(
+            "b0a70000-0000-0000-0000-000000000022");
+        var reference = new BoatReference(boatId, 1);
+        var state = new BoatState(
+            boatId,
+            0x8000_0000_0000_0021,
+            2,
+            ownerId,
+            string.Empty,
+            Guid.Empty,
+            0,
+            1,
+            2,
+            1,
+            0,
+            0,
+            false);
+
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1, 1, commandId, 1, 1,
+                new MoveBoatAction(reference, float.NaN, 0))),
+            "boat destinations must be finite");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1, 1, commandId, 1, 1,
+                new BoardBoatAction(new BoatReference(Guid.Empty, 1)))),
+            "boat commands must identify a boat");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(
+                new BoatDeltaBatchMessage(1, 1, [])),
+            "empty boat mutation batches must be rejected");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new BoatBaselineMessage(
+                1, 1, [state, state])),
+            "boat baselines must reject duplicate identities");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new BoatDeltaBatchMessage(
+                1,
+                1,
+                [new BoatDelta(
+                    BoatDeltaKind.Upsert,
+                    reference,
+                    2,
+                    state with { BoatId = Guid.NewGuid() })])),
+            "boat upserts must match their referenced identity");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new BoatDeltaBatchMessage(
+                1,
+                1,
+                [new BoatDelta(
+                    BoatDeltaKind.Remove,
+                    reference,
+                    2,
+                    state)])),
+            "boat removals cannot carry state");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new BoatActionResultMessage(
+                1,
+                1,
+                commandId,
+                BoatActionKind.Board,
+                reference,
+                false,
+                CommandRejectionCode.Impossible,
+                "rejected",
+                1,
+                1,
+                1,
+                true,
+                1,
+                2,
+                0)),
+            "rejected boat commands cannot claim an actor transition");
     }
 
     private static void WorldStateMessagesRoundTrip()

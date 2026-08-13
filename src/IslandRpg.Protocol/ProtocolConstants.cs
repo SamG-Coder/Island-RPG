@@ -5,7 +5,7 @@ public static class ProtocolConstants
 {
     public const uint ReliableMagic = 0x49525047; // IRPG
     public const uint SnapshotMagic = 0x49525544; // IRUD
-    public const ushort CurrentVersion = 7;
+    public const ushort CurrentVersion = 8;
     public const int ReliableHeaderSize = 28;
     public const int TcpLengthPrefixSize = sizeof(uint);
     public const int MaxReliableFrameBytes = 64 * 1024;
@@ -34,6 +34,8 @@ public static class ProtocolLimits
     public const int MaxWorldChunkRevisionsPerBatch = 512;
     public const int MaxResourceNodesPerBatch = 512;
     public const int MaxResourceRewardsPerAction = 8;
+    public const int MaxBoatsPerBatch = 256;
+    public const int GroupOwnerIdBytes = 64;
     public const int MinConstructionRotation = 0;
     public const int MaxConstructionRotation = 3;
     public const float MaxPlayerHunger = 100;
@@ -65,6 +67,9 @@ public enum ProtocolMessageKind : byte
     ResourceNodeDeltaBatch = 42,
     ResourceActionResult = 43,
     CaveActionResult = 44,
+    BoatBaseline = 45,
+    BoatDeltaBatch = 46,
+    BoatActionResult = 47,
 }
 
 [Flags]
@@ -152,6 +157,21 @@ public enum ActionCommandKind : byte
     CookOnCampfire = 15,
     ResourceAction = 16,
     CaveAction = 17,
+    BoatAction = 18,
+}
+
+public enum BoatActionKind : byte
+{
+    Board = 1,
+    Move = 2,
+    Stop = 3,
+    Disembark = 4,
+}
+
+public enum BoatDeltaKind : byte
+{
+    Upsert = 1,
+    Remove = 2,
 }
 
 public enum CaveActionKind : byte
@@ -214,6 +234,7 @@ public enum NetworkEntityKind : byte
     Enemy = 3,
     GroundObject = 4,
     Projectile = 5,
+    Boat = 6,
 }
 
 [Flags]

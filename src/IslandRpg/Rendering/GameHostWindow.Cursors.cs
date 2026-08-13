@@ -154,7 +154,10 @@ internal sealed partial class GameHostWindow
                 cursor = _exitBoatNativeCursor;
             }
             else if (!_fishingBoatBoarded &&
-                     FishingBoatHitTest(SceneMousePosition()) &&
+                     (IsNetworkWorld
+                         ? TryGetNetworkBoatUnderMouse(
+                             SceneMousePosition(), out _)
+                         : FishingBoatHitTest(SceneMousePosition())) &&
                      _enterBoatNativeCursor is not null)
             {
                 next = GameCursorKind.EnterBoat;

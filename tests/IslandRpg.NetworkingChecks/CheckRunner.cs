@@ -28,11 +28,17 @@ internal sealed class CheckRunner
 
     public async Task<int> RunAsync(CancellationToken cancellationToken)
     {
+        var filter = Environment.GetEnvironmentVariable("ISLAND_RPG_CHECK_FILTER");
         var failures = 0;
+        var executed = 0;
         var timer = Stopwatch.StartNew();
 
         foreach (var check in _checks)
         {
+            if (!string.IsNullOrEmpty(filter) &&
+                !check.Name.Contains(filter, StringComparison.OrdinalIgnoreCase))
+                continue;
+            executed++;
             cancellationToken.ThrowIfCancellationRequested();
             var checkTimer = Stopwatch.StartNew();
             try
@@ -50,7 +56,7 @@ internal sealed class CheckRunner
         }
 
         Console.WriteLine(
-            $"Networking checks: {_checks.Count - failures}/{_checks.Count} passed " +
+            $"Networking checks: {executed - failures}/{executed} passed " +
             $"in {timer.ElapsedMilliseconds} ms.");
         return failures == 0 ? 0 : 1;
     }

@@ -23,6 +23,7 @@ public sealed class AuthoritativeWorldSession
     private readonly IWorldNavigationObstacleSource _obstacles;
     private readonly AuthoritativeWorldTransactions _worldTransactions;
     private readonly AuthoritativeResourceTransactions? _resourceTransactions;
+    private readonly AuthoritativeBoatTransactions? _boatTransactions;
     private readonly Channel<QueuedOperation> _inbound;
     private readonly Dictionary<ActorId, MutableActor> _actors = [];
     private readonly Dictionary<PlayerId, ActorId> _actorsByPlayer = [];
@@ -41,7 +42,8 @@ public sealed class AuthoritativeWorldSession
         IWorldNavigationQuery? navigation = null,
         IWorldNavigationObstacleSource? obstacles = null,
         AuthoritativeWorldTransactions? worldTransactions = null,
-        AuthoritativeResourceTransactions? resourceTransactions = null)
+        AuthoritativeResourceTransactions? resourceTransactions = null,
+        AuthoritativeBoatTransactions? boatTransactions = null)
     {
         _limits = (limits ?? SimulationLimits.Default).ValidatedCopy();
         _identitySource = identitySource ?? new SecureSessionIdentitySource();
@@ -50,6 +52,7 @@ public sealed class AuthoritativeWorldSession
         _worldTransactions = worldTransactions ??
             new AuthoritativeWorldTransactions();
         _resourceTransactions = resourceTransactions;
+        _boatTransactions = boatTransactions;
         Id = sessionId is { } provided && provided.Value != Guid.Empty
             ? provided
             : SessionId.New();
@@ -95,6 +98,17 @@ public sealed class AuthoritativeWorldSession
 
     public event Action<ResourceTransactionResult>? ResourceTransactionCommitted;
 
+    public event Action<BoatTransactionResult>? BoatTransactionCommitted;
+
+    public event Action<BoatStateDelta>? BoatStateCommitted;
+
+    /// <summary>
+    /// Route completion is the only autonomous boat semantic transition.
+    /// Servers subscribe here; command/provision deltas are returned directly
+    /// so requester-private state can be sent before public replication.
+    /// </summary>
+    public event Action<BoatStateDelta>? BoatRouteCompleted;
+
     public event Action<CookingCompletionSnapshot>? CookingCompleted;
 
     public Task<JoinResult> EnqueueJoinAsync(JoinRequest request)
@@ -138,6 +152,22 @@ public sealed class AuthoritativeWorldSession
                 "The authoritative command queue is full."));
         }
 
+        return completion.Task;
+    }
+
+    /// <summary>
+    /// Trusted host-only queue seam for island-start boat provisioning. It
+    /// preserves the session's single-owner mutation rule during handshake.
+    /// </summary>
+    public Task<AuthoritativeBoatSnapshot> EnqueueProvisionPlayerBoatAsync(
+        PlayerId playerId,
+        string? groupId = null)
+    {
+        var completion = NewCompletion<AuthoritativeBoatSnapshot>();
+        if (!_inbound.Writer.TryWrite(new ProvisionPlayerBoatOperation(
+                playerId, groupId, completion)))
+            completion.SetException(new InvalidOperationException(
+                "The authoritative command queue is full."));
         return completion.Task;
     }
 
@@ -203,6 +233,14 @@ public sealed class AuthoritativeWorldSession
         {
             var processed = DrainCore(_limits.MaximumCommandsPerTick);
             AdvanceActors();
+            if (_boatTransactions is not null)
+                foreach (var delta in _boatTransactions.Advance(
+                             SimulationTiming.FixedDeltaSeconds))
+                {
+                    BoatStateCommitted?.Invoke(delta);
+                    BoatRouteCompleted?.Invoke(delta);
+                }
+            SynchronizeBoatOccupants();
             var publish = Clock.AdvanceOneTick();
             AdvanceCookingJobs();
             if (!publish)
@@ -288,6 +326,80 @@ public sealed class AuthoritativeWorldSession
     }
 
     /// <summary>
+    /// Trusted server seam for explicit boat seeds. Network input cannot
+    /// create entities or select their identities.
+    /// </summary>
+    public AuthoritativeBoatSnapshot SeedBoat(AuthoritativeBoatSeed seed)
+    {
+        EnterOwner();
+        try
+        {
+            var boat = _boatTransactions?.Seed(seed) ??
+                   throw new InvalidOperationException(
+                       "This session has no authoritative boat aggregate.");
+            BoatStateCommitted?.Invoke(new(
+                BoatChangeKind.Added, null, boat));
+            return boat;
+        }
+        finally
+        {
+            ExitOwner();
+        }
+    }
+
+    /// <summary>
+    /// Trusted island-start provisioning seam. The host decides whether this
+    /// is called; ordinary joins never implicitly create a raft.
+    /// </summary>
+    public AuthoritativeBoatSnapshot ProvisionPlayerBoat(
+        PlayerId playerId,
+        string? groupId = null)
+    {
+        EnterOwner();
+        try
+        {
+            return ProvisionPlayerBoatCore(playerId, groupId);
+        }
+        finally
+        {
+            ExitOwner();
+        }
+    }
+
+    private AuthoritativeBoatSnapshot ProvisionPlayerBoatCore(
+        PlayerId playerId,
+        string? groupId)
+    {
+        if (!TryGetActor(playerId, out var actor))
+            throw new KeyNotFoundException("The player does not exist.");
+        if (_boatTransactions is null)
+            throw new InvalidOperationException(
+                "This session has no authoritative boat aggregate.");
+        var id = AuthoritativeBoatTransactions.DerivePlayerBoatId(playerId);
+        var existed = _boatTransactions.CaptureBoats().Any(
+            value => value.BoatId == id);
+        var boat = _boatTransactions.ProvisionPlayerBoat(
+            playerId, actor.Position, groupId);
+        if (!existed)
+            BoatStateCommitted?.Invoke(new(
+                BoatChangeKind.Added, null, boat));
+        return boat;
+    }
+
+    public ImmutableArray<AuthoritativeBoatSnapshot> CaptureBoats()
+    {
+        EnterOwner();
+        try
+        {
+            return _boatTransactions?.CaptureBoats() ?? [];
+        }
+        finally
+        {
+            ExitOwner();
+        }
+    }
+
+    /// <summary>
     /// Captures all durable authority state on the owning simulation thread.
     /// Reconnect hashes are copied into immutable storage and never logged.
     /// </summary>
@@ -320,7 +432,8 @@ public sealed class AuthoritativeWorldSession
                 actors,
                 _worldTransactions.CaptureCheckpoint(),
                 cooking,
-                _resourceTransactions?.CaptureCheckpoint());
+                _resourceTransactions?.CaptureCheckpoint(),
+                _boatTransactions?.CaptureCheckpoint());
         }
         finally
         {
@@ -479,6 +592,31 @@ public sealed class AuthoritativeWorldSession
                         "The checkpoint has resource state but this session has no resource authority.");
                 _resourceTransactions.ValidateCheckpoint(pendingResources);
             }
+            if (checkpoint.Boats is { } pendingBoats)
+            {
+                if (_boatTransactions is null)
+                {
+                    if (!pendingBoats.Boats.IsDefaultOrEmpty)
+                        throw new InvalidDataException(
+                            "The checkpoint has boats but this session has no boat authority.");
+                }
+                else
+                {
+                _boatTransactions.ValidateCheckpoint(pendingBoats);
+                var persistedActors = actors.Values.ToDictionary(
+                    static value => value.Identity.ActorId);
+                foreach (var boat in pendingBoats.Boats)
+                {
+                    if (boat.OccupantActorId is not { } actorId) continue;
+                    if (!persistedActors.TryGetValue(actorId, out var occupant) ||
+                        boat.OccupantPlayerId != occupant.Identity.PlayerId ||
+                        boat.Position != occupant.Position ||
+                        boat.WorldLevel != occupant.WorldLevel)
+                        throw new InvalidDataException(
+                            "A persisted boat occupant does not match its actor.");
+                }
+                }
+            }
             // Resource validation precedes the world commit. Each restorer
             // then validates completely before mutating its own aggregate.
             _worldTransactions.RestoreCheckpoint(checkpoint.World);
@@ -486,6 +624,9 @@ public sealed class AuthoritativeWorldSession
             {
                 _resourceTransactions!.RestoreCheckpoint(resources);
             }
+            if (checkpoint.Boats is { } boats)
+                if (_boatTransactions is not null)
+                    _boatTransactions.RestoreCheckpoint(boats);
             Clock.Restore(checkpoint.Tick, checkpoint.SnapshotSequence);
             foreach (var value in actors) _actors.Add(value.Key, value.Value);
             foreach (var value in actorsByPlayer)
@@ -564,6 +705,17 @@ public sealed class AuthoritativeWorldSession
             case IntentOperation intent:
                 intent.Completion?.SetResult(ProcessIntent(intent.Command));
                 break;
+            case ProvisionPlayerBoatOperation provision:
+                try
+                {
+                    provision.Completion.SetResult(ProvisionPlayerBoatCore(
+                        provision.PlayerId, provision.GroupId));
+                }
+                catch (Exception error)
+                {
+                    provision.Completion.SetException(error);
+                }
+                break;
             default:
                 throw new InvalidOperationException("Unknown authoritative operation.");
         }
@@ -606,6 +758,16 @@ public sealed class AuthoritativeWorldSession
                 "The session has reached its actor limit.");
         }
 
+        if (request.ProvisionBoat && _boatTransactions is null)
+        {
+            return new JoinResult(
+                JoinStatus.InvalidRequest,
+                default,
+                default,
+                0,
+                "This session cannot provision an island-start boat.");
+        }
+
         var identity = CreateUniqueIdentity();
         var reconnectToken = _identitySource.CreateReconnectToken();
         if (reconnectToken.IsEmpty)
@@ -640,9 +802,36 @@ public sealed class AuthoritativeWorldSession
             }
             actor.Gameplay.Inventory = inventory;
         }
+
+        AuthoritativeBoatSnapshot? boat = null;
+        if (request.ProvisionBoat)
+        {
+            try
+            {
+                // Provision before publishing any actor lookup. The boat
+                // aggregate either commits a complete stable entity or
+                // throws without mutation, so a failed island join cannot
+                // leak actor/player/connection mappings.
+                boat = _boatTransactions!.ProvisionPlayerBoat(
+                    identity.PlayerId, actor.Position);
+            }
+            catch (Exception error) when (error is ArgumentException or
+                                          InvalidOperationException)
+            {
+                return new JoinResult(
+                    JoinStatus.InvalidRequest,
+                    default,
+                    default,
+                    0,
+                    "No valid island-start boat mooring is available.");
+            }
+        }
         _actors.Add(identity.ActorId, actor);
         _actorsByPlayer.Add(identity.PlayerId, identity.ActorId);
         _playersByConnection.Add(request.ConnectionId, identity.PlayerId);
+        if (boat is not null)
+            BoatStateCommitted?.Invoke(new(
+                BoatChangeKind.Added, null, boat));
 
         return new JoinResult(
             JoinStatus.Accepted,
@@ -654,6 +843,7 @@ public sealed class AuthoritativeWorldSession
             Gameplay = actor.Gameplay.ToSnapshot(),
             Position = actor.Position,
             WorldLevel = actor.WorldLevel,
+            Boat = boat
         };
     }
 
@@ -748,9 +938,19 @@ public sealed class AuthoritativeWorldSession
         actor.Connected = false;
         actor.ConnectionId = default;
         actor.ClearRoute();
+        BoatStateDelta? stoppedBoat = null;
+        if (_boatTransactions?.StopForOccupant(
+                actor.Identity.ActorId) is { } boatDelta)
+        {
+            stoppedBoat = boatDelta;
+            BoatStateCommitted?.Invoke(boatDelta);
+        }
         actor.DisconnectedAtTick = Clock.Tick;
         _playersByConnection.Remove(request.ConnectionId);
-        return new DisconnectResult(DisconnectStatus.Accepted, null);
+        return new DisconnectResult(DisconnectStatus.Accepted, null)
+        {
+            BoatDelta = stoppedBoat
+        };
     }
 
     private IntentResult ProcessIntent(ActorCommand command)
@@ -862,7 +1062,15 @@ public sealed class AuthoritativeWorldSession
 
         return command.Intent switch
         {
-            WalkIntent walk => ProcessWalk(actor, walk),
+            WalkIntent walk when _boatTransactions?.FindByOccupant(
+                actor.Identity.ActorId) is null => ProcessWalk(actor, walk),
+            WalkIntent => Rejected(
+                IntentStatus.AlreadyAboard, actor,
+                "Use boat movement while aboard."),
+            StopIntent when _boatTransactions?.FindByOccupant(
+                actor.Identity.ActorId) is not null => Rejected(
+                    IntentStatus.AlreadyAboard, actor,
+                    "Use an exact revisioned boat stop while aboard."),
             StopIntent => ProcessStop(actor),
             ChatIntent chat => ProcessChat(actor, chat),
             _ => Rejected(IntentStatus.InvalidIntent, actor, "The intent type is unsupported.")
@@ -892,6 +1100,9 @@ public sealed class AuthoritativeWorldSession
         {
             return ProcessResourceIntent(actor, resource);
         }
+
+        if (intent is BoatGameplayIntent boat)
+            return ProcessBoatIntent(actor, boat);
 
         if (intent.ExpectedInventoryRevision !=
             actor.Gameplay.InventoryRevision)
@@ -1207,6 +1418,9 @@ public sealed class AuthoritativeWorldSession
             actor.Position,
             actor.WorldLevel,
             actor.Gameplay.ToSnapshot());
+        var occupiedBoat = intent is CatchFishIntent
+            ? _boatTransactions?.FindByOccupant(actor.Identity.ActorId)
+            : null;
         var gameSeconds = Clock.Current.ElapsedSeconds;
         var transaction = intent switch
         {
@@ -1233,6 +1447,16 @@ public sealed class AuthoritativeWorldSession
                 new MineResourceTransaction(
                     context, mining.Node, mining.ToolInventorySlot,
                     gameSeconds)),
+            CatchFishIntent fishing => _resourceTransactions.Execute(
+                input with
+                {
+                    Position = occupiedBoat?.Position ?? actor.Position
+                },
+                new CatchFishTransaction(
+                    context, fishing.Node,
+                    fishing.FishingNetInventorySlot,
+                    occupiedBoat is null ? 2.4f : 2.85f,
+                    gameSeconds)),
             _ => throw new InvalidOperationException(
                 "The resource gameplay intent type is unsupported.")
         };
@@ -1245,7 +1469,9 @@ public sealed class AuthoritativeWorldSession
              gameplay.FarmingExperience != actor.Gameplay.FarmingExperience ||
              gameplay.MiningExperience != actor.Gameplay.MiningExperience ||
              gameplay.AdventureExperience !=
-             actor.Gameplay.AdventureExperience))
+             actor.Gameplay.AdventureExperience ||
+             gameplay.FishingExperience !=
+             actor.Gameplay.FishingExperience))
             actor.Gameplay.ReplaceWith(gameplay);
         // Accepted misses still carry authoritative hit/damage feedback and
         // cadence progression even though no node revision changed.
@@ -1299,6 +1525,112 @@ public sealed class AuthoritativeWorldSession
             ResourceTransactionStatus.CadenceLocked =>
                 IntentStatus.ResourceCadenceLocked,
             ResourceTransactionStatus.Depleted => IntentStatus.ResourceDepleted,
+            _ => throw new ArgumentOutOfRangeException(nameof(status))
+        };
+
+    private IntentResult ProcessBoatIntent(
+        MutableActor actor,
+        BoatGameplayIntent intent)
+    {
+        if (_boatTransactions is null)
+            return Rejected(IntentStatus.InvalidIntent, actor,
+                "This session has no authoritative boat authority.",
+                intent.CommandId);
+
+        var context = new WorldTransactionContext(
+            intent.CommandId,
+            actor.Identity.ActorId,
+            intent.ExpectedActorRevision,
+            intent.ExpectedInventoryRevision);
+        var input = new BoatTransactionActorInput(
+            actor.Identity.ActorId,
+            actor.Identity.PlayerId,
+            actor.Position,
+            actor.WorldLevel,
+            actor.Gameplay.ToSnapshot());
+        var transaction = intent switch
+        {
+            BoardBoatIntent board => _boatTransactions.Execute(
+                input, new BoardBoatTransaction(context, board.Boat)),
+            MoveBoatIntent move => _boatTransactions.Execute(
+                input, new MoveBoatTransaction(
+                    context, move.Boat, move.Target)),
+            StopBoatIntent stop => _boatTransactions.Execute(
+                input, new StopBoatTransaction(context, stop.Boat)),
+            DisembarkBoatIntent disembark => _boatTransactions.Execute(
+                input, new DisembarkBoatTransaction(
+                    context, disembark.Boat,
+                    disembark.RequestedLanding)),
+            _ => throw new InvalidOperationException(
+                "The boat gameplay intent type is unsupported.")
+        };
+
+        if (transaction.Accepted &&
+            transaction.Gameplay.ActorRevision !=
+            actor.Gameplay.ActorRevision)
+            actor.Gameplay.ReplaceWith(transaction.Gameplay);
+        if (transaction.Accepted &&
+            transaction.ActorTransition is { } transition)
+        {
+            actor.Position = transition.Position;
+            actor.WorldLevel = transition.WorldLevel;
+            actor.ClearRoute();
+        }
+        if (transaction.Accepted && transaction.BoatDelta is { } delta)
+        {
+            BoatTransactionCommitted?.Invoke(transaction);
+            BoatStateCommitted?.Invoke(delta);
+        }
+
+        return new IntentResult(
+            MapBoatStatus(transaction.Status),
+            actor.LastProcessedCommandSequence,
+            transaction.Accepted
+                ? null
+                : string.IsNullOrWhiteSpace(transaction.Detail)
+                    ? transaction.Status.ToString()
+                    : transaction.Detail)
+        {
+            CommandId = intent.CommandId,
+            InventoryRevision = actor.Gameplay.InventoryRevision,
+            ActorRevision = actor.Gameplay.ActorRevision,
+            Gameplay = actor.Gameplay.ToSnapshot(),
+            BoatTransaction = transaction
+        };
+    }
+
+    private static IntentStatus MapBoatStatus(
+        BoatTransactionStatus status) => status switch
+        {
+            BoatTransactionStatus.Accepted => IntentStatus.Accepted,
+            BoatTransactionStatus.InvalidCommand =>
+                IntentStatus.WorldCommandInvalid,
+            BoatTransactionStatus.ActorNotFound => IntentStatus.ActorNotFound,
+            BoatTransactionStatus.DeadActor => IntentStatus.DeadActor,
+            BoatTransactionStatus.StaleActorRevision =>
+                IntentStatus.StaleActorRevision,
+            BoatTransactionStatus.StaleInventoryRevision =>
+                IntentStatus.StaleInventoryRevision,
+            BoatTransactionStatus.BoatNotFound => IntentStatus.BoatNotFound,
+            BoatTransactionStatus.StaleBoatRevision =>
+                IntentStatus.StaleBoatRevision,
+            BoatTransactionStatus.WrongWorldLevel =>
+                IntentStatus.WrongWorldLevel,
+            BoatTransactionStatus.OutOfRange => IntentStatus.OutOfRange,
+            BoatTransactionStatus.AccessDenied => IntentStatus.AccessDenied,
+            BoatTransactionStatus.AlreadyAboard => IntentStatus.AlreadyAboard,
+            BoatTransactionStatus.BoatOccupied => IntentStatus.BoatOccupied,
+            BoatTransactionStatus.NotAboard => IntentStatus.NotAboard,
+            BoatTransactionStatus.InvalidDestination =>
+                IntentStatus.InvalidBoatDestination,
+            BoatTransactionStatus.DestinationTooFar =>
+                IntentStatus.BoatDestinationTooFar,
+            BoatTransactionStatus.RouteUnreachable =>
+                IntentStatus.BoatRouteUnreachable,
+            BoatTransactionStatus.InvalidLanding =>
+                IntentStatus.InvalidBoatLanding,
+            BoatTransactionStatus.PlanningCadenceLocked =>
+                IntentStatus.BoatPlanningLocked,
             _ => throw new ArgumentOutOfRangeException(nameof(status))
         };
 
@@ -1822,6 +2154,12 @@ public sealed class AuthoritativeWorldSession
 
         foreach (var actor in _actors.Values)
         {
+            if (_boatTransactions?.FindByOccupant(
+                    actor.Identity.ActorId) is not null)
+            {
+                actor.ClearRoute();
+                continue;
+            }
             if (!actor.Connected || actor.CurrentWaypoint is not { } destination)
             {
                 actor.Velocity = Vector2.Zero;
@@ -1882,18 +2220,38 @@ public sealed class AuthoritativeWorldSession
         }
     }
 
+    private void SynchronizeBoatOccupants()
+    {
+        if (_boatTransactions is null) return;
+        foreach (var actor in _actors.Values)
+        {
+            var boat = _boatTransactions.FindByOccupant(
+                actor.Identity.ActorId);
+            if (boat is null) continue;
+            actor.Position = boat.Position;
+            actor.WorldLevel = boat.WorldLevel;
+            actor.Velocity = boat.Velocity;
+            actor.Destination = boat.Destination;
+        }
+    }
+
     private SessionSnapshot CaptureSnapshotCore(long sequence)
     {
         var actors = _actors.Values
             .OrderBy(static actor => actor.Identity.ActorId.Value)
-            .Select(static actor => actor.ToSnapshot())
+            .Select(actor => actor.ToSnapshot() with
+            {
+                BoardedBoatId = _boatTransactions?.FindByOccupant(
+                    actor.Identity.ActorId)?.BoatId
+            })
             .ToImmutableArray();
         return new SessionSnapshot(
             Id,
             sequence,
             Clock.Current,
             actors,
-            _chatHistory.ToImmutableArray());
+            _chatHistory.ToImmutableArray(),
+            _boatTransactions?.CaptureBoats() ?? []);
     }
 
     private PlayerIdentity CreateUniqueIdentity()
@@ -2043,6 +2401,12 @@ public sealed class AuthoritativeWorldSession
     private sealed record IntentOperation(
         ActorCommand Command,
         TaskCompletionSource<IntentResult>? Completion) : QueuedOperation;
+
+    private sealed record ProvisionPlayerBoatOperation(
+        PlayerId PlayerId,
+        string? GroupId,
+        TaskCompletionSource<AuthoritativeBoatSnapshot> Completion) :
+        QueuedOperation;
 
     private sealed record ActiveCookingJob(
         Guid CommandId,
@@ -2301,6 +2665,8 @@ public sealed class AuthoritativeWorldSession
 
         public int DiggingExperience { get; set; }
 
+        public int FishingExperience { get; set; }
+
         public void ReplaceWith(PlayerGameplaySnapshot snapshot)
         {
             if (snapshot.ActorRevision == 0 ||
@@ -2317,7 +2683,8 @@ public sealed class AuthoritativeWorldSession
                 snapshot.FarmingExperience < 0 ||
                 snapshot.MiningExperience < 0 ||
                 snapshot.AdventureExperience < 0 ||
-                snapshot.DiggingExperience < 0)
+                snapshot.DiggingExperience < 0 ||
+                snapshot.FishingExperience < 0)
             {
                 throw new InvalidOperationException(
                     "The world transaction returned invalid actor state.");
@@ -2371,6 +2738,7 @@ public sealed class AuthoritativeWorldSession
             MiningExperience = snapshot.MiningExperience;
             AdventureExperience = snapshot.AdventureExperience;
             DiggingExperience = snapshot.DiggingExperience;
+            FishingExperience = snapshot.FishingExperience;
         }
 
         public PlayerGameplaySnapshot ToSnapshot()
@@ -2400,7 +2768,8 @@ public sealed class AuthoritativeWorldSession
                 FarmingExperience,
                 MiningExperience,
                 AdventureExperience,
-                DiggingExperience);
+                DiggingExperience,
+                FishingExperience);
         }
     }
 

@@ -196,7 +196,8 @@ public static class WorldActionProtocolAdapter
             gameplay.FarmingExperience,
             gameplay.MiningExperience,
             gameplay.AdventureExperience,
-            gameplay.DiggingExperience);
+            gameplay.DiggingExperience,
+            gameplay.FishingExperience);
     }
 
     /// <summary>

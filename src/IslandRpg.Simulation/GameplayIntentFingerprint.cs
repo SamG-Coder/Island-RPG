@@ -157,6 +157,29 @@ public static class GameplayIntentFingerprint
                 writer.Tag(27);
                 writer.Handle(value.Entrance);
                 break;
+            case CatchFishIntent value:
+                writer.Tag(28);
+                writer.Resource(value.Node);
+                writer.Int32(value.FishingNetInventorySlot);
+                break;
+            case BoardBoatIntent value:
+                writer.Tag(29);
+                writer.Boat(value.Boat);
+                break;
+            case MoveBoatIntent value:
+                writer.Tag(30);
+                writer.Boat(value.Boat);
+                writer.Vector(value.Target);
+                break;
+            case StopBoatIntent value:
+                writer.Tag(31);
+                writer.Boat(value.Boat);
+                break;
+            case DisembarkBoatIntent value:
+                writer.Tag(32);
+                writer.Boat(value.Boat);
+                writer.Vector(value.RequestedLanding);
+                break;
             default:
                 throw new NotSupportedException(
                     $"Gameplay intent type '{intent.GetType().Name}' has no canonical fingerprint.");
@@ -222,6 +245,12 @@ public static class GameplayIntentFingerprint
             Int32(value.Chunk.WorldLevel);
             UInt32(value.ExpectedNodeRevision);
             UInt32(value.ExpectedResourceChunkRevision);
+        }
+
+        public void Boat(BoatReference value)
+        {
+            Guid(value.BoatId.Value);
+            UInt32(value.ExpectedRevision);
         }
 
         public void Text(string? value)

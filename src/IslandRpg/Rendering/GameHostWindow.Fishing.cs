@@ -1,5 +1,6 @@
 using IslandRpg.Assets;
 using IslandRpg.Gameplay;
+using IslandRpg.Protocol;
 using IslandRpg.Rendering.Ui;
 using IslandRpg.World;
 using OpenTK.Mathematics;
@@ -50,7 +51,26 @@ internal sealed partial class GameHostWindow
                 QueueFishing(fish);
                 break;
             case 1:
-                if (_fishingBoatBoarded)
+                if (IsNetworkWorld && _fishingBoatBoarded)
+                {
+                    var boat = LocalNetworkBoat();
+                    if (boat is not null &&
+                        FishingBoatTravel.IsNavigable(
+                            InfiniteWorldGenerator.BiomeAt(
+                                _worldSeed,
+                                (int)MathF.Floor(_fishContextWalkTarget.X),
+                                (int)MathF.Floor(_fishContextWalkTarget.Y))))
+                    {
+                        SendNetworkBoatAction(
+                            BoatActionKind.Move,
+                            boat.State.BoatId,
+                            reference => new MoveBoatAction(
+                                reference,
+                                _fishContextWalkTarget.X,
+                                _fishContextWalkTarget.Y));
+                    }
+                }
+                else if (_fishingBoatBoarded)
                     QueueFishingBoatTravel(_fishContextWalkTarget);
                 else
                     QueueWalk(_fishContextWalkTarget);
@@ -102,6 +122,9 @@ internal sealed partial class GameHostWindow
 
     private bool IsFishDepleted(WorldFish fish)
     {
+        if (IsNetworkWorld)
+            return TryDescribeNetworkFish(fish, out var descriptor) &&
+                   NetworkFishIsDepleted(descriptor);
         var chunk = FindFishChunk(fish.StableKey);
         return chunk is not null &&
                chunk.Chunk.FishRemaining.TryGetValue(
@@ -139,6 +162,11 @@ internal sealed partial class GameHostWindow
 
     private void QueueFishing(WorldFish fish)
     {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkFishing(fish);
+            return;
+        }
         if (_activePlayer is null || IsFishDepleted(fish)) return;
         var net = PlayerInventory.BestFishingNet(
             _activePlayer.Inventory);
@@ -178,6 +206,13 @@ internal sealed partial class GameHostWindow
 
     internal void BeginFishing(string fishKey, Vector2 target)
     {
+        if (IsNetworkWorld)
+        {
+            var networkFish = FindFish(fishKey);
+            if (networkFish is not null)
+                QueueNetworkFishing(networkFish);
+            return;
+        }
         if (_player is null || _activePlayer is null) return;
         var fish = FindFish(fishKey);
         if (fish is null || IsFishDepleted(fish)) return;
@@ -212,6 +247,7 @@ internal sealed partial class GameHostWindow
 
     internal void UpdateFishing()
     {
+        if (IsNetworkWorld) return;
         if (_activeFishKey is null || _player is null ||
             _activePlayer is null)
             return;

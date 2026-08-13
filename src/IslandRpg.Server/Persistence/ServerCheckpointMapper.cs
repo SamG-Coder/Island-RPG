@@ -72,7 +72,10 @@ public static class ServerCheckpointMapper
                         value.ActorId.Value,
                         value.ExcavationId,
                         value.NextAllowedGameSeconds))
-                .ToArray());
+                .ToArray(),
+            options.IslandStart,
+            ToDurable(source.Boats ??
+                AuthoritativeBoatTransactionsCheckpoint.Empty));
     }
 
     public static AuthoritativeSessionCheckpoint ToSimulation(
@@ -86,10 +89,11 @@ public static class ServerCheckpointMapper
             !string.Equals(source.BuildVersion, options.BuildVersion,
                 StringComparison.Ordinal) ||
             !string.Equals(source.ContentVersion, options.ContentVersion,
-                StringComparison.Ordinal))
+                StringComparison.Ordinal) ||
+            source.IslandStart != options.IslandStart)
         {
             throw new InvalidDataException(
-                "The checkpoint world seed or content identity does not match the server.");
+                "The checkpoint world seed, profile, or content identity does not match the server.");
         }
 
         var chunks = source.ChunkRevisions.ToDictionary(
@@ -137,7 +141,8 @@ public static class ServerCheckpointMapper
                     value.Burnt,
                     value.DropObjectId,
                     value.CompletesAtTick)).ToImmutableArray(),
-            ToSimulation(source.Resources));
+            ToSimulation(source.Resources),
+            ToSimulation(source.Boats));
     }
 
     private static ServerActorCheckpoint ToDurable(
@@ -173,7 +178,8 @@ public static class ServerCheckpointMapper
         value.Gameplay.FarmingExperience,
         value.Gameplay.MiningExperience,
         value.Gameplay.AdventureExperience,
-        value.Gameplay.DiggingExperience);
+        value.Gameplay.DiggingExperience,
+        value.Gameplay.FishingExperience);
 
     private static AuthoritativeActorCheckpoint ToSimulation(
         ServerActorCheckpoint value) => new(
@@ -203,7 +209,8 @@ public static class ServerCheckpointMapper
             value.FarmingExperience,
             value.MiningExperience,
             value.AdventureExperience,
-            value.DiggingExperience),
+            value.DiggingExperience,
+            value.FishingExperience),
         value.ReconnectTokenHash.ToImmutableArray(),
         value.CommandReceipts.Select(static receipt =>
             new AuthoritativeCommandReceiptCheckpoint(
@@ -211,6 +218,51 @@ public static class ServerCheckpointMapper
                 receipt.PayloadFingerprint,
                 receipt.Status,
                 receipt.Error)).ToImmutableArray());
+
+    private static IReadOnlyList<ServerBoatCheckpoint> ToDurable(
+        AuthoritativeBoatTransactionsCheckpoint value) =>
+        (value.Boats.IsDefault
+                ? ImmutableArray<AuthoritativeBoatCheckpoint>.Empty
+                : value.Boats)
+            .Select(static boat => new ServerBoatCheckpoint(
+                boat.BoatId.Value,
+                boat.OwnerPlayerId.Value,
+                boat.GroupId,
+                boat.OccupantActorId?.Value,
+                boat.OccupantPlayerId?.Value,
+                boat.Position.X,
+                boat.Position.Y,
+                boat.Facing.X,
+                boat.Facing.Y,
+                boat.WorldLevel,
+                boat.Revision,
+                boat.RemainingRoute.Select(static point =>
+                    new ServerBoatRoutePointCheckpoint(
+                        point.X, point.Y)).ToArray(),
+                boat.PlanningCooldownSeconds))
+            .ToArray();
+
+    private static AuthoritativeBoatTransactionsCheckpoint ToSimulation(
+        IReadOnlyList<ServerBoatCheckpoint>? value) => new(
+        (value ?? [])
+            .Select(static boat => new AuthoritativeBoatCheckpoint(
+                new BoatId(boat.BoatId),
+                new PlayerId(boat.OwnerPlayerId),
+                boat.GroupId,
+                boat.OccupantActorId is { } actor
+                    ? new ActorId(actor)
+                    : null,
+                boat.OccupantPlayerId is { } player
+                    ? new PlayerId(player)
+                    : null,
+                new Vector2(boat.X, boat.Y),
+                new Vector2(boat.FacingX, boat.FacingY),
+                boat.WorldLevel,
+                boat.Revision,
+                boat.RemainingRoute.Select(static point =>
+                    new Vector2(point.X, point.Y)).ToImmutableArray(),
+                boat.PlanningCooldownSeconds))
+            .ToImmutableArray());
 
     private static ServerResourceCheckpoint ToDurable(
         AuthoritativeResourceTransactionsCheckpoint value) => new(

@@ -19,6 +19,8 @@ public sealed class ServerCheckpointStore
     public const int MaximumContainerSlots = 1_024;
     public const int MaximumStackQuantity = 1_000_000;
     public const int PlayerInventoryCapacity = 28;
+    public const int MaximumBoats = 256;
+    public const int MaximumBoatRoutePoints = 4_096;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -229,6 +231,7 @@ public sealed class ServerCheckpointStore
                 actor.FarmingExperience < 0 || actor.MiningExperience < 0 ||
                 actor.AdventureExperience < 0 ||
                 actor.DiggingExperience < 0 ||
+                actor.FishingExperience < 0 ||
                 actor.ReconnectTokenHash is not { Length: 32 } ||
                 actor.Inventory is null || actor.Inventory.Count != PlayerInventoryCapacity ||
                 actor.CommandReceipts is null ||
@@ -345,6 +348,50 @@ public sealed class ServerCheckpointStore
         }
 
         ValidateResources(value.Resources, actors);
+        ValidateBoats(value.Boats, players, actors);
+    }
+
+    private static void ValidateBoats(
+        IReadOnlyList<ServerBoatCheckpoint>? boats,
+        IReadOnlySet<Guid> players,
+        IReadOnlySet<Guid> actors)
+    {
+        boats ??= [];
+        if (boats.Count > MaximumBoats)
+            throw new InvalidDataException(
+                "The boat checkpoint collection exceeds its hard limit.");
+        var ids = new HashSet<Guid>();
+        var occupants = new HashSet<Guid>();
+        foreach (var boat in boats)
+        {
+            if (boat.BoatId == Guid.Empty || !ids.Add(boat.BoatId) ||
+                boat.OwnerPlayerId == Guid.Empty ||
+                !players.Contains(boat.OwnerPlayerId) ||
+                boat.WorldLevel != 0 || boat.Revision == 0 ||
+                !float.IsFinite(boat.X) || !float.IsFinite(boat.Y) ||
+                !float.IsFinite(boat.FacingX) ||
+                !float.IsFinite(boat.FacingY) ||
+                boat.FacingX * boat.FacingX +
+                    boat.FacingY * boat.FacingY <= .0001f ||
+                boat.GroupId is { Length: > 64 } ||
+                boat.GroupId?.Any(char.IsControl) == true ||
+                (boat.OccupantActorId is null) !=
+                    (boat.OccupantPlayerId is null) ||
+                boat.OccupantActorId is { } occupantActor &&
+                    (!actors.Contains(occupantActor) ||
+                     !occupants.Add(occupantActor)) ||
+                boat.OccupantPlayerId is { } occupantPlayer &&
+                    !players.Contains(occupantPlayer) ||
+                boat.RemainingRoute is null ||
+                boat.RemainingRoute.Count > MaximumBoatRoutePoints ||
+                !double.IsFinite(boat.PlanningCooldownSeconds) ||
+                boat.PlanningCooldownSeconds < 0 ||
+                boat.PlanningCooldownSeconds > 60 ||
+                boat.RemainingRoute.Any(static point =>
+                    !float.IsFinite(point.X) || !float.IsFinite(point.Y)))
+                throw new InvalidDataException(
+                    "A boat checkpoint is invalid.");
+        }
     }
 
     private static void ValidateResources(

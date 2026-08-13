@@ -12,7 +12,10 @@ internal static class ServerCheckpointChecks
         {
             using var folder = TemporaryFolder.Create();
             var store = new ServerCheckpointStore(folder.Path);
-            var source = CreateCheckpoint(revision: 1);
+            var source = CreateCheckpoint(revision: 1) with
+            {
+                Boats = [BoatCheckpoint(.1375)]
+            };
 
             store.Save(source);
             var loaded = store.Load(source.WorldId);
@@ -31,6 +34,9 @@ internal static class ServerCheckpointChecks
             CheckAssert.Equal(source.Actors[0].DiggingExperience,
                 loaded.Checkpoint.Actors[0].DiggingExperience,
                 "digging experience must be part of the same durable state");
+            CheckAssert.Equal(.1375,
+                loaded.Checkpoint.Boats![0].PlanningCooldownSeconds,
+                "boat planning cooldown must survive exact server JSON storage");
         });
 
         checks.Add("server checkpoint rejects stale asynchronous writes", () =>
@@ -184,7 +190,10 @@ internal static class ServerCheckpointChecks
                 "0.3.0",
                 "base",
                 8);
-            var original = CreateCheckpoint(revision: 7);
+            var original = CreateCheckpoint(revision: 7) with
+            {
+                Boats = [BoatCheckpoint(.0875)]
+            };
             var cookingCommandId = Guid.Parse(
                 "70000000-0000-0000-0000-000000000001");
             var cookingActorId = original.Actors[0].ActorId;
@@ -266,6 +275,9 @@ internal static class ServerCheckpointChecks
             CheckAssert.Equal(source.Actors[0].DiggingExperience,
                 roundTrip.Actors[0].DiggingExperience,
                 "mapping must preserve authoritative digging experience");
+            CheckAssert.Equal(source.Boats![0].PlanningCooldownSeconds,
+                roundTrip.Boats![0].PlanningCooldownSeconds,
+                "mapping must preserve exact boat planning cooldown");
         });
 
         checks.Add("server checkpoint preserves linked caves and dig cadence", () =>
@@ -462,6 +474,22 @@ internal static class ServerCheckpointChecks
                 [new ServerContainerSlotCheckpoint(0, "stick", 1, null)])],
             [new ServerChunkRevisionCheckpoint(0, 0, 0, 6)]);
     }
+
+    private static ServerBoatCheckpoint BoatCheckpoint(
+        double planningCooldownSeconds) => new(
+        Guid.Parse("72000000-0000-0000-0000-000000000001"),
+        Guid.Parse("30000000-0000-0000-0000-000000000001"),
+        null,
+        null,
+        null,
+        .5f,
+        .5f,
+        0,
+        1,
+        0,
+        1,
+        [],
+        planningCooldownSeconds);
 
     private sealed class TemporaryFolder : IDisposable
     {

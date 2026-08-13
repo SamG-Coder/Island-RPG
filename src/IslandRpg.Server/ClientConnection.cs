@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
 using IslandRpg.Protocol;
+using IslandRpg.Resources;
 using IslandRpg.Simulation;
 
 namespace IslandRpg.Server;
@@ -16,6 +17,9 @@ internal sealed class ClientConnection : IAsyncDisposable
     private readonly EntitySnapshot[] _snapshotSelection =
         new EntitySnapshot[UdpSnapshotCodec.MaxEntitiesPerDatagram];
     private readonly object _outboundSync = new();
+    private Dictionary<WorldChunkKey, uint>? _publicWorldRevisions;
+    private Dictionary<WorldChunkKey, uint>? _publicResourceRevisions;
+    private Dictionary<Guid, uint>? _publicBoatRevisions;
     private long _nextOutboundSequence;
     private int _disposed;
 
@@ -89,6 +93,33 @@ internal sealed class ClientConnection : IAsyncDisposable
             if (_lifetime.IsCancellationRequested) return false;
             var sequence = checked((ulong)++_nextOutboundSequence);
             return _outbound.Writer.TryWrite(createMessage(sequence));
+        }
+    }
+
+    /// <summary>
+    /// Queues one public message while atomically allocating its wire
+    /// sequence. A stale post-bootstrap mutation consumes no sequence, so
+    /// filtering cannot create a reliable-stream hole.
+    /// </summary>
+    public bool TryQueuePublicSequenced(
+        Func<ulong, IProtocolMessage> createMessage)
+    {
+        ArgumentNullException.ThrowIfNull(createMessage);
+        lock (_outboundSync)
+        {
+            if (_lifetime.IsCancellationRequested) return false;
+            var sequence = checked((ulong)_nextOutboundSequence + 1);
+            var message = createMessage(sequence);
+            var updates = ValidatePublicMessage(message);
+            if (updates.IsStale)
+                return true;
+            if (!_outbound.Writer.TryWrite(message)) return false;
+            _nextOutboundSequence = checked((long)sequence);
+            updates.Apply(
+                _publicWorldRevisions,
+                _publicResourceRevisions,
+                _publicBoatRevisions);
+            return true;
         }
     }
 
@@ -183,11 +214,11 @@ internal sealed class ClientConnection : IAsyncDisposable
             {
                 return;
             }
-            _server.QueueWorldObjectBaselines(this);
-            _server.QueueResourceBaselines(this);
-
-            Authenticated = true;
             PlayerId = player.Value.Identity.PlayerId.Value;
+            if (!_server.ActivateAndQueuePublicBaselines(this))
+            {
+                return;
+            }
             _server.AnnouncePlayerJoined(
                 this,
                 player.Value.Identity.PlayerId.Value,
@@ -265,6 +296,198 @@ internal sealed class ClientConnection : IAsyncDisposable
             catch (Exception exception) when (exception is IOException or SocketException or OperationCanceledException)
             {
             }
+        }
+    }
+
+    /// <summary>
+    /// Transitions this connection into the public replication set. The
+    /// server calls this only while holding its bootstrap/broadcast barrier,
+    /// immediately before it captures and queues the public baselines.
+    /// </summary>
+    internal void Activate() => Authenticated = true;
+
+    internal void SetPublicBaselineHighWater(
+        IEnumerable<WorldChunkRevisionState> worldChunks,
+        IEnumerable<ResourceChunkSparseState> resourceChunks,
+        IEnumerable<AuthoritativeBoatSnapshot> boats)
+    {
+        _publicWorldRevisions = worldChunks.ToDictionary(
+            static value => new WorldChunkKey(
+                value.ChunkX, value.ChunkY, value.WorldLevel),
+            static value => value.Revision);
+        _publicResourceRevisions = resourceChunks.ToDictionary(
+            static value => value.Chunk,
+            static value => value.ResourceChunkRevision);
+        _publicBoatRevisions = boats.ToDictionary(
+            static value => value.BoatId.Value,
+            static value => value.Revision);
+    }
+
+    private PublicRevisionUpdates ValidatePublicMessage(
+        IProtocolMessage message)
+    {
+        return message switch
+        {
+            WorldObjectDeltaBatchMessage world =>
+                ValidateWorld(world, _publicWorldRevisions),
+            ResourceNodeDeltaBatchMessage resources =>
+                ValidateResources(resources, _publicResourceRevisions),
+            BoatDeltaBatchMessage boats =>
+                ValidateBoats(boats, _publicBoatRevisions),
+            _ => PublicRevisionUpdates.None
+        };
+    }
+
+    private static PublicRevisionUpdates ValidateWorld(
+        WorldObjectDeltaBatchMessage message,
+        Dictionary<WorldChunkKey, uint>? revisions)
+    {
+        if (revisions is null)
+            throw new InvalidOperationException(
+                "Public world high-water was not initialized.");
+        var groups = message.Deltas.GroupBy(static value => new WorldChunkKey(
+                value.Reference.ChunkX,
+                value.Reference.ChunkY,
+                value.Reference.WorldLevel))
+            .ToArray();
+        var next = new List<(WorldChunkKey Chunk, uint Revision)>();
+        var stale = false;
+        foreach (var group in groups)
+        {
+            revisions.TryGetValue(group.Key, out var known);
+            var first = group.First();
+            if (group.Any(value =>
+                    value.Reference.ExpectedChunkRevision !=
+                    first.Reference.ExpectedChunkRevision ||
+                    value.CurrentChunkRevision !=
+                    first.CurrentChunkRevision))
+                throw new InvalidOperationException(
+                    "A public world batch contained conflicting chunk revisions.");
+            if (first.CurrentChunkRevision <=
+                first.Reference.ExpectedChunkRevision)
+                throw new InvalidOperationException(
+                    "A public world delta did not advance its chunk revision.");
+            if (first.CurrentChunkRevision <= known)
+            {
+                stale = true;
+                continue;
+            }
+            if (first.Reference.ExpectedChunkRevision != known)
+                throw new InvalidOperationException(
+                    "A public world delta lost its per-connection revision chain.");
+            next.Add((group.Key, first.CurrentChunkRevision));
+        }
+        if (stale && next.Count != 0)
+            throw new InvalidOperationException(
+                "A public world batch straddled the retained bootstrap revision.");
+        return next.Count == 0
+            ? PublicRevisionUpdates.Stale
+            : new PublicRevisionUpdates(World: next);
+    }
+
+    private static PublicRevisionUpdates ValidateResources(
+        ResourceNodeDeltaBatchMessage message,
+        Dictionary<WorldChunkKey, uint>? revisions)
+    {
+        if (revisions is null)
+            throw new InvalidOperationException(
+                "Public resource high-water was not initialized.");
+        var next = new List<(WorldChunkKey Chunk, uint Revision)>();
+        var stale = false;
+        foreach (var group in message.Deltas.GroupBy(
+                     static value => value.Reference.Chunk))
+        {
+            revisions.TryGetValue(group.Key, out var known);
+            var first = group.First();
+            if (group.Any(value =>
+                    value.Reference.ExpectedResourceChunkRevision !=
+                    first.Reference.ExpectedResourceChunkRevision ||
+                    value.CurrentResourceChunkRevision !=
+                    first.CurrentResourceChunkRevision))
+                throw new InvalidOperationException(
+                    "A public resource batch contained conflicting chunk revisions.");
+            if (first.CurrentResourceChunkRevision <=
+                first.Reference.ExpectedResourceChunkRevision)
+                throw new InvalidOperationException(
+                    "A public resource delta did not advance its chunk revision.");
+            if (first.CurrentResourceChunkRevision <= known)
+            {
+                stale = true;
+                continue;
+            }
+            if (first.Reference.ExpectedResourceChunkRevision != known)
+                throw new InvalidOperationException(
+                    "A public resource delta lost its per-connection revision chain.");
+            next.Add((group.Key, first.CurrentResourceChunkRevision));
+        }
+        if (stale && next.Count != 0)
+            throw new InvalidOperationException(
+                "A public resource batch straddled the retained bootstrap revision.");
+        return next.Count == 0
+            ? PublicRevisionUpdates.Stale
+            : new PublicRevisionUpdates(Resources: next);
+    }
+
+    private static PublicRevisionUpdates ValidateBoats(
+        BoatDeltaBatchMessage message,
+        Dictionary<Guid, uint>? revisions)
+    {
+        if (revisions is null)
+            throw new InvalidOperationException(
+                "Public boat high-water was not initialized.");
+        var next = new List<(Guid BoatId, uint Revision)>();
+        var stale = false;
+        var seen = new HashSet<Guid>();
+        foreach (var delta in message.Deltas)
+        {
+            if (!seen.Add(delta.Reference.BoatId))
+                throw new InvalidOperationException(
+                    "A public boat batch changed one boat more than once.");
+            if (delta.CurrentRevision <= delta.Reference.ExpectedRevision)
+                throw new InvalidOperationException(
+                    "A public boat delta did not advance its revision.");
+            revisions.TryGetValue(delta.Reference.BoatId, out var known);
+            if (delta.CurrentRevision <= known)
+            {
+                stale = true;
+                continue;
+            }
+            if (delta.Reference.ExpectedRevision != known)
+                throw new InvalidOperationException(
+                    "A public boat delta lost its per-connection revision chain.");
+            next.Add((delta.Reference.BoatId, delta.CurrentRevision));
+        }
+        if (stale && next.Count != 0)
+            throw new InvalidOperationException(
+                "A public boat batch straddled the retained bootstrap revision.");
+        return next.Count == 0
+            ? PublicRevisionUpdates.Stale
+            : new PublicRevisionUpdates(Boats: next);
+    }
+
+    private sealed record PublicRevisionUpdates(
+        IReadOnlyList<(WorldChunkKey Chunk, uint Revision)>? World = null,
+        IReadOnlyList<(WorldChunkKey Chunk, uint Revision)>? Resources = null,
+        IReadOnlyList<(Guid BoatId, uint Revision)>? Boats = null,
+        bool IsStale = false)
+    {
+        public static PublicRevisionUpdates None { get; } = new();
+        public static PublicRevisionUpdates Stale { get; } = new(IsStale: true);
+
+        public void Apply(
+            Dictionary<WorldChunkKey, uint>? world,
+            Dictionary<WorldChunkKey, uint>? resources,
+            Dictionary<Guid, uint>? boats)
+        {
+            if (World is not null)
+                foreach (var value in World)
+                    world![value.Chunk] = value.Revision;
+            if (Resources is not null)
+                foreach (var value in Resources)
+                    resources![value.Chunk] = value.Revision;
+            if (Boats is not null)
+                foreach (var value in Boats)
+                    boats![value.BoatId] = value.Revision;
         }
     }
 

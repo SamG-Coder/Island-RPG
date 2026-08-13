@@ -3055,25 +3055,9 @@ internal sealed partial class GameHostWindow : GameWindow
     private static Vector2 FindNearestPlayableLand(
         long seed, CancellationToken cancellationToken)
     {
-        const int maximumSearchRadius = 160;
-        for (var radius = 0; radius <= maximumSearchRadius; radius++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            for (var y = -radius; y <= radius; y++)
-            for (var x = -radius; x <= radius; x++)
-            {
-                if (Math.Max(Math.Abs(x), Math.Abs(y)) != radius)
-                    continue;
-                var biome = InfiniteWorldGenerator.BiomeAt(seed, x, y);
-                if (biome is Biome.DeepWater or Biome.ShallowWater or
-                    Biome.RiverWater or Biome.MangroveShallows)
-                    continue;
-                return new(x + .5f, y + .5f);
-            }
-        }
-        throw new InvalidOperationException(
-            $"No playable land was found within {maximumSearchRadius} " +
-            $"tiles of the world origin for seed {seed}.");
+        var spawn = IslandRpg.Boats.BoatTravelRules.FindPlayableLandSpawn(
+            seed, cancellationToken);
+        return new(spawn.X, spawn.Y);
     }
 
     internal static bool ShouldPlayOpeningCinematic(

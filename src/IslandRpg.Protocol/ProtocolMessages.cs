@@ -49,7 +49,8 @@ public sealed record HandshakeAcceptedMessage(
     string ReconnectToken,
     ushort ServerSnapshotPort,
     ushort ServerTickRate,
-    ServerCapabilities Capabilities) : IProtocolMessage
+    ServerCapabilities Capabilities,
+    bool IslandStart = false) : IProtocolMessage
 {
     public ProtocolMessageKind Kind => ProtocolMessageKind.HandshakeAccepted;
 }

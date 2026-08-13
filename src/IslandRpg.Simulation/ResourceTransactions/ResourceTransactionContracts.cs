@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.Numerics;
 using IslandRpg.Resources;
+using IslandRpg.Fishing;
 
 namespace IslandRpg.Simulation;
 
@@ -52,7 +54,8 @@ public sealed record ResourceTransactionResult(
     bool Hit = false,
     int Damage = 0,
     bool ToolWorn = false,
-    string Detail = "")
+    string Detail = "",
+    FishingTransactionOutcome? FishingOutcome = null)
 {
     public bool Accepted => Status == ResourceTransactionStatus.Accepted;
 
@@ -64,6 +67,11 @@ public sealed record ResourceTransactionResult(
                     StringComparison.OrdinalIgnoreCase))
                 .Sum(static value => value.Quantity);
 }
+
+public readonly record struct FishingTransactionOutcome(
+    FishSpecies Species,
+    bool Caught,
+    float CatchChance);
 
 public sealed record GatherTreeStickTransaction(
     WorldTransactionContext Context,
@@ -91,6 +99,13 @@ public sealed record MineResourceTransaction(
     WorldTransactionContext Context,
     ResourceNodeReference Node,
     int ToolInventorySlot,
+    double GameSeconds);
+
+public sealed record CatchFishTransaction(
+    WorldTransactionContext Context,
+    ResourceNodeReference Node,
+    int FishingNetInventorySlot,
+    float MaximumReach,
     double GameSeconds);
 
 public sealed record ResourceActorCadenceCheckpoint(
@@ -131,6 +146,9 @@ public sealed record AuthoritativeResourceTransactionOptions
     public ResourceActionCadence MineCadence { get; init; } =
         new(1.05);
 
+    public ResourceActionCadence FishCadence { get; init; } =
+        new(2.8);
+
     internal AuthoritativeResourceTransactionOptions ValidatedCopy()
     {
         if (!float.IsFinite(InteractionRange) || InteractionRange <= 0)
@@ -140,6 +158,7 @@ public sealed record AuthoritativeResourceTransactionOptions
         _ = GatherFibreCadence.NextReadyAt(0);
         _ = GatherBerriesCadence.NextReadyAt(0);
         _ = MineCadence.NextReadyAt(0);
+        _ = FishCadence.NextReadyAt(0);
         return this with { };
     }
 }

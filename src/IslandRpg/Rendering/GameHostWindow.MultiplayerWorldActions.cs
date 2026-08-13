@@ -122,7 +122,10 @@ internal sealed partial class GameHostWindow
             !IsPointerOverGameUi(MouseState.Position))
         {
             var target = ScreenToTerrain(SceneMousePosition());
-            if (TryGetNetworkGroundObjectUnderMouse(
+            if (TryGetFishUnderMouse(
+                    SceneMousePosition(), out var contextFish))
+                OpenFishContext(contextFish, target);
+            else if (TryGetNetworkGroundObjectUnderMouse(
                     SceneMousePosition(), out var contextObject, out _))
                 OpenNetworkGroundObjectContext(contextObject, target);
             else if (TryGetGatherableVegetationUnderMouse(
@@ -179,6 +182,11 @@ internal sealed partial class GameHostWindow
                 QueueNetworkObjectAction(
                     NetworkWorldActionKind.PickUp, groundObject);
         }
+        else if (!placingObject && leftDown && !_gameLeftWasDown &&
+                 !IsPointerOverGameUi(MouseState.Position) &&
+                 TryGetFishUnderMouse(
+                     SceneMousePosition(), out var fishingTarget))
+            QueueNetworkFishing(fishingTarget);
         else if (!placingObject && leftDown && !_gameLeftWasDown &&
                  !IsPointerOverGameUi(MouseState.Position) &&
                  TryGetGatherableVegetationUnderMouse(

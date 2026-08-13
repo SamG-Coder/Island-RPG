@@ -135,6 +135,7 @@ public static class ReliableProtocolCodec
                 writer.WriteUInt16(value.ServerSnapshotPort);
                 writer.WriteUInt16(value.ServerTickRate);
                 writer.WriteUInt32((uint)value.Capabilities);
+                writer.WriteBoolean(value.IslandStart);
                 break;
             case HandshakeRejectedMessage value:
                 writer.WriteUInt16(value.ProtocolVersion);
@@ -219,6 +220,15 @@ public static class ReliableProtocolCodec
             case CaveActionResultMessage value:
                 WriteCaveActionResult(writer, value);
                 break;
+            case BoatBaselineMessage value:
+                WriteBoatBaseline(writer, value);
+                break;
+            case BoatDeltaBatchMessage value:
+                WriteBoatDeltaBatch(writer, value);
+                break;
+            case BoatActionResultMessage value:
+                WriteBoatActionResult(writer, value);
+                break;
             default:
                 throw new ProtocolException($"Unsupported message type {message.GetType().FullName}.");
         }
@@ -249,7 +259,8 @@ public static class ReliableProtocolCodec
                 reader.ReadUInt64(), reader.ReadUInt64(), reader.ReadUInt64(),
                 reader.ReadString(ProtocolLimits.ReconnectTokenBytes, "ReconnectToken"),
                 reader.ReadUInt16(), reader.ReadUInt16(),
-                ReadEnum<ServerCapabilities>(reader.ReadUInt32(), "ServerCapabilities")),
+                ReadEnum<ServerCapabilities>(reader.ReadUInt32(), "ServerCapabilities"),
+                reader.ReadBoolean()),
             ProtocolMessageKind.HandshakeRejected => new HandshakeRejectedMessage(
                 sequence, tick, reader.ReadUInt16(),
                 reader.ReadString(ProtocolLimits.BuildVersionBytes, "BuildVersion"),
@@ -300,6 +311,12 @@ public static class ReliableProtocolCodec
                 ReadResourceActionResult(sequence, tick, ref reader),
             ProtocolMessageKind.CaveActionResult =>
                 ReadCaveActionResult(sequence, tick, ref reader),
+            ProtocolMessageKind.BoatBaseline =>
+                ReadBoatBaseline(sequence, tick, ref reader),
+            ProtocolMessageKind.BoatDeltaBatch =>
+                ReadBoatDeltaBatch(sequence, tick, ref reader),
+            ProtocolMessageKind.BoatActionResult =>
+                ReadBoatActionResult(sequence, tick, ref reader),
             _ => throw new ProtocolException($"Unsupported reliable message kind {header.Kind}."),
         };
     }
@@ -422,6 +439,10 @@ public static class ReliableProtocolCodec
                 writer.WriteByte((byte)ActionCommandKind.CaveAction);
                 WriteCaveAction(writer, action);
                 break;
+            case BoatActionPayload action:
+                writer.WriteByte((byte)ActionCommandKind.BoatAction);
+                WriteBoatAction(writer, action);
+                break;
             default:
                 throw new ProtocolException(
                     $"Unsupported action payload type {value.Payload.GetType().FullName}.");
@@ -488,6 +509,7 @@ public static class ReliableProtocolCodec
                     ReadWorldObjectReference(ref reader)),
             ActionCommandKind.ResourceAction => ReadResourceAction(ref reader),
             ActionCommandKind.CaveAction => ReadCaveAction(ref reader),
+            ActionCommandKind.BoatAction => ReadBoatAction(ref reader),
             _ => throw new ProtocolException($"Unsupported action command kind {kind}."),
         };
         return new ActionCommandMessage(
@@ -655,6 +677,74 @@ public static class ReliableProtocolCodec
                 "This resource action requires an exact tool slot.");
         }
         return new ResourceActionPayload(action, resource, toolSlot);
+    }
+
+    private static void WriteBoatAction(
+        WireWriter writer,
+        BoatActionPayload action)
+    {
+        EnsureDefined(action.Action, nameof(action.Action));
+        writer.WriteByte((byte)action.Action);
+        WriteBoatReference(writer, action.Boat);
+        switch (action)
+        {
+            case BoardBoatAction:
+            case StopBoatAction:
+                break;
+            case MoveBoatAction move:
+                EnsureFinite(move.TargetX, nameof(move.TargetX));
+                EnsureFinite(move.TargetY, nameof(move.TargetY));
+                writer.WriteSingle(move.TargetX);
+                writer.WriteSingle(move.TargetY);
+                break;
+            case DisembarkBoatAction disembark:
+                EnsureFinite(disembark.TargetX, nameof(disembark.TargetX));
+                EnsureFinite(disembark.TargetY, nameof(disembark.TargetY));
+                writer.WriteSingle(disembark.TargetX);
+                writer.WriteSingle(disembark.TargetY);
+                break;
+            default:
+                throw new ProtocolException(
+                    $"Unsupported boat action payload {action.GetType().FullName}.");
+        }
+    }
+
+    private static BoatActionPayload ReadBoatAction(ref WireReader reader)
+    {
+        var action = ReadEnum<BoatActionKind>(
+            reader.ReadByte(), nameof(BoatActionKind));
+        var boat = ReadBoatReference(ref reader);
+        return action switch
+        {
+            BoatActionKind.Board => new BoardBoatAction(boat),
+            BoatActionKind.Move => new MoveBoatAction(
+                boat,
+                ReadFinite(ref reader, "TargetX"),
+                ReadFinite(ref reader, "TargetY")),
+            BoatActionKind.Stop => new StopBoatAction(boat),
+            BoatActionKind.Disembark => new DisembarkBoatAction(
+                boat,
+                ReadFinite(ref reader, "TargetX"),
+                ReadFinite(ref reader, "TargetY")),
+            _ => throw new ProtocolException(
+                $"Unsupported boat action kind {action}.")
+        };
+    }
+
+    private static void WriteBoatReference(
+        WireWriter writer,
+        BoatReference value)
+    {
+        EnsureBoatId(value.BoatId);
+        writer.WriteGuid(value.BoatId);
+        writer.WriteUInt32(value.ExpectedRevision);
+    }
+
+    private static BoatReference ReadBoatReference(ref WireReader reader)
+    {
+        var result = new BoatReference(reader.ReadGuid(), reader.ReadUInt32());
+        EnsureBoatId(result.BoatId);
+        return result;
     }
 
     private static void WriteResourceNodeReference(
@@ -1171,6 +1261,13 @@ public static class ReliableProtocolCodec
         writer.WriteBoolean(value.Hit);
         writer.WriteInt32(value.Damage);
         writer.WriteBoolean(value.ToolWorn);
+        writer.WriteBoolean(value.FishingOutcome is not null);
+        if (value.FishingOutcome is { } fishing)
+        {
+            writer.WriteByte((byte)fishing.Species);
+            writer.WriteBoolean(fishing.Caught);
+            writer.WriteSingle(fishing.Chance);
+        }
     }
 
     private static ResourceActionResultMessage ReadResourceActionResult(
@@ -1200,10 +1297,22 @@ public static class ReliableProtocolCodec
                     "RewardItemId"),
                 reader.ReadUInt16());
         }
+        var hit = reader.ReadBoolean();
+        var damage = reader.ReadInt32();
+        var toolWorn = reader.ReadBoolean();
+        FishingOutcomeState? fishingOutcome = null;
+        if (reader.ReadBoolean())
+        {
+            fishingOutcome = new FishingOutcomeState(
+                ReadEnum<IslandRpg.Fishing.FishSpecies>(
+                    reader.ReadByte(), "FishSpecies"),
+                reader.ReadBoolean(),
+                ReadFinite(ref reader, "FishingChance"));
+        }
         var result = new ResourceActionResultMessage(
             sequence, tick, commandId, accepted, rejection, detail,
             actorRevision, inventoryRevision, action, resource, rewards,
-            reader.ReadBoolean(), reader.ReadInt32(), reader.ReadBoolean());
+            hit, damage, toolWorn, fishingOutcome);
         ValidateResourceActionResult(result);
         return result;
     }
@@ -1220,6 +1329,24 @@ public static class ReliableProtocolCodec
             throw new ProtocolException("Resource reward count exceeds its hard limit.");
         if (value.Damage < 0 || !value.Hit && value.Damage != 0)
             throw new ProtocolException("Resource damage is inconsistent with its hit flag.");
+        if (value.FishingOutcome is { } fishing)
+        {
+            EnsureDefined(fishing.Species, nameof(fishing.Species));
+            EnsureFinite(fishing.Chance, nameof(fishing.Chance));
+            if (value.Action != ResourceActionKind.Fish || !value.Accepted ||
+                fishing.Chance is < 0 or > 1 || fishing.Caught != value.Hit ||
+                fishing.Caught && value.Rewards.Count == 0 ||
+                !fishing.Caught && value.Rewards.Count != 0)
+            {
+                throw new ProtocolException(
+                    "Fishing outcome is inconsistent with the resource result.");
+            }
+        }
+        else if (value.Action == ResourceActionKind.Fish && value.Accepted)
+        {
+            throw new ProtocolException(
+                "An accepted fishing result must include its typed outcome.");
+        }
         foreach (var reward in value.Rewards)
         {
             EnsureIdentifier(reward.ItemId, nameof(reward.ItemId));
@@ -1241,6 +1368,227 @@ public static class ReliableProtocolCodec
         writer.WriteInt32(value.Remaining);
         writer.WriteDouble(value.ReadyAtGameSeconds);
         writer.WriteBoolean(value.Depleted);
+    }
+
+    private static void WriteBoatBaseline(
+        WireWriter writer,
+        BoatBaselineMessage value)
+    {
+        ValidateBoatStates(value.Boats);
+        writer.WriteUInt16((ushort)value.Boats.Count);
+        foreach (var boat in value.Boats)
+            WriteBoatState(writer, boat);
+    }
+
+    private static BoatBaselineMessage ReadBoatBaseline(
+        ulong sequence,
+        ulong tick,
+        ref WireReader reader)
+    {
+        var count = reader.ReadUInt16();
+        if (count > ProtocolLimits.MaxBoatsPerBatch)
+            throw new ProtocolException("Boat baseline exceeds its hard limit.");
+        var boats = new BoatState[count];
+        for (var index = 0; index < boats.Length; index++)
+            boats[index] = ReadBoatState(ref reader);
+        ValidateBoatStates(boats);
+        return new BoatBaselineMessage(sequence, tick, boats);
+    }
+
+    private static void WriteBoatDeltaBatch(
+        WireWriter writer,
+        BoatDeltaBatchMessage value)
+    {
+        ValidateBoatDeltas(value.Deltas);
+        writer.WriteUInt16((ushort)value.Deltas.Count);
+        foreach (var delta in value.Deltas)
+        {
+            writer.WriteByte((byte)delta.Kind);
+            WriteBoatReference(writer, delta.Reference);
+            writer.WriteUInt32(delta.CurrentRevision);
+            writer.WriteBoolean(delta.State is not null);
+            if (delta.State is { } state) WriteBoatState(writer, state);
+        }
+    }
+
+    private static BoatDeltaBatchMessage ReadBoatDeltaBatch(
+        ulong sequence,
+        ulong tick,
+        ref WireReader reader)
+    {
+        var count = reader.ReadUInt16();
+        if (count > ProtocolLimits.MaxBoatsPerBatch)
+            throw new ProtocolException("Boat delta batch exceeds its hard limit.");
+        var deltas = new BoatDelta[count];
+        for (var index = 0; index < deltas.Length; index++)
+        {
+            var kind = ReadEnum<BoatDeltaKind>(
+                reader.ReadByte(), nameof(BoatDeltaKind));
+            var reference = ReadBoatReference(ref reader);
+            var revision = reader.ReadUInt32();
+            var hasState = reader.ReadBoolean();
+            deltas[index] = new BoatDelta(
+                kind, reference, revision,
+                hasState ? ReadBoatState(ref reader) : null);
+        }
+        ValidateBoatDeltas(deltas);
+        return new BoatDeltaBatchMessage(sequence, tick, deltas);
+    }
+
+    private static void WriteBoatActionResult(
+        WireWriter writer,
+        BoatActionResultMessage value)
+    {
+        ValidateBoatActionResult(value);
+        writer.WriteGuid(value.CommandId);
+        writer.WriteByte((byte)value.Action);
+        WriteBoatReference(writer, value.Boat);
+        writer.WriteBoolean(value.Accepted);
+        writer.WriteByte((byte)value.RejectionCode);
+        writer.WriteString(value.Detail, ProtocolLimits.DetailBytes,
+            nameof(value.Detail));
+        writer.WriteUInt32(value.ActorRevision);
+        writer.WriteUInt32(value.InventoryRevision);
+        writer.WriteUInt32(value.BoatRevision);
+        writer.WriteBoolean(value.Transitioned);
+        writer.WriteSingle(value.ActorX);
+        writer.WriteSingle(value.ActorY);
+        writer.WriteInt16(value.ActorWorldLevel);
+    }
+
+    private static BoatActionResultMessage ReadBoatActionResult(
+        ulong sequence,
+        ulong tick,
+        ref WireReader reader)
+    {
+        var result = new BoatActionResultMessage(
+            sequence,
+            tick,
+            reader.ReadGuid(),
+            ReadEnum<BoatActionKind>(reader.ReadByte(), nameof(BoatActionKind)),
+            ReadBoatReference(ref reader),
+            reader.ReadBoolean(),
+            ReadEnum<CommandRejectionCode>(
+                reader.ReadByte(), nameof(CommandRejectionCode)),
+            reader.ReadString(ProtocolLimits.DetailBytes, "Detail"),
+            reader.ReadUInt32(),
+            reader.ReadUInt32(),
+            reader.ReadUInt32(),
+            reader.ReadBoolean(),
+            ReadFinite(ref reader, "ActorX"),
+            ReadFinite(ref reader, "ActorY"),
+            reader.ReadInt16());
+        ValidateBoatActionResult(result);
+        return result;
+    }
+
+    private static void WriteBoatState(WireWriter writer, BoatState value)
+    {
+        ValidateBoatState(value);
+        writer.WriteGuid(value.BoatId);
+        writer.WriteUInt64(value.EntityId);
+        writer.WriteUInt32(value.Revision);
+        writer.WriteGuid(value.OwnerPlayerId);
+        writer.WriteString(value.GroupOwnerId, ProtocolLimits.GroupOwnerIdBytes,
+            nameof(value.GroupOwnerId));
+        writer.WriteGuid(value.OccupantPlayerId);
+        writer.WriteUInt64(value.OccupantEntityId);
+        writer.WriteSingle(value.X);
+        writer.WriteSingle(value.Y);
+        writer.WriteSingle(value.FacingX);
+        writer.WriteSingle(value.FacingY);
+        writer.WriteInt16(value.WorldLevel);
+        writer.WriteBoolean(value.Moving);
+    }
+
+    private static BoatState ReadBoatState(ref WireReader reader) => new(
+        reader.ReadGuid(),
+        reader.ReadUInt64(),
+        reader.ReadUInt32(),
+        reader.ReadGuid(),
+        reader.ReadString(ProtocolLimits.GroupOwnerIdBytes, "GroupOwnerId"),
+        reader.ReadGuid(),
+        reader.ReadUInt64(),
+        ReadFinite(ref reader, "BoatX"),
+        ReadFinite(ref reader, "BoatY"),
+        ReadFinite(ref reader, "BoatFacingX"),
+        ReadFinite(ref reader, "BoatFacingY"),
+        reader.ReadInt16(),
+        reader.ReadBoolean());
+
+    private static void ValidateBoatStates(IReadOnlyList<BoatState>? values)
+    {
+        if (values is null || values.Count > ProtocolLimits.MaxBoatsPerBatch)
+            throw new ProtocolException("Boat state count exceeds its hard limit.");
+        var boats = new HashSet<Guid>();
+        var entities = new HashSet<ulong>();
+        var occupants = new HashSet<Guid>();
+        foreach (var value in values)
+        {
+            ValidateBoatState(value);
+            if (!boats.Add(value.BoatId) || !entities.Add(value.EntityId) ||
+                value.OccupantPlayerId != Guid.Empty &&
+                !occupants.Add(value.OccupantPlayerId))
+                throw new ProtocolException("Boat identities or occupants are duplicated.");
+        }
+    }
+
+    private static void ValidateBoatState(BoatState value)
+    {
+        EnsureBoatId(value.BoatId);
+        if (value.EntityId == 0 || value.Revision == 0)
+            throw new ProtocolException("Boat state omitted its entity or revision.");
+        EnsureFinite(value.X, nameof(value.X));
+        EnsureFinite(value.Y, nameof(value.Y));
+        EnsureFinite(value.FacingX, nameof(value.FacingX));
+        EnsureFinite(value.FacingY, nameof(value.FacingY));
+        if (value.FacingX * value.FacingX + value.FacingY * value.FacingY <= .0001f)
+            throw new ProtocolException("Boat facing must be non-zero.");
+        if ((value.OccupantPlayerId == Guid.Empty) !=
+            (value.OccupantEntityId == 0))
+            throw new ProtocolException("Boat occupant identities are incomplete.");
+        if (value.OwnerPlayerId == Guid.Empty &&
+            string.IsNullOrEmpty(value.GroupOwnerId))
+            throw new ProtocolException("Boat state must have an individual or group owner.");
+    }
+
+    private static void ValidateBoatDeltas(IReadOnlyList<BoatDelta>? deltas)
+    {
+        if (deltas is null || deltas.Count == 0 ||
+            deltas.Count > ProtocolLimits.MaxBoatsPerBatch)
+            throw new ProtocolException("Boat delta count exceeds its hard limit.");
+        var ids = new HashSet<Guid>();
+        foreach (var delta in deltas)
+        {
+            EnsureDefined(delta.Kind, nameof(delta.Kind));
+            EnsureBoatId(delta.Reference.BoatId);
+            if (!ids.Add(delta.Reference.BoatId) ||
+                delta.CurrentRevision <= delta.Reference.ExpectedRevision)
+                throw new ProtocolException("Boat delta revision chain is invalid.");
+            if (delta.Kind == BoatDeltaKind.Upsert)
+            {
+                if (delta.State is not { } state ||
+                    state.BoatId != delta.Reference.BoatId ||
+                    state.Revision != delta.CurrentRevision)
+                    throw new ProtocolException("Boat upsert does not match its reference.");
+                ValidateBoatState(state);
+            }
+            else if (delta.State is not null)
+                throw new ProtocolException("Boat removal cannot include state.");
+        }
+    }
+
+    private static void ValidateBoatActionResult(BoatActionResultMessage value)
+    {
+        EnsureCommandId(value.CommandId);
+        EnsureDefined(value.Action, nameof(value.Action));
+        EnsureBoatId(value.Boat.BoatId);
+        ValidateActionResult(value.Accepted, value.RejectionCode);
+        EnsureFinite(value.ActorX, nameof(value.ActorX));
+        EnsureFinite(value.ActorY, nameof(value.ActorY));
+        if (value.Transitioned && !value.Accepted ||
+            value.BoatRevision < value.Boat.ExpectedRevision)
+            throw new ProtocolException("Boat action result has inconsistent revisions.");
     }
 
     private static ResourceNodeSparseState ReadResourceNodeState(
@@ -1606,6 +1954,7 @@ public static class ReliableProtocolCodec
         writer.WriteInt32(value.MiningExperience);
         writer.WriteInt32(value.AdventureExperience);
         writer.WriteInt32(value.DiggingExperience);
+        writer.WriteInt32(value.FishingExperience);
     }
 
     private static PlayerStateMessage ReadPlayerState(
@@ -1645,6 +1994,7 @@ public static class ReliableProtocolCodec
         var miningExperience = reader.ReadInt32();
         var adventureExperience = reader.ReadInt32();
         var diggingExperience = reader.ReadInt32();
+        var fishingExperience = reader.ReadInt32();
 
         var result = new PlayerStateMessage(
             sequence,
@@ -1666,7 +2016,8 @@ public static class ReliableProtocolCodec
             farmingExperience,
             miningExperience,
             adventureExperience,
-            diggingExperience);
+            diggingExperience,
+            fishingExperience);
         ValidatePlayerState(result);
         return result;
     }
@@ -1729,7 +2080,8 @@ public static class ReliableProtocolCodec
             value.FarmingExperience < 0 ||
             value.MiningExperience < 0 ||
             value.AdventureExperience < 0 ||
-            value.DiggingExperience < 0)
+            value.DiggingExperience < 0 ||
+            value.FishingExperience < 0)
         {
             throw new ProtocolException("Skill experience cannot be negative.");
         }
@@ -1818,6 +2170,14 @@ public static class ReliableProtocolCodec
         if (objectId == Guid.Empty)
         {
             throw new ProtocolException("World object ID cannot be empty.");
+        }
+    }
+
+    private static void EnsureBoatId(Guid boatId)
+    {
+        if (boatId == Guid.Empty)
+        {
+            throw new ProtocolException("Boat ID cannot be empty.");
         }
     }
 

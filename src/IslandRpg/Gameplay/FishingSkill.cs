@@ -1,3 +1,4 @@
+using IslandRpg.Fishing;
 using IslandRpg.World;
 
 namespace IslandRpg.Gameplay;
@@ -16,21 +17,15 @@ internal static class FishingSkill
     public const float AnimationSpeedMultiplier = 1.18f;
 
     private static readonly IReadOnlyDictionary<WorldFishSpecies, FishingCatchProfile>
-        Profiles = new Dictionary<WorldFishSpecies, FishingCatchProfile>
-        {
-            [WorldFishSpecies.ShoreMinnows] = new(
-                WorldFishSpecies.ShoreMinnows, ItemIds.RawMinnows, 1, 1, 8, 5),
-            [WorldFishSpecies.RiverPerch] = new(
-                WorldFishSpecies.RiverPerch, ItemIds.RawRiverPerch, 1, 1, 10, 4),
-            [WorldFishSpecies.SilverHerring] = new(
-                WorldFishSpecies.SilverHerring, ItemIds.RawSilverHerring, 5, 2, 18, 4),
-            [WorldFishSpecies.RedSnapper] = new(
-                WorldFishSpecies.RedSnapper, ItemIds.RawRedSnapper, 9, 2, 30, 3),
-            [WorldFishSpecies.OceanMackerel] = new(
-                WorldFishSpecies.OceanMackerel, ItemIds.RawOceanMackerel, 13, 3, 48, 3),
-            [WorldFishSpecies.BluefinTuna] = new(
-                WorldFishSpecies.BluefinTuna, ItemIds.RawBluefinTuna, 17, 3, 75, 2)
-        };
+        Profiles = FishingRules.CatchProfiles.ToDictionary(
+            profile => (WorldFishSpecies)profile.Species,
+            profile => new FishingCatchProfile(
+                (WorldFishSpecies)profile.Species,
+                profile.ItemId,
+                profile.RequiredLevel,
+                profile.RequiredNetPower,
+                profile.Experience,
+                profile.SchoolSize));
 
     public static IReadOnlyList<FishingCatchProfile> CatchProfiles =>
         Profiles.Values
@@ -39,13 +34,13 @@ internal static class FishingSkill
             .ToArray();
 
     public static int LevelForExperience(int experience) =>
-        SkillService.LevelForExperience(experience);
+        FishingRules.LevelForExperience(experience);
 
     public static int ExperienceForLevel(int level) =>
-        SkillService.ExperienceForLevel(level);
+        FishingRules.ExperienceForLevel(level);
 
     public static int ExperienceToNextLevel(int experience) =>
-        SkillService.ExperienceToNextLevel(experience);
+        FishingRules.ExperienceToNextLevel(experience);
 
     public static FishingCatchProfile Profile(WorldFishSpecies species) =>
         Profiles[species];
@@ -55,28 +50,29 @@ internal static class FishingSkill
 
     public static bool CanCatch(
         WorldFishSpecies species, int level, int netPower) =>
-        CanCatch(species, level) &&
-        netPower >= Profile(species).RequiredNetPower;
+        FishingRules.CanCatch((FishSpecies)species, level, netPower);
 
     public static float AnimationFrameSeconds(float authoredFrameSeconds) =>
-        authoredFrameSeconds / AnimationSpeedMultiplier;
+        FishingRules.AnimationFrameSeconds(authoredFrameSeconds);
 
     public static float CycleSeconds(float baseSeconds, int netPower) =>
-        baseSeconds / (1f + (Math.Max(1, netPower) - 1) * .18f);
+        FishingRules.CycleSeconds(baseSeconds, netPower);
 
     public static float CatchChance(
         WorldFishSpecies species, int level, int netPower)
-    {
-        var profile = Profile(species);
-        var levelBonus = Math.Max(0, level - profile.RequiredLevel) * .015f;
-        var netBonus = Math.Max(0, netPower - profile.RequiredNetPower) * .08f;
-        return Math.Clamp(.72f + levelBonus + netBonus, .72f, .95f);
-    }
+        => FishingRules.CatchChance((FishSpecies)species, level, netPower);
 
     public static SkillExperienceChange AwardExperience(
-        int currentExperience, WorldFishSpecies species) =>
-        SkillService.AwardExperience(
-            currentExperience, Profile(species).Experience);
+        int currentExperience, WorldFishSpecies species)
+    {
+        var award = FishingRules.AwardExperience(
+            currentExperience, (FishSpecies)species);
+        return new(
+            award.Experience,
+            award.Gained,
+            award.PreviousLevel,
+            award.Level);
+    }
 
     public static string InventoryMessage(string itemName) =>
         $"You add {itemName} to your inventory.";

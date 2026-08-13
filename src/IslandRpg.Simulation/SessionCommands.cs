@@ -9,7 +9,8 @@ public readonly record struct JoinRequest(
     Vector2 SpawnPosition,
     IReadOnlyList<InitialInventoryItem>? InitialInventory = null,
     float InitialHunger = 100f,
-    int SpawnWorldLevel = 0);
+    int SpawnWorldLevel = 0,
+    bool ProvisionBoat = false);
 
 /// <summary>
 /// Server-authored join inventory, supplied only by the trusted host. Network
@@ -173,6 +174,56 @@ public sealed record MineResourceIntent(
         ExpectedInventoryRevision,
         ExpectedActorRevision,
         Node);
+
+public sealed record CatchFishIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    ResourceNodeReference Node,
+    int FishingNetInventorySlot) : ResourceGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision,
+        Node);
+
+public abstract record BoatGameplayIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    BoatReference Boat) : GameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record BoardBoatIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    BoatReference Boat) : BoatGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision, Boat);
+
+public sealed record MoveBoatIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    BoatReference Boat,
+    Vector2 Target) : BoatGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision, Boat);
+
+public sealed record StopBoatIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    BoatReference Boat) : BoatGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision, Boat);
+
+public sealed record DisembarkBoatIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    BoatReference Boat,
+    Vector2 RequestedLanding) : BoatGameplayIntent(
+        CommandId, ExpectedInventoryRevision, ExpectedActorRevision, Boat);
 
 public sealed record PickUpWorldObjectIntent(
     Guid CommandId,
@@ -371,6 +422,13 @@ public readonly record struct JoinResult(
     public Vector2 Position { get; init; }
 
     public int WorldLevel { get; init; }
+
+    /// <summary>
+    /// Trusted server-provisioned island-start boat. It is created in the
+    /// same owner-thread transaction as the actor so a failed provision
+    /// cannot leave a durable player behind.
+    /// </summary>
+    public AuthoritativeBoatSnapshot? Boat { get; init; }
 }
 
 public enum ReconnectStatus
@@ -413,6 +471,13 @@ public readonly record struct DisconnectResult(
     string? Error)
 {
     public bool Accepted => Status == DisconnectStatus.Accepted;
+
+    /// <summary>
+    /// Public semantic state produced while disconnecting the actor. The
+    /// server broadcasts this only after it has completed requester-private
+    /// disconnect handling, preserving reliable message ordering.
+    /// </summary>
+    public BoatStateDelta? BoatDelta { get; init; }
 }
 
 public enum IntentStatus
@@ -485,7 +550,17 @@ public enum IntentStatus
     InvalidExcavation,
     MissingExcavationTool,
     ExcavationCadenceLocked,
-    InvalidCaveLink
+    InvalidCaveLink,
+    BoatNotFound,
+    StaleBoatRevision,
+    AlreadyAboard,
+    BoatOccupied,
+    NotAboard,
+    InvalidBoatDestination,
+    BoatDestinationTooFar,
+    BoatRouteUnreachable,
+    InvalidBoatLanding,
+    BoatPlanningLocked
 }
 
 public readonly record struct CookingCompletionSnapshot(
@@ -535,4 +610,6 @@ public readonly record struct IntentResult(
     public WorldTransactionResult? WorldTransaction { get; init; }
 
     public ResourceTransactionResult? ResourceTransaction { get; init; }
+
+    public BoatTransactionResult? BoatTransaction { get; init; }
 }

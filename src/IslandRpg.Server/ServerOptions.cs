@@ -1,4 +1,5 @@
 using System.Net;
+using System.Numerics;
 using IslandRpg.Simulation;
 
 namespace IslandRpg.Server;
@@ -13,6 +14,7 @@ public sealed record ServerOptions(
     int MaximumClients)
 {
     public const ushort DefaultPort = 38_740;
+    public const int MaximumIslandStartClients = 256;
     public static readonly TimeSpan DefaultAutosaveInterval =
         TimeSpan.FromSeconds(30);
 
@@ -32,6 +34,19 @@ public sealed record ServerOptions(
     public string? SaveRoot { get; init; }
 
     public TimeSpan AutosaveInterval { get; init; } = DefaultAutosaveInterval;
+
+    /// <summary>
+    /// Trusted world profile. Island-start worlds provision one durable raft
+    /// for each newly joined player; reconnects and ordinary worlds do not.
+    /// </summary>
+    public bool IslandStart { get; init; }
+
+    /// <summary>
+    /// Trusted scenario/test spawn override. Production command-line hosts do
+    /// not expose this; absent values resolve through the shared Core land
+    /// spawn rule.
+    /// </summary>
+    public Vector2? StartingPosition { get; init; }
 
     /// <summary>
     /// Trusted host bootstrap for deterministic scenarios and integration
@@ -58,6 +73,7 @@ public sealed record ServerOptions(
         var maximumClients = 64;
         string? saveRoot = null;
         var autosaveInterval = DefaultAutosaveInterval;
+        var islandStart = false;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -124,6 +140,9 @@ public sealed record ServerOptions(
                     autosaveInterval = TimeSpan.FromSeconds(seconds);
                     index++;
                     break;
+                case "--island-start":
+                    islandStart = true;
+                    break;
                 case "--help":
                 case "-h":
                     throw new ShowHelpException();
@@ -134,6 +153,12 @@ public sealed record ServerOptions(
 
         ValidateVersion(buildVersion, "--build-version");
         ValidateVersion(contentVersion, "--content-version");
+        if (islandStart && maximumClients > MaximumIslandStartClients)
+        {
+            throw new ArgumentException(
+                $"--max-clients cannot exceed {MaximumIslandStartClients} " +
+                "for an island-start world because each player owns one raft.");
+        }
         return new ServerOptions(
             listenAddress,
             listenPort,
@@ -144,7 +169,8 @@ public sealed record ServerOptions(
             maximumClients)
         {
             SaveRoot = saveRoot,
-            AutosaveInterval = autosaveInterval
+            AutosaveInterval = autosaveInterval,
+            IslandStart = islandStart
         };
     }
 
@@ -164,6 +190,7 @@ public sealed record ServerOptions(
         writer.WriteLine("  --max-clients <count>     Concurrent connections, 1-1024 (default 64)");
         writer.WriteLine("  --save-root <directory>   Enable authoritative checkpoint persistence");
         writer.WriteLine("  --autosave-seconds <n>    Autosave interval, 1-3600 (default 30)");
+        writer.WriteLine("  --island-start            Use island bootstrap and provision player rafts");
         writer.WriteLine("  -h, --help                Show this help");
     }
 

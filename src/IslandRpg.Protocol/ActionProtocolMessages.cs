@@ -219,7 +219,8 @@ public sealed record PlayerStateMessage(
     int FarmingExperience = 0,
     int MiningExperience = 0,
     int AdventureExperience = 0,
-    int DiggingExperience = 0) : IProtocolMessage
+    int DiggingExperience = 0,
+    int FishingExperience = 0) : IProtocolMessage
 {
     public ProtocolMessageKind Kind => ProtocolMessageKind.PlayerState;
 }

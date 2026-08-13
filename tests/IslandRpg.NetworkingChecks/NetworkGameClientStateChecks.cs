@@ -28,6 +28,9 @@ internal static class NetworkGameClientStateChecks
         checks.Add(
             "network client publishes typed cave action outcomes",
             PublishesTypedCaveOutcomeAsync);
+        checks.Add(
+            "network client rejects boat batches atomically",
+            RejectsBoatBatchAtomicallyAsync);
     }
 
     private static async ValueTask AppliesBaselineAndDeltaAsync(
@@ -350,6 +353,77 @@ internal static class NetworkGameClientStateChecks
             "the cave receipt did not advance the observed server tick",
             cancellationToken);
     }
+
+    private static async ValueTask RejectsBoatBatchAtomicallyAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var client = new NetworkGameClient(TimeSpan.Zero);
+        await using var peer = await ScriptedPeer.ConnectAsync(
+            client, cancellationToken);
+        var firstId = Guid.Parse(
+            "b0a70000-0000-0000-0000-000000000001");
+        var secondId = Guid.Parse(
+            "b0a70000-0000-0000-0000-000000000002");
+        var first = Boat(firstId, 1, peer.PlayerId, 0x8000_0000_0000_0001);
+        var second = Boat(secondId, 1, peer.PlayerId, 0x8000_0000_0000_0002);
+        await peer.SendAsync(new BoatBaselineMessage(
+            2, 500, [first, second]), cancellationToken);
+        await EventuallyAsync(
+            () => client.State.Boats.Count == 2,
+            "the boat atomicity check did not receive its baseline",
+            cancellationToken);
+
+        var poisoned = new BoatDeltaBatchMessage(
+            3,
+            501,
+            [
+                new BoatDelta(
+                    BoatDeltaKind.Upsert,
+                    new BoatReference(firstId, 1),
+                    2,
+                    first with { Revision = 2, X = 1 }),
+                new BoatDelta(
+                    BoatDeltaKind.Upsert,
+                    new BoatReference(secondId, 0),
+                    1,
+                    second)
+            ]);
+        await peer.SendAsync(poisoned, cancellationToken);
+        await EventuallyAsync(
+            () => client.State.Status == NetworkGameClientStatus.Faulted,
+            "the client did not fault on the malformed second boat delta",
+            cancellationToken);
+
+        CheckAssert.Equal(first, client.State.Boats[firstId],
+            "a malformed later delta must not partially apply earlier state");
+        CheckAssert.Equal(second, client.State.Boats[secondId],
+            "a rejected boat batch must preserve every visible boat");
+        CheckAssert.Equal(new BoatReference(firstId, 1),
+            client.GetBoatReference(firstId),
+            "a rejected boat batch must not poison retained revision high-water");
+        CheckAssert.Equal(new BoatReference(secondId, 1),
+            client.GetBoatReference(secondId),
+            "a rejected boat batch must preserve later boat revision state");
+    }
+
+    private static BoatState Boat(
+        Guid id,
+        uint revision,
+        Guid owner,
+        ulong entityId) => new(
+        id,
+        entityId,
+        revision,
+        owner,
+        string.Empty,
+        Guid.Empty,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        false);
 
     private static InventorySlotState[] CreateFullInventory() =>
         Enumerable.Range(0, ProtocolLimits.PlayerInventorySlots)

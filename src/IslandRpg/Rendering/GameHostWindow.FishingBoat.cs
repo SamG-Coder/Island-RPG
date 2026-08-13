@@ -495,6 +495,8 @@ internal sealed partial class GameHostWindow
 
     private bool UpdateFishingBoatInput(bool leftDown, bool rightDown)
     {
+        if (IsNetworkWorld)
+            return UpdateNetworkBoatInput(leftDown, rightDown);
         var leftPressed = leftDown && !_gameLeftWasDown;
         var rightPressed = rightDown && !_gameRightWasDown;
         if (_fishingBoat is null ||
@@ -563,6 +565,11 @@ internal sealed partial class GameHostWindow
     private void BeginFishingBoatDisembarkTargeting()
     {
         if (!_fishingBoatBoarded) return;
+        if (IsNetworkWorld)
+        {
+            _networkPendingDisembarkTarget = null;
+            _networkDisembarkMoveAccepted = false;
+        }
         CancelFishingBoatAction();
         _fishingBoatDisembarkTargeting =
             !_fishingBoatDisembarkTargeting;
@@ -721,6 +728,7 @@ internal sealed partial class GameHostWindow
 
     internal void BoardFishingBoat()
     {
+        if (IsNetworkWorld) return;
         if (_fishingBoat is null || _player is null ||
             (_player.Position - _fishingBoat.Position).Length > 1.4f)
             return;
@@ -883,6 +891,11 @@ internal sealed partial class GameHostWindow
 
     private void DrawFishingBoat()
     {
+        if (IsNetworkWorld)
+        {
+            DrawNetworkBoats();
+            return;
+        }
         if (_fishingBoat is null || _activePlayer is null)
             return;
         var fishing = _fishingBoatBoarded &&

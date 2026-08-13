@@ -23,9 +23,11 @@ public sealed record ServerCheckpoint(
     IReadOnlyList<ServerCookingJobCheckpoint>? CookingJobs = null,
     ServerResourceCheckpoint? Resources = null,
     IReadOnlyList<ServerExcavationCadenceCheckpoint>?
-        ExcavationCadences = null)
+        ExcavationCadences = null,
+    bool IslandStart = false,
+    IReadOnlyList<ServerBoatCheckpoint>? Boats = null)
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 }
 
 public sealed record ServerActorCheckpoint(
@@ -51,7 +53,8 @@ public sealed record ServerActorCheckpoint(
     int FarmingExperience = 0,
     int MiningExperience = 0,
     int AdventureExperience = 0,
-    int DiggingExperience = 0)
+    int DiggingExperience = 0,
+    int FishingExperience = 0)
 {
     // Keep credentials out of accidental structured-log interpolation.
     public override string ToString() =>
@@ -152,6 +155,25 @@ public sealed record ServerResourceCadenceCheckpoint(
     IslandRpg.Resources.ResourceActionKind Action,
     double ReadyAtGameSeconds,
     ulong ActionOrdinal);
+
+public sealed record ServerBoatCheckpoint(
+    Guid BoatId,
+    Guid OwnerPlayerId,
+    string? GroupId,
+    Guid? OccupantActorId,
+    Guid? OccupantPlayerId,
+    float X,
+    float Y,
+    float FacingX,
+    float FacingY,
+    int WorldLevel,
+    uint Revision,
+    IReadOnlyList<ServerBoatRoutePointCheckpoint> RemainingRoute,
+    double PlanningCooldownSeconds = 0);
+
+public readonly record struct ServerBoatRoutePointCheckpoint(
+    float X,
+    float Y);
 
 public sealed record ServerCheckpointLoadResult(
     ServerCheckpoint Checkpoint,

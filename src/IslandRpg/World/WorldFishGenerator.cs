@@ -1,3 +1,6 @@
+using IslandRpg.Fishing;
+using IslandRpg.Simulation;
+
 namespace IslandRpg.World;
 
 internal enum WorldFishSpecies : byte
@@ -33,32 +36,15 @@ internal static class WorldFishGenerator
     public const int MaximumBeginnerShoreDistance = 3;
 
     public static readonly WorldFishProfile[] Profiles =
-    [
-        new(
-            WorldFishSpecies.ShoreMinnows, "shore minnows",
-            "FISHS_NN", 34, "Common",
-            "Sheltered shallows and mangrove edges"),
-        new(
-            WorldFishSpecies.RiverPerch, "river perch",
-            "FISH1_NN", 49, "Common",
-            "Freshwater rivers and wetlands"),
-        new(
-            WorldFishSpecies.SilverHerring, "silver herring",
-            "FISH2_NN", 49, "Common",
-            "Coastal sea and open ocean"),
-        new(
-            WorldFishSpecies.BluefinTuna, "bluefin tuna",
-            "FISH3_NN", 49, "Rare",
-            "Deep open ocean"),
-        new(
-            WorldFishSpecies.RedSnapper, "red snapper",
-            "FISH4_NN", 49, "Uncommon",
-            "Warm coastal shallows and mangroves"),
-        new(
-            WorldFishSpecies.OceanMackerel, "ocean mackerel",
-            "FISHX_NN", 30, "Uncommon",
-            "Deep open ocean")
-    ];
+        FishingRules.CatchProfiles
+            .Select(profile => new WorldFishProfile(
+                (WorldFishSpecies)profile.Species,
+                profile.DisplayName,
+                profile.GraphicName,
+                profile.FrameCount,
+                profile.Rarity,
+                profile.Habitat))
+            .ToArray();
 
     public static readonly string[] RequiredGraphicNames =
         Profiles.Select(profile => profile.GraphicName).ToArray();
@@ -86,6 +72,16 @@ internal static class WorldFishGenerator
     public static WorldFish[] Generate(
         long seed, IReadOnlyList<IslandTile> tiles)
     {
+        if (tiles.Count > 0 && TryChunk(tiles, out var chunk))
+        {
+            return new ProceduralFishSchoolSource()
+                .DescribeSchools(seed, chunk)
+                .Select(ToWorldFish)
+                .ToArray();
+        }
+
+        // Kept for callers providing a partial/non-chunk tile fixture. World
+        // chunks delegate to the canonical procedural source above.
         var tileLookup = tiles.ToDictionary(
             tile => (tile.X, tile.Y));
         var candidates = new List<(float Priority, WorldFish Fish)>();
@@ -156,6 +152,40 @@ internal static class WorldFishGenerator
             selectedFish.Add(guaranteed);
         }
         return selectedFish.ToArray();
+    }
+
+    private static bool TryChunk(
+        IReadOnlyList<IslandTile> tiles,
+        out WorldChunkKey chunk)
+    {
+        chunk = default;
+        if (tiles.Count != WorldChunk.Size * WorldChunk.Size)
+            return false;
+        var candidate = WorldChunkKey.At(
+            new System.Numerics.Vector2(tiles[0].X, tiles[0].Y), 0);
+        var originX = candidate.X * WorldChunk.Size;
+        var originY = candidate.Y * WorldChunk.Size;
+        for (var index = 0; index < tiles.Count; index++)
+        {
+            var expectedX = originX + index % WorldChunk.Size;
+            var expectedY = originY + index / WorldChunk.Size;
+            if (tiles[index].X != expectedX || tiles[index].Y != expectedY)
+                return false;
+        }
+        chunk = candidate;
+        return true;
+    }
+
+    private static WorldFish ToWorldFish(FishSchoolDescriptor value)
+    {
+        var profile = FishingRules.Profile(value.Species);
+        return new(
+            value.Position.X,
+            value.Position.Y,
+            (WorldFishSpecies)value.Species,
+            profile.GraphicName,
+            value.AnimationOffset,
+            value.StableKey);
     }
 
     public static int DistanceFromShore(

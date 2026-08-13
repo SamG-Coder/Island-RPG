@@ -33,6 +33,8 @@ ResourceProtocolClientChecks.Register(checks);
 WorldRuleChecks.Register(checks);
 WorldTransactionChecks.Register(checks);
 CaveAuthorityChecks.Register(checks);
+BoatFishingAuthorityChecks.Register(checks);
+BoatFishingServerIntegrationChecks.Register(checks);
 SessionWorldTransactionChecks.Register(checks);
 ServerWorldActionAdapterChecks.Register(checks);
 ServerCheckpointChecks.Register(checks);

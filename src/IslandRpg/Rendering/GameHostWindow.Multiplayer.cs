@@ -92,6 +92,11 @@ internal sealed partial class GameHostWindow
         _networkClient.ResourceActionCompleted += (_, value) =>
             _networkEvents.Enqueue(() => HandleNetworkResourceActionResult(
                 value.Result));
+        _networkClient.BoatActionCompleted += (_, value) =>
+            _networkEvents.Enqueue(() => HandleNetworkBoatActionResult(
+                value.Result));
+        _networkClient.BoatsChanged += (_, value) =>
+            _networkEvents.Enqueue(() => HandleNetworkBoatsChanged(value));
         _networkClient.CaveActionCompleted += (_, value) =>
             _networkEvents.Enqueue(() => HandleNetworkCaveActionResult(
                 value.Result));
@@ -164,7 +169,8 @@ internal sealed partial class GameHostWindow
         _activeWorldLevel = accepted.SpawnWorldLevel;
         _activeWorld = new WorldProfile(
             accepted.WorldId.ToString("N"), "Multiplayer World",
-            accepted.WorldSeed, DateTime.UtcNow, DateTime.UtcNow);
+            accepted.WorldSeed, DateTime.UtcNow, DateTime.UtcNow,
+            IslandStart: accepted.IslandStart);
         _activePlayer = new PlayerProfile(
             accepted.PlayerId.ToString("N"), _networkLaunch!.PlayerName,
             EntityGender.Male, 2, 1, DateTime.UtcNow, DateTime.UtcNow,
@@ -177,6 +183,7 @@ internal sealed partial class GameHostWindow
             new Vector2(accepted.SpawnX, accepted.SpawnY),
             EntityGender.Male);
         _networkActors.Clear();
+        InitializeNetworkBoats();
         _networkWorldEntered = true;
         _networkWorldClockTick = accepted.Tick;
         UpdateNetworkWorldClock(accepted.Tick);
@@ -211,6 +218,7 @@ internal sealed partial class GameHostWindow
             NetworkGameClientStatus.Faulted)
         {
             CancelNetworkCaveInteraction();
+            ClearNetworkBoatPresentation();
             ClearNetworkResourceProjection();
             ClearNetworkWorldObjects();
         }
@@ -303,6 +311,7 @@ internal sealed partial class GameHostWindow
             MiningExperience = state.MiningExperience,
             AdventureExperience = state.AdventureExperience,
             DiggingExperience = state.DiggingExperience,
+            FishingExperience = state.FishingExperience,
             UpdatedUtc = DateTime.UtcNow
         };
         if (_activeInventorySlot >= 0 &&
@@ -319,18 +328,23 @@ internal sealed partial class GameHostWindow
             OpenTK.Windowing.GraphicsLibraryFramework.MouseButton.Right);
         var leftDown = MouseState.IsButtonDown(
             OpenTK.Windowing.GraphicsLibraryFramework.MouseButton.Left);
-        UpdateNetworkWorldInteractionInput(leftDown, rightDown);
+        if (!UpdateNetworkBoatInput(leftDown, rightDown))
+            UpdateNetworkWorldInteractionInput(leftDown, rightDown);
         if (!_chatUi.Input.Focused && KeyboardState.IsKeyPressed(
                 OpenTK.Windowing.GraphicsLibraryFramework.Keys.X))
         {
             _pendingNetworkWorldAction = null;
             StopNetworkRepeatedConstruction();
             CancelNetworkCaveInteraction();
-            SendNetworkStop();
+            if (_fishingBoatBoarded)
+                SendNetworkBoatStop();
+            else
+                SendNetworkStop();
         }
         UpdatePendingNetworkWorldAction();
         UpdateNetworkCaveInteraction();
         UpdateNetworkResourceInteraction();
+        UpdateNetworkBoatFishingPresentation(elapsed);
         UpdateNativeCursor();
         FollowPlayer();
     }
@@ -342,10 +356,18 @@ internal sealed partial class GameHostWindow
             sampled is null)
             return;
         var seen = new HashSet<ulong>();
+        var seenBoats = new HashSet<ulong>();
         foreach (var snapshot in sampled.Entities)
         {
+            if (snapshot.EntityKind == NetworkEntityKind.Boat)
+            {
+                seenBoats.Add(snapshot.EntityId);
+                ApplyNetworkBoatSnapshot(snapshot, elapsed);
+                continue;
+            }
             if (snapshot.EntityKind != NetworkEntityKind.Player ||
-                snapshot.State.HasFlag(NetworkEntityState.Hidden))
+                snapshot.State.HasFlag(NetworkEntityState.Hidden) ||
+                IsNetworkActorAboard(snapshot.EntityId))
                 continue;
             seen.Add(snapshot.EntityId);
             var position = new Vector2(snapshot.X, snapshot.Y);
@@ -364,7 +386,9 @@ internal sealed partial class GameHostWindow
                   entity.Action is EntityAction.Gather or EntityAction.Work or
                       EntityAction.Mine) ||
                  (_networkCavePresentationOwned &&
-                  entity.Action == EntityAction.Dig));
+                  entity.Action == EntityAction.Dig) ||
+                 (_networkActiveFishing is not null &&
+                  entity.Action == EntityAction.Fish));
             SyncNetworkEntity(entity, position, velocity, snapshot.State,
                 elapsed, preservePresentedAction);
             if (snapshot.EntityId == _networkClient.State.PlayerEntityId)
@@ -374,6 +398,7 @@ internal sealed partial class GameHostWindow
         foreach (var id in _networkActors.Keys
                      .Where(id => !seen.Contains(id)).ToArray())
             _networkActors.Remove(id);
+        PruneNetworkBoatTransforms(seenBoats);
     }
 
     private WorldEntity GetOrCreateNetworkActor(ulong id, Vector2 position)
@@ -444,23 +469,34 @@ internal sealed partial class GameHostWindow
 
     private void SendNetworkWalk(
         Vector2 target,
-        bool preserveResourceAction = false)
+        bool preserveResourceAction = false,
+        bool preserveFishingAction = false,
+        bool preserveBoatBoarding = false)
     {
         if (_networkClient?.IsConnected != true) return;
         ReleaseNetworkCookingPresentation();
         if (!preserveResourceAction)
             CancelNetworkResourceInteraction();
+        if (!preserveFishingAction)
+            CancelNetworkFishingPresentation();
+        if (!preserveBoatBoarding)
+            _networkPendingBoardBoatId = null;
         _moveMarker = new MoveMarker(target, 0);
         QueueNetworkSend(cancellationToken => _networkClient.SendWalkAsync(
             target.X, target.Y, _activeWorldLevel, cancellationToken).AsTask());
     }
 
-    private void SendNetworkStop(bool preserveResourceAction = false)
+    private void SendNetworkStop(
+        bool preserveResourceAction = false,
+        bool preserveFishingAction = false)
     {
         if (_networkClient?.IsConnected != true) return;
         ReleaseNetworkCookingPresentation();
         if (!preserveResourceAction)
             CancelNetworkResourceInteraction();
+        if (!preserveFishingAction)
+            CancelNetworkFishingPresentation();
+        _networkPendingBoardBoatId = null;
         QueueNetworkSend(cancellationToken =>
             _networkClient.SendStopAsync(cancellationToken).AsTask());
     }

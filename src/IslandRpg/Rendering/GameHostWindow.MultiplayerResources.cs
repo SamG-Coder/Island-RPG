@@ -336,6 +336,7 @@ internal sealed partial class GameHostWindow
         NetworkResourcesChangedEventArgs value)
     {
         if (!IsNetworkWorld) return;
+        ObserveNetworkFishingResourceChanges(value);
         HandleNetworkVegetationChanged(value);
         HandleNetworkMiningChanged(value);
         if (_activeNetworkTreeAction is { } active &&
@@ -353,6 +354,7 @@ internal sealed partial class GameHostWindow
     private void HandleNetworkResourceActionResult(
         ResourceActionResultMessage result)
     {
+        if (TryHandleNetworkFishingResult(result)) return;
         if (_networkResourceCommandId != result.CommandId ||
             (_activeNetworkTreeAction is null &&
              _activeNetworkVegetationAction is null &&

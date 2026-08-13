@@ -58,6 +58,32 @@ public sealed class SnapshotInterpolationBuffer
         }
     }
 
+    /// <summary>
+    /// Replaces the newest frame after a delayed keyframe reconciles entity
+    /// membership without changing the already-observed effective server tick.
+    /// </summary>
+    internal bool ReplaceLatest(EntitySnapshotMessage snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var entities = snapshot.Entities.ToArray();
+        lock (_sync)
+        {
+            if (_frames.Count == 0 ||
+                snapshot.Metadata.ServerTick != _frames[^1].ServerTick)
+            {
+                return false;
+            }
+
+            // Preserve receipt time so reconciliation cannot introduce an
+            // artificial interpolation stall for the same simulation frame.
+            _frames[^1] = new BufferedFrame(
+                _frames[^1].ReceivedTimestamp,
+                snapshot.Metadata.ServerTick,
+                entities);
+            return true;
+        }
+    }
+
     public bool TrySample(out InterpolatedSnapshot? snapshot, long nowTimestamp = 0)
     {
         nowTimestamp = nowTimestamp == 0 ? Stopwatch.GetTimestamp() : nowTimestamp;

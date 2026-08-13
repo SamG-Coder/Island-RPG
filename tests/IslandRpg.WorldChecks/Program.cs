@@ -13,6 +13,7 @@ SurfaceTreeResourceChecks.Run();
 SurfaceVegetationResourceChecks.Run();
 UndergroundMiningResourceChecks.Run();
 CaveCoreChecks.Run();
+BoatFishingCoreChecks.Run();
 
 var slimeExportIndex = Array.FindIndex(
     args, value => value.Equals(

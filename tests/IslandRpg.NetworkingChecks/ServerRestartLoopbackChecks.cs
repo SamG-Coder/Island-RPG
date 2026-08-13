@@ -38,6 +38,7 @@ internal static class ServerRestartLoopbackChecks
         {
             SaveRoot = save.Path,
             AutosaveInterval = TimeSpan.FromHours(1),
+            StartingPosition = Vector2.Zero,
             StartingInventory =
             [
                 new InitialInventoryItem("stone_shovel"),
@@ -433,6 +434,7 @@ internal static class ServerRestartLoopbackChecks
         {
             SaveRoot = saveRoot,
             AutosaveInterval = TimeSpan.FromHours(1),
+            StartingPosition = Vector2.Zero,
             StartingWorldObjects =
             [
                 new WorldObjectSeed(

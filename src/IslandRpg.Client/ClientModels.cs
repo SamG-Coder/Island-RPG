@@ -47,7 +47,8 @@ public sealed record NetworkPlayerGameplayState(
     int FarmingExperience = 0,
     int MiningExperience = 0,
     int AdventureExperience = 0,
-    int DiggingExperience = 0);
+    int DiggingExperience = 0,
+    int FishingExperience = 0);
 
 /// <summary>
 /// Immutable public projection of a server-authored world object. Container
@@ -105,6 +106,12 @@ public sealed record NetworkResourceChange(
     uint ResourceChunkRevision,
     ResourceNodeSparseState? State);
 
+public sealed record NetworkBoatChange(
+    BoatDeltaKind Kind,
+    Guid BoatId,
+    uint Revision,
+    BoatState? State);
+
 public readonly record struct NetworkWorldChunk(
     int ChunkX,
     int ChunkY,
@@ -151,6 +158,20 @@ public sealed record NetworkGameClientState(
         new ReadOnlyDictionary<Guid, NetworkContainerState>(new Dictionary<Guid, NetworkContainerState>());
     private static readonly IReadOnlyDictionary<WorldChunkKey, NetworkResourceChunkState> EmptyResourceChunks =
         new ReadOnlyDictionary<WorldChunkKey, NetworkResourceChunkState>(new Dictionary<WorldChunkKey, NetworkResourceChunkState>());
+    private static readonly IReadOnlyDictionary<Guid, BoatState> EmptyBoats =
+        new ReadOnlyDictionary<Guid, BoatState>(new Dictionary<Guid, BoatState>());
+
+    /// <summary>
+    /// True only for worlds whose trusted server profile uses the island-start
+    /// bootstrap. Clients never infer this from terrain or local settings.
+    /// </summary>
+    public bool IslandStart { get; init; }
+
+    /// <summary>
+    /// Latest reliable semantic boat state. High-frequency positions are also
+    /// available through <see cref="Entities"/> using each boat's EntityId.
+    /// </summary>
+    public IReadOnlyDictionary<Guid, BoatState> Boats { get; init; } = EmptyBoats;
 
     public static NetworkGameClientState Disconnected { get; } = new(
         NetworkGameClientStatus.Disconnected,
@@ -216,6 +237,12 @@ public sealed class NetworkResourceActionResultEventArgs(
     public ResourceActionResultMessage Result { get; } = result;
 }
 
+public sealed class NetworkBoatActionResultEventArgs(
+    BoatActionResultMessage result) : EventArgs
+{
+    public BoatActionResultMessage Result { get; } = result;
+}
+
 public sealed class NetworkCaveActionResultEventArgs(
     CaveActionResultMessage result) : EventArgs
 {
@@ -274,4 +301,12 @@ public sealed class NetworkResourcesChangedEventArgs(
     public WorldChunkKey Chunk { get; } = chunk;
     public bool IsBaseline { get; } = isBaseline;
     public IReadOnlyList<NetworkResourceChange> Changes { get; } = changes;
+}
+
+public sealed class NetworkBoatsChangedEventArgs(
+    bool isBaseline,
+    IReadOnlyList<NetworkBoatChange> changes) : EventArgs
+{
+    public bool IsBaseline { get; } = isBaseline;
+    public IReadOnlyList<NetworkBoatChange> Changes { get; } = changes;
 }

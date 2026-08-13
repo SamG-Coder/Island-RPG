@@ -233,7 +233,8 @@ internal static class ServerResourceIntegrationChecks
             BuildVersion, ContentVersion, 8)
         {
             SaveRoot = saveRoot,
-            AutosaveInterval = TimeSpan.FromHours(1)
+            AutosaveInterval = TimeSpan.FromHours(1),
+            StartingPosition = Vector2.Zero
         };
 
     private static Task<HandshakeAcceptedMessage> ConnectAsync(

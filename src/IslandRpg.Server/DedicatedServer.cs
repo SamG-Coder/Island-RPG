@@ -8,6 +8,8 @@ using System.Numerics;
 using System.Security.Cryptography;
 using IslandRpg.Navigation;
 using IslandRpg.Caves;
+using IslandRpg.Boats;
+using IslandRpg.Fishing;
 using IslandRpg.Protocol;
 using IslandRpg.Resources;
 using IslandRpg.Server.Persistence;
@@ -25,6 +27,7 @@ public sealed class DedicatedServer : IAsyncDisposable
     private readonly ConcurrentDictionary<Guid, ClientConnection> _clients = [];
     private readonly ConcurrentDictionary<Guid, byte> _activeClientIds = [];
     private readonly ConcurrentDictionary<Guid, string> _connectedPlayers = [];
+    private readonly object _publicReplicationSync = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly TaskCompletionSource<IPEndPoint> _startedSignal =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -39,6 +42,8 @@ public sealed class DedicatedServer : IAsyncDisposable
     private readonly object _resourceBootstrapSync = new();
     private ResourceBootstrapState _resourceBootstrap =
         ResourceBootstrapState.Empty;
+    private readonly object _boatBootstrapSync = new();
+    private BoatBootstrapState _boatBootstrap = BoatBootstrapState.Empty;
     private readonly ServerCheckpointStore? _checkpointStore;
     private readonly ServerCheckpointWriter? _checkpointWriter;
     private readonly IDisposable? _worldLease;
@@ -47,8 +52,27 @@ public sealed class DedicatedServer : IAsyncDisposable
     private long _nextAutosaveTick;
     private int _disposed;
 
+    /// <summary>
+    /// Deterministic test seam inside the activation/broadcast barrier and
+    /// immediately before baseline capture. Production leaves this null.
+    /// </summary>
+    internal Action<ClientConnection>? DuringBootstrapActivation { get; set; }
+
+    internal Action? AfterWorldBootstrapUpdatedForTest { get; set; }
+
     public DedicatedServer(ServerOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
+        if (options.IslandStart &&
+            options.MaximumClients > ServerOptions.MaximumIslandStartClients)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                $"Island-start worlds support at most " +
+                $"{ServerOptions.MaximumIslandStartClients} clients because " +
+                "each player owns one authoritative raft.");
+        }
+
         _options = options;
         _listener = new TcpListener(options.ListenAddress, options.ListenPort);
         _snapshotSocket = new Socket(
@@ -59,23 +83,29 @@ public sealed class DedicatedServer : IAsyncDisposable
             new CompositeResourceDescriptorSource(
                 new SurfaceTreeResourceDescriptorSource(),
                 new SurfaceVegetationResourceDescriptorSource(),
-                new UndergroundMiningResourceDescriptorSource()));
+                new UndergroundMiningResourceDescriptorSource(),
+                new ProceduralFishSchoolSource()));
         var resourceTransactions = new AuthoritativeResourceTransactions(
             options.WorldSeed,
             resourceCatalog);
         var worldTransactions = new AuthoritativeWorldTransactions(
             caves: new ProceduralCaveExcavationEnvironment(
                 options.WorldSeed));
+        var boatTransactions = new AuthoritativeBoatTransactions(
+            new ProceduralBoatNavigationQuery(options.WorldSeed));
         _session = new AuthoritativeWorldSession(
             SimulationLimits.Default with { MaximumActors = options.MaximumClients },
             sessionId: new SessionId(options.WorldId),
             navigation: new ProceduralWorldNavigationQuery(options.WorldSeed),
             worldTransactions: worldTransactions,
-            resourceTransactions: resourceTransactions);
+            resourceTransactions: resourceTransactions,
+            boatTransactions: boatTransactions);
         _session.WorldTransactionCommitted += ApplyWorldTransactionToBootstrap;
         _session.ResourceTransactionCommitted +=
             ApplyResourceTransactionToBootstrap;
         _session.CookingCompleted += BroadcastCookingCompletion;
+        _session.BoatRouteCompleted += BroadcastBoatRouteCompletion;
+        _session.BoatStateCommitted += ApplyBoatStateToBootstrap;
         if (!string.IsNullOrWhiteSpace(options.SaveRoot))
         {
             _checkpointStore = new ServerCheckpointStore(options.SaveRoot);
@@ -299,12 +329,17 @@ public sealed class DedicatedServer : IAsyncDisposable
                 return authenticated;
             }
 
+            var spawn = _options.StartingPosition ??
+                BoatTravelRules.FindPlayableLandSpawn(
+                    _options.WorldSeed,
+                    _lifetime.Token);
             var join = await _session.EnqueueJoinAsync(new JoinRequest(
                 connection.Id,
                 request.PlayerName,
-                Vector2.Zero,
+                spawn,
                 _options.StartingInventory,
-                _options.StartingHunger)).ConfigureAwait(false);
+                _options.StartingHunger,
+                ProvisionBoat: _options.IslandStart)).ConfigureAwait(false);
             if (!join.Accepted)
             {
                 var code = join.Status == JoinStatus.SessionFull
@@ -312,6 +347,9 @@ public sealed class DedicatedServer : IAsyncDisposable
                     : HandshakeRejectionCode.InvalidName;
                 throw new HandshakeFailure(code, join.Error ?? "Join was rejected.");
             }
+
+            if (join.Boat is { } boat)
+                BroadcastBoatProvisioned(boat);
 
             var joinedPlayer = new AuthenticatedPlayer(
                 request.ClientId,
@@ -366,7 +404,8 @@ public sealed class DedicatedServer : IAsyncDisposable
                   (connection.DeltaSnapshotsEnabled
                       ? ServerCapabilities.DeltaSnapshots
                       : ServerCapabilities.None)
-                : ServerCapabilities.None);
+                : ServerCapabilities.None,
+            _options.IslandStart);
 
     internal HandshakeRejectedMessage CreateHandshakeRejected(
         ClientConnection connection,
@@ -396,9 +435,37 @@ public sealed class DedicatedServer : IAsyncDisposable
             baselineInventoryRevision: 0);
     }
 
-    internal void QueueWorldObjectBaselines(ClientConnection connection)
+    /// <summary>
+    /// Atomically enters public replication and queues a fresh projection of
+    /// every public aggregate. A commit before this lock is represented by
+    /// the baselines; a commit after it observes Authenticated and broadcasts
+    /// its delta. There is therefore no unauthenticated baseline/delta gap.
+    /// </summary>
+    internal bool ActivateAndQueuePublicBaselines(ClientConnection connection)
     {
-        var bootstrap = Volatile.Read(ref _worldBootstrap);
+        lock (_publicReplicationSync)
+        {
+            DuringBootstrapActivation?.Invoke(connection);
+            var world = Volatile.Read(ref _worldBootstrap);
+            var resources = Volatile.Read(ref _resourceBootstrap);
+            var boats = Volatile.Read(ref _boatBootstrap);
+            connection.SetPublicBaselineHighWater(
+                world.ChunkRevisions,
+                resources.Chunks,
+                boats.Boats);
+            if (!QueueWorldObjectBaselines(connection, world) ||
+                !QueueResourceBaselines(connection, resources) ||
+                !QueueBoatBaseline(connection, boats))
+                return false;
+            connection.Activate();
+            return true;
+        }
+    }
+
+    private bool QueueWorldObjectBaselines(
+        ClientConnection connection,
+        WorldBootstrapState bootstrap)
+    {
         var chunkRevisions = bootstrap.ChunkRevisions;
         for (var offset = 0; offset < chunkRevisions.Count;
              offset += ProtocolLimits.MaxWorldChunkRevisionsPerBatch)
@@ -416,7 +483,7 @@ public sealed class DedicatedServer : IAsyncDisposable
                         batch)))
             {
                 connection.Stop();
-                return;
+                return false;
             }
         }
 
@@ -433,14 +500,16 @@ public sealed class DedicatedServer : IAsyncDisposable
                         value.ChunkRevision)))
             {
                 connection.Stop();
-                return;
+                return false;
             }
         }
+        return true;
     }
 
-    internal void QueueResourceBaselines(ClientConnection connection)
+    private bool QueueResourceBaselines(
+        ClientConnection connection,
+        ResourceBootstrapState bootstrap)
     {
-        var bootstrap = Volatile.Read(ref _resourceBootstrap);
         foreach (var chunk in bootstrap.Chunks)
         {
             if (!connection.TryQueueSequenced(sequence =>
@@ -450,9 +519,26 @@ public sealed class DedicatedServer : IAsyncDisposable
                         chunk)))
             {
                 connection.Stop();
-                return;
+                return false;
             }
         }
+        return true;
+    }
+
+    private bool QueueBoatBaseline(
+        ClientConnection connection,
+        BoatBootstrapState bootstrap)
+    {
+        if (!connection.TryQueueSequenced(sequence =>
+                BoatActionProtocolAdapter.ToBaseline(
+                    sequence,
+                    checked((ulong)CurrentTick),
+                    bootstrap.Boats)))
+        {
+            connection.Stop();
+            return false;
+        }
+        return true;
     }
 
     internal async Task<IntentResult> ProcessCommandAsync(
@@ -480,6 +566,8 @@ public sealed class DedicatedServer : IAsyncDisposable
                     : action.Payload is ResourceActionPayload resource
                         ? ResourceActionProtocolAdapter.ToIntent(
                             action, resource)
+                        : action.Payload is BoatActionPayload boat
+                            ? BoatActionProtocolAdapter.ToIntent(action, boat)
                         : action.Payload is CaveActionPayload cave
                             ? CaveActionProtocolAdapter.ToIntent(action, cave)
                         : ToGameplayIntent(action),
@@ -513,6 +601,12 @@ public sealed class DedicatedServer : IAsyncDisposable
         {
             QueueResourceActionOutcome(
                 connection, player, command, resourceAction, result, tick);
+            return;
+        }
+        if (command.Payload is BoatActionPayload boatAction)
+        {
+            QueueBoatActionOutcome(
+                connection, player, command, boatAction, result, tick);
             return;
         }
         if (command.Payload is CaveActionPayload caveAction)
@@ -602,6 +696,49 @@ public sealed class DedicatedServer : IAsyncDisposable
                 ResourceActionProtocolAdapter.ToPublicDelta(
                     sequence, tick, transaction)!);
         }
+    }
+
+    private void QueueBoatActionOutcome(
+        ClientConnection connection,
+        AuthenticatedPlayer player,
+        ActionCommandMessage command,
+        BoatActionPayload action,
+        IntentResult result,
+        ulong tick)
+    {
+        // Private gameplay state and the command receipt precede the public
+        // semantic delta. This prevents the requesting client from observing
+        // a boat revision it cannot yet correlate to its command.
+        if (result.Accepted && !result.Duplicate &&
+            !connection.TryQueueSequenced(sequence => ToPlayerStateMessage(
+                sequence,
+                tick,
+                player,
+                result.Gameplay,
+                PlayerStateFlags.Baseline |
+                PlayerStateFlags.Actor |
+                PlayerStateFlags.Inventory,
+                0,
+                0)))
+        {
+            connection.Stop();
+            return;
+        }
+        if (!connection.TryQueueSequenced(sequence =>
+                BoatActionProtocolAdapter.ToPrivateResult(
+                    sequence, tick, command, action, result)))
+        {
+            connection.Stop();
+            return;
+        }
+        if (result.Duplicate ||
+            result.BoatTransaction?.BoatDelta is not { } delta ||
+            BoatActionProtocolAdapter.ToPublicDelta(
+                1, tick, delta) is null)
+            return;
+        Broadcast((_, sequence) =>
+            BoatActionProtocolAdapter.ToPublicDelta(
+                sequence, tick, delta)!);
     }
 
     private void QueueCaveActionOutcome(
@@ -811,8 +948,10 @@ public sealed class DedicatedServer : IAsyncDisposable
         IntentStatus.ResourceCadenceLocked => CommandRejectionCode.RateLimited,
         IntentStatus.ExcavationCadenceLocked =>
             CommandRejectionCode.RateLimited,
+        IntentStatus.BoatPlanningLocked => CommandRejectionCode.RateLimited,
         IntentStatus.StaleNodeRevision or
-            IntentStatus.StaleResourceChunkRevision =>
+            IntentStatus.StaleResourceChunkRevision or
+            IntentStatus.StaleBoatRevision =>
             CommandRejectionCode.OutOfOrder,
         IntentStatus.ResourceNotFound or
             IntentStatus.WrongResourceKind or
@@ -821,7 +960,15 @@ public sealed class DedicatedServer : IAsyncDisposable
             IntentStatus.InvalidExcavation or
             IntentStatus.MissingExcavationTool or
             IntentStatus.InvalidCaveLink or
-            IntentStatus.OutOfRange => CommandRejectionCode.Impossible,
+            IntentStatus.OutOfRange or
+            IntentStatus.BoatNotFound or
+            IntentStatus.AlreadyAboard or
+            IntentStatus.BoatOccupied or
+            IntentStatus.NotAboard or
+            IntentStatus.InvalidBoatDestination or
+            IntentStatus.BoatDestinationTooFar or
+            IntentStatus.BoatRouteUnreachable or
+            IntentStatus.InvalidBoatLanding => CommandRejectionCode.Impossible,
         IntentStatus.QueueFull => CommandRejectionCode.ServerBusy,
         _ => CommandRejectionCode.Invalid
     };
@@ -887,7 +1034,8 @@ public sealed class DedicatedServer : IAsyncDisposable
             gameplay.FarmingExperience,
             gameplay.MiningExperience,
             gameplay.AdventureExperience,
-            gameplay.DiggingExperience);
+            gameplay.DiggingExperience,
+            gameplay.FishingExperience);
 
     private void BroadcastCookingCompletion(CookingCompletionSnapshot value)
     {
@@ -930,6 +1078,15 @@ public sealed class DedicatedServer : IAsyncDisposable
                     sequence, tick, value.Transaction)!);
     }
 
+    private void BroadcastBoatRouteCompletion(BoatStateDelta delta)
+    {
+        var tick = checked((ulong)CurrentTick);
+        if (BoatActionProtocolAdapter.ToPublicDelta(1, tick, delta) is null)
+            return;
+        Broadcast((_, sequence) =>
+            BoatActionProtocolAdapter.ToPublicDelta(sequence, tick, delta)!);
+    }
+
     private static PlayerStateMessage ToPlayerStateMessage(
         ulong sequence,
         ulong tick,
@@ -959,12 +1116,23 @@ public sealed class DedicatedServer : IAsyncDisposable
         gameplay.FarmingExperience,
         gameplay.MiningExperience,
         gameplay.AdventureExperience,
-        gameplay.DiggingExperience);
+        gameplay.DiggingExperience,
+        gameplay.FishingExperience);
 
-    internal Task DisconnectAsync(ClientConnection connection, AuthenticatedPlayer player) =>
-        _session.EnqueueDisconnectAsync(new DisconnectRequest(
-            connection.Id,
-            player.Identity.PlayerId));
+    internal async Task DisconnectAsync(
+        ClientConnection connection,
+        AuthenticatedPlayer player)
+    {
+        var result = await _session.EnqueueDisconnectAsync(
+            new DisconnectRequest(
+                connection.Id,
+                player.Identity.PlayerId)).ConfigureAwait(false);
+        if (result.BoatDelta is not { } delta) return;
+        var tick = checked((ulong)CurrentTick);
+        Broadcast((_, sequence) =>
+            BoatActionProtocolAdapter.ToPublicDelta(
+                sequence, tick, delta)!);
+    }
 
     public async ValueTask DisposeAsync()
     {
@@ -1032,6 +1200,7 @@ public sealed class DedicatedServer : IAsyncDisposable
             }
             RefreshWorldBootstrap();
             RefreshResourceBootstrap();
+            RefreshBoatBootstrap();
             _nextAutosaveTick = checked(
                 _session.Clock.Tick + AutosaveTicks(_options.AutosaveInterval));
         }
@@ -1168,6 +1337,7 @@ public sealed class DedicatedServer : IAsyncDisposable
             Volatile.Write(ref _worldBootstrap, new WorldBootstrapState(
                 Array.AsReadOnly(nextObjects),
                 Array.AsReadOnly(nextChunks)));
+            AfterWorldBootstrapUpdatedForTest?.Invoke();
         }
     }
 
@@ -1208,12 +1378,49 @@ public sealed class DedicatedServer : IAsyncDisposable
         }
     }
 
+    private void RefreshBoatBootstrap()
+    {
+        var boats = _session.CaptureBoats().ToArray();
+        lock (_boatBootstrapSync)
+            Volatile.Write(ref _boatBootstrap, new BoatBootstrapState(
+                Array.AsReadOnly(boats)));
+    }
+
+    private void ApplyBoatStateToBootstrap(BoatStateDelta delta)
+    {
+        lock (_boatBootstrapSync)
+        {
+            var boats = _boatBootstrap.Boats.ToDictionary(
+                static boat => boat.BoatId);
+            var id = delta.Current?.BoatId ?? delta.Previous?.BoatId ??
+                throw new InvalidOperationException(
+                    "A committed boat delta omitted both states.");
+            if (delta.Current is { } current)
+                boats[id] = current;
+            else
+                boats.Remove(id);
+            Volatile.Write(ref _boatBootstrap, new BoatBootstrapState(
+                Array.AsReadOnly(boats.Values
+                    .OrderBy(static boat => boat.BoatId.Value)
+                    .ToArray())));
+        }
+    }
+
+    private void BroadcastBoatProvisioned(AuthoritativeBoatSnapshot boat)
+    {
+        var tick = checked((ulong)CurrentTick);
+        var delta = new BoatStateDelta(BoatChangeKind.Added, null, boat);
+        Broadcast((_, sequence) =>
+            BoatActionProtocolAdapter.ToPublicDelta(
+                sequence, tick, delta)!);
+    }
+
     private static long AutosaveTicks(TimeSpan interval) => checked((long)
         Math.Ceiling(interval.TotalSeconds * SimulationTiming.TicksPerSecond));
 
     private void BroadcastSnapshot(SessionSnapshot snapshot)
     {
-        var entities = snapshot.Actors
+        var actorEntities = snapshot.Actors
             .Select(actor => new EntitySnapshot(
                 StableNetworkId(actor.ActorId.Value),
                 NetworkEntityKind.Player,
@@ -1227,6 +1434,27 @@ public sealed class DedicatedServer : IAsyncDisposable
                 (actor.Velocity != Vector2.Zero ? NetworkEntityState.Moving : NetworkEntityState.None),
                 checked((uint)Math.Min(snapshot.Sequence, uint.MaxValue))))
             .ToArray();
+        var boatEntities = (snapshot.Boats.IsDefault
+                ? Enumerable.Empty<AuthoritativeBoatSnapshot>()
+                : snapshot.Boats)
+            .Select(boat => new EntitySnapshot(
+                boat.NetworkEntityId,
+                NetworkEntityKind.Boat,
+                0,
+                checked((short)boat.WorldLevel),
+                boat.Position.X,
+                boat.Position.Y,
+                boat.Velocity.X,
+                boat.Velocity.Y,
+                boat.Destination is not null
+                    ? NetworkEntityState.Moving
+                    : NetworkEntityState.None,
+                boat.Revision))
+            .ToArray();
+        var entities = actorEntities.Concat(boatEntities).ToArray();
+        if (entities.Length > ProtocolLimits.MaxSnapshotEntities)
+            throw new InvalidOperationException(
+                "The authoritative snapshot exceeds its protocol entity bound.");
         var snapshotSequence = unchecked((ushort)snapshot.Sequence);
 
         foreach (var connection in _clients.Values)
@@ -1277,7 +1505,7 @@ public sealed class DedicatedServer : IAsyncDisposable
             return;
         }
 
-        var selected = SelectUdpEntities(connection, entities);
+        var selected = SelectUdpEntities(connection, snapshot, entities);
         if (selected.IsEmpty)
             return;
         var metadata = new SnapshotMetadata(
@@ -1316,6 +1544,7 @@ public sealed class DedicatedServer : IAsyncDisposable
 
     private static ReadOnlySpan<EntitySnapshot> SelectUdpEntities(
         ClientConnection connection,
+        SessionSnapshot snapshot,
         EntitySnapshot[] entities)
     {
         if (entities.Length <= UdpSnapshotCodec.MaxEntitiesPerDatagram)
@@ -1332,6 +1561,37 @@ public sealed class DedicatedServer : IAsyncDisposable
         if (own >= 0)
             result[count++] = entities[own];
 
+        var ownActor = snapshot.Actors.FirstOrDefault(actor =>
+            StableNetworkId(actor.ActorId.Value) == connection.PlayerEntityId);
+        var occupiedBoatId = ownActor.BoardedBoatId is { } boarded
+            ? snapshot.Boats.FirstOrDefault(boat => boat.BoatId == boarded)
+                ?.NetworkEntityId ?? 0
+            : 0;
+        if (occupiedBoatId != 0 && count < result.Length)
+        {
+            var occupied = Array.FindIndex(
+                entities, entity => entity.EntityId == occupiedBoatId);
+            if (occupied >= 0) result[count++] = entities[occupied];
+        }
+
+        // Nearby boats are more relevant than round-robin overflow: their
+        // collision and boarding affordances must remain spatially coherent.
+        if (own >= 0)
+        {
+            foreach (var index in Enumerable.Range(0, entities.Length)
+                         .Where(index =>
+                             index != own &&
+                             entities[index].EntityId != occupiedBoatId &&
+                             entities[index].EntityKind ==
+                                 NetworkEntityKind.Boat)
+                         .OrderBy(index => DistanceSquared(
+                             entities[own], entities[index])))
+            {
+                if (count >= result.Length) break;
+                result[count++] = entities[index];
+            }
+        }
+
         // Rotate the overflow window every publication. This keeps the local
         // actor present while ensuring every other entity receives fresh UDP
         // state even in worlds larger than one 1200-byte packet.
@@ -1343,7 +1603,8 @@ public sealed class DedicatedServer : IAsyncDisposable
              scanned++)
         {
             var index = (offset + scanned) % entities.Length;
-            if (index == own)
+            if (index == own || entities[index].EntityId == occupiedBoatId ||
+                result[..count].Contains(entities[index]))
                 continue;
             result[count++] = entities[index];
         }
@@ -1351,17 +1612,28 @@ public sealed class DedicatedServer : IAsyncDisposable
         return result[..count];
     }
 
+    private static float DistanceSquared(
+        EntitySnapshot left,
+        EntitySnapshot right)
+    {
+        var x = left.X - right.X;
+        var y = left.Y - right.Y;
+        return x * x + y * y;
+    }
+
     private void Broadcast(
         Func<ClientConnection, ulong, IProtocolMessage> createMessage)
     {
-        foreach (var connection in _clients.Values)
+        lock (_publicReplicationSync)
         {
-            if (connection.Authenticated &&
-                !connection.TryQueueSequenced(sequence => createMessage(
-                    connection,
-                    sequence)))
+            foreach (var connection in _clients.Values)
             {
-                connection.Stop();
+                if (!connection.Authenticated) continue;
+                if (!connection.TryQueuePublicSequenced(sequence =>
+                        createMessage(connection, sequence)))
+                {
+                    connection.Stop();
+                }
             }
         }
     }
@@ -1371,12 +1643,14 @@ public sealed class DedicatedServer : IAsyncDisposable
         value.Trim().Length <= 40 &&
         value.All(character => !char.IsControl(character) && !char.IsSurrogate(character));
 
-    private static ulong StableNetworkId(Guid value)
+    internal static ulong StableNetworkId(Guid value)
     {
         Span<byte> bytes = stackalloc byte[16];
         value.TryWriteBytes(bytes);
-        return BinaryPrimitives.ReadUInt64LittleEndian(bytes) ^
-            BinaryPrimitives.ReadUInt64LittleEndian(bytes[8..]);
+        var result = (BinaryPrimitives.ReadUInt64LittleEndian(bytes) ^
+            BinaryPrimitives.ReadUInt64LittleEndian(bytes[8..])) &
+            0x7fff_ffff_ffff_ffffUL;
+        return result == 0 ? 1 : result;
     }
 
     private static ulong CreateDatagramToken()
@@ -1426,6 +1700,13 @@ internal sealed record ResourceBootstrapState(
 {
     public static ResourceBootstrapState Empty { get; } = new(
         Array.Empty<ResourceChunkSparseState>());
+}
+
+internal sealed record BoatBootstrapState(
+    IReadOnlyList<AuthoritativeBoatSnapshot> Boats)
+{
+    public static BoatBootstrapState Empty { get; } = new(
+        Array.Empty<AuthoritativeBoatSnapshot>());
 }
 
 internal readonly record struct AuthenticatedPlayer(

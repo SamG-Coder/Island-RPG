@@ -23,6 +23,8 @@ public readonly record struct ActorSnapshot(
     public uint ActorRevision => Gameplay.ActorRevision;
 
     public uint InventoryRevision => Gameplay.Inventory.Revision;
+
+    public BoatId? BoardedBoatId { get; init; }
 }
 
 public readonly record struct InventorySlotSnapshot(
@@ -49,7 +51,8 @@ public readonly record struct PlayerGameplaySnapshot(
     int FarmingExperience = 0,
     int MiningExperience = 0,
     int AdventureExperience = 0,
-    int DiggingExperience = 0);
+    int DiggingExperience = 0,
+    int FishingExperience = 0);
 
 public readonly record struct ChatMessageSnapshot(
     long MessageId,
@@ -67,14 +70,16 @@ public sealed record SessionSnapshot(
     long Sequence,
     SimulationClockSnapshot Clock,
     ImmutableArray<ActorSnapshot> Actors,
-    ImmutableArray<ChatMessageSnapshot> ChatHistory)
+    ImmutableArray<ChatMessageSnapshot> ChatHistory,
+    ImmutableArray<AuthoritativeBoatSnapshot> Boats = default)
 {
     public static SessionSnapshot Empty(SessionId sessionId) => new(
         sessionId,
         0,
         default,
         ImmutableArray<ActorSnapshot>.Empty,
-        ImmutableArray<ChatMessageSnapshot>.Empty);
+        ImmutableArray<ChatMessageSnapshot>.Empty,
+        ImmutableArray<AuthoritativeBoatSnapshot>.Empty);
 }
 
 public readonly record struct SessionTickResult(

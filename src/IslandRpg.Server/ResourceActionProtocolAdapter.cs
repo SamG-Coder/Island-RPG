@@ -42,6 +42,12 @@ internal static class ResourceActionProtocolAdapter
                 command.ActorRevision,
                 action.Resource,
                 action.ToolInventorySlot),
+            ResourceActionKind.Fish => new CatchFishIntent(
+                command.CommandId,
+                command.InventoryRevision,
+                command.ActorRevision,
+                action.Resource,
+                action.ToolInventorySlot),
             _ => throw new CommandFailure(
                 CommandRejectionCode.Invalid,
                 "The resource action is not supported by this authority.")
@@ -74,7 +80,13 @@ internal static class ResourceActionProtocolAdapter
             rewards,
             transaction?.Hit ?? false,
             transaction?.Damage ?? 0,
-            transaction?.ToolWorn ?? false);
+            transaction?.ToolWorn ?? false,
+            transaction?.FishingOutcome is { } fishing
+                ? new FishingOutcomeState(
+                    fishing.Species,
+                    fishing.Caught,
+                    fishing.CatchChance)
+                : null);
     }
 
     public static ResourceNodeDeltaBatchMessage? ToPublicDelta(
