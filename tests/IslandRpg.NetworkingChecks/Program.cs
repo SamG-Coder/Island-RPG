@@ -20,6 +20,7 @@ AuthoritativeSessionChecks.Register(checks);
 ProtocolChecks.Register(checks);
 NetworkGameClientStateChecks.Register(checks);
 ItemContainerChecks.Register(checks);
+WorldRuleChecks.Register(checks);
 LoopbackChecks.Register(checks);
 
 return await checks.RunAsync(CancellationToken.None);

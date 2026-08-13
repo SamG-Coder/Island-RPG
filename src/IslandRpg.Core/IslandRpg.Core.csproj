@@ -18,6 +18,10 @@
     <Compile Include="..\IslandRpg\Gameplay\ItemContainerService.cs" Link="Gameplay\ItemContainerService.cs" />
     <Compile Include="..\IslandRpg\Gameplay\PlayerInventory.cs" Link="Gameplay\PlayerInventory.cs" />
     <Compile Include="..\IslandRpg\Gameplay\SkillService.cs" Link="Gameplay\SkillService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\WorldTime.cs" Link="Gameplay\WorldTime.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\FiremakingSkill.cs" Link="Gameplay\FiremakingSkill.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\CampfireService.cs" Link="Gameplay\CampfireService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\CharcoalService.cs" Link="Gameplay\CharcoalService.cs" />
     <Compile Include="..\IslandRpg\Gameplay\AdventureService.cs" Link="Gameplay\AdventureService.cs" />
     <Compile Include="..\IslandRpg\Gameplay\CraftingSkill.cs" Link="Gameplay\CraftingSkill.cs" />
     <Compile Include="..\IslandRpg\Gameplay\CraftingService.cs" Link="Gameplay\CraftingService.cs" />
@@ -35,5 +39,10 @@
     <Compile Include="..\IslandRpg\Gameplay\DefenceBuildingCatalog.cs" Link="Gameplay\DefenceBuildingCatalog.cs" />
     <Compile Include="..\IslandRpg\Gameplay\WallCatalog.cs" Link="Gameplay\WallCatalog.cs" />
     <Compile Include="..\IslandRpg\Gameplay\GateCatalog.cs" Link="Gameplay\GateCatalog.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\ConstructionService.cs" Link="Gameplay\ConstructionService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\StorageContainerService.cs" Link="Gameplay\StorageContainerService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\GateAccessState.cs" Link="Gameplay\GateAccessState.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\GateService.cs" Link="Gameplay\GateService.cs" />
+    <Compile Include="..\IslandRpg\World\WorldDomain.cs" Link="World\WorldDomain.cs" />
   </ItemGroup>
 </Project>

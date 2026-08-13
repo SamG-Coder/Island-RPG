@@ -2,13 +2,6 @@ namespace IslandRpg.Gameplay;
 
 using IslandRpg.World;
 
-internal enum GateAccessState : byte
-{
-    Unlocked,
-    Opened,
-    Locked
-}
-
 internal static class GateService
 {
     public static bool IsOpen(WorldGroundObject value) =>
