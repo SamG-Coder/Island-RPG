@@ -35,6 +35,22 @@ public sealed record ConsumeItemAction(
     public ActionCommandKind Kind => ActionCommandKind.ConsumeItem;
 }
 
+public sealed record PlantCropAction(
+    int SeedInventorySlot,
+    float X,
+    float Y,
+    short WorldLevel,
+    uint ExpectedChunkRevision) : IActionCommandPayload
+{
+    public ActionCommandKind Kind => ActionCommandKind.PlantCrop;
+}
+
+public sealed record HarvestCropAction(
+    WorldObjectReference Crop) : IActionCommandPayload
+{
+    public ActionCommandKind Kind => ActionCommandKind.HarvestCrop;
+}
+
 /// <summary>
 /// Stable identity and optimistic-concurrency token for a persisted world
 /// object. Chunk and level make lookups explicit without trusting object ID
@@ -194,6 +210,12 @@ public readonly record struct InventorySlotState(
     public bool IsEmpty => ItemId.Length == 0;
 }
 
+public sealed record QuestObjectiveState(string ObjectiveId, int Count);
+
+public sealed record QuestProgressState(
+    string QuestId, byte Status, long CompletionTick,
+    IReadOnlyList<QuestObjectiveState> Objectives);
+
 /// <summary>
 /// Authoritative player state. A baseline contains Actor and Inventory and all
 /// 28 slots. A delta identifies its baselines and contains only changed slots.
@@ -229,7 +251,8 @@ public sealed record PlayerStateMessage(
     CombatLifeState LifeState = CombatLifeState.Alive,
     ulong RespawnTick = 0,
     CombatStatusFlags CombatStatusFlags = CombatStatusFlags.None,
-    Guid CombatTargetEnemyId = default) : IProtocolMessage
+    Guid CombatTargetEnemyId = default,
+    IReadOnlyList<QuestProgressState>? Quests = null) : IProtocolMessage
 {
     public ProtocolMessageKind Kind => ProtocolMessageKind.PlayerState;
 }

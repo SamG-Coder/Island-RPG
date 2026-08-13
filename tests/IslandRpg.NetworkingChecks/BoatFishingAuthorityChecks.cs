@@ -677,11 +677,16 @@ internal static class BoatFishingAuthorityChecks
         var attempts = 0;
         while (attempts++ < 64)
         {
+            var beforeAttemptRevision = actor.Gameplay.ActorRevision;
             result = authority.Execute(actor, new CatchFishTransaction(
                 ResourceContext(actor), Node(authority, descriptor), 0,
                 2.4f, attempts * .11));
             CheckAssert.True(result.Accepted,
                 "a ready valid fishing attempt should resolve");
+            CheckAssert.Equal(beforeAttemptRevision + 1,
+                result.ActorRevision,
+                "each accepted fishing attempt must advance actor revision once");
+            actor = actor with { Gameplay = result.Gameplay!.Value };
             if (result.FishingOutcome is { Caught: true }) break;
         }
         CheckAssert.True(result.FishingOutcome is { Caught: true },
@@ -694,7 +699,6 @@ internal static class BoatFishingAuthorityChecks
             "a catch must grant Fishing XP");
         CheckAssert.True(result.Gameplay!.Value.AdventureExperience > 0,
             "a catch must share progress with Adventure XP");
-        actor = actor with { Gameplay = result.Gameplay.Value };
         var locked = authority.Execute(actor, new CatchFishTransaction(
             ResourceContext(actor), Node(authority, descriptor), 0,
             2.4f, attempts * .11));
@@ -739,8 +743,13 @@ internal static class BoatFishingAuthorityChecks
             var first = trial.Execute(actor, new CatchFishTransaction(
                 ResourceContext(actor), Node(descriptor), 0, 2.4f, 0));
             if (first.FishingOutcome is not { Caught: false }) continue;
-            var second = trial.Execute(actor, new CatchFishTransaction(
-                ResourceContext(actor), Node(trial, descriptor), 0,
+            var advancedActor = actor with
+            {
+                Gameplay = first.Gameplay!.Value
+            };
+            var second = trial.Execute(advancedActor,
+                new CatchFishTransaction(
+                ResourceContext(advancedActor), Node(trial, descriptor), 0,
                 2.4f, .11));
             if (second.FishingOutcome is { Caught: true })
             {
@@ -759,10 +768,32 @@ internal static class BoatFishingAuthorityChecks
                          miss.FishingOutcome is { Caught: false } &&
                          miss.NodeDelta is null && miss.ChunkDelta is null,
             "an authoritative miss must commit cadence without fake stock");
+        CheckAssert.Equal(
+            selectedActor!.Gameplay.ActorRevision + 1,
+            miss.ActorRevision,
+            "an accepted fishing miss must advance actor revision exactly once");
         var checkpoint = source.CaptureCheckpoint();
         CheckAssert.Equal(1UL,
             checkpoint.ActorCadences.Single().ActionOrdinal,
             "the persisted miss must advance the deterministic roll ordinal");
+        var afterMissActor = selectedActor with
+        {
+            Gameplay = miss.Gameplay!.Value
+        };
+        var staleReplay = source.Execute(afterMissActor,
+            new CatchFishTransaction(
+                ResourceContext(afterMissActor) with
+                {
+                    CommandId = Guid.NewGuid(),
+                    ExpectedActorRevision = selectedActor.Gameplay.ActorRevision
+                },
+                Node(source, descriptor), 0, 2.4f, .22));
+        CheckAssert.Equal(ResourceTransactionStatus.StaleActorRevision,
+            staleReplay.Status,
+            "an evicted fishing-miss replay must fail its old actor revision");
+        CheckAssert.Equal(1UL,
+            source.CaptureCheckpoint().ActorCadences.Single().ActionOrdinal,
+            "a stale fishing-miss replay must not consume another ordinal");
 
         var left = new AuthoritativeResourceTransactions(
             worldSeed, catalog, options);
@@ -770,12 +801,13 @@ internal static class BoatFishingAuthorityChecks
             worldSeed, catalog, options);
         left.RestoreCheckpoint(checkpoint);
         right.RestoreCheckpoint(checkpoint);
-        var leftCatch = left.Execute(selectedActor!, new CatchFishTransaction(
-            ResourceContext(selectedActor!), Node(left, descriptor), 0,
-            2.4f, .11));
-        var rightCatch = right.Execute(selectedActor!,
+        var leftCatch = left.Execute(afterMissActor,
             new CatchFishTransaction(
-                ResourceContext(selectedActor!), Node(right, descriptor), 0,
+                ResourceContext(afterMissActor), Node(left, descriptor), 0,
+                2.4f, .11));
+        var rightCatch = right.Execute(afterMissActor,
+            new CatchFishTransaction(
+                ResourceContext(afterMissActor), Node(right, descriptor), 0,
                 2.4f, .11));
         CheckAssert.True(leftCatch.FishingOutcome is { Caught: true } &&
                          rightCatch.FishingOutcome is { Caught: true },

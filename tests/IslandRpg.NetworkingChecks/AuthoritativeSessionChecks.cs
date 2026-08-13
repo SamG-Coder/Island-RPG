@@ -41,6 +41,9 @@ internal static class AuthoritativeSessionChecks
             "eating consumes one authoritative food item",
             EatingUsesAuthoritativeSurvivalState);
         checks.Add(
+            "passive survival advances only connected actors at coarse authority cadence",
+            PassiveSurvivalAdvancesConnectedActors);
+        checks.Add(
             "stone tool sharpening is an authoritative combination",
             SharpeningUsesAuthoritativeInventoryState);
         checks.Add(
@@ -368,6 +371,8 @@ internal static class AuthoritativeSessionChecks
             "the combination recipe must commit both canonical outputs");
         CheckAssert.Equal(8, combined.CraftingExperience,
             "combining items must award the canonical recipe experience once");
+        CheckAssert.Equal(2, combined.AdventureExperience,
+            "crafting must feed canonical Adventure XP from actual skill XP gained");
         CheckAssert.Equal(afterSwap.Inventory.Revision + 1,
             combined.Inventory.Revision,
             "a successful combination must advance the inventory revision once");
@@ -623,6 +628,49 @@ internal static class AuthoritativeSessionChecks
                 session.CaptureSnapshot().Actors[0].Gameplay.Inventory,
                 "wild_berries"),
             "a rejected food action must not consume the item");
+    }
+
+    private static void PassiveSurvivalAdvancesConnectedActors()
+    {
+        var session = NewSession();
+        var firstConnection = ClientConnectionId.New();
+        var secondConnection = ClientConnectionId.New();
+        var first = Join(session, firstConnection, "Mira", Vector2.Zero,
+            initialHunger: 100);
+        var second = Join(session, secondConnection, "Rowan", Vector2.One,
+            initialHunger: 100);
+        for (var tick = 0; tick < SimulationTiming.TicksPerSecond - 1; tick++)
+            session.Tick();
+        var beforeBoundary = session.CaptureSnapshot().Actors
+            .Single(actor => actor.PlayerId == first.Identity.PlayerId).Gameplay;
+        CheckAssert.Equal(100f, beforeBoundary.Hunger,
+            "survival must not churn private actor revisions every fixed step");
+        session.Tick();
+        var afterFirstSecond = session.CaptureSnapshot().Actors
+            .Single(actor => actor.PlayerId == first.Identity.PlayerId).Gameplay;
+        CheckAssert.True(afterFirstSecond.Hunger < 100 &&
+                         afterFirstSecond.ActorRevision > beforeBoundary.ActorRevision,
+            "connected actors must lose hunger at the authoritative one-second cadence");
+
+        var disconnect = session.EnqueueDisconnectAsync(new DisconnectRequest(
+            secondConnection, second.Identity.PlayerId));
+        session.Drain();
+        CheckAssert.True(disconnect.GetAwaiter().GetResult().Accepted,
+            "the control actor must disconnect before offline survival is checked");
+        var offlineBefore = session.CaptureSnapshot().Actors
+            .Single(actor => actor.PlayerId == second.Identity.PlayerId).Gameplay;
+        for (var tick = 0; tick < SimulationTiming.TicksPerSecond * 3; tick++)
+            session.Tick();
+        var onlineAfter = session.CaptureSnapshot().Actors
+            .Single(actor => actor.PlayerId == first.Identity.PlayerId).Gameplay;
+        var offlineAfter = session.CaptureSnapshot().Actors
+            .Single(actor => actor.PlayerId == second.Identity.PlayerId).Gameplay;
+        CheckAssert.True(onlineAfter.Hunger < afterFirstSecond.Hunger,
+            "connected actors must continue authoritative survival progression");
+        CheckAssert.Equal(offlineBefore.Hunger, offlineAfter.Hunger,
+            "offline actors must pause survival progression");
+        CheckAssert.Equal(offlineBefore.WellFedSeconds, offlineAfter.WellFedSeconds,
+            "offline actors must retain their exact digestion timer");
     }
 
     private static void SharpeningUsesAuthoritativeInventoryState()

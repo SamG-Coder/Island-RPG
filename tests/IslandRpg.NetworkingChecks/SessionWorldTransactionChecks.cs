@@ -1,4 +1,5 @@
 using System.Numerics;
+using IslandRpg.Gameplay;
 using IslandRpg.Simulation;
 
 namespace IslandRpg.NetworkingChecks;
@@ -11,6 +12,9 @@ internal static class SessionWorldTransactionChecks
     {
         checks.Add("session world pickup commits once and replays its receipt",
             PickupCommitsOnceAndReplays);
+        checks.Add(
+            "aggregate replay after session receipt eviction is tombstoned",
+            AggregateReplayAfterSessionReceiptEvictionIsTombstoned);
         checks.Add("session world actions reject foreign stale and distant actors",
             ForeignStaleAndRangeAreRejected);
         checks.Add("session container open is private and read only",
@@ -86,6 +90,225 @@ internal static class SessionWorldTransactionChecks
         AssertGameplayEqual(committed,
             session.CaptureSnapshot().Actors.Single().Gameplay,
             "a payload conflict must be mutation free");
+    }
+
+    private static void AggregateReplayAfterSessionReceiptEvictionIsTombstoned()
+    {
+        var session = NewSession();
+        var material = session.SeedWorldObject(new(
+            Guid.Parse("81100000-0000-0000-0000-000000000001"),
+            ItemIds.LargeRock,
+            new Vector2(1, 0)));
+        var chest = session.SeedWorldObject(new(
+            Guid.Parse("81100000-0000-0000-0000-000000000002"),
+            ItemIds.StorageChest,
+            new Vector2(1, 0)));
+        var connection = ClientConnectionId.New();
+        var joined = Join(
+            session,
+            connection,
+            "Archivist",
+            Vector2.Zero,
+            [
+                new InitialInventoryItem(ItemIds.LargeRock, 4),
+                new InitialInventoryItem(ItemIds.Sticks, 2),
+                new InitialInventoryItem(ItemIds.PlantFibres, 2),
+                new InitialInventoryItem(ItemIds.WildGrainSeeds)
+            ]);
+        var committedTransactions = 0;
+        session.WorldTransactionCommitted += _ => committedTransactions++;
+        var original = new PickUpWorldObjectIntent(
+            Guid.Parse("82100000-0000-0000-0000-000000000001"),
+            joined.Gameplay.Inventory.Revision,
+            joined.Gameplay.ActorRevision,
+            Handle(
+                material,
+                session.CaptureWorldChunkRevision(material.Chunk)));
+        var first = Send(session, connection, joined, 1, original);
+        CheckAssert.True(first.Accepted,
+            "the fixture pickup must commit");
+        CheckAssert.Equal(50, first.Gameplay.AdventureExperience,
+            "held starter materials plus the pickup must complete quest one");
+
+        var crafted = Send(
+            session,
+            connection,
+            joined,
+            2,
+            new CraftRecipeIntent(
+                Guid.Parse("82100000-0000-0000-0000-000000000002"),
+                first.InventoryRevision,
+                first.ActorRevision,
+                "medium-rock"));
+        CheckAssert.True(crafted.Accepted,
+            "the fixture craft must advance state beyond the cached pickup");
+        CheckAssert.Equal(2,
+            crafted.Gameplay.Quests[1].ObjectiveCounts!
+                .GetValueOrDefault("medium-rocks"),
+            "the post-pickup state must carry newer quest progress");
+
+        var cropPosition = new Vector2(.5f, 1.5f);
+        var seedSlot = crafted.Gameplay.Inventory.Slots.Single(value =>
+            value.ItemId == ItemIds.WildGrainSeeds).Slot;
+        var planted = Send(
+            session,
+            connection,
+            joined,
+            3,
+            new PlantCropIntent(
+                Guid.Parse("82100000-0000-0000-0000-000000000003"),
+                crafted.InventoryRevision,
+                crafted.ActorRevision,
+                seedSlot,
+                cropPosition,
+                0,
+                session.CaptureWorldChunkRevision(
+                    WorldChunkKey.At(cropPosition, 0))));
+        CheckAssert.True(planted.Accepted,
+            "the fixture crop must advance aggregate action XP");
+        CheckAssert.True(
+            planted.Gameplay.AdventureExperience >
+            first.Gameplay.AdventureExperience,
+            "the post-pickup state must carry newer Adventure XP");
+
+        var chestHandle = Handle(
+            chest,
+            session.CaptureWorldChunkRevision(chest.Chunk));
+        for (var index = 0; index < 254; index++)
+        {
+            var opened = Send(
+                session,
+                connection,
+                joined,
+                index + 4L,
+                new OpenWorldContainerIntent(
+                    Guid.Parse($"83100000-0000-0000-0000-{index + 1:D12}"),
+                    planted.InventoryRevision,
+                    planted.ActorRevision,
+                    chestHandle));
+            CheckAssert.True(opened.Accepted,
+                "the read-only command must fill the bounded receipt history");
+        }
+
+        var beforeReplay = Actor(session, joined.Identity.PlayerId).Gameplay;
+        var chunkBeforeReplay =
+            session.CaptureWorldChunkRevision(material.Chunk);
+        var checkpoint = session.CaptureCheckpoint();
+        CheckAssert.Equal(256,
+            checkpoint.Actors.Single().CommandReceipts.Length,
+            "the durable session receipt history must remain bounded");
+        CheckAssert.False(
+            checkpoint.Actors.Single().CommandReceipts.Any(value =>
+                value.CommandId == original.CommandId),
+            "the original pickup must be evicted from the session receipt history");
+
+        var conflict = Send(
+            session,
+            connection,
+            joined,
+            258,
+            original with
+            {
+                Object = original.Object with
+                {
+                    ExpectedObjectRevision =
+                        original.Object.ExpectedObjectRevision + 1
+                }
+            });
+        CheckAssert.Equal(IntentStatus.CommandIdConflict, conflict.Status,
+            "the longer-lived aggregate receipt must reject a changed payload");
+
+        var replay = Send(session, connection, joined, 259, original);
+        CheckAssert.True(replay.Accepted && replay.Duplicate,
+            "an exact aggregate-level replay must become a session duplicate");
+        CheckAssert.True(replay.WorldTransaction is null,
+            "an evicted aggregate receipt must replay as a stale-effect tombstone");
+        CheckAssert.Equal(beforeReplay.ActorRevision, replay.ActorRevision,
+            "aggregate replay must report the current actor revision");
+        CheckAssert.Equal(beforeReplay.Inventory.Revision,
+            replay.InventoryRevision,
+            "aggregate replay must report the current inventory revision");
+        CheckAssert.Equal(beforeReplay.AdventureExperience,
+            replay.Gameplay.AdventureExperience,
+            "aggregate replay must not rewind Adventure XP");
+        CheckAssert.Equal(beforeReplay.CraftingExperience,
+            replay.Gameplay.CraftingExperience,
+            "aggregate replay must not rewind skill XP");
+        CheckAssert.SequenceEqual(beforeReplay.Quests, replay.Gameplay.Quests,
+            "aggregate replay must not rewind or reapply quest progress");
+        CheckAssert.SequenceEqual(beforeReplay.Inventory.Slots,
+            replay.Gameplay.Inventory.Slots,
+            "aggregate replay must not rewind inventory contents");
+        CheckAssert.Equal(chunkBeforeReplay,
+            session.CaptureWorldChunkRevision(material.Chunk),
+            "aggregate replay must not advance or rewind world revisions");
+        CheckAssert.Equal(2, committedTransactions,
+            "aggregate replay must not rebroadcast its public world delta");
+
+        var secondCraft = Send(
+            session,
+            connection,
+            joined,
+            260,
+            new CraftRecipeIntent(
+                Guid.Parse("82100000-0000-0000-0000-000000000004"),
+                replay.InventoryRevision,
+                replay.ActorRevision,
+                "medium-rock"));
+        CheckAssert.True(secondCraft.Accepted,
+            "the fixture must advance state after caching the tombstone");
+        var replayFromTombstone = Send(
+            session, connection, joined, 261, original);
+        CheckAssert.True(
+            replayFromTombstone.Accepted && replayFromTombstone.Duplicate,
+            "a reinserted aggregate tombstone must remain idempotent");
+        CheckAssert.True(replayFromTombstone.WorldTransaction is null,
+            "a reinserted tombstone must never regain stale world effects");
+        CheckAssert.Equal(secondCraft.ActorRevision,
+            replayFromTombstone.ActorRevision,
+            "a cached tombstone must report the newest actor revision");
+        CheckAssert.Equal(secondCraft.InventoryRevision,
+            replayFromTombstone.InventoryRevision,
+            "a cached tombstone must report the newest inventory revision");
+        CheckAssert.Equal(secondCraft.Gameplay.AdventureExperience,
+            replayFromTombstone.Gameplay.AdventureExperience,
+            "a cached tombstone must report the newest Adventure XP");
+        CheckAssert.SequenceEqual(secondCraft.Gameplay.Quests,
+            replayFromTombstone.Gameplay.Quests,
+            "a cached tombstone must report the newest quest progress");
+        CheckAssert.Equal(2, committedTransactions,
+            "cached tombstone replay must not rebroadcast world deltas");
+
+        var restored = NewSession();
+        restored.RestoreCheckpoint(checkpoint);
+        var restoredPublications = 0;
+        restored.WorldTransactionCommitted += _ => restoredPublications++;
+        var reconnectConnection = ClientConnectionId.New();
+        var reconnectPending = restored.EnqueueReconnectAsync(new(
+            reconnectConnection,
+            joined.Identity.PlayerId,
+            joined.ReconnectToken));
+        restored.Drain();
+        var reconnect = reconnectPending.GetAwaiter().GetResult();
+        CheckAssert.True(reconnect.Accepted,
+            "the evicted-receipt checkpoint owner must reconnect");
+        var afterRestart = Send(
+            restored,
+            reconnectConnection,
+            joined,
+            reconnect.NextCommandSequence,
+            original);
+        CheckAssert.Equal(IntentStatus.StaleActorRevision,
+            afterRestart.Status,
+            "an old evicted mutation must fail safely after aggregate restart");
+        CheckAssert.SequenceEqual(beforeReplay.Inventory.Slots,
+            afterRestart.Gameplay.Inventory.Slots,
+            "restart retry must preserve current inventory");
+        CheckAssert.SequenceEqual(beforeReplay.Quests,
+            afterRestart.Gameplay.Quests,
+            "restart retry must preserve current quest progress");
+        CheckAssert.Equal(0, restoredPublications,
+            "restart retry must not publish an old world delta");
     }
 
     private static void ForeignStaleAndRangeAreRejected()
@@ -484,7 +707,9 @@ internal static class SessionWorldTransactionChecks
         var campfire = session.SeedWorldObject(new(
             Guid.Parse("8c000000-0000-0000-0000-000000000001"),
             "campfire", new Vector2(1, 0),
-            FuelItemId: "logs", LitUntilGameSeconds: 300));
+            FuelItemId: "logs",
+            LitUntilGameSeconds: AuthoritativeWorldTime
+                .FromElapsedRealSeconds(300)));
         var connection = ClientConnectionId.New();
         var joined = Join(session, connection, "Cook", Vector2.Zero,
             [new InitialInventoryItem("raw_minnows")]);
@@ -519,6 +744,53 @@ internal static class SessionWorldTransactionChecks
             "replay and conflict handling must not restore or consume another item");
 
         var checkpoint = session.CaptureCheckpoint();
+        var actorCheckpoint = checkpoint.Actors.Single();
+        var cookingQuestProgress = QuestService.Normalize(null);
+        var questAdventureExperience = 0;
+        foreach (var questId in new[]
+                 {
+                     "washed-ashore",
+                     "tools-of-survival",
+                     "first-light"
+                 })
+        {
+            var questUpdate = QuestService.Complete(
+                cookingQuestProgress,
+                questAdventureExperience,
+                questId,
+                completionTick: 0);
+            cookingQuestProgress = questUpdate.Progress;
+            questAdventureExperience = questUpdate.AdventureExperience;
+        }
+        foreach (var questEvent in new[]
+                 {
+                     new QuestEvent(
+                         QuestEventType.CraftItem,
+                         ItemIds.PrimitiveFishingNet),
+                     new QuestEvent(QuestEventType.CatchFish)
+                 })
+        {
+            var questUpdate = QuestService.Apply(
+                cookingQuestProgress,
+                questAdventureExperience,
+                questEvent,
+                completionTick: 0);
+            cookingQuestProgress = questUpdate.Progress;
+            questAdventureExperience = questUpdate.AdventureExperience;
+        }
+        checkpoint = checkpoint with
+        {
+            Actors = [actorCheckpoint with
+            {
+                Gameplay = actorCheckpoint.Gameplay with
+                {
+                    AdventureExperience = 74,
+                    MaximumHealth = 100,
+                    Health = 100,
+                    Quests = cookingQuestProgress
+                }
+            }]
+        };
         var invalidOutcome = NewSession();
         CheckAssert.Throws<InvalidDataException>(
             () => invalidOutcome.RestoreCheckpoint(checkpoint with
@@ -531,19 +803,59 @@ internal static class SessionWorldTransactionChecks
             "restore must reject cooking outcomes that do not match the deterministic roll");
         var restored = NewSession();
         restored.RestoreCheckpoint(checkpoint);
+        var completionCount = 0;
+        restored.CookingCompleted += _ => completionCount++;
         for (var tick = checkpoint.Tick;
              tick < checkpoint.CookingJobs[0].CompletesAtTick;
              tick++)
             restored.Tick();
         var completed = Actor(restored, joined.Identity.PlayerId).Gameplay;
-        CheckAssert.Equal(1,
-            Count(completed, "cooked_minnows") +
-            Count(completed, "burnt_minnows"),
-            "restored authority must complete exactly one deterministic output");
+        CheckAssert.Equal(1, Count(completed, ItemIds.CookedMinnows),
+            "the deterministic fixture must complete one successful cooked output");
+        CheckAssert.Equal(0, Count(completed, ItemIds.BurntMinnows),
+            "the threshold regression must not silently take the burnt branch");
         CheckAssert.Equal(0, restored.CaptureCheckpoint().CookingJobs.Length,
             "a completed job must leave durable active state");
-        CheckAssert.True(completed.CookingExperience >= 0,
-            "only the authority may award cooking experience");
+        CheckAssert.Equal(1, completionCount,
+            "a durable cooking job must publish one atomic completion");
+        CheckAssert.Equal(10, completed.CookingExperience,
+            "successful minnows must award their authoritative Cooking XP");
+        CheckAssert.Equal(327, completed.AdventureExperience,
+            "cooking action XP and the completed cooking quest must both commit");
+        CheckAssert.Equal(
+            AdventureService.MaximumHealth(completed.AdventureExperience),
+            completed.MaximumHealth,
+            "cooking Adventure XP must reconcile maximum health before commit");
+        CheckAssert.Equal(104, completed.MaximumHealth,
+            "action and quest XP must cross the two expected Adventure thresholds");
+        CheckAssert.Equal(completed.MaximumHealth, completed.Health,
+            "cooking level crossings must heal by the exact maximum-health gain");
+        CheckAssert.Equal(
+            checked(actorCheckpoint.Gameplay.ActorRevision + 2),
+            completed.ActorRevision,
+            "inventory, skill XP, and quest completion must not add a third quest-only revision");
+        CheckAssert.Equal(
+            checked(actorCheckpoint.Gameplay.Inventory.Revision + 1),
+            completed.Inventory.Revision,
+            "cooking completion must publish its output through one inventory revision");
+        CheckAssert.Equal(
+            QuestStatus.Complete,
+            completed.Quests.Single(value =>
+                value.QuestId == "island-provision").Status,
+            "the successful output must atomically complete the cooking quest");
+
+        restored.Tick();
+        var afterExtraTick = Actor(
+            restored, joined.Identity.PlayerId).Gameplay;
+        AssertGameplayEqual(completed, afterExtraTick,
+            "a completed durable job must not commit again on a later tick");
+        CheckAssert.Equal(completed.AdventureExperience,
+            afterExtraTick.AdventureExperience,
+            "a completed durable job must not award Adventure XP twice");
+        CheckAssert.SequenceEqual(completed.Quests, afterExtraTick.Quests,
+            "a completed durable job must not apply its quest event twice");
+        CheckAssert.Equal(1, completionCount,
+            "a completed durable job must not publish twice");
     }
 
     private static JoinResult Join(AuthoritativeWorldSession session,

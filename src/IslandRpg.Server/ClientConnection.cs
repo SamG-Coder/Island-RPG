@@ -661,7 +661,10 @@ internal sealed class PrivatePlayerStateHighWater
                 : Array.Empty<InventorySlotState>(),
             CombatTargetEnemyId = publishActor
                 ? candidate.CombatTargetEnemyId
-                : Guid.Empty
+                : Guid.Empty,
+            Quests = publishActor
+                ? candidate.Quests
+                : Array.Empty<QuestProgressState>()
         };
     }
 }

@@ -100,6 +100,11 @@ public sealed class ServerCheckpointStore
     public void Save(ServerCheckpoint checkpoint)
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
+        if (checkpoint.SchemaVersion != ServerCheckpoint.CurrentSchemaVersion)
+        {
+            throw new InvalidOperationException(
+                "Only the current checkpoint schema can be written. Load and map legacy checkpoints before saving them.");
+        }
         Validate(checkpoint, checkpoint.WorldId);
 
         lock (_sync)
@@ -202,7 +207,9 @@ public sealed class ServerCheckpointStore
     {
         ArgumentNullException.ThrowIfNull(value);
         ValidateWorldId(expectedWorldId);
-        if (value.SchemaVersion != ServerCheckpoint.CurrentSchemaVersion)
+        if (value.SchemaVersion is not (
+                ServerCheckpoint.LegacyElapsedDeadlineSchemaVersion or
+                ServerCheckpoint.CurrentSchemaVersion))
             throw new InvalidDataException("The server checkpoint schema is unsupported.");
         if (value.Revision <= 0 || value.WorldId != expectedWorldId ||
             value.SessionId == Guid.Empty || value.Tick < 0 ||
@@ -223,17 +230,35 @@ public sealed class ServerCheckpointStore
             if (actor.PlayerId == Guid.Empty || actor.ActorId == Guid.Empty ||
                 !players.Add(actor.PlayerId) || !actors.Add(actor.ActorId) ||
                 !float.IsFinite(actor.X) || !float.IsFinite(actor.Y) ||
-                actor.LastProcessedCommandSequence < 0 || actor.ActorRevision == 0 ||
+                actor.LastProcessedCommandSequence < 0 ||
+                actor.ActorRevision is 0 or uint.MaxValue ||
                 actor.InventoryRevision == 0 || actor.Health < 0 ||
                 !float.IsFinite(actor.Hunger) || actor.Hunger is < 0 or > 100 ||
                 !float.IsFinite(actor.WellFedSeconds) || actor.WellFedSeconds < 0 ||
+                !float.IsFinite(actor.StarvationDamageRemainder) ||
+                actor.StarvationDamageRemainder is < 0 or >= 1 ||
+                !float.IsFinite(actor.HealthRegenerationRemainder) ||
+                actor.HealthRegenerationRemainder is < 0 or >= 1 ||
+                !TimedHealingService.IsCanonical(new TimedHealingState(
+                    actor.TimedHealingRemainingHealth,
+                    actor.TimedHealingRemainingSeconds,
+                    actor.TimedHealingFractionalHealth)) ||
+                (actor.TimedHealingRemainingHealth > 0 &&
+                 (actor.Health <= 0 ||
+                  actor.Health >= actor.MaximumHealth ||
+                  actor.LifeState != ActorLifeState.Alive)) ||
                 actor.CraftingExperience < 0 || actor.CookingExperience < 0 ||
                 actor.WoodcuttingExperience < 0 ||
                 actor.FarmingExperience < 0 || actor.MiningExperience < 0 ||
                 actor.AdventureExperience < 0 ||
+                actor.AdventureExperience > AdventureService.ExperienceForLevel(
+                    AdventureService.MaximumLevel) ||
                 actor.DiggingExperience < 0 ||
                 actor.FishingExperience < 0 ||
                 actor.MaximumHealth <= 0 ||
+                value.SchemaVersion == ServerCheckpoint.CurrentSchemaVersion &&
+                    actor.MaximumHealth != AdventureService.MaximumHealth(
+                        actor.AdventureExperience) ||
                 actor.Health > actor.MaximumHealth ||
                 actor.AttackExperience < 0 ||
                 actor.StrengthExperience < 0 ||
@@ -262,6 +287,19 @@ public sealed class ServerCheckpointStore
                 throw new InvalidDataException("An actor checkpoint is invalid.");
             ValidateText(actor.DisplayName, 64, nameof(actor.DisplayName));
             ValidateInventory(actor.Inventory);
+            if (actor.Quests is not null)
+            {
+                try
+                {
+                    _ = QuestService.Normalize(actor.Quests);
+                }
+                catch (Exception error) when (
+                    error is InvalidDataException or ArgumentException)
+                {
+                    throw new InvalidDataException(
+                        "An actor quest checkpoint is invalid.", error);
+                }
+            }
             var commands = new HashSet<Guid>();
             foreach (var receipt in actor.CommandReceipts)
             {

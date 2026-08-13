@@ -30,7 +30,8 @@ internal sealed partial class GameHostWindow
         InstallCaveRope,
         TakeCaveRope,
         FillExcavation,
-        TraverseCave
+        TraverseCave,
+        HarvestCrop
     }
 
     private readonly record struct PendingNetworkWorldAction(
@@ -188,7 +189,10 @@ internal sealed partial class GameHostWindow
                          groundObject.ItemId) &&
                      !CaveEntranceService.IsExcavation(groundObject))
                 QueueNetworkObjectAction(
-                    NetworkWorldActionKind.PickUp, groundObject);
+                    CropService.IsCrop(groundObject)
+                        ? NetworkWorldActionKind.HarvestCrop
+                        : NetworkWorldActionKind.PickUp,
+                    groundObject);
         }
         else if (!placingObject && leftDown && !_gameLeftWasDown &&
                  !IsPointerOverGameUi(MouseState.Position) &&
@@ -285,6 +289,8 @@ internal sealed partial class GameHostWindow
         else if (CaveEntranceService.IsShallowHole(value) &&
                  FindNetworkCaveFillSlot(value) is >= 0)
             Add("Fill hole", NetworkWorldActionKind.FillExcavation);
+        else if (CropService.IsCrop(value))
+            Add("Harvest", NetworkWorldActionKind.HarvestCrop);
         else if (!PlaceableObjectCatalog.IsPlaceable(value.ItemId))
             Add("Pick up", NetworkWorldActionKind.PickUp);
 
@@ -569,6 +575,8 @@ internal sealed partial class GameHostWindow
                 new FillExcavationAction(reference, action.InventorySlot),
             NetworkWorldActionKind.TraverseCave =>
                 new TraverseCaveAction(reference),
+            NetworkWorldActionKind.HarvestCrop =>
+                new HarvestCropAction(reference),
             _ => null
         };
     }

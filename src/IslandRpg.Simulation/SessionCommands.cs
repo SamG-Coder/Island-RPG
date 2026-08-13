@@ -280,6 +280,27 @@ public sealed record DropInventoryItemIntent(
         ExpectedInventoryRevision,
         ExpectedActorRevision);
 
+public sealed record PlantCropIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    int SeedInventorySlot,
+    Vector2 Position,
+    int WorldLevel,
+    uint ExpectedChunkRevision) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record HarvestCropIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Crop) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
 public sealed record OpenWorldContainerIntent(
     Guid CommandId,
     uint ExpectedInventoryRevision,
@@ -584,6 +605,8 @@ public enum IntentStatus
     MissingExcavationTool,
     ExcavationCadenceLocked,
     InvalidCaveLink,
+    NotCrop,
+    CropNotReady,
     BoatNotFound,
     StaleBoatRevision,
     AlreadyAboard,

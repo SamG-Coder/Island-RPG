@@ -51,6 +51,7 @@ internal sealed partial class GameHostWindow
 
     private void RecordQuestEvent(QuestEvent questEvent)
     {
+        if (IsNetworkWorld) return;
         if (_activePlayer is null) return;
         var before = QuestService.Normalize(_activePlayer.Quests);
         var result = QuestService.Apply(
@@ -81,6 +82,7 @@ internal sealed partial class GameHostWindow
 
     private void ReconcileInventoryQuestProgress()
     {
+        if (IsNetworkWorld) return;
         if (_activePlayer is null) return;
         var inventory = _activePlayer.Inventory;
         var quests = _activePlayer.Quests;
@@ -117,6 +119,11 @@ internal sealed partial class GameHostWindow
 
     private void CompleteQuestFromCommand(string questId)
     {
+        if (IsNetworkWorld)
+        {
+            CommandMessage("Quests are updated by the server in multiplayer.");
+            return;
+        }
         if (_activePlayer is null) return;
         var result = QuestService.Complete(
             _activePlayer.Quests,
@@ -148,6 +155,34 @@ internal sealed partial class GameHostWindow
         _questReturnModal = _modalScreen.Active;
         _modalScreen.Open(ModalScreenKind.QuestComplete);
         CommandMessage($"Completed quest {result.CompletedQuest.Title}.");
+    }
+
+    private void PresentNetworkQuestCompletion(
+        IReadOnlyList<QuestProgress> previous,
+        IReadOnlyList<QuestProgress> current)
+    {
+        if (!IsNetworkWorld || previous.Count != current.Count) return;
+        for (var index = 0; index < current.Count; index++)
+        {
+            if (previous[index].Status == QuestStatus.Complete ||
+                current[index].Status != QuestStatus.Complete ||
+                current[index].CompletionTick < 0)
+                continue;
+            var definition = QuestService.Definitions[index];
+            if (!string.Equals(
+                    definition.Id, current[index].QuestId,
+                    StringComparison.Ordinal))
+                continue;
+            _completedQuest = definition;
+            _questReturnModal = _modalScreen.Active;
+            _modalScreen.Open(ModalScreenKind.QuestComplete);
+            _chatUi.BlurInput();
+            UseDefaultGameCursor();
+            _chatUi.AddMessage(
+                $"Completed quest {definition.Title}.",
+                ChatMessageStyle.Reward);
+            return;
+        }
     }
 
     private void UpdateQuestWindowInput(Vector2 pointer, bool leftDown)

@@ -1,6 +1,6 @@
 namespace IslandRpg.Gameplay;
 
-internal static class AdventureService
+public static class AdventureService
 {
     public const int MaximumLevel = 100;
     public const int BaseMaximumHealth = 100;
@@ -26,7 +26,7 @@ internal static class AdventureService
         BaseMaximumHealth +
         (LevelForExperience(experience) - 1) * HealthPerLevel;
 
-    public static SkillExperienceChange AwardFromAction(
+    internal static SkillExperienceChange AwardFromAction(
         int currentExperience, int actionExperience)
     {
         var previousLevel = LevelForExperience(currentExperience);

@@ -469,7 +469,8 @@ internal static class LoopbackChecks
                 "campfire",
                 new(.5f, 0),
                 FuelItemId: "logs",
-                LitUntilGameSeconds: 300)],
+                LitUntilGameSeconds: AuthoritativeWorldTime
+                    .FromElapsedRealSeconds(300))],
             [new("raw_minnows")]);
         await using var client = new NetworkGameClient(TimeSpan.Zero);
         await fixture.ConnectAsync(client, "Cook", cancellationToken);

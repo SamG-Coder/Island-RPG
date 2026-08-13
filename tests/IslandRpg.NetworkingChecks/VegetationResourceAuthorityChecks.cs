@@ -253,6 +253,100 @@ internal static class VegetationResourceAuthorityChecks
                 "catch-up must preserve one bounded actor/action cadence");
         });
 
+        checks.Add("resource session separates real cadence from accelerated regrowth", async _ =>
+        {
+            var fixture = Fixture(ResourceNodeKind.FibreShrub);
+            var session = new AuthoritativeWorldSession(
+                identitySource: new FixedIdentitySource(),
+                resourceTransactions: fixture.Authority);
+            var connection = ClientConnectionId.New();
+            var joinTask = session.EnqueueJoinAsync(new(
+                connection, "Clock Tester", fixture.Actor.Position));
+            session.Drain();
+            var join = await joinTask;
+
+            var firstTask = session.EnqueueIntentAsync(new(
+                connection,
+                join.Identity.PlayerId,
+                1,
+                new GatherFibreIntent(
+                    Guid.NewGuid(),
+                    join.Gameplay.Inventory.Revision,
+                    join.Gameplay.ActorRevision,
+                    fixture.Reference)));
+            session.Drain();
+            var first = await firstTask;
+            CheckAssert.True(first.Accepted,
+                "the first server-time fibre harvest must commit");
+            var firstResource = first.ResourceTransaction!;
+            CheckAssert.Equal(
+                AuthoritativeWorldTime.FromElapsedRealSeconds(0) + 300,
+                firstResource.NodeDelta!.Current.ReadyAtGameSeconds,
+                "renewable readiness must be stamped in accelerated world time");
+            CheckAssert.Equal(.75,
+                fixture.Authority.CaptureCheckpoint()
+                    .ActorCadences.Single().ReadyAtGameSeconds,
+                "the persisted interaction cadence must remain elapsed real time");
+
+            var depletedReference = new ResourceNodeReference(
+                firstResource.NodeDelta.Current.Id,
+                firstResource.NodeDelta.Current.Chunk,
+                firstResource.NodeDelta.Current.NodeRevision,
+                firstResource.ChunkDelta!.Value.CurrentRevision);
+            var immediateTask = session.EnqueueIntentAsync(new(
+                connection,
+                join.Identity.PlayerId,
+                2,
+                new GatherFibreIntent(
+                    Guid.NewGuid(),
+                    first.InventoryRevision,
+                    first.ActorRevision,
+                    depletedReference)));
+            session.Drain();
+            var immediate = await immediateTask;
+            CheckAssert.Equal(IntentStatus.ResourceCadenceLocked,
+                immediate.Status,
+                "accelerated world time must not bypass a real-time action cadence");
+
+            for (var tick = 0; tick < 45; tick++) session.Tick();
+            var earlyTask = session.EnqueueIntentAsync(new(
+                connection,
+                join.Identity.PlayerId,
+                3,
+                new GatherFibreIntent(
+                    Guid.NewGuid(),
+                    first.InventoryRevision,
+                    first.ActorRevision,
+                    depletedReference)));
+            session.Drain();
+            var early = await earlyTask;
+            CheckAssert.Equal(IntentStatus.ResourceDepleted, early.Status,
+                "the real cadence may elapse before the accelerated five-minute regrowth deadline");
+
+            for (var tick = 45; tick < 300; tick++) session.Tick();
+            var currentGameplay = session.CaptureSnapshot().Actors
+                .Single(actor => actor.PlayerId == join.Identity.PlayerId)
+                .Gameplay;
+            var dueTask = session.EnqueueIntentAsync(new(
+                connection,
+                join.Identity.PlayerId,
+                4,
+                new GatherFibreIntent(
+                    Guid.NewGuid(),
+                    currentGameplay.Inventory.Revision,
+                    currentGameplay.ActorRevision,
+                    depletedReference)));
+            session.Drain();
+            var due = await dueTask;
+            CheckAssert.True(due.Accepted,
+                "five real seconds must advance the renewable node by five game minutes");
+            CheckAssert.Equal(
+                AuthoritativeWorldTime.FromElapsedRealSeconds(5) + 300,
+                due.ResourceTransaction!.NodeDelta!.Current
+                    .ReadyAtGameSeconds,
+                "the next renewable deadline must remain in the world-time domain");
+        });
+
         checks.Add("resource session replays vegetation receipts after restart", async _ =>
         {
             var fixture = Fixture(ResourceNodeKind.FibreShrub);

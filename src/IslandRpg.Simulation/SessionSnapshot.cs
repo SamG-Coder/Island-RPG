@@ -64,7 +64,13 @@ public readonly record struct PlayerGameplaySnapshot(
     SlimeVictimStatus CombatStatus = default,
     EnemyId? CombatTargetEnemyId = null,
     ulong CombatAttackSequence = 0,
-    long NextCombatAttackTick = 0)
+    long NextCombatAttackTick = 0,
+    float StarvationDamageRemainder = 0,
+    float HealthRegenerationRemainder = 0,
+    ImmutableArray<QuestProgress> Quests = default,
+    float TimedHealingRemainingHealth = 0,
+    float TimedHealingRemainingSeconds = 0,
+    float TimedHealingFractionalHealth = 0)
 {
     public CombatStatusFlags StatusFlags(double now)
     {

@@ -281,25 +281,46 @@ internal static class ServerRestartLoopbackChecks
         CaveActionPayload payload,
         CancellationToken cancellationToken)
     {
-        var commandId = Guid.NewGuid();
-        var completion = new TaskCompletionSource<CaveActionResultMessage>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        void Handler(object? _, NetworkCaveActionResultEventArgs args)
+        for (var attempt = 0; attempt < 4; attempt++)
         {
-            if (args.Result.CommandId == commandId)
-                completion.TrySetResult(args.Result);
+            var authoredGameplay = client.State.Gameplay;
+            var commandId = Guid.NewGuid();
+            var completion =
+                new TaskCompletionSource<CaveActionResultMessage>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            void Handler(object? _, NetworkCaveActionResultEventArgs args)
+            {
+                if (args.Result.CommandId == commandId)
+                    completion.TrySetResult(args.Result);
+            }
+            client.CaveActionCompleted += Handler;
+            CaveActionResultMessage result;
+            try
+            {
+                await client.SendActionAsync(
+                    payload, commandId, cancellationToken);
+                result = await completion.Task.WaitAsync(
+                    Timeout, cancellationToken);
+            }
+            finally
+            {
+                client.CaveActionCompleted -= Handler;
+            }
+
+            if (result.RejectionCode != CommandRejectionCode.OutOfOrder ||
+                authoredGameplay is null ||
+                result.ActorRevision <= authoredGameplay.ActorRevision)
+                return result;
+
+            await EventuallyAsync(
+                () => client.State.Gameplay is { } current &&
+                      current.ActorRevision >= result.ActorRevision &&
+                      current.InventoryRevision >= result.InventoryRevision,
+                "the stale cave receipt was not followed by its authoritative player state",
+                cancellationToken);
         }
-        client.CaveActionCompleted += Handler;
-        try
-        {
-            await client.SendActionAsync(
-                payload, commandId, cancellationToken);
-            return await completion.Task.WaitAsync(Timeout, cancellationToken);
-        }
-        finally
-        {
-            client.CaveActionCompleted -= Handler;
-        }
+        throw new InvalidOperationException(
+            "autonomous actor revisions repeatedly overtook the cave command");
     }
 
     private static async ValueTask PreservesWorldAndActorStateAcrossRestartAsync(

@@ -373,6 +373,21 @@ public static class ReliableProtocolCodec
                 writer.WriteByte((byte)ActionCommandKind.ConsumeItem);
                 WriteInventorySlot(writer, action.Slot, nameof(action.Slot));
                 break;
+            case PlantCropAction action:
+                writer.WriteByte((byte)ActionCommandKind.PlantCrop);
+                WriteInventorySlot(writer, action.SeedInventorySlot,
+                    nameof(action.SeedInventorySlot));
+                EnsureFinite(action.X, nameof(action.X));
+                EnsureFinite(action.Y, nameof(action.Y));
+                writer.WriteSingle(action.X);
+                writer.WriteSingle(action.Y);
+                writer.WriteInt16(action.WorldLevel);
+                writer.WriteUInt32(action.ExpectedChunkRevision);
+                break;
+            case HarvestCropAction action:
+                writer.WriteByte((byte)ActionCommandKind.HarvestCrop);
+                WriteWorldObjectReference(writer, action.Crop);
+                break;
             case PickUpWorldObjectAction action:
                 writer.WriteByte((byte)ActionCommandKind.PickUpWorldObject);
                 WriteWorldObjectReference(writer, action.Object);
@@ -495,6 +510,12 @@ public static class ReliableProtocolCodec
                 ReadIdentifier(ref reader, ProtocolLimits.RecipeIdBytes, "RecipeId")),
             ActionCommandKind.ConsumeItem => new ConsumeItemAction(
                 ReadInventorySlot(ref reader, "Slot")),
+            ActionCommandKind.PlantCrop => new PlantCropAction(
+                ReadInventorySlot(ref reader, "SeedInventorySlot"),
+                ReadFinite(ref reader, "X"), ReadFinite(ref reader, "Y"),
+                reader.ReadInt16(), reader.ReadUInt32()),
+            ActionCommandKind.HarvestCrop => new HarvestCropAction(
+                ReadWorldObjectReference(ref reader)),
             ActionCommandKind.PickUpWorldObject => new PickUpWorldObjectAction(
                 ReadWorldObjectReference(ref reader)),
             ActionCommandKind.DropInventoryItem => new DropInventoryItemAction(
@@ -2310,6 +2331,22 @@ public static class ReliableProtocolCodec
         writer.WriteUInt64(value.RespawnTick);
         writer.WriteUInt32((uint)value.CombatStatusFlags);
         writer.WriteGuid(value.CombatTargetEnemyId);
+        var quests = value.Flags.HasFlag(PlayerStateFlags.Actor)
+            ? ToCanonicalQuestStates(value.Quests)
+            : [];
+        writer.WriteByte((byte)quests.Count);
+        foreach (var quest in quests)
+        {
+            writer.WriteString(quest.QuestId, ProtocolLimits.ItemIdBytes, "QuestId");
+            writer.WriteByte(quest.Status);
+            writer.WriteUInt64(unchecked((ulong)quest.CompletionTick));
+            writer.WriteByte((byte)quest.Objectives.Count);
+            foreach (var objective in quest.Objectives)
+            {
+                writer.WriteString(objective.ObjectiveId, ProtocolLimits.ItemIdBytes, "ObjectiveId");
+                writer.WriteInt32(objective.Count);
+            }
+        }
     }
 
     private static PlayerStateMessage ReadPlayerState(
@@ -2359,6 +2396,28 @@ public static class ReliableProtocolCodec
         var respawnTick = reader.ReadUInt64();
         var combatStatusFlags = ReadEnum<CombatStatusFlags>(reader.ReadUInt32(), nameof(CombatStatusFlags));
         var combatTargetEnemyId = reader.ReadGuid();
+        var questCount = reader.ReadByte();
+        if (questCount > ProtocolLimits.MaxQuestStates)
+            throw new ProtocolException("Quest state count exceeds the protocol limit.");
+        if (flags.HasFlag(PlayerStateFlags.Actor) &&
+            questCount != ProtocolLimits.MaxQuestStates)
+            throw new ProtocolException("An actor-state section must carry canonical quest state.");
+        var quests = new QuestProgressState[questCount];
+        for (var questIndex = 0; questIndex < questCount; questIndex++)
+        {
+            var id = reader.ReadString(ProtocolLimits.ItemIdBytes, "QuestId");
+            var status = reader.ReadByte();
+            var completionTick = unchecked((long)reader.ReadUInt64());
+            var objectiveCount = reader.ReadByte();
+            if (objectiveCount > ProtocolLimits.MaxQuestObjectivesPerState)
+                throw new ProtocolException("Quest objective count exceeds the protocol limit.");
+            var objectives = new QuestObjectiveState[objectiveCount];
+            for (var objectiveIndex = 0; objectiveIndex < objectiveCount; objectiveIndex++)
+                objectives[objectiveIndex] = new(
+                    reader.ReadString(ProtocolLimits.ItemIdBytes, "ObjectiveId"),
+                    reader.ReadInt32());
+            quests[questIndex] = new(id, status, completionTick, objectives);
+        }
 
         var result = new PlayerStateMessage(
             sequence,
@@ -2390,7 +2449,7 @@ public static class ReliableProtocolCodec
             lifeState,
             respawnTick,
             combatStatusFlags,
-            combatTargetEnemyId);
+            combatTargetEnemyId, quests);
         ValidatePlayerState(result);
         return result;
     }
@@ -2422,6 +2481,57 @@ public static class ReliableProtocolCodec
         {
             throw new ProtocolException(
                 "Actor revision changed without an actor-state section.");
+        }
+
+        // Null remains source-compatible for direct legacy fixtures only. The
+        // encoder expands it to the canonical six-state actor section; network
+        // input is always validated after decoding and therefore cannot omit it.
+        if (!hasActor)
+        {
+            if (value.Quests is { Count: > 0 })
+                throw new ProtocolException(
+                    "Quest state was supplied without an actor-state section.");
+        }
+        else
+        {
+            var quests = value.Quests is null or { Count: 0 }
+                ? ToCanonicalQuestStates(null)
+                : value.Quests;
+            if (quests.Count != ProtocolLimits.MaxQuestStates)
+                throw new ProtocolException(
+                    $"An actor-state section must contain exactly {ProtocolLimits.MaxQuestStates} quest states.");
+            try
+            {
+                var supplied = quests.Select(quest =>
+                    new IslandRpg.Gameplay.QuestProgress(
+                        quest.QuestId,
+                        (IslandRpg.Gameplay.QuestStatus)quest.Status,
+                        quest.Objectives.ToDictionary(
+                            objective => objective.ObjectiveId,
+                            objective => objective.Count,
+                            StringComparer.Ordinal),
+                        quest.CompletionTick)).ToArray();
+                var canonical = IslandRpg.Gameplay.QuestService.Normalize(supplied);
+                for (var index = 0; index < canonical.Length; index++)
+                {
+                    var wire = quests[index];
+                    var expected = canonical[index];
+                    if (wire.QuestId != expected.QuestId ||
+                        wire.Status != (byte)expected.Status ||
+                        wire.CompletionTick != expected.CompletionTick ||
+                        !wire.Objectives.SequenceEqual(
+                            (expected.ObjectiveCounts ??
+                             Enumerable.Empty<KeyValuePair<string, int>>()).Select(value =>
+                                new QuestObjectiveState(value.Key, value.Value))))
+                        throw new InvalidDataException(
+                            "Quest state is not canonical.");
+                }
+            }
+            catch (Exception exception) when (exception is ArgumentException or
+                                              InvalidDataException)
+            {
+                throw new ProtocolException("Quest state is not canonical.");
+            }
         }
 
         if (!hasInventory && value.InventoryRevision != value.BaselineInventoryRevision)
@@ -2531,6 +2641,30 @@ public static class ReliableProtocolCodec
                     $"Inventory quantity must be between 1 and {ProtocolLimits.MaxInventoryQuantity}.");
             }
         }
+    }
+
+    private static IReadOnlyList<QuestProgressState> ToCanonicalQuestStates(
+        IReadOnlyList<QuestProgressState>? values)
+    {
+        var supplied = values is { Count: > 0 }
+            ? values.Select(quest => new IslandRpg.Gameplay.QuestProgress(
+            quest.QuestId,
+            (IslandRpg.Gameplay.QuestStatus)quest.Status,
+            quest.Objectives.ToDictionary(
+                objective => objective.ObjectiveId,
+                objective => objective.Count,
+                StringComparer.Ordinal),
+            quest.CompletionTick)).ToArray()
+            : null;
+        return IslandRpg.Gameplay.QuestService.Normalize(supplied).Select(quest =>
+            new QuestProgressState(
+                quest.QuestId,
+                (byte)quest.Status,
+                quest.CompletionTick,
+                (quest.ObjectiveCounts ??
+                 Enumerable.Empty<KeyValuePair<string, int>>()).Select(value =>
+                    new QuestObjectiveState(value.Key, value.Value)).ToArray()))
+            .ToArray();
     }
 
     private static void ValidateActionResult(

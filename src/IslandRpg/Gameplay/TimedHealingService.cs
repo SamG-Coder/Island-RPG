@@ -14,10 +14,24 @@ internal readonly record struct TimedHealingUpdate(
 
 internal static class TimedHealingService
 {
+    public const float MaximumRemainingHealth = 18;
+    public const float MaximumRemainingSeconds = 12;
+
     public static TimedHealingState Start(FoodEffect effect) =>
         effect.TimedHealing > 0 && effect.TimedHealingSeconds > 0
             ? new(effect.TimedHealing, effect.TimedHealingSeconds)
             : default;
+
+    public static bool IsCanonical(TimedHealingState state) =>
+        float.IsFinite(state.RemainingHealth) &&
+        float.IsFinite(state.RemainingSeconds) &&
+        float.IsFinite(state.FractionalHealth) &&
+        state.RemainingHealth >= 0 &&
+        state.RemainingHealth <= MaximumRemainingHealth &&
+        state.RemainingSeconds >= 0 &&
+        state.RemainingSeconds <= MaximumRemainingSeconds &&
+        state.FractionalHealth is >= 0 and < 1 &&
+        (state.Active || state == default);
 
     public static TimedHealingUpdate Advance(
         int health,

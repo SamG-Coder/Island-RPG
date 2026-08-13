@@ -14,6 +14,8 @@ namespace IslandRpg.Simulation;
 /// </summary>
 public sealed class AuthoritativeCombatTransactions
 {
+    internal const int DefaultRespawnDelayTicks = 300;
+
     private readonly long _worldSeed;
     private readonly IWorldNavigationQuery _navigation;
     private readonly AuthoritativeCombatOptions _options;
@@ -33,6 +35,29 @@ public sealed class AuthoritativeCombatTransactions
     }
 
     public Vector2 RespawnPosition => _options.RespawnPosition;
+
+    /// <summary>
+    /// Applies a non-combat lethal state through the same canonical death
+    /// transition and event stream used by combat attacks.
+    /// </summary>
+    public CombatActorMutation? ApplyEnvironmentalDeath(
+        CombatActorInput actor,
+        PlayerGameplaySnapshot gameplay,
+        long tick,
+        out CombatEventSnapshot? combatEvent)
+    {
+        EnsureOwner();
+        combatEvent = null;
+        if (actor.Gameplay.LifeState == ActorLifeState.Dead ||
+            gameplay.Health > 0)
+            return null;
+        gameplay = DeathGameplay(
+            gameplay, tick, _options.RespawnDelayTicks);
+        combatEvent = CreateEvent(tick, CombatEventKind.ActorDied,
+            actor.ActorId);
+        return new CombatActorMutation(actor.ActorId, gameplay,
+            ClearMovement: true);
+    }
 
     public AuthoritativeEnemySnapshot Seed(AuthoritativeEnemySeed seed)
     {
@@ -196,9 +221,40 @@ public sealed class AuthoritativeCombatTransactions
             return Rejected(context, actor.Gameplay,
                 CombatTransactionStatus.RespawnLocked,
                 "The respawn delay has not elapsed.");
-        var maximumHealth = Math.Max(1, actor.Gameplay.MaximumHealth);
+        var gameplay = RespawnGameplay(actor.Gameplay);
+        return Accepted(context, gameplay,
+            CreateEvent(tick, CombatEventKind.ActorRespawned, actor.ActorId));
+    }
+
+    internal static PlayerGameplaySnapshot DeathGameplay(
+        PlayerGameplaySnapshot gameplay,
+        long tick,
+        int respawnDelayTicks)
+    {
+        var respawnAvailableTick = checked(tick + respawnDelayTicks);
+        var actorRevision = checked(gameplay.ActorRevision + 1);
+        return gameplay with
+        {
+            Health = 0,
+            LifeState = ActorLifeState.Dead,
+            RespawnAvailableTick = respawnAvailableTick,
+            CombatStatus = default,
+            CombatTargetEnemyId = null,
+            NextCombatAttackTick = 0,
+            TimedHealingRemainingHealth = 0,
+            TimedHealingRemainingSeconds = 0,
+            TimedHealingFractionalHealth = 0,
+            ActorRevision = actorRevision
+        };
+    }
+
+    internal static PlayerGameplaySnapshot RespawnGameplay(
+        PlayerGameplaySnapshot gameplay)
+    {
+        var maximumHealth = Math.Max(1, gameplay.MaximumHealth);
         var recoveryHealth = Math.Max(1, maximumHealth / 2);
-        var gameplay = actor.Gameplay with
+        var actorRevision = checked(gameplay.ActorRevision + 1);
+        return gameplay with
         {
             Health = recoveryHealth,
             Hunger = 25,
@@ -208,10 +264,8 @@ public sealed class AuthoritativeCombatTransactions
             CombatStatus = default,
             CombatTargetEnemyId = null,
             NextCombatAttackTick = 0,
-            ActorRevision = checked(actor.Gameplay.ActorRevision + 1)
+            ActorRevision = actorRevision
         };
-        return Accepted(context, gameplay,
-            CreateEvent(tick, CombatEventKind.ActorRespawned, actor.ActorId));
     }
 
     /// <summary>

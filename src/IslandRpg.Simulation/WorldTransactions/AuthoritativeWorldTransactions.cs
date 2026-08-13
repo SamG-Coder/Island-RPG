@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.Buffers.Binary;
 using System.Numerics;
+using System.Security.Cryptography;
 using IslandRpg.Gameplay;
 using IslandRpg.Caves;
 using IslandRpg.World;
@@ -20,6 +22,10 @@ public sealed class AuthoritativeWorldTransactions
     private int? _ownerThreadId;
     private readonly Dictionary<Guid, ObjectState> _objects = [];
     private readonly Dictionary<WorldChunkKey, uint> _chunkRevisions = [];
+    private readonly Dictionary<WorldChunkKey, HashSet<Guid>>
+        _objectsByChunk = [];
+    private readonly Dictionary<WorldChunkKey, HashSet<Guid>>
+        _campfiresByChunk = [];
     private readonly Dictionary<(ActorId ActorId, Guid CommandId),
         CommandReceipt> _commandResults = [];
     private readonly Queue<(ActorId ActorId, Guid CommandId)> _commandOrder = [];
@@ -34,6 +40,31 @@ public sealed class AuthoritativeWorldTransactions
     {
         _newObjectId = newObjectId ?? Guid.NewGuid;
         _caves = caves;
+    }
+
+    public static Guid DeriveCropObjectId(
+        ActorId actorId, Guid commandId, uint expectedActorRevision)
+    {
+        if (actorId.Value == Guid.Empty)
+            throw new ArgumentException(
+                "A valid actor identity is required.", nameof(actorId));
+        if (commandId == Guid.Empty)
+            throw new ArgumentException(
+                "A valid command identity is required.", nameof(commandId));
+        if (expectedActorRevision == 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(expectedActorRevision));
+
+        Span<byte> identity = stackalloc byte[36];
+        actorId.Value.TryWriteBytes(
+            identity[..16], bigEndian: true, out _);
+        commandId.TryWriteBytes(
+            identity[16..32], bigEndian: true, out _);
+        BinaryPrimitives.WriteUInt32BigEndian(
+            identity[32..], expectedActorRevision);
+        Span<byte> digest = stackalloc byte[32];
+        SHA256.HashData(identity, digest);
+        return new Guid(digest[..16], bigEndian: true);
     }
 
     public AuthoritativeWorldObjectSnapshot AddObject(WorldObjectSeed seed)
@@ -79,6 +110,7 @@ public sealed class AuthoritativeWorldTransactions
         if (seed.ObjectId == Guid.Empty || !IsFinite(seed.Position) ||
             seed.ObjectRevision == 0 || seed.ContainerRevision == 0 ||
             string.IsNullOrWhiteSpace(seed.DefinitionId) ||
+            !ValidGameSeconds(seed.LitUntilGameSeconds) ||
             !ValidGateState(seed.DefinitionId, seed.GateState) ||
             seed.LinkedObjectId == Guid.Empty ||
             seed.LinkedObjectId == seed.ObjectId)
@@ -97,6 +129,9 @@ public sealed class AuthoritativeWorldTransactions
             GroupOwnerId: seed.GroupOwnerId,
             VisualFrame: seed.Rotation,
             GateState: ToCoreGateState(seed.GateState));
+        if (!CropService.HasValidPersistentState(value))
+            throw new ArgumentException(
+                "The seeded crop state is invalid.", nameof(seed));
         if (seed.ContainerItems is { Count: > 0 })
         {
             if (!WorldItemContainerService.IsContainer(seed.DefinitionId))
@@ -120,6 +155,7 @@ public sealed class AuthoritativeWorldTransactions
                 new ObjectState(value, chunk, seed.ObjectRevision,
                     seed.ContainerRevision, seed.LinkedObjectId)))
             throw new InvalidOperationException("The world object already exists.");
+        IndexObject(_objects[seed.ObjectId]);
         var chunkDelta = AdvanceChunk(chunk);
         return new AddedObjectCommit(
             Snapshot(_objects[seed.ObjectId]),
@@ -138,6 +174,84 @@ public sealed class AuthoritativeWorldTransactions
     {
         EnsureOwner();
         return ChunkRevision(chunk);
+    }
+
+    public bool HasLitCampfireWithin(
+        Vector2 position,
+        int worldLevel,
+        double gameSeconds,
+        float range)
+    {
+        EnsureOwner();
+        if (!IsFinite(position))
+            throw new ArgumentOutOfRangeException(
+                nameof(position), "The query position must be finite.");
+        if (!ValidGameSeconds(gameSeconds))
+            throw new ArgumentOutOfRangeException(
+                nameof(gameSeconds),
+                "Campfire time must be finite and non-negative.");
+        if (!float.IsFinite(range) || range < 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(range), "Campfire range must be finite and non-negative.");
+
+        var rangeSquared = (double)range * range;
+        var offset = new Vector2(range);
+        var minimum = WorldChunkKey.At(position - offset, worldLevel);
+        var maximum = WorldChunkKey.At(position + offset, worldLevel);
+        for (var chunkY = minimum.Y; chunkY <= maximum.Y; chunkY++)
+        for (var chunkX = minimum.X; chunkX <= maximum.X; chunkX++)
+        {
+            var chunk = new WorldChunkKey(chunkX, chunkY, worldLevel);
+            if (!_campfiresByChunk.TryGetValue(chunk, out var candidates))
+                continue;
+            foreach (var objectId in candidates)
+                if (_objects.TryGetValue(objectId, out var value) &&
+                    CampfireService.State(value.Value, gameSeconds) ==
+                        CampfireState.Lit &&
+                    DistanceSquared(position, value.Value) <= rangeSquared)
+                    return true;
+        }
+        return false;
+    }
+
+    private static double DistanceSquared(
+        Vector2 position, WorldGroundObject value)
+    {
+        var x = (double)position.X - value.X;
+        var y = (double)position.Y - value.Y;
+        return x * x + y * y;
+    }
+
+    private void IndexObject(ObjectState value)
+    {
+        if (!_objectsByChunk.TryGetValue(value.Chunk, out var objects))
+        {
+            objects = [];
+            _objectsByChunk.Add(value.Chunk, objects);
+        }
+        objects.Add(value.Value.Id);
+        if (!CampfireService.IsCampfire(value.Value)) return;
+        if (!_campfiresByChunk.TryGetValue(value.Chunk, out var campfires))
+        {
+            campfires = [];
+            _campfiresByChunk.Add(value.Chunk, campfires);
+        }
+        campfires.Add(value.Value.Id);
+    }
+
+    private void UnindexObject(ObjectState value)
+    {
+        if (!_objectsByChunk.TryGetValue(value.Chunk, out var objects))
+            return;
+        objects.Remove(value.Value.Id);
+        if (objects.Count == 0)
+            _objectsByChunk.Remove(value.Chunk);
+        if (!CampfireService.IsCampfire(value.Value) ||
+            !_campfiresByChunk.TryGetValue(value.Chunk, out var campfires))
+            return;
+        campfires.Remove(value.Value.Id);
+        if (campfires.Count == 0)
+            _campfiresByChunk.Remove(value.Chunk);
     }
 
     public AuthoritativeWorldTransactionsCheckpoint CaptureCheckpoint()
@@ -183,7 +297,9 @@ public sealed class AuthoritativeWorldTransactions
             throw new InvalidDataException(
                 "The world checkpoint is incomplete.");
         }
-        if (_objects.Count != 0 || _chunkRevisions.Count != 0 ||
+        if (_objects.Count != 0 || _objectsByChunk.Count != 0 ||
+            _campfiresByChunk.Count != 0 ||
+            _chunkRevisions.Count != 0 ||
             _commandResults.Count != 0 || _excavationCadences.Count != 0)
         {
             throw new InvalidOperationException(
@@ -258,6 +374,9 @@ public sealed class AuthoritativeWorldTransactions
                 snapshot.GroupOwnerId,
                 snapshot.Rotation,
                 ToCoreGateState(snapshot.GateState));
+            if (!CropService.HasValidPersistentState(value))
+                throw new InvalidDataException(
+                    "The world checkpoint contains invalid crop state.");
             objects.Add(snapshot.ObjectId, new ObjectState(
                 value,
                 snapshot.Chunk,
@@ -289,7 +408,11 @@ public sealed class AuthoritativeWorldTransactions
                     "The world checkpoint contains invalid excavation cadence state.");
         }
         foreach (var value in chunks) _chunkRevisions.Add(value.Key, value.Value);
-        foreach (var value in objects) _objects.Add(value.Key, value.Value);
+        foreach (var value in objects)
+        {
+            _objects.Add(value.Key, value.Value);
+            IndexObject(value.Value);
+        }
         foreach (var value in restoredCadences)
             _excavationCadences.Add(value.Key, value.Value);
     }
@@ -305,6 +428,18 @@ public sealed class AuthoritativeWorldTransactions
         DropInventoryItemTransaction command) =>
         ExecuteCached(actor, command.Context, command,
             state => Drop(state, command));
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        PlantCropTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => PlantCrop(state, command));
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        HarvestCropTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => HarvestCrop(state, command));
 
     public WorldTransactionResult Execute(
         WorldTransactionActorInput actor,
@@ -393,6 +528,7 @@ public sealed class AuthoritativeWorldTransactions
                 dropPosition.Y,
                 OwnerId: actor.ActorId.ToString()), chunk, 1, 1, null);
             _objects.Add(command.DropObjectId, drop);
+            IndexObject(drop);
             var chunkDelta = AdvanceChunk(chunk);
             objectDeltas =
             [
@@ -406,8 +542,12 @@ public sealed class AuthoritativeWorldTransactions
 
         if (fireStillLit && command.Experience > 0)
         {
-            actor.CookingExperience = CookingSkill.AwardExperience(
-                actor.CookingExperience, command.Experience).Experience;
+            var cooking = CookingSkill.AwardExperience(
+                actor.CookingExperience, command.Experience);
+            var adventure = AdventureService.AwardFromAction(
+                actor.AdventureExperience, cooking.Gained);
+            actor.CookingExperience = cooking.Experience;
+            actor.AdventureExperience = adventure.Experience;
             AdvanceActor(actor);
         }
         return Accepted(context, actor, objectDeltas, chunkDeltas) with
@@ -478,6 +618,41 @@ public sealed class AuthoritativeWorldTransactions
         ExecuteCached(actor, command.Context, command,
             state => TraverseCave(state, command));
 
+    /// <summary>
+    /// Resolves a session-authored command against the aggregate's longer-lived
+    /// receipt history before any current-world preconditions are evaluated.
+    /// The fingerprint contains only the authenticated client payload, so
+    /// server-authored timestamps do not turn an exact retry into a conflict.
+    /// </summary>
+    internal CachedWorldTransactionResolution ResolveCached(
+        WorldTransactionContext context,
+        out WorldTransactionResult result)
+    {
+        EnsureOwner();
+        result = null!;
+        if (context.CommandId == Guid.Empty ||
+            context.ActorId.Value == Guid.Empty ||
+            string.IsNullOrWhiteSpace(context.PayloadFingerprint))
+            return CachedWorldTransactionResolution.Missing;
+
+        if (!_commandResults.TryGetValue(
+                (context.ActorId, context.CommandId), out var prior))
+            return CachedWorldTransactionResolution.Missing;
+
+        if (string.Equals(
+                prior.PayloadFingerprint,
+                context.PayloadFingerprint,
+                StringComparison.Ordinal))
+        {
+            result = prior.Result;
+            return CachedWorldTransactionResolution.Duplicate;
+        }
+
+        result = Rejected(
+            context, WorldTransactionStatus.CommandIdConflict);
+        return CachedWorldTransactionResolution.Conflict;
+    }
+
     private WorldTransactionResult ExecuteCached(
         WorldTransactionActorInput input,
         WorldTransactionContext context,
@@ -490,7 +665,7 @@ public sealed class AuthoritativeWorldTransactions
             return Rejected(context, WorldTransactionStatus.InvalidCommand);
         var key = (context.ActorId, context.CommandId);
         if (_commandResults.TryGetValue(key, out var prior))
-            return Equals(prior.Command, command)
+            return SameCommand(prior, context, command)
                 ? prior.Result
                 : Rejected(context, WorldTransactionStatus.CommandIdConflict);
         var actor = CreateActor(input);
@@ -507,8 +682,25 @@ public sealed class AuthoritativeWorldTransactions
                 context, WorldTransactionStatus.StaleInventoryRevision, actor);
         else
             result = operation(actor);
-        Remember(key, command, result);
+        Remember(key, context, command, result);
         return result;
+    }
+
+    private static bool SameCommand(
+        CommandReceipt prior,
+        WorldTransactionContext context,
+        object command)
+    {
+        if (prior.PayloadFingerprint is not null ||
+            context.PayloadFingerprint is not null)
+        {
+            return string.Equals(
+                prior.PayloadFingerprint,
+                context.PayloadFingerprint,
+                StringComparison.Ordinal);
+        }
+
+        return Equals(prior.Command, command);
     }
 
     private WorldTransactionResult PickUp(
@@ -528,6 +720,7 @@ public sealed class AuthoritativeWorldTransactions
             return Rejected(command.Context, WorldTransactionStatus.InventoryFull, actor);
 
         var oldObjectRevision = state.ObjectRevision;
+        UnindexObject(state);
         _objects.Remove(state.Value.Id);
         var chunk = AdvanceChunk(state.Chunk);
         CommitInventory(actor, inventory);
@@ -578,7 +771,11 @@ public sealed class AuthoritativeWorldTransactions
                 chunk, 1, 1, null));
         }
 
-        foreach (var addition in additions) _objects.Add(addition.Value.Id, addition);
+        foreach (var addition in additions)
+        {
+            _objects.Add(addition.Value.Id, addition);
+            IndexObject(addition);
+        }
         var chunkDelta = AdvanceChunk(chunk);
         CommitInventory(actor, inventory);
         return Accepted(command.Context, actor,
@@ -586,6 +783,136 @@ public sealed class AuthoritativeWorldTransactions
                 WorldObjectChangeKind.Added, value.Value.Id, chunk,
                 0, value.ObjectRevision, Snapshot(value))).ToImmutableArray(),
             [chunkDelta]);
+    }
+
+    private WorldTransactionResult PlantCrop(
+        ActorState actor, PlantCropTransaction command)
+    {
+        if (command.CropObjectId == Guid.Empty ||
+            _objects.ContainsKey(command.CropObjectId) ||
+            !ValidGameSeconds(command.GameSeconds))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCommand, actor);
+        if (!CropService.IsTileCenter(command.Position))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidPlacement, actor);
+        if (command.WorldLevel != actor.WorldLevel)
+            return Rejected(command.Context,
+                WorldTransactionStatus.WrongWorldLevel, actor);
+        if (command.WorldLevel != 0)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidPlacement, actor,
+                "Crops can only be planted on the surface.");
+        if (!InRange(actor.Position, command.Position))
+            return Rejected(command.Context,
+                WorldTransactionStatus.OutOfRange, actor);
+
+        var chunkKey = WorldChunkKey.At(
+            command.Position, command.WorldLevel);
+        if (ChunkRevision(chunkKey) != command.ExpectedChunkRevision)
+            return Rejected(command.Context,
+                WorldTransactionStatus.StaleChunkRevision, actor);
+        if (TileOccupied(command.Position, command.WorldLevel))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidPlacement, actor,
+                "The planting tile is occupied.");
+        if ((uint)command.SeedInventorySlot >=
+            (uint)actor.Inventory.Capacity)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidInventorySlot, actor);
+        if (actor.Inventory[command.SeedInventorySlot] is not { } seed)
+            return Rejected(command.Context,
+                WorldTransactionStatus.ItemUnavailable, actor);
+        if (!CropService.TryHarvestItem(seed.ItemId, out _))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidItem, actor);
+        if (actor.ActorRevision == uint.MaxValue ||
+            actor.InventoryRevision == uint.MaxValue ||
+            ChunkRevision(chunkKey) == uint.MaxValue)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCommand, actor,
+                "A crop revision cannot advance any further.");
+
+        var inventory = actor.Inventory.Clone();
+        if (!inventory.TryTake(
+                command.SeedInventorySlot, 1, out var consumed) ||
+            !string.Equals(
+                consumed.ItemId, seed.ItemId, StringComparison.Ordinal))
+            return Rejected(command.Context,
+                WorldTransactionStatus.ItemUnavailable, actor);
+
+        var crop = CropService.Plant(
+            command.CropObjectId,
+            consumed.ItemId,
+            command.Position.X,
+            command.Position.Y,
+            command.GameSeconds,
+            actor.ActorId.ToString());
+        var state = new ObjectState(crop, chunkKey, 1, 1, null);
+        _objects.Add(command.CropObjectId, state);
+        IndexObject(state);
+        var chunk = AdvanceChunk(chunkKey);
+        AwardFarming(actor, FarmingSkill.PlantingExperience);
+        CommitInventory(actor, inventory);
+        return Accepted(command.Context, actor,
+            [new(WorldObjectChangeKind.Added,
+                crop.Id, chunkKey, 0, state.ObjectRevision,
+                Snapshot(state))],
+            [chunk]) with { Detail = "crop_planted" };
+    }
+
+    private WorldTransactionResult HarvestCrop(
+        ActorState actor, HarvestCropTransaction command)
+    {
+        var rejected = ValidateObject(
+            actor, command.Context, command.Crop, out var state);
+        if (rejected is not null) return rejected;
+        if (!ValidGameSeconds(command.GameSeconds))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCommand, actor);
+        if (!CanAccess(actor, state!.Value))
+            return Rejected(command.Context,
+                WorldTransactionStatus.AccessDenied, actor);
+        if (!CropService.IsCrop(state.Value))
+            return Rejected(command.Context,
+                WorldTransactionStatus.NotCrop, actor);
+        if (!CropService.IsReady(state.Value, command.GameSeconds))
+            return Rejected(command.Context,
+                WorldTransactionStatus.CropNotReady, actor);
+        if (state.Value.FuelItemId is not { } harvestItemId ||
+            !ItemCatalog.TryGet(harvestItemId, out _))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidItem, actor);
+        if (actor.ActorRevision == uint.MaxValue ||
+            actor.InventoryRevision == uint.MaxValue ||
+            state.ObjectRevision == uint.MaxValue ||
+            ChunkRevision(state.Chunk) == uint.MaxValue)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCommand, actor,
+                "A crop revision cannot advance any further.");
+
+        var quantity = CropService.HarvestCount(
+            actor.Inventory.Count(ItemIds.GatheringBasket) > 0);
+        var inventory = actor.Inventory.Clone();
+        if (!inventory.TryAdd(harvestItemId, quantity))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InventoryFull, actor);
+
+        var previousObjectRevision = state.ObjectRevision;
+        UnindexObject(state);
+        _objects.Remove(state.Value.Id);
+        var chunk = AdvanceChunk(state.Chunk);
+        AwardFarming(
+            actor, FarmingSkill.PlantingExperience * quantity);
+        CommitInventory(actor, inventory);
+        return Accepted(command.Context, actor,
+            [new(WorldObjectChangeKind.Removed,
+                state.Value.Id,
+                state.Chunk,
+                previousObjectRevision,
+                checked(previousObjectRevision + 1),
+                null)],
+            [chunk]) with { Detail = "crop_harvested" };
     }
 
     private WorldTransactionResult OpenContainer(
@@ -687,6 +1014,7 @@ public sealed class AuthoritativeWorldTransactions
             // one transaction, so an empty bag cannot accumulate or be
             // reopened between two separately observable mutations.
             var empty = ContainerSnapshot(state);
+            UnindexObject(state);
             _objects.Remove(state.Value.Id);
             return Accepted(command.Context, actor,
                 [new WorldObjectTransactionDelta(
@@ -868,6 +1196,7 @@ public sealed class AuthoritativeWorldTransactions
             OwnerId: actor.ActorId.ToString(), VisualFrame: command.Rotation));
         var state = new ObjectState(value, chunkKey, 1, 1, null);
         _objects.Add(id, state);
+        IndexObject(state);
         var chunk = AdvanceChunk(chunkKey);
         CommitInventory(actor, inventory);
         return Accepted(command.Context, actor,
@@ -921,6 +1250,7 @@ public sealed class AuthoritativeWorldTransactions
         if (!inventory.TryAdd(refund))
             return Rejected(command.Context, WorldTransactionStatus.InventoryFull, actor);
         var previous = state.ObjectRevision;
+        UnindexObject(state);
         _objects.Remove(state.Value.Id);
         var chunk = AdvanceChunk(state.Chunk);
         CommitInventory(actor, inventory);
@@ -970,6 +1300,7 @@ public sealed class AuthoritativeWorldTransactions
             id, position, _caves.TerrainAt(position));
         var state = NewExcavationState(excavation, chunkKey);
         _objects.Add(id, state);
+        IndexObject(state);
         var chunk = AdvanceChunk(chunkKey);
         return Accepted(command.Context, actor,
             [new(WorldObjectChangeKind.Added, id, chunkKey, 0, 1,
@@ -1063,9 +1394,15 @@ public sealed class AuthoritativeWorldTransactions
         target.LinkedObjectId = linkedObjectId;
         target.ObjectRevision = checked(target.ObjectRevision + 1);
         if (underground is not null)
+        {
             _objects.Add(underground.Value.Id, underground);
+            IndexObject(underground);
+        }
         if (rewardDrop is not null)
+        {
             _objects.Add(rewardDrop.Value.Id, rewardDrop);
+            IndexObject(rewardDrop);
+        }
         if (strike.Completed)
             _excavationCadences.Remove(cadenceKey);
         else
@@ -1259,8 +1596,21 @@ public sealed class AuthoritativeWorldTransactions
     private static bool IsPortable(WorldGroundObject value) =>
         !WorldItemContainerService.IsContainer(value.ItemId) &&
         !CampfireService.IsCampfire(value) &&
+        !CropService.IsCrop(value) &&
         !ConstructionService.IsConstructible(value.ItemId) &&
         Kind(value.ItemId) == ExcavationKind.None;
+
+    private bool TileOccupied(Vector2 position, int worldLevel)
+    {
+        var tileX = MathF.Floor(position.X);
+        var tileY = MathF.Floor(position.Y);
+        var chunk = WorldChunkKey.At(position, worldLevel);
+        return _objectsByChunk.TryGetValue(chunk, out var candidates) &&
+               candidates.Any(objectId =>
+                   _objects.TryGetValue(objectId, out var value) &&
+                   MathF.Floor(value.Value.X) == tileX &&
+                   MathF.Floor(value.Value.Y) == tileY);
+    }
 
     private static ExcavationKind Kind(string itemId) => itemId switch
     {
@@ -1384,6 +1734,7 @@ public sealed class AuthoritativeWorldTransactions
         }
         foreach (var value in removed)
         {
+            UnindexObject(value);
             _objects.Remove(value.Value.Id);
             foreach (var cadence in _excavationCadences.Keys
                          .Where(key => key.ExcavationId == value.Value.Id)
@@ -1416,6 +1767,16 @@ public sealed class AuthoritativeWorldTransactions
         var adventure = AdventureService.AwardFromAction(
             actor.AdventureExperience, digging.Gained);
         actor.DiggingExperience = digging.Experience;
+        actor.AdventureExperience = adventure.Experience;
+    }
+
+    private static void AwardFarming(ActorState actor, int experience)
+    {
+        var farming = FarmingSkill.AwardExperience(
+            actor.FarmingExperience, experience);
+        var adventure = AdventureService.AwardFromAction(
+            actor.AdventureExperience, farming.Gained);
+        actor.FarmingExperience = farming.Experience;
         actor.AdventureExperience = adventure.Experience;
     }
 
@@ -1689,10 +2050,12 @@ public sealed class AuthoritativeWorldTransactions
 
     private void Remember(
         (ActorId ActorId, Guid CommandId) key,
+        WorldTransactionContext context,
         object command,
         WorldTransactionResult result)
     {
-        _commandResults.Add(key, new(command, result));
+        _commandResults.Add(key, new(
+            command, context.PayloadFingerprint, result));
         _commandOrder.Enqueue(key);
         while (_commandOrder.Count > MaximumRememberedCommands)
             _commandResults.Remove(_commandOrder.Dequeue());
@@ -1728,6 +2091,7 @@ public sealed class AuthoritativeWorldTransactions
                 input.Gameplay.CraftingExperience);
             CraftingExperience = input.Gameplay.CraftingExperience;
             CookingExperience = input.Gameplay.CookingExperience;
+            FarmingExperience = input.Gameplay.FarmingExperience;
             DiggingExperience = input.Gameplay.DiggingExperience;
             AdventureExperience = input.Gameplay.AdventureExperience;
             FiremakingLevel = Math.Clamp(input.FiremakingLevel, 1, 20);
@@ -1745,6 +2109,7 @@ public sealed class AuthoritativeWorldTransactions
         public int CraftingLevel { get; }
         public int CraftingExperience { get; set; }
         public int CookingExperience { get; set; }
+        public int FarmingExperience { get; set; }
         public int DiggingExperience { get; set; }
         public int AdventureExperience { get; set; }
         public int FiremakingLevel { get; }
@@ -1766,6 +2131,7 @@ public sealed class AuthoritativeWorldTransactions
                 ActorRevision = ActorRevision,
                 CraftingExperience = CraftingExperience,
                 CookingExperience = CookingExperience,
+                FarmingExperience = FarmingExperience,
                 DiggingExperience = DiggingExperience,
                 AdventureExperience = AdventureExperience,
                 Inventory = new(InventoryRevision, slots.MoveToImmutable())
@@ -1789,9 +2155,17 @@ public sealed class AuthoritativeWorldTransactions
 
     private sealed record CommandReceipt(
         object Command,
+        string? PayloadFingerprint,
         WorldTransactionResult Result);
 
     private readonly record struct AddedObjectCommit(
         AuthoritativeWorldObjectSnapshot Snapshot,
         WorldChunkRevisionDelta ChunkDelta);
+}
+
+internal enum CachedWorldTransactionResolution : byte
+{
+    Missing,
+    Duplicate,
+    Conflict
 }

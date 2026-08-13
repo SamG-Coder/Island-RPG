@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Threading.Channels;
+using IslandRpg.Gameplay;
 using IslandRpg.Protocol;
 using IslandRpg.Resources;
 using IslandRpg.Simulation;
@@ -1622,6 +1623,34 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 slots[slot.Slot] = slot;
 
         var actorChanged = message.Flags.HasFlag(PlayerStateFlags.Actor);
+        IReadOnlyList<QuestProgressState>? quests = actorChanged
+            ? null
+            : previous!.Quests;
+        if (actorChanged)
+        {
+            try
+            {
+                var normalized = QuestService.Normalize((message.Quests ?? []).Select(quest =>
+                    new QuestProgress(
+                        quest.QuestId,
+                        (QuestStatus)quest.Status,
+                        quest.Objectives.ToDictionary(
+                            objective => objective.ObjectiveId,
+                            objective => objective.Count,
+                            StringComparer.Ordinal),
+                        quest.CompletionTick)).ToArray());
+                quests = normalized.Select(quest => new QuestProgressState(
+                    quest.QuestId, (byte)quest.Status, quest.CompletionTick,
+                    (quest.ObjectiveCounts ??
+                     Enumerable.Empty<KeyValuePair<string, int>>()).Select(value =>
+                        new QuestObjectiveState(value.Key, value.Value)).ToArray())).ToArray();
+            }
+            catch (Exception exception) when (exception is ArgumentException or InvalidDataException)
+            {
+                throw new ProtocolException("Received invalid canonical quest state.");
+            }
+        }
+
         return new NetworkPlayerGameplayState(
             actorChanged ? message.ActorRevision : previous!.ActorRevision,
             message.Flags.HasFlag(PlayerStateFlags.Inventory)
@@ -1667,7 +1696,8 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 ? message.CombatTargetEnemyId == Guid.Empty
                     ? null
                     : message.CombatTargetEnemyId
-                : previous!.CombatTargetEnemyId);
+                : previous!.CombatTargetEnemyId,
+            quests);
     }
 
     private void UpdateTick(ulong tick) => UpdateState(current => current with { ServerTick = Math.Max(current.ServerTick, tick) });

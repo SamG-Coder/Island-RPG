@@ -76,38 +76,47 @@ public readonly record struct FishingTransactionOutcome(
 public sealed record GatherTreeStickTransaction(
     WorldTransactionContext Context,
     ResourceNodeReference Node,
-    double GameSeconds);
+    double GameSeconds,
+    double WorldGameSeconds = double.NaN);
 
 public sealed record StrikeTreeTransaction(
     WorldTransactionContext Context,
     ResourceNodeReference Node,
     int ToolInventorySlot,
-    double GameSeconds);
+    double GameSeconds,
+    double WorldGameSeconds = double.NaN);
 
 public sealed record GatherFibreTransaction(
     WorldTransactionContext Context,
     ResourceNodeReference Node,
-    double GameSeconds);
+    double GameSeconds,
+    double WorldGameSeconds = double.NaN);
 
 public sealed record GatherBerriesTransaction(
     WorldTransactionContext Context,
     ResourceNodeReference Node,
     int ToolInventorySlot,
-    double GameSeconds);
+    double GameSeconds,
+    double WorldGameSeconds = double.NaN);
 
 public sealed record MineResourceTransaction(
     WorldTransactionContext Context,
     ResourceNodeReference Node,
     int ToolInventorySlot,
-    double GameSeconds);
+    double GameSeconds,
+    double WorldGameSeconds = double.NaN);
 
 public sealed record CatchFishTransaction(
     WorldTransactionContext Context,
     ResourceNodeReference Node,
     int FishingNetInventorySlot,
     float MaximumReach,
-    double GameSeconds);
+    double GameSeconds,
+    double WorldGameSeconds = double.NaN);
 
+// ReadyAtGameSeconds is retained for checkpoint/source compatibility. Resource
+// action cadence has always been persisted in elapsed real seconds; renewable
+// node ReadyAtGameSeconds values use accelerated world time instead.
 public sealed record ResourceActorCadenceCheckpoint(
     ActorId ActorId,
     ResourceActionKind Action,

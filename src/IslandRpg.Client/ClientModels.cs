@@ -57,7 +57,8 @@ public sealed record NetworkPlayerGameplayState(
     CombatLifeState LifeState = CombatLifeState.Alive,
     ulong RespawnTick = 0,
     CombatStatusFlags CombatStatusFlags = CombatStatusFlags.None,
-    Guid? CombatTargetEnemyId = null);
+    Guid? CombatTargetEnemyId = null,
+    IReadOnlyList<QuestProgressState>? Quests = null);
 
 /// <summary>
 /// Immutable public projection of a server-authored world object. Container

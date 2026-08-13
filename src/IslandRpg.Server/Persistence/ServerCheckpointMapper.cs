@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Numerics;
+using IslandRpg.Gameplay;
 using IslandRpg.Resources;
 using IslandRpg.Simulation;
 
@@ -108,10 +109,15 @@ public static class ServerCheckpointMapper
             new SessionId(source.SessionId),
             source.Tick,
             source.SnapshotSequence,
-            source.Actors.Select(ToSimulation).ToImmutableArray(),
+            source.Actors.Select(value =>
+                ToSimulation(value, source.SchemaVersion)).ToImmutableArray(),
             new AuthoritativeWorldTransactionsCheckpoint(
                 source.WorldObjects.Select(value =>
-                    ToSimulation(value, chunks)).ToImmutableArray(),
+                    ToSimulation(
+                        value,
+                        chunks,
+                        source.SchemaVersion,
+                        source.Tick)).ToImmutableArray(),
                 source.ChunkRevisions.Select(static value =>
                     new AuthoritativeChunkRevisionSnapshot(
                         new WorldChunkKey(
@@ -143,7 +149,10 @@ public static class ServerCheckpointMapper
                     value.Burnt,
                     value.DropObjectId,
                     value.CompletesAtTick)).ToImmutableArray(),
-            ToSimulation(source.Resources),
+            ToSimulation(
+                source.Resources,
+                source.SchemaVersion,
+                source.Tick),
             ToSimulation(source.Boats),
             ToSimulation(source.Combat, source.WorldSeed));
     }
@@ -197,10 +206,42 @@ public static class ServerCheckpointMapper
         value.Gameplay.CombatStatus.PoisonDamage,
         value.Gameplay.CombatTargetEnemyId?.Value,
         value.Gameplay.CombatAttackSequence,
-        value.Gameplay.NextCombatAttackTick);
+        value.Gameplay.NextCombatAttackTick,
+        value.Gameplay.StarvationDamageRemainder,
+        value.Gameplay.HealthRegenerationRemainder,
+        value.Gameplay.Quests.IsDefault ? null : value.Gameplay.Quests.ToArray(),
+        value.Gameplay.TimedHealingRemainingHealth,
+        value.Gameplay.TimedHealingRemainingSeconds,
+        value.Gameplay.TimedHealingFractionalHealth);
 
     private static AuthoritativeActorCheckpoint ToSimulation(
-        ServerActorCheckpoint value) => new(
+        ServerActorCheckpoint value,
+        int schemaVersion)
+    {
+        var maximumHealth = value.MaximumHealth;
+        var health = value.Health;
+        if (schemaVersion ==
+            ServerCheckpoint.LegacyElapsedDeadlineSchemaVersion)
+        {
+            maximumHealth = AdventureService.MaximumHealth(
+                value.AdventureExperience);
+            if (value.LifeState == ActorLifeState.Dead)
+            {
+                health = 0;
+            }
+            else
+            {
+                // Legacy saves predate canonical Adventure-derived maximum
+                // health. Preserve the amount of health the actor was missing
+                // while moving both values onto the current invariant.
+                var migratedHealth =
+                    (long)value.Health + maximumHealth - value.MaximumHealth;
+                health = (int)Math.Clamp(
+                    migratedHealth, 1L, maximumHealth);
+            }
+        }
+
+        return new AuthoritativeActorCheckpoint(
         new PlayerIdentity(
             new PlayerId(value.PlayerId),
             new ActorId(value.ActorId)),
@@ -211,7 +252,7 @@ public static class ServerCheckpointMapper
         value.DisconnectedAtTick,
         new PlayerGameplaySnapshot(
             value.ActorRevision,
-            value.Health,
+            health,
             value.Hunger,
             value.WellFedSeconds,
             value.CraftingExperience,
@@ -229,7 +270,7 @@ public static class ServerCheckpointMapper
             value.AdventureExperience,
             value.DiggingExperience,
             value.FishingExperience,
-            value.MaximumHealth,
+            maximumHealth,
             value.AttackExperience,
             value.StrengthExperience,
             value.DefenceExperience,
@@ -246,7 +287,15 @@ public static class ServerCheckpointMapper
                 ? new EnemyId(enemyId)
                 : null,
             value.CombatAttackSequence,
-            value.NextCombatAttackTick),
+            value.NextCombatAttackTick,
+            value.StarvationDamageRemainder,
+            value.HealthRegenerationRemainder,
+            value.Quests is null
+                ? IslandRpg.Gameplay.QuestService.Normalize(null)
+                : IslandRpg.Gameplay.QuestService.Normalize(value.Quests),
+            value.TimedHealingRemainingHealth,
+            value.TimedHealingRemainingSeconds,
+            value.TimedHealingFractionalHealth),
         value.ReconnectTokenHash.ToImmutableArray(),
         value.CommandReceipts.Select(static receipt =>
             new AuthoritativeCommandReceiptCheckpoint(
@@ -254,6 +303,7 @@ public static class ServerCheckpointMapper
                 receipt.PayloadFingerprint,
                 receipt.Status,
                 receipt.Error)).ToImmutableArray());
+    }
 
     private static IReadOnlyList<ServerBoatCheckpoint> ToDurable(
         AuthoritativeBoatTransactionsCheckpoint value) =>
@@ -325,11 +375,13 @@ public static class ServerCheckpointMapper
                 cadence.ActionOrdinal)).ToArray());
 
     private static AuthoritativeResourceTransactionsCheckpoint ToSimulation(
-        ServerResourceCheckpoint? value)
+        ServerResourceCheckpoint? value,
+        int schemaVersion,
+        long checkpointTick)
     {
         value ??= new ServerResourceCheckpoint([], []);
         return new AuthoritativeResourceTransactionsCheckpoint(
-            value.Chunks.Select(static chunk =>
+            value.Chunks.Select(chunk =>
                 new ResourceChunkSparseState(
                     new WorldChunkKey(chunk.X, chunk.Y, chunk.WorldLevel),
                     chunk.Revision,
@@ -342,7 +394,10 @@ public static class ServerCheckpointMapper
                             node.NodeRevision,
                             node.Health,
                             node.Remaining,
-                            node.ReadyAtGameSeconds,
+                            MigrateLegacyDeadline(
+                                node.ReadyAtGameSeconds,
+                                schemaVersion,
+                                checkpointTick),
                             node.Depleted)).ToImmutableArray()))
                 .ToImmutableArray(),
             value.ActorCadences.Select(static cadence =>
@@ -469,7 +524,9 @@ public static class ServerCheckpointMapper
 
     private static AuthoritativeWorldObjectCheckpoint ToSimulation(
         ServerWorldObjectCheckpoint value,
-        IReadOnlyDictionary<WorldChunkKey, uint> chunkRevisions)
+        IReadOnlyDictionary<WorldChunkKey, uint> chunkRevisions,
+        int schemaVersion,
+        long checkpointTick)
     {
         var chunk = new WorldChunkKey(
             value.ChunkX,
@@ -489,7 +546,12 @@ public static class ServerCheckpointMapper
             value.GroupOwnerId,
             value.HasContainer,
             value.FuelItemId,
-            value.LitUntilGameSeconds,
+            value.DefinitionId == ItemIds.Campfire
+                ? MigrateLegacyDeadline(
+                    value.LitUntilGameSeconds,
+                    schemaVersion,
+                    checkpointTick)
+                : value.LitUntilGameSeconds,
             value.FiremakingLevel,
             value.GateState,
             value.LinkedObjectId);
@@ -514,4 +576,13 @@ public static class ServerCheckpointMapper
                         slot.OwnerId)).ToImmutableArray());
         return new AuthoritativeWorldObjectCheckpoint(item, container);
     }
+
+    private static double MigrateLegacyDeadline(
+        double value,
+        int schemaVersion,
+        long checkpointTick) =>
+        schemaVersion == ServerCheckpoint.LegacyElapsedDeadlineSchemaVersion
+            ? AuthoritativeWorldTime.FromLegacyElapsedDeadline(
+                value, checkpointTick)
+            : value;
 }

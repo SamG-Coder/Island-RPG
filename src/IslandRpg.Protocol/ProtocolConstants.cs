@@ -5,7 +5,7 @@ public static class ProtocolConstants
 {
     public const uint ReliableMagic = 0x49525047; // IRPG
     public const uint SnapshotMagic = 0x49525544; // IRUD
-    public const ushort CurrentVersion = 10;
+    public const ushort CurrentVersion = 11;
     public const int ReliableHeaderSize = 28;
     public const int TcpLengthPrefixSize = sizeof(uint);
     public const int MaxReliableFrameBytes = 64 * 1024;
@@ -27,6 +27,10 @@ public static class ProtocolLimits
     public const int DefinitionIdBytes = 64;
     public const int RecipeIdBytes = 64;
     public const int PlayerInventorySlots = 28;
+    // Canonical quest state is private actor data. These limits are deliberately
+    // fixed at the protocol boundary, independent of a particular save.
+    public const int MaxQuestStates = 6;
+    public const int MaxQuestObjectivesPerState = 8;
     public const int MaxInventoryQuantity = ushort.MaxValue;
     public const int MaxContainerSlots = 128;
     public const int MaxContainerTransferQuantity = ushort.MaxValue;
@@ -168,6 +172,8 @@ public enum ActionCommandKind : byte
     CaveAction = 17,
     BoatAction = 18,
     CombatAction = 19,
+    PlantCrop = 20,
+    HarvestCrop = 21,
 }
 
 public enum BoatActionKind : byte

@@ -284,6 +284,18 @@ internal sealed partial class GameHostWindow
     private void ApplyNetworkPlayerState(NetworkPlayerGameplayState state)
     {
         if (_activePlayer is null) return;
+        var hadAuthoritativeQuestState = _activePlayer.Quests is { Count: > 0 };
+        var previousQuests = QuestService.Normalize(_activePlayer.Quests);
+        var authoritativeQuests = state.Quests is { Count: > 0 }
+            ? QuestService.Normalize(state.Quests.Select(quest => new QuestProgress(
+                quest.QuestId,
+                (QuestStatus)quest.Status,
+                quest.Objectives.ToDictionary(
+                    value => value.ObjectiveId,
+                    value => value.Count,
+                    StringComparer.Ordinal),
+                quest.CompletionTick)).ToArray())
+            : previousQuests;
         ObserveNetworkResourceGameplayState(
             state,
             _activePlayer.WoodcuttingExperience,
@@ -318,8 +330,11 @@ internal sealed partial class GameHostWindow
             StrengthExperience = state.StrengthExperience,
             DefenceExperience = state.DefenceExperience,
             CombatStance = FromNetworkCombatStance(state.CombatStance),
+            Quests = authoritativeQuests,
             UpdatedUtc = DateTime.UtcNow
         };
+        if (hadAuthoritativeQuestState)
+            PresentNetworkQuestCompletion(previousQuests, authoritativeQuests);
         ApplyNetworkCombatPlayerState(state);
         if (_activeInventorySlot >= 0 &&
             items[_activeInventorySlot] is null)

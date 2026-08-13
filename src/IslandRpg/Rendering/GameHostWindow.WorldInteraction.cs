@@ -301,7 +301,10 @@ internal sealed partial class GameHostWindow
     {
         if (IsNetworkWorld)
             QueueNetworkObjectAction(
-                NetworkWorldActionKind.PickUp, groundObject);
+                CropService.IsCrop(groundObject)
+                    ? NetworkWorldActionKind.HarvestCrop
+                    : NetworkWorldActionKind.PickUp,
+                groundObject);
         else
             _worldActions.QueueGroundObjectPickup(groundObject);
     }

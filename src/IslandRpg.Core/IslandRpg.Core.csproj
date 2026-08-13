@@ -36,6 +36,7 @@
     <Compile Include="..\IslandRpg\Gameplay\ActorActionService.cs" Link="Gameplay\ActorActionService.cs" />
     <Compile Include="..\IslandRpg\Gameplay\WoodcuttingSkill.cs" Link="Gameplay\WoodcuttingSkill.cs" />
     <Compile Include="..\IslandRpg\Gameplay\FarmingSkill.cs" Link="Gameplay\FarmingSkill.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\CropService.cs" Link="Gameplay\CropService.cs" />
     <Compile Include="..\IslandRpg\Gameplay\MiningSkill.cs" Link="Gameplay\MiningSkill.cs" />
     <Compile Include="..\IslandRpg\Gameplay\ResourceStrikeService.cs" Link="Gameplay\ResourceStrikeService.cs" />
     <Compile Include="..\IslandRpg\Gameplay\EntityAction.cs" Link="Gameplay\EntityAction.cs" />
@@ -52,6 +53,7 @@
     <Compile Include="..\IslandRpg\Gameplay\ConstructionService.cs" Link="Gameplay\ConstructionService.cs" />
     <Compile Include="..\IslandRpg\Gameplay\StorageContainerService.cs" Link="Gameplay\StorageContainerService.cs" />
     <Compile Include="..\IslandRpg\Gameplay\WorldItemContainerService.cs" Link="Gameplay\WorldItemContainerService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\QuestService.cs" Link="Gameplay\QuestService.cs" />
     <Compile Include="..\IslandRpg\Gameplay\GateAccessState.cs" Link="Gameplay\GateAccessState.cs" />
     <Compile Include="..\IslandRpg\Gameplay\GateService.cs" Link="Gameplay\GateService.cs" />
     <Compile Include="..\IslandRpg\World\WorldDomain.cs" Link="World\WorldDomain.cs" />

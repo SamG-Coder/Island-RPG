@@ -152,7 +152,7 @@ public sealed class AuthoritativeResourceTransactions
             .Select(static value => new ResourceActorCadenceCheckpoint(
                 value.Key.ActorId,
                 value.Key.Action,
-                value.Value.ReadyAtGameSeconds,
+                value.Value.ReadyAtRealSeconds,
                 value.Value.ActionOrdinal))
             .ToImmutableArray();
         return new(chunks, cadences);
@@ -257,9 +257,12 @@ public sealed class AuthoritativeResourceTransactions
         WorldTransactionActorInput input,
         GatherTreeStickTransaction command)
     {
+        var worldGameSeconds = ResolveWorldGameSeconds(
+            command.GameSeconds, command.WorldGameSeconds);
         var validation = Validate(
             input, command.Context, command.Node,
             ResourceActionKind.GatherTreeStick, command.GameSeconds,
+            worldGameSeconds,
             out var descriptor, out var current, out var cadence);
         if (validation is not null) return validation;
         if (current.Remaining <= 0 || current.Depleted)
@@ -298,7 +301,7 @@ public sealed class AuthoritativeResourceTransactions
 
         var previous = current;
         if (!ResourceNodeStateRules.TryConsumeRemaining(
-                descriptor, current, 1, command.GameSeconds,
+                descriptor, current, 1, worldGameSeconds,
                 out current))
             throw new InvalidOperationException(
                 "Validated tree-stick state could not be consumed.");
@@ -320,9 +323,12 @@ public sealed class AuthoritativeResourceTransactions
         WorldTransactionActorInput input,
         StrikeTreeTransaction command)
     {
+        var worldGameSeconds = ResolveWorldGameSeconds(
+            command.GameSeconds, command.WorldGameSeconds);
         var validation = Validate(
             input, command.Context, command.Node,
             ResourceActionKind.CutTree, command.GameSeconds,
+            worldGameSeconds,
             out var descriptor, out var current, out var cadence);
         if (validation is not null) return validation;
         if (current.Health <= 0 || current.Depleted)
@@ -384,6 +390,15 @@ public sealed class AuthoritativeResourceTransactions
             inventoryChanged = true;
         }
 
+        var inventoryWillChange =
+            inventoryChanged || grantedRewardQuantity > 0;
+        var revisionFailure = ValidateAttemptRevisionCapacity(
+            input, command.Context, descriptor, current,
+            inventoryWillChange, strike.Hit);
+        if (revisionFailure is not null) return revisionFailure;
+        var nextReadyAt = Cadence(ResourceActionKind.CutTree)
+            .NextReadyAt(command.GameSeconds);
+
         ResourceNodeTransactionDelta? nodeDelta = null;
         ResourceChunkRevisionDelta? chunkDelta = null;
         if (strike.Hit)
@@ -394,21 +409,23 @@ public sealed class AuthoritativeResourceTransactions
                     out current))
                 throw new InvalidOperationException(
                     "Validated tree damage could not be committed.");
-            _nodes[descriptor.Id] = current;
             nodeDelta = new(previous, current);
-            chunkDelta = AdvanceChunk(descriptor.Chunk);
         }
 
-        CommitCadence(input.ActorId, ResourceActionKind.CutTree,
-            command.GameSeconds, ordinal);
-        var experienceChanged = strike.Experience.Experience !=
-                                input.Gameplay.WoodcuttingExperience;
         var gameplay = UpdatedGameplay(
             input.Gameplay,
             inventory,
-            inventoryChanged || grantedRewardQuantity > 0,
+            inventoryWillChange,
             strike.Experience.Experience,
-            actorChanged: experienceChanged);
+            actorChanged: true);
+        if (strike.Hit)
+        {
+            _nodes[descriptor.Id] = current;
+            chunkDelta = AdvanceChunk(descriptor.Chunk);
+        }
+        CommitPreparedCadence(
+            input.ActorId, ResourceActionKind.CutTree,
+            nextReadyAt, ordinal);
         var rewards = grantedRewardQuantity > 0
             ? ImmutableArray.Create(
                 new ResourceItemReward(
@@ -436,9 +453,12 @@ public sealed class AuthoritativeResourceTransactions
         WorldTransactionActorInput input,
         GatherFibreTransaction command)
     {
+        var worldGameSeconds = ResolveWorldGameSeconds(
+            command.GameSeconds, command.WorldGameSeconds);
         var validation = Validate(
             input, command.Context, command.Node,
             ResourceActionKind.GatherFibre, command.GameSeconds,
+            worldGameSeconds,
             out var descriptor, out var current, out var cadence,
             out var regrowth);
         if (validation is not null) return validation;
@@ -470,6 +490,7 @@ public sealed class AuthoritativeResourceTransactions
         return CommitRenewableHarvest(
             input, command.Context, descriptor, current, regrowth,
             ResourceActionKind.GatherFibre, command.GameSeconds,
+            worldGameSeconds,
             ordinal, inventory, visual.GatherItemId!, gathered, requested,
             farmingExperience: input.Gameplay.FarmingExperience,
             adventureExperience: AwardAdventureExperience(
@@ -484,9 +505,12 @@ public sealed class AuthoritativeResourceTransactions
             return Rejected(input, command.Context,
                 ResourceTransactionStatus.InvalidCommand,
                 "The berry-gathering tool slot is malformed.");
+        var worldGameSeconds = ResolveWorldGameSeconds(
+            command.GameSeconds, command.WorldGameSeconds);
         var validation = Validate(
             input, command.Context, command.Node,
             ResourceActionKind.GatherBerries, command.GameSeconds,
+            worldGameSeconds,
             out var descriptor, out var current, out var cadence,
             out var regrowth);
         if (validation is not null) return validation;
@@ -545,6 +569,7 @@ public sealed class AuthoritativeResourceTransactions
         return CommitRenewableHarvest(
             input, command.Context, descriptor, current, regrowth,
             ResourceActionKind.GatherBerries, command.GameSeconds,
+            worldGameSeconds,
             ordinal, inventory, visual.GatherItemId!, gathered, requested,
             farming,
             AwardAdventureExperience(
@@ -555,9 +580,12 @@ public sealed class AuthoritativeResourceTransactions
         WorldTransactionActorInput input,
         MineResourceTransaction command)
     {
+        var worldGameSeconds = ResolveWorldGameSeconds(
+            command.GameSeconds, command.WorldGameSeconds);
         var validation = Validate(
             input, command.Context, command.Node,
             ResourceActionKind.Mine, command.GameSeconds,
+            worldGameSeconds,
             out var descriptor, out var current, out var cadence);
         if (validation is not null) return validation;
         if (current.Health <= 0 || current.Depleted)
@@ -600,6 +628,18 @@ public sealed class AuthoritativeResourceTransactions
         if (strike.Depleted && visual.RewardItemId is { } completionReward)
             grantedRewardQuantity = inventory.AddUpTo(completionReward, 1);
 
+        var gainedMining = strike.Experience.Experience -
+                           input.Gameplay.MiningExperience;
+        var adventureExperience = AwardAdventureExperience(
+            input.Gameplay.AdventureExperience, gainedMining);
+        var inventoryChanged = grantedRewardQuantity > 0;
+        var revisionFailure = ValidateAttemptRevisionCapacity(
+            input, command.Context, descriptor, current,
+            inventoryChanged, strike.Hit);
+        if (revisionFailure is not null) return revisionFailure;
+        var nextReadyAt = Cadence(ResourceActionKind.Mine)
+            .NextReadyAt(command.GameSeconds);
+
         ResourceNodeTransactionDelta? nodeDelta = null;
         ResourceChunkRevisionDelta? chunkDelta = null;
         if (strike.Hit)
@@ -610,21 +650,9 @@ public sealed class AuthoritativeResourceTransactions
                     out current))
                 throw new InvalidOperationException(
                     "Validated mining damage could not be committed.");
-            _nodes[descriptor.Id] = current;
             nodeDelta = new(previous, current);
-            chunkDelta = AdvanceChunk(descriptor.Chunk);
         }
 
-        CommitCadence(input.ActorId, ResourceActionKind.Mine,
-            command.GameSeconds, ordinal);
-        var gainedMining = strike.Experience.Experience -
-                           input.Gameplay.MiningExperience;
-        var adventureExperience = AwardAdventureExperience(
-            input.Gameplay.AdventureExperience, gainedMining);
-        var experienceChanged = gainedMining != 0 ||
-                                adventureExperience !=
-                                input.Gameplay.AdventureExperience;
-        var inventoryChanged = grantedRewardQuantity > 0;
         var gameplay = UpdatedGameplay(
             input.Gameplay,
             inventory,
@@ -632,7 +660,15 @@ public sealed class AuthoritativeResourceTransactions
             input.Gameplay.WoodcuttingExperience,
             miningExperience: strike.Experience.Experience,
             adventureExperience: adventureExperience,
-            actorChanged: experienceChanged);
+            actorChanged: true);
+        if (strike.Hit)
+        {
+            _nodes[descriptor.Id] = current;
+            chunkDelta = AdvanceChunk(descriptor.Chunk);
+        }
+        CommitPreparedCadence(
+            input.ActorId, ResourceActionKind.Mine,
+            nextReadyAt, ordinal);
         var rewards = grantedRewardQuantity > 0
             ? ImmutableArray.Create(new ResourceItemReward(
                 visual.RewardItemId!, grantedRewardQuantity))
@@ -661,9 +697,12 @@ public sealed class AuthoritativeResourceTransactions
             return Rejected(input, command.Context,
                 ResourceTransactionStatus.InvalidCommand,
                 "The fishing reach is invalid.");
+        var worldGameSeconds = ResolveWorldGameSeconds(
+            command.GameSeconds, command.WorldGameSeconds);
         var validation = Validate(
             input, command.Context, command.Node,
             ResourceActionKind.Fish, command.GameSeconds,
+            worldGameSeconds,
             out var descriptor, out var current, out var cadence);
         if (validation is not null) return validation;
         if (Vector2.DistanceSquared(
@@ -715,32 +754,45 @@ public sealed class AuthoritativeResourceTransactions
         var caught = DeterministicRolls(
             input.ActorId, descriptor.Id, ordinal,
             ResourceActionKind.Fish).Accuracy < chance;
-        CommitCadence(input.ActorId, ResourceActionKind.Fish,
-            command.GameSeconds, ordinal);
+        var revisionFailure = ValidateAttemptRevisionCapacity(
+            input, command.Context, descriptor, current,
+            inventoryChanges: caught, resourceChanges: caught);
+        if (revisionFailure is not null) return revisionFailure;
+        var nextReadyAt = Cadence(ResourceActionKind.Fish)
+            .NextReadyAt(command.GameSeconds);
         if (!caught)
+        {
+            var missGameplay = UpdatedGameplay(
+                input.Gameplay,
+                inventory,
+                inventoryChanged: false,
+                input.Gameplay.WoodcuttingExperience,
+                actorChanged: true);
+            CommitPreparedCadence(
+                input.ActorId, ResourceActionKind.Fish,
+                nextReadyAt, ordinal);
             return new ResourceTransactionResult(
                 command.Context.CommandId,
                 ResourceTransactionStatus.Accepted,
-                input.Gameplay.ActorRevision,
-                input.Gameplay.Inventory.Revision,
-                input.Gameplay,
+                missGameplay.ActorRevision,
+                missGameplay.Inventory.Revision,
+                missGameplay,
                 null,
                 null,
                 ImmutableArray<ResourceItemReward>.Empty,
                 Hit: false,
                 Detail: string.Empty,
                 FishingOutcome: new(species, false, chance));
+        }
 
         if (!inventory.TryAdd(profile.ItemId))
             throw new InvalidOperationException(
                 "Validated fish reward could not be added.");
         var previous = current;
         if (!ResourceNodeStateRules.TryConsumeRemaining(
-                descriptor, current, 1, command.GameSeconds, out current))
+                descriptor, current, 1, worldGameSeconds, out current))
             throw new InvalidOperationException(
                 "Validated fish stock could not be consumed.");
-        _nodes[descriptor.Id] = current;
-        var chunk = AdvanceChunk(descriptor.Chunk);
         var award = FishingRules.AwardExperience(
             input.Gameplay.FishingExperience, species);
         var adventure = AwardAdventureExperience(
@@ -752,8 +804,12 @@ public sealed class AuthoritativeResourceTransactions
             input.Gameplay.WoodcuttingExperience,
             adventureExperience: adventure,
             fishingExperience: award.Experience,
-            actorChanged: award.Gained != 0 ||
-                          adventure != input.Gameplay.AdventureExperience);
+            actorChanged: true);
+        _nodes[descriptor.Id] = current;
+        var chunk = AdvanceChunk(descriptor.Chunk);
+        CommitPreparedCadence(
+            input.ActorId, ResourceActionKind.Fish,
+            nextReadyAt, ordinal);
         return new ResourceTransactionResult(
             command.Context.CommandId,
             ResourceTransactionStatus.Accepted,
@@ -773,13 +829,15 @@ public sealed class AuthoritativeResourceTransactions
         WorldTransactionContext context,
         ResourceNodeReference reference,
         ResourceActionKind action,
-        double gameSeconds,
+        double cadenceSeconds,
+        double worldGameSeconds,
         out ResourceNodeDescriptor descriptor,
         out ResourceNodeSparseState current,
         out CadenceState cadence)
     {
         return Validate(
-            input, context, reference, action, gameSeconds,
+            input, context, reference, action, cadenceSeconds,
+            worldGameSeconds,
             out descriptor, out current, out cadence, out _);
     }
 
@@ -788,7 +846,8 @@ public sealed class AuthoritativeResourceTransactions
         WorldTransactionContext context,
         ResourceNodeReference reference,
         ResourceActionKind action,
-        double gameSeconds,
+        double cadenceSeconds,
+        double worldGameSeconds,
         out ResourceNodeDescriptor descriptor,
         out ResourceNodeSparseState current,
         out CadenceState cadence,
@@ -800,7 +859,8 @@ public sealed class AuthoritativeResourceTransactions
         regrowth = null;
         if (context.CommandId == Guid.Empty ||
             context.ActorId != input.ActorId ||
-            !double.IsFinite(gameSeconds) || gameSeconds < 0)
+            !double.IsFinite(cadenceSeconds) || cadenceSeconds < 0 ||
+            !double.IsFinite(worldGameSeconds) || worldGameSeconds < 0)
             return Rejected(input, context,
                 ResourceTransactionStatus.InvalidCommand,
                 "The resource command is malformed.");
@@ -852,7 +912,8 @@ public sealed class AuthoritativeResourceTransactions
                 "The resource is outside interaction range.");
         cadence = _cadences.GetValueOrDefault((input.ActorId, action));
         var policy = Cadence(action);
-        if (!policy.IsReady(gameSeconds, cadence.ReadyAtGameSeconds))
+        if (!policy.IsReady(
+                cadenceSeconds, cadence.ReadyAtRealSeconds))
             return Rejected(input, context,
                 ResourceTransactionStatus.CadenceLocked,
                 "The resource interaction cadence has not elapsed.");
@@ -862,7 +923,7 @@ public sealed class AuthoritativeResourceTransactions
         // harvest atomically publishes both logical revisions, avoiding a
         // hidden mutation when a later validation rejects the command.
         if (ResourceNodeStateRules.TryRegrow(
-                descriptor, current, gameSeconds, out var regrown))
+                descriptor, current, worldGameSeconds, out var regrown))
         {
             regrowth = new(current, regrown);
             current = regrown;
@@ -881,8 +942,39 @@ public sealed class AuthoritativeResourceTransactions
         double gameSeconds,
         ulong actionOrdinal)
     {
+        CommitPreparedCadence(
+            actorId, action,
+            Cadence(action).NextReadyAt(gameSeconds),
+            actionOrdinal);
+    }
+
+    private void CommitPreparedCadence(
+        ActorId actorId,
+        ResourceActionKind action,
+        double readyAtRealSeconds,
+        ulong actionOrdinal) =>
         _cadences[(actorId, action)] = new(
-            Cadence(action).NextReadyAt(gameSeconds), actionOrdinal);
+            readyAtRealSeconds, actionOrdinal);
+
+    private ResourceTransactionResult? ValidateAttemptRevisionCapacity(
+        WorldTransactionActorInput input,
+        WorldTransactionContext context,
+        ResourceNodeDescriptor descriptor,
+        ResourceNodeSparseState current,
+        bool inventoryChanges,
+        bool resourceChanges)
+    {
+        if (input.Gameplay.ActorRevision != uint.MaxValue &&
+            (!inventoryChanges ||
+             input.Gameplay.Inventory.Revision != uint.MaxValue) &&
+            (!resourceChanges ||
+             current.NodeRevision != uint.MaxValue &&
+             ChunkRevision(descriptor.Chunk) != uint.MaxValue))
+            return null;
+
+        return Rejected(
+            input, context, ResourceTransactionStatus.InvalidCommand,
+            "An accepted resource attempt revision cannot advance any further.");
     }
 
     private ResourceActionCadence Cadence(ResourceActionKind action) =>
@@ -906,7 +998,8 @@ public sealed class AuthoritativeResourceTransactions
         ResourceNodeSparseState current,
         ResourceNodeTransactionDelta? regrowth,
         ResourceActionKind action,
-        double gameSeconds,
+        double cadenceSeconds,
+        double worldGameSeconds,
         ulong ordinal,
         InventoryContainer inventory,
         string itemId,
@@ -917,7 +1010,7 @@ public sealed class AuthoritativeResourceTransactions
     {
         var previous = regrowth?.Previous ?? current;
         if (!ResourceNodeStateRules.TryConsumeRemaining(
-                descriptor, current, current.Remaining, gameSeconds,
+                descriptor, current, current.Remaining, worldGameSeconds,
                 out current))
             throw new InvalidOperationException(
                 "Validated renewable resource state could not be harvested.");
@@ -929,7 +1022,7 @@ public sealed class AuthoritativeResourceTransactions
                 descriptor.Chunk,
                 firstChunk.PreviousRevision,
                 AdvanceChunk(descriptor.Chunk).CurrentRevision);
-        CommitCadence(input.ActorId, action, gameSeconds, ordinal);
+        CommitCadence(input.ActorId, action, cadenceSeconds, ordinal);
         var gameplay = UpdatedGameplay(
             input.Gameplay, inventory,
             inventoryChanged: true,
@@ -1149,6 +1242,13 @@ public sealed class AuthoritativeResourceTransactions
     private static float UnitRoll(ReadOnlySpan<byte> value) =>
         (float)(BinaryPrimitives.ReadUInt32BigEndian(value) / 4294967296d);
 
+    private static double ResolveWorldGameSeconds(
+        double cadenceSeconds,
+        double worldGameSeconds) =>
+        double.IsNaN(worldGameSeconds)
+            ? cadenceSeconds
+            : worldGameSeconds;
+
     private static bool IsFinite(Vector2 value) =>
         float.IsFinite(value.X) && float.IsFinite(value.Y);
 
@@ -1162,7 +1262,7 @@ public sealed class AuthoritativeResourceTransactions
     }
 
     private readonly record struct CadenceState(
-        double ReadyAtGameSeconds,
+        double ReadyAtRealSeconds,
         ulong ActionOrdinal);
 
     private sealed record PreparedCheckpoint(

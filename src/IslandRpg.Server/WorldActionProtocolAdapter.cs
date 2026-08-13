@@ -37,6 +37,14 @@ public static class WorldActionProtocolAdapter
                 new Vector2(value.X, value.Y),
                 value.WorldLevel,
                 value.ExpectedChunkRevision),
+            PlantCropAction value => new PlantCropIntent(
+                command.CommandId, command.InventoryRevision,
+                command.ActorRevision, value.SeedInventorySlot,
+                new Vector2(value.X, value.Y), value.WorldLevel,
+                value.ExpectedChunkRevision),
+            HarvestCropAction value => new HarvestCropIntent(
+                command.CommandId, command.InventoryRevision,
+                command.ActorRevision, Handle(value.Crop)),
             OpenContainerAction value => new OpenWorldContainerIntent(
                 command.CommandId,
                 command.InventoryRevision,
@@ -211,8 +219,20 @@ public static class WorldActionProtocolAdapter
                     tick / (double)SimulationTiming.TicksPerSecond)),
             actorChanged
                 ? gameplay.CombatTargetEnemyId?.Value ?? Guid.Empty
-                : Guid.Empty);
+                : Guid.Empty,
+            actorChanged ? ToQuestStates(gameplay) : []);
     }
+
+    internal static IReadOnlyList<QuestProgressState> ToQuestStates(
+        PlayerGameplaySnapshot gameplay) =>
+        gameplay.Quests.IsDefault
+            ? []
+            : gameplay.Quests.Select(quest => new QuestProgressState(
+                quest.QuestId, (byte)quest.Status, quest.CompletionTick,
+                (quest.ObjectiveCounts ??
+                 Enumerable.Empty<KeyValuePair<string, int>>()).Select(value =>
+                    new QuestObjectiveState(value.Key, value.Value)).ToArray()))
+            .ToArray();
 
     /// <summary>
     /// Creates the public, broadcast-safe world delta. Visual fuel/burn and

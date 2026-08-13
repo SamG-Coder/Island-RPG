@@ -51,6 +51,10 @@ internal static class MiningResourceAuthorityChecks
                 result.NodeDelta?.Current.Depleted == false,
                 maximumHealth: 85);
             var result = fixture.Result;
+            CheckAssert.Equal(
+                fixture.Fixture.Actor.Gameplay.ActorRevision + 1,
+                result.ActorRevision,
+                "an accepted mining hit must advance actor revision exactly once");
             CheckAssert.True(result.Damage is >= 4 and <= 9,
                 "a level-one stone pickaxe must use the canonical 4-9 damage range");
             CheckAssert.Equal(result.Damage,
@@ -145,13 +149,23 @@ internal static class MiningResourceAuthorityChecks
             CheckAssert.True(result.NodeDelta is null &&
                              result.ChunkDelta is null,
                 "a miss must not publish a fake resource mutation");
-            CheckAssert.Equal(fixture.Fixture.Actor.Gameplay.ActorRevision,
+            CheckAssert.Equal(
+                fixture.Fixture.Actor.Gameplay.ActorRevision + 1,
                 result.ActorRevision,
-                "a miss must not invent actor progression revisions");
+                "an accepted miss must advance the actor concurrency revision once");
+            var currentActor = fixture.Fixture.Actor with
+            {
+                Gameplay = result.Gameplay!.Value
+            };
             var locked = fixture.Fixture.Authority.Execute(
-                fixture.Fixture.Actor,
+                currentActor,
                 new MineResourceTransaction(
-                    fixture.Fixture.Context with { CommandId = Guid.NewGuid() },
+                    fixture.Fixture.Context with
+                    {
+                        CommandId = Guid.NewGuid(),
+                        ExpectedActorRevision = result.ActorRevision,
+                        ExpectedInventoryRevision = result.InventoryRevision
+                    },
                     fixture.Fixture.Reference, fixture.Fixture.ToolSlot,
                     2.5));
             CheckAssert.Equal(ResourceTransactionStatus.CadenceLocked,
@@ -161,6 +175,24 @@ internal static class MiningResourceAuthorityChecks
                 fixture.Fixture.Authority.CaptureCheckpoint()
                     .ActorCadences.Single().ActionOrdinal,
                 "a miss must persist its deterministic roll ordinal");
+
+            var staleReplay = fixture.Fixture.Authority.Execute(
+                currentActor,
+                new MineResourceTransaction(
+                    fixture.Fixture.Context with
+                    {
+                        CommandId = Guid.NewGuid(),
+                        ExpectedInventoryRevision = result.InventoryRevision
+                    },
+                    fixture.Fixture.Reference, fixture.Fixture.ToolSlot,
+                    4));
+            CheckAssert.Equal(ResourceTransactionStatus.StaleActorRevision,
+                staleReplay.Status,
+                "an evicted miss replay with its old actor revision must reject before cadence");
+            CheckAssert.Equal(1UL,
+                fixture.Fixture.Authority.CaptureCheckpoint()
+                    .ActorCadences.Single().ActionOrdinal,
+                "a stale miss replay must not consume another deterministic ordinal");
         });
 
         checks.Add("mining remains deterministic across checkpoint restore", () =>

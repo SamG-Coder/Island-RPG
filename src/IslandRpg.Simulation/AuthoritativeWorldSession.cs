@@ -268,6 +268,7 @@ public sealed class AuthoritativeWorldSession
                 }
             SynchronizeBoatOccupants();
             AdvanceCombat();
+            AdvanceSurvival();
             var publish = Clock.AdvanceOneTick();
             AdvanceCookingJobs();
             if (!publish)
@@ -1136,7 +1137,8 @@ public sealed class AuthoritativeWorldSession
         if (command.Intent is GameplayIntent gameplay)
         {
             var result = ProcessGameplayIntent(actor, gameplay);
-            if (gameplay.CommandId != Guid.Empty)
+            if (gameplay.CommandId != Guid.Empty &&
+                result.Status != IntentStatus.CommandIdConflict)
             {
                 actor.RememberReceipt(
                     gameplay,
@@ -1243,6 +1245,37 @@ public sealed class AuthoritativeWorldSession
         MutableActor actor,
         WorldGameplayIntent intent)
     {
+        var context = new WorldTransactionContext(
+            intent.CommandId,
+            actor.Identity.ActorId,
+            intent.ExpectedActorRevision,
+            intent.ExpectedInventoryRevision,
+            GameplayIntentFingerprint.Create(intent));
+        var cachedResolution = _worldTransactions.ResolveCached(
+            context, out var cachedTransaction);
+        if (cachedResolution != CachedWorldTransactionResolution.Missing)
+        {
+            return ResolveCachedWorldIntent(
+                actor, intent, cachedResolution, cachedTransaction);
+        }
+
+        if (intent is PlantCropIntent crop &&
+            (crop.WorldLevel != 0 ||
+             !CropService.IsTileCenter(crop.Position) ||
+             !_navigation.SupportsWorldLevel(crop.WorldLevel) ||
+             !_navigation.CanStandAt(crop.Position, crop.WorldLevel) ||
+             _resourceTransactions?.HasBlockingTreeAt(
+                 crop.Position, crop.WorldLevel) == true ||
+             _obstacles.GetObstacles(crop.WorldLevel).Any(value =>
+                 value.Contains(crop.Position))))
+        {
+            return Rejected(
+                IntentStatus.InvalidPlacement,
+                actor,
+                "Crops must be planted at the centre of a clear traversable surface tile.",
+                intent.CommandId);
+        }
+
         if (intent is PlaceConstructionIntent placement &&
             (!_navigation.SupportsWorldLevel(placement.WorldLevel) ||
              !_navigation.CanStandAt(placement.Position, placement.WorldLevel)))
@@ -1276,16 +1309,22 @@ public sealed class AuthoritativeWorldSession
         }
 
         var gameSeconds = Clock.Current.ElapsedSeconds;
-        var context = new WorldTransactionContext(
-            intent.CommandId,
-            actor.Identity.ActorId,
-            intent.ExpectedActorRevision,
-            intent.ExpectedInventoryRevision);
+        var worldGameSeconds = AuthoritativeWorldTime
+            .FromElapsedRealSeconds(gameSeconds);
+        var beforeGameplay = actor.Gameplay.ToSnapshot();
         var input = new WorldTransactionActorInput(
             actor.Identity.ActorId,
             actor.Position,
             actor.WorldLevel,
-            actor.Gameplay.ToSnapshot());
+            beforeGameplay);
+        var questTarget = intent switch
+        {
+            PickUpWorldObjectIntent pickUp =>
+                TryCaptureWorldObject(pickUp.Object.ObjectId),
+            HarvestCropIntent harvest =>
+                TryCaptureWorldObject(harvest.Crop.ObjectId),
+            _ => null
+        };
         var transaction = intent switch
         {
             PickUpWorldObjectIntent pickUp => _worldTransactions.Execute(
@@ -1300,6 +1339,23 @@ public sealed class AuthoritativeWorldSession
                     drop.Position,
                     drop.WorldLevel,
                     drop.ExpectedChunkRevision)),
+            PlantCropIntent plant => _worldTransactions.Execute(
+                input,
+                new PlantCropTransaction(
+                    context,
+                    AuthoritativeWorldTransactions.DeriveCropObjectId(
+                        actor.Identity.ActorId,
+                        plant.CommandId,
+                        plant.ExpectedActorRevision),
+                    plant.SeedInventorySlot,
+                    plant.Position,
+                    plant.WorldLevel,
+                    plant.ExpectedChunkRevision,
+                    worldGameSeconds)),
+            HarvestCropIntent harvest => _worldTransactions.Execute(
+                input,
+                new HarvestCropTransaction(
+                    context, harvest.Crop, worldGameSeconds)),
             OpenWorldContainerIntent open => _worldTransactions.Execute(
                 input,
                 new OpenWorldContainerTransaction(context, open.Container)),
@@ -1318,21 +1374,21 @@ public sealed class AuthoritativeWorldSession
                     context,
                     fuel.Campfire,
                     fuel.InventorySlot,
-                    gameSeconds)),
+                    worldGameSeconds)),
             TakeCampfireFuelIntent takeFuel => _worldTransactions.Execute(
                 input,
                 new TakeCampfireFuelTransaction(
                     context,
                     takeFuel.Campfire,
-                    gameSeconds)),
+                    worldGameSeconds)),
             LightCampfireIntent light => _worldTransactions.Execute(
                 input,
                 new LightCampfireTransaction(
                     context,
                     light.Campfire,
-                    gameSeconds)),
+                    worldGameSeconds)),
             CookOnCampfireIntent cook => BeginCooking(
-                actor, input, context, cook, gameSeconds),
+                actor, input, context, cook, worldGameSeconds),
             PlaceConstructionIntent place => _worldTransactions.Execute(
                 input,
                 new PlaceConstructionTransaction(
@@ -1392,6 +1448,8 @@ public sealed class AuthoritativeWorldSession
             (gameplay.ActorRevision != actor.Gameplay.ActorRevision ||
              gameplay.Inventory.Revision != actor.Gameplay.InventoryRevision))
         {
+            gameplay = ReconcileAdventureHealth(
+                beforeGameplay, gameplay);
             actor.Gameplay.ReplaceWith(gameplay);
         }
 
@@ -1401,6 +1459,21 @@ public sealed class AuthoritativeWorldSession
             actor.Position = transition.Position;
             actor.WorldLevel = transition.WorldLevel;
             actor.ClearRoute();
+        }
+
+        if (transaction.Accepted)
+        {
+            ApplyQuestEvents(
+                actor,
+                CommittedWorldQuestEvents(
+                    intent,
+                    questTarget,
+                    transaction,
+                    beforeGameplay,
+                    actor.Gameplay.ToSnapshot()),
+                beforeGameplay.ActorRevision);
+            transaction = RebaseTransaction(
+                transaction, actor.Gameplay.ToSnapshot());
         }
 
         if (transaction.Accepted &&
@@ -1422,6 +1495,40 @@ public sealed class AuthoritativeWorldSession
             ActorRevision = actor.Gameplay.ActorRevision,
             Gameplay = actor.Gameplay.ToSnapshot(),
             WorldTransaction = transaction
+        };
+    }
+
+    private IntentResult ResolveCachedWorldIntent(
+        MutableActor actor,
+        WorldGameplayIntent intent,
+        CachedWorldTransactionResolution resolution,
+        WorldTransactionResult transaction)
+    {
+        var gameplay = actor.Gameplay.ToSnapshot();
+        var duplicate =
+            resolution == CachedWorldTransactionResolution.Duplicate;
+        var status = MapWorldStatus(transaction.Status);
+        return new IntentResult(
+            status,
+            actor.LastProcessedCommandSequence,
+            transaction.Accepted
+                ? null
+                : string.IsNullOrWhiteSpace(transaction.Detail)
+                    ? transaction.Status.ToString()
+                    : transaction.Detail)
+        {
+            CommandId = intent.CommandId,
+            InventoryRevision = gameplay.Inventory.Revision,
+            ActorRevision = gameplay.ActorRevision,
+            Duplicate = duplicate,
+            Gameplay = gameplay,
+            // The aggregate receipt can outlive the session's private receipt.
+            // Never expose its stale gameplay, container, cave transition, or
+            // public deltas. A conflict has no cached effects and remains useful
+            // as a typed world rejection; an exact retry is a safe tombstone.
+            WorldTransaction = duplicate
+                ? null
+                : RebaseTransaction(transaction, gameplay)
         };
     }
 
@@ -1492,6 +1599,9 @@ public sealed class AuthoritativeWorldSession
                 IntentStatus.ExcavationCadenceLocked,
             WorldTransactionStatus.InvalidCaveLink =>
                 IntentStatus.InvalidCaveLink,
+            WorldTransactionStatus.NotCrop => IntentStatus.NotCrop,
+            WorldTransactionStatus.CropNotReady =>
+                IntentStatus.CropNotReady,
             _ => throw new ArgumentOutOfRangeException(nameof(status))
         };
 
@@ -1513,40 +1623,43 @@ public sealed class AuthoritativeWorldSession
             actor.Identity.ActorId,
             intent.ExpectedActorRevision,
             intent.ExpectedInventoryRevision);
+        var inputGameplay = actor.Gameplay.ToSnapshot();
         var input = new WorldTransactionActorInput(
             actor.Identity.ActorId,
             actor.Position,
             actor.WorldLevel,
-            actor.Gameplay.ToSnapshot());
+            inputGameplay);
         var occupiedBoat = intent is CatchFishIntent
             ? _boatTransactions?.FindByOccupant(actor.Identity.ActorId)
             : null;
-        var gameSeconds = Clock.Current.ElapsedSeconds;
+        var realSeconds = Clock.Current.ElapsedSeconds;
+        var worldGameSeconds = AuthoritativeWorldTime
+            .FromElapsedRealSeconds(realSeconds);
         var transaction = intent switch
         {
             GatherTreeStickIntent gather => _resourceTransactions.Execute(
                 input,
                 new GatherTreeStickTransaction(
-                    context, gather.Node, gameSeconds)),
+                    context, gather.Node, realSeconds, worldGameSeconds)),
             StrikeTreeIntent strike => _resourceTransactions.Execute(
                 input,
                 new StrikeTreeTransaction(
                     context, strike.Node, strike.ToolInventorySlot,
-                    gameSeconds)),
+                    realSeconds, worldGameSeconds)),
             GatherFibreIntent fibre => _resourceTransactions.Execute(
                 input,
                 new GatherFibreTransaction(
-                    context, fibre.Node, gameSeconds)),
+                    context, fibre.Node, realSeconds, worldGameSeconds)),
             GatherBerriesIntent berries => _resourceTransactions.Execute(
                 input,
                 new GatherBerriesTransaction(
                     context, berries.Node, berries.ToolInventorySlot,
-                    gameSeconds)),
+                    realSeconds, worldGameSeconds)),
             MineResourceIntent mining => _resourceTransactions.Execute(
                 input,
                 new MineResourceTransaction(
                     context, mining.Node, mining.ToolInventorySlot,
-                    gameSeconds)),
+                    realSeconds, worldGameSeconds)),
             CatchFishIntent fishing => _resourceTransactions.Execute(
                 input with
                 {
@@ -1556,7 +1669,7 @@ public sealed class AuthoritativeWorldSession
                     context, fishing.Node,
                     fishing.FishingNetInventorySlot,
                     occupiedBoat is null ? 2.4f : 2.85f,
-                    gameSeconds)),
+                    realSeconds, worldGameSeconds)),
             _ => throw new InvalidOperationException(
                 "The resource gameplay intent type is unsupported.")
         };
@@ -1572,7 +1685,20 @@ public sealed class AuthoritativeWorldSession
              actor.Gameplay.AdventureExperience ||
              gameplay.FishingExperience !=
              actor.Gameplay.FishingExperience))
+        {
+            gameplay = ReconcileAdventureHealth(
+                inputGameplay, gameplay);
             actor.Gameplay.ReplaceWith(gameplay);
+        }
+        if (transaction.Accepted)
+        {
+            ApplyQuestEvents(
+                actor,
+                CommittedResourceQuestEvents(intent, transaction),
+                inputGameplay.ActorRevision);
+            transaction = RebaseTransaction(
+                transaction, actor.Gameplay.ToSnapshot());
+        }
         // Accepted misses still carry authoritative hit/damage feedback and
         // cadence progression even though no node revision changed.
         if (transaction.Accepted)
@@ -1627,6 +1753,222 @@ public sealed class AuthoritativeWorldSession
             ResourceTransactionStatus.Depleted => IntentStatus.ResourceDepleted,
             _ => throw new ArgumentOutOfRangeException(nameof(status))
         };
+
+    private void ApplyQuestEvents(
+        MutableActor actor,
+        IEnumerable<QuestEvent> events,
+        uint baselineActorRevision)
+    {
+        var gameplay = actor.Gameplay;
+        var quests = gameplay.Quests;
+        var adventureExperience = gameplay.AdventureExperience;
+        var changed = false;
+        foreach (var questEvent in events)
+        {
+            var update = QuestService.Apply(
+                quests,
+                adventureExperience,
+                questEvent,
+                Clock.Tick);
+            quests = update.Progress;
+            adventureExperience = update.AdventureExperience;
+            changed |= update.Changed;
+        }
+
+        // A newly unlocked objective may already be satisfied by items the
+        // server owns in this inventory. Reconcile those facts from the
+        // authoritative slots, never from client-provided totals. The pass is
+        // bounded by the quest chain, and canonical counters make repeats
+        // idempotent.
+        for (var pass = 0; pass < QuestService.Definitions.Count; pass++)
+        {
+            var activeBefore = QuestService.ActiveQuest(quests)?
+                .Definition.Id;
+            var inventoryEvents = QuestService.InventoryProgressEvents(
+                quests,
+                gameplay.Inventory.ItemIds(),
+                gameplay.Inventory.Quantities());
+            if (inventoryEvents.IsDefaultOrEmpty) break;
+
+            foreach (var inventoryEvent in inventoryEvents)
+            {
+                var update = QuestService.Apply(
+                    quests,
+                    adventureExperience,
+                    inventoryEvent,
+                    Clock.Tick);
+                quests = update.Progress;
+                adventureExperience = update.AdventureExperience;
+                changed |= update.Changed;
+
+                var activeAfter = QuestService.ActiveQuest(quests)?
+                    .Definition.Id;
+                if (!string.Equals(
+                        activeBefore, activeAfter, StringComparison.Ordinal))
+                    break;
+            }
+
+            if (string.Equals(
+                    activeBefore,
+                    QuestService.ActiveQuest(quests)?.Definition.Id,
+                    StringComparison.Ordinal))
+                break;
+        }
+
+        if (!changed) return;
+
+        var previousMaximumHealth = gameplay.MaximumHealth;
+        var maximumHealth = AdventureService.MaximumHealth(
+            adventureExperience);
+        var health = Math.Clamp(
+            checked(gameplay.Health +
+                    (maximumHealth - previousMaximumHealth)),
+            0,
+            maximumHealth);
+        var actorRevision = gameplay.ActorRevision == baselineActorRevision
+            ? checked(gameplay.ActorRevision + 1)
+            : gameplay.ActorRevision;
+        gameplay.Quests = quests;
+        gameplay.AdventureExperience = adventureExperience;
+        gameplay.MaximumHealth = maximumHealth;
+        gameplay.Health = health;
+        gameplay.ActorRevision = actorRevision;
+    }
+
+    private static PlayerGameplaySnapshot ReconcileAdventureHealth(
+        PlayerGameplaySnapshot before,
+        PlayerGameplaySnapshot after)
+    {
+        if (after.AdventureExperience == before.AdventureExperience)
+            return after;
+        var maximumHealth = AdventureService.MaximumHealth(
+            after.AdventureExperience);
+        var gainedMaximumHealth = maximumHealth - before.MaximumHealth;
+        return after with
+        {
+            MaximumHealth = maximumHealth,
+            Health = Math.Clamp(
+                checked(after.Health + gainedMaximumHealth),
+                0,
+                maximumHealth)
+        };
+    }
+
+    private AuthoritativeWorldObjectSnapshot? TryCaptureWorldObject(
+        Guid objectId)
+    {
+        try
+        {
+            return _worldTransactions.CaptureObject(objectId);
+        }
+        catch (KeyNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    internal static ImmutableArray<QuestEvent> CommittedWorldQuestEvents(
+        WorldGameplayIntent intent,
+        AuthoritativeWorldObjectSnapshot? target,
+        WorldTransactionResult transaction,
+        PlayerGameplaySnapshot before,
+        PlayerGameplaySnapshot after)
+    {
+        switch (intent)
+        {
+            case PickUpWorldObjectIntent when target is { } pickedUp:
+                return [new QuestEvent(
+                    QuestEventType.GatherItem,
+                    pickedUp.DefinitionId)];
+            case HarvestCropIntent when
+                target?.FuelItemId is { } harvestItemId:
+            {
+                var quantity = InventoryItemCount(after, harvestItemId) -
+                               InventoryItemCount(before, harvestItemId);
+                return quantity > 0
+                    ? [new QuestEvent(
+                        QuestEventType.GatherItem,
+                        harvestItemId,
+                        quantity)]
+                    : [];
+            }
+            case LightCampfireIntent:
+                return [new QuestEvent(QuestEventType.LightCampfire)];
+            case PlaceConstructionIntent placement:
+                return [new QuestEvent(
+                    QuestEventType.BuildObject,
+                    placement.DefinitionId)];
+            case TraverseCaveIntent when
+                transaction.ActorTransition?.WorldLevel ==
+                    CaveExcavationRules.UndergroundWorldLevel:
+                return [new QuestEvent(QuestEventType.EnterCave)];
+            default:
+                return [];
+        }
+    }
+
+    internal static ImmutableArray<QuestEvent> CommittedResourceQuestEvents(
+        ResourceGameplayIntent intent,
+        ResourceTransactionResult transaction)
+    {
+        if (intent is CatchFishIntent)
+        {
+            if (transaction.FishingOutcome is not { Caught: true })
+                return [];
+            var catchReward = transaction.Rewards.IsDefaultOrEmpty
+                ? null
+                : transaction.Rewards[0].ItemId;
+            return [new QuestEvent(
+                QuestEventType.CatchFish,
+                catchReward)];
+        }
+
+        if (transaction.Rewards.IsDefaultOrEmpty) return [];
+        var type = intent is MineResourceIntent
+            ? QuestEventType.MineOre
+            : QuestEventType.GatherItem;
+        return transaction.Rewards
+            .Where(static reward => reward.Quantity > 0)
+            .Select(reward => new QuestEvent(
+                type,
+                reward.ItemId,
+                reward.Quantity))
+            .ToImmutableArray();
+    }
+
+    private static int InventoryItemCount(
+        PlayerGameplaySnapshot gameplay,
+        string itemId) => gameplay.Inventory.Slots
+        .Where(slot => string.Equals(
+            slot.ItemId,
+            itemId,
+            StringComparison.OrdinalIgnoreCase))
+        .Sum(static slot => slot.Quantity);
+
+    internal static ImmutableArray<QuestEvent> CommittedCookingQuestEvents(
+        bool interrupted,
+        bool burnt,
+        string resultItemId) => !interrupted && !burnt
+        ? [new QuestEvent(QuestEventType.CookFood, resultItemId)]
+        : [];
+
+    private static WorldTransactionResult RebaseTransaction(
+        WorldTransactionResult transaction,
+        PlayerGameplaySnapshot gameplay) => transaction with
+    {
+        ActorRevision = gameplay.ActorRevision,
+        InventoryRevision = gameplay.Inventory.Revision,
+        Gameplay = gameplay
+    };
+
+    private static ResourceTransactionResult RebaseTransaction(
+        ResourceTransactionResult transaction,
+        PlayerGameplaySnapshot gameplay) => transaction with
+    {
+        ActorRevision = gameplay.ActorRevision,
+        InventoryRevision = gameplay.Inventory.Revision,
+        Gameplay = gameplay
+    };
 
     private IntentResult ProcessBoatIntent(
         MutableActor actor,
@@ -1739,9 +2081,13 @@ public sealed class AuthoritativeWorldSession
         CombatGameplayIntent intent)
     {
         if (_combatTransactions is null)
+        {
+            if (intent is RespawnIntent respawn)
+                return ProcessRespawnWithoutCombat(actor, respawn);
             return Rejected(IntentStatus.CombatUnavailable, actor,
                 "This session has no authoritative combat authority.",
                 intent.CommandId);
+        }
         if (intent is SetCombatTargetIntent &&
             _boatTransactions?.FindByOccupant(
                 actor.Identity.ActorId) is not null)
@@ -1791,6 +2137,73 @@ public sealed class AuthoritativeWorldSession
             MapCombatStatus(transaction.Status),
             actor.LastProcessedCommandSequence,
             transaction.Accepted ? null : transaction.Detail)
+        {
+            CommandId = intent.CommandId,
+            InventoryRevision = actor.Gameplay.InventoryRevision,
+            ActorRevision = actor.Gameplay.ActorRevision,
+            Gameplay = actor.Gameplay.ToSnapshot(),
+            CombatTransaction = transaction,
+            BoatDelta = detachedBoat
+        };
+    }
+
+    private IntentResult ProcessRespawnWithoutCombat(
+        MutableActor actor,
+        RespawnIntent intent)
+    {
+        CombatTransactionStatus status;
+        string detail;
+        if (intent.ExpectedInventoryRevision !=
+            actor.Gameplay.InventoryRevision)
+        {
+            status = CombatTransactionStatus.StaleInventoryRevision;
+            detail = "The inventory revision is stale.";
+        }
+        else if (intent.ExpectedActorRevision != actor.Gameplay.ActorRevision)
+        {
+            status = CombatTransactionStatus.StaleActorRevision;
+            detail = "The actor revision is stale.";
+        }
+        else if (actor.Gameplay.LifeState != ActorLifeState.Dead)
+        {
+            status = CombatTransactionStatus.ActorAlive;
+            detail = "The actor is already alive.";
+        }
+        else if (Clock.Tick < actor.Gameplay.RespawnAvailableTick)
+        {
+            status = CombatTransactionStatus.RespawnLocked;
+            detail = "The respawn delay has not elapsed.";
+        }
+        else
+        {
+            status = CombatTransactionStatus.Accepted;
+            detail = string.Empty;
+        }
+
+        BoatStateDelta? detachedBoat = null;
+        if (status == CombatTransactionStatus.Accepted)
+        {
+            var gameplay = AuthoritativeCombatTransactions.RespawnGameplay(
+                actor.Gameplay.ToSnapshot());
+            actor.Gameplay.ReplaceWith(gameplay);
+            detachedBoat = _boatTransactions?.DetachOccupant(
+                actor.Identity.ActorId);
+            if (detachedBoat is not null)
+                BoatStateCommitted?.Invoke(detachedBoat);
+            actor.Position = Vector2.Zero;
+            actor.WorldLevel = 0;
+            actor.ClearRoute();
+        }
+
+        var transaction = new CombatTransactionResult(
+            intent.CommandId,
+            status,
+            actor.Gameplay.ToSnapshot(),
+            Detail: detail);
+        return new IntentResult(
+            MapCombatStatus(status),
+            actor.LastProcessedCommandSequence,
+            status == CombatTransactionStatus.Accepted ? null : detail)
         {
             CommandId = intent.CommandId,
             InventoryRevision = actor.Gameplay.InventoryRevision,
@@ -1912,18 +2325,27 @@ public sealed class AuthoritativeWorldSession
                     job.Experience,
                     job.Burnt,
                     job.DropObjectId,
-                    Clock.Current.ElapsedSeconds));
+                    AuthoritativeWorldTime.FromElapsedRealSeconds(
+                        Clock.Current.ElapsedSeconds)));
             if (!transaction.Accepted || transaction.Gameplay is not { } gameplay)
             {
                 throw new InvalidOperationException(
                     $"A validated cooking job could not complete: {transaction.Status}.");
             }
+            gameplay = ReconcileAdventureHealth(input.Gameplay, gameplay);
             actor.Gameplay.ReplaceWith(gameplay);
             _cookingJobs.Remove(job.ActorId);
+            var interrupted = transaction.Detail == "cooking_interrupted";
+            ApplyQuestEvents(
+                actor,
+                CommittedCookingQuestEvents(
+                    interrupted, job.Burnt, job.ResultItemId),
+                input.Gameplay.ActorRevision);
+            gameplay = actor.Gameplay.ToSnapshot();
+            transaction = RebaseTransaction(transaction, gameplay);
             if (!transaction.ObjectDeltas.IsDefaultOrEmpty ||
                 !transaction.ChunkDeltas.IsDefaultOrEmpty)
                 WorldTransactionCommitted?.Invoke(transaction);
-            var interrupted = transaction.Detail == "cooking_interrupted";
             CookingCompleted?.Invoke(new CookingCompletionSnapshot(
                 job.CommandId,
                 actor.Identity.PlayerId,
@@ -2023,7 +2445,7 @@ public sealed class AuthoritativeWorldSession
         return Accepted(actor, intent.CommandId);
     }
 
-    private static IntentResult ProcessCombineInventorySlots(
+    private IntentResult ProcessCombineInventorySlots(
         MutableActor actor,
         CombineInventorySlotsIntent intent)
     {
@@ -2075,7 +2497,7 @@ public sealed class AuthoritativeWorldSession
         return TryCraft(actor, recipe, intent.CommandId);
     }
 
-    private static IntentResult ProcessCraftRecipe(
+    private IntentResult ProcessCraftRecipe(
         MutableActor actor,
         CraftRecipeIntent intent)
     {
@@ -2098,13 +2520,15 @@ public sealed class AuthoritativeWorldSession
         return TryCraft(actor, recipe, intent.CommandId);
     }
 
-    private static IntentResult TryCraft(
+    private IntentResult TryCraft(
         MutableActor actor,
         CraftingRecipe recipe,
         Guid commandId)
     {
         var gameplay = actor.Gameplay;
+        var baselineActorRevision = gameplay.ActorRevision;
         var beforeItems = gameplay.Inventory.ItemIds();
+        var beforeResultCount = gameplay.Inventory.Count(recipe.ResultItemId);
         var craftResult = CraftingService.TryCraftDetailed(
             recipe,
             CraftingSkill.LevelForExperience(gameplay.CraftingExperience),
@@ -2124,16 +2548,37 @@ public sealed class AuthoritativeWorldSession
             gameplay.CraftingExperience,
             recipe,
             beforeItems);
+        var adventure = AdventureService.AwardFromAction(
+            gameplay.AdventureExperience,
+            experience.Gained);
         var nextInventoryRevision = checked(gameplay.InventoryRevision + 1);
-        var nextActorRevision = experience.Experience ==
-            gameplay.CraftingExperience
+        var nextActorRevision = experience.Gained == 0 &&
+            adventure.Gained == 0
                 ? gameplay.ActorRevision
                 : checked(gameplay.ActorRevision + 1);
 
         gameplay.Inventory = updated;
         gameplay.InventoryRevision = nextInventoryRevision;
         gameplay.CraftingExperience = experience.Experience;
+        gameplay.AdventureExperience = adventure.Experience;
+        var maximumHealth = AdventureService.MaximumHealth(
+            gameplay.AdventureExperience);
+        gameplay.Health = Math.Clamp(
+            checked(gameplay.Health + maximumHealth - gameplay.MaximumHealth),
+            0,
+            maximumHealth);
+        gameplay.MaximumHealth = maximumHealth;
         gameplay.ActorRevision = nextActorRevision;
+        var crafted = gameplay.Inventory.Count(recipe.ResultItemId) -
+                      beforeResultCount;
+        if (crafted > 0)
+            ApplyQuestEvents(
+                actor,
+                [new QuestEvent(
+                    QuestEventType.CraftItem,
+                    recipe.ResultItemId,
+                    crafted)],
+                baselineActorRevision);
         return Accepted(actor, commandId);
     }
 
@@ -2195,9 +2640,15 @@ public sealed class AuthoritativeWorldSession
             gameplay.WellFedSeconds,
             gameplay.Health,
             gameplay.MaximumHealth);
+        var timedHealing = effect.TimedHealing > 0
+            ? TimedHealingService.Start(effect)
+            : gameplay.TimedHealing;
+        if (survival.Health >= gameplay.MaximumHealth)
+            timedHealing = default;
         var actorChanged = survival.Health != gameplay.Health ||
             survival.Hunger != gameplay.Hunger ||
-            survival.WellFedSeconds != gameplay.WellFedSeconds;
+            survival.WellFedSeconds != gameplay.WellFedSeconds ||
+            timedHealing != gameplay.TimedHealing;
         var nextInventoryRevision = checked(gameplay.InventoryRevision + 1);
         var nextActorRevision = actorChanged
             ? checked(gameplay.ActorRevision + 1)
@@ -2208,6 +2659,7 @@ public sealed class AuthoritativeWorldSession
         gameplay.Health = survival.Health;
         gameplay.Hunger = survival.Hunger;
         gameplay.WellFedSeconds = survival.WellFedSeconds;
+        gameplay.TimedHealing = timedHealing;
         gameplay.ActorRevision = nextActorRevision;
         return Accepted(actor, intent.CommandId);
     }
@@ -2492,7 +2944,18 @@ public sealed class AuthoritativeWorldSession
                     "Combat mutated an actor outside the session registry.");
             var died = actor.Gameplay.LifeState != ActorLifeState.Dead &&
                        mutation.Gameplay.LifeState == ActorLifeState.Dead;
-            actor.Gameplay.ReplaceWith(mutation.Gameplay);
+            var gameplay = mutation.Gameplay;
+            if (gameplay.Health < actor.Gameplay.Health ||
+                gameplay.LifeState == ActorLifeState.Dead)
+            {
+                gameplay = gameplay with
+                {
+                    TimedHealingRemainingHealth = 0,
+                    TimedHealingRemainingSeconds = 0,
+                    TimedHealingFractionalHealth = 0
+                };
+            }
+            actor.Gameplay.ReplaceWith(gameplay);
             if (mutation.Position is { } position) actor.Position = position;
             if (mutation.WorldLevel is { } level) actor.WorldLevel = level;
             if (mutation.ClearMovement) actor.ClearRoute();
@@ -2527,6 +2990,106 @@ public sealed class AuthoritativeWorldSession
             EnemyStateCommitted?.Invoke(delta);
         foreach (var combatEvent in update.Events)
             CombatEventCommitted?.Invoke(combatEvent);
+    }
+
+    private void AdvanceSurvival()
+    {
+        // Survival is semantically observable at a one-second cadence. This
+        // keeps private gameplay revisions stable between meaningful updates
+        // while preserving fixed-authority elapsed time.
+        if ((Clock.Tick + 1) % SimulationTiming.TicksPerSecond != 0) return;
+        foreach (var actor in _actors.Values)
+        {
+            if (!actor.Connected || actor.Gameplay.LifeState != ActorLifeState.Alive ||
+                actor.Gameplay.Health <= 0)
+                continue;
+            var gameplay = actor.Gameplay;
+            var survival = SurvivalService.Advance(
+                gameplay.Hunger, gameplay.WellFedSeconds, gameplay.Health,
+                elapsed: 1,
+                starvationDamageRemainder: gameplay.StarvationDamageRemainder);
+            var activeHealing = survival.Health < gameplay.Health
+                ? default
+                : gameplay.TimedHealing;
+            var regeneration = EntityHealthRegenerationService.Advance(
+                survival.Health, gameplay.MaximumHealth,
+                elapsedRealSeconds: 1,
+                multiplier: _worldTransactions.HasLitCampfireWithin(
+                    actor.Position,
+                    actor.WorldLevel,
+                    AuthoritativeWorldTime.FromElapsedRealSeconds(
+                        Clock.Current.ElapsedSeconds),
+                    EntityHealthRegenerationService.LitCampfireRange)
+                    ? EntityHealthRegenerationService
+                        .LitCampfireHumanMultiplier
+                    : 1,
+                remainder: gameplay.HealthRegenerationRemainder);
+            var healing = TimedHealingService.Advance(
+                regeneration.Health,
+                gameplay.MaximumHealth,
+                elapsed: 1,
+                activeHealing);
+            if (survival.Hunger == gameplay.Hunger &&
+                survival.WellFedSeconds == gameplay.WellFedSeconds &&
+                healing.Health == gameplay.Health &&
+                survival.StarvationDamageRemainder == gameplay.StarvationDamageRemainder &&
+                regeneration.Remainder == gameplay.HealthRegenerationRemainder &&
+                healing.State == gameplay.TimedHealing)
+                continue;
+            var next = gameplay.ToSnapshot() with
+            {
+                Hunger = survival.Hunger,
+                WellFedSeconds = survival.WellFedSeconds,
+                Health = healing.Health,
+                StarvationDamageRemainder =
+                    survival.StarvationDamageRemainder,
+                HealthRegenerationRemainder = regeneration.Remainder,
+                TimedHealingRemainingHealth = healing.State.RemainingHealth,
+                TimedHealingRemainingSeconds = healing.State.RemainingSeconds,
+                TimedHealingFractionalHealth = healing.State.FractionalHealth
+            };
+            if (next.Health <= 0)
+            {
+                if (_combatTransactions is not null)
+                {
+                    var mutation = _combatTransactions.ApplyEnvironmentalDeath(
+                        CombatInput(actor), next, Clock.Tick,
+                        out var combatEvent);
+                    if (mutation is { } value)
+                    {
+                        actor.Gameplay.ReplaceWith(value.Gameplay);
+                        if (value.ClearMovement) actor.ClearRoute();
+                        if (_boatTransactions?.DetachOccupant(
+                                actor.Identity.ActorId) is { } detachedBoat)
+                        {
+                            BoatStateCommitted?.Invoke(detachedBoat);
+                            BoatAutonomousStateCommitted?.Invoke(detachedBoat);
+                        }
+                        if (combatEvent is { } emitted)
+                            CombatEventCommitted?.Invoke(emitted);
+                        continue;
+                    }
+                }
+                next = AuthoritativeCombatTransactions.DeathGameplay(
+                    next,
+                    Clock.Tick,
+                    AuthoritativeCombatTransactions.DefaultRespawnDelayTicks);
+                gameplay.ReplaceWith(next);
+                actor.ClearRoute();
+                if (_boatTransactions?.DetachOccupant(
+                        actor.Identity.ActorId) is { } fallbackDetachedBoat)
+                {
+                    BoatStateCommitted?.Invoke(fallbackDetachedBoat);
+                    BoatAutonomousStateCommitted?.Invoke(fallbackDetachedBoat);
+                }
+                continue;
+            }
+            next = next with
+            {
+                ActorRevision = checked(next.ActorRevision + 1)
+            };
+            gameplay.ReplaceWith(next);
+        }
     }
 
     private CombatActorInput CombatInput(MutableActor actor) => new(
@@ -2863,7 +3426,11 @@ public sealed class AuthoritativeWorldSession
                 new CommandReceipt(
                     GameplayIntentFingerprint.Create(intent),
                     result,
-                    Restored: false));
+                    // Aggregate-level duplicates deliberately carry no stale
+                    // transaction effects. Keep their reinserted session
+                    // receipt as a current-state tombstone too, so later
+                    // retries cannot report revisions from this retry point.
+                    Restored: result.Duplicate));
             _receiptOrder.Enqueue(intent.CommandId);
         }
 
@@ -2946,6 +3513,7 @@ public sealed class AuthoritativeWorldSession
         public MutablePlayerGameplay()
         {
             Inventory = PlayerInventory.CreateContainer();
+            Quests = QuestService.Normalize(null);
         }
 
         public InventoryContainer Inventory { get; set; }
@@ -2959,6 +3527,12 @@ public sealed class AuthoritativeWorldSession
         public float Hunger { get; set; } = SurvivalService.MaximumHunger;
 
         public float WellFedSeconds { get; set; }
+
+        public float StarvationDamageRemainder { get; set; }
+
+        public float HealthRegenerationRemainder { get; set; }
+
+        public TimedHealingState TimedHealing { get; set; }
 
         public int CraftingExperience { get; set; }
 
@@ -2999,9 +3573,32 @@ public sealed class AuthoritativeWorldSession
 
         public long NextCombatAttackTick { get; set; }
 
+        public ImmutableArray<QuestProgress> Quests { get; set; }
+
         public void ReplaceWith(PlayerGameplaySnapshot snapshot)
         {
-            if (snapshot.ActorRevision == 0 ||
+            ImmutableArray<QuestProgress> quests;
+            try
+            {
+                if (snapshot.Quests.IsDefault)
+                {
+                    quests = QuestService.Normalize(null);
+                }
+                else
+                {
+                    QuestService.Validate(snapshot.Quests);
+                    quests = snapshot.Quests;
+                }
+            }
+            catch (Exception error) when (error is InvalidDataException or
+                                          ArgumentException)
+            {
+                throw new InvalidOperationException(
+                    "The world transaction returned invalid quest state.",
+                    error);
+            }
+
+            if (snapshot.ActorRevision is 0 or uint.MaxValue ||
                 snapshot.Inventory.Revision == 0 ||
                 snapshot.Inventory.Capacity != PlayerInventory.Capacity ||
                 snapshot.Health < 0 ||
@@ -3009,15 +3606,31 @@ public sealed class AuthoritativeWorldSession
                 snapshot.Hunger is < 0 or > SurvivalService.MaximumHunger ||
                 !float.IsFinite(snapshot.WellFedSeconds) ||
                 snapshot.WellFedSeconds < 0 ||
+                !float.IsFinite(snapshot.StarvationDamageRemainder) ||
+                snapshot.StarvationDamageRemainder is < 0 or >= 1 ||
+                !float.IsFinite(snapshot.HealthRegenerationRemainder) ||
+                snapshot.HealthRegenerationRemainder is < 0 or >= 1 ||
+                !TimedHealingService.IsCanonical(new TimedHealingState(
+                    snapshot.TimedHealingRemainingHealth,
+                    snapshot.TimedHealingRemainingSeconds,
+                    snapshot.TimedHealingFractionalHealth)) ||
+                (snapshot.TimedHealingRemainingHealth > 0 &&
+                 (snapshot.Health <= 0 ||
+                  snapshot.Health >= snapshot.MaximumHealth ||
+                  snapshot.LifeState != ActorLifeState.Alive)) ||
                 snapshot.CraftingExperience < 0 ||
                 snapshot.CookingExperience < 0 ||
                 snapshot.WoodcuttingExperience < 0 ||
                 snapshot.FarmingExperience < 0 ||
                 snapshot.MiningExperience < 0 ||
                 snapshot.AdventureExperience < 0 ||
+                snapshot.AdventureExperience > AdventureService
+                    .ExperienceForLevel(AdventureService.MaximumLevel) ||
                 snapshot.DiggingExperience < 0 ||
                 snapshot.FishingExperience < 0 ||
                 snapshot.MaximumHealth <= 0 ||
+                snapshot.MaximumHealth != AdventureService.MaximumHealth(
+                    snapshot.AdventureExperience) ||
                 snapshot.Health > snapshot.MaximumHealth ||
                 snapshot.AttackExperience < 0 ||
                 snapshot.StrengthExperience < 0 ||
@@ -3077,6 +3690,12 @@ public sealed class AuthoritativeWorldSession
             Health = snapshot.Health;
             Hunger = snapshot.Hunger;
             WellFedSeconds = snapshot.WellFedSeconds;
+            StarvationDamageRemainder = snapshot.StarvationDamageRemainder;
+            HealthRegenerationRemainder = snapshot.HealthRegenerationRemainder;
+            TimedHealing = new TimedHealingState(
+                snapshot.TimedHealingRemainingHealth,
+                snapshot.TimedHealingRemainingSeconds,
+                snapshot.TimedHealingFractionalHealth);
             CraftingExperience = snapshot.CraftingExperience;
             CookingExperience = snapshot.CookingExperience;
             WoodcuttingExperience = snapshot.WoodcuttingExperience;
@@ -3096,6 +3715,7 @@ public sealed class AuthoritativeWorldSession
             CombatTargetEnemyId = snapshot.CombatTargetEnemyId;
             CombatAttackSequence = snapshot.CombatAttackSequence;
             NextCombatAttackTick = snapshot.NextCombatAttackTick;
+            Quests = quests;
         }
 
         public PlayerGameplaySnapshot ToSnapshot()
@@ -3137,7 +3757,13 @@ public sealed class AuthoritativeWorldSession
                 CombatStatus,
                 CombatTargetEnemyId,
                 CombatAttackSequence,
-                NextCombatAttackTick);
+                NextCombatAttackTick,
+                StarvationDamageRemainder,
+                HealthRegenerationRemainder,
+                Quests,
+                TimedHealing.RemainingHealth,
+                TimedHealing.RemainingSeconds,
+                TimedHealing.FractionalHealth);
         }
 
         private static bool ValidCombatStatus(SlimeVictimStatus value) =>

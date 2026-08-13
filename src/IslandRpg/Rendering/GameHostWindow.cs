@@ -14,6 +14,7 @@ using IslandRpg.Rendering.Ui;
 using StbImageSharp;
 using System.Buffers;
 using IslandRpg.Client;
+using PlantCropAction = IslandRpg.Protocol.PlantCropAction;
 using IslandRpg.Resources;
 
 namespace IslandRpg.Rendering;
@@ -2010,7 +2011,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _worldGameSeconds = WorldTime.Advance(
             _worldGameSeconds, elapsed);
         var wading = false;
-        if (!IsObserveWorld)
+        if (!IsObserveWorld && !IsNetworkWorld)
         {
             UpdateSurvival(elapsed);
             var currentTerrain = SamplePlayerTerrain(
@@ -5140,6 +5141,22 @@ internal sealed partial class GameHostWindow : GameWindow
         if (inventory[slot]?.ItemId != itemId)
             return;
         var (plantX, plantY, targetGpu) = planting.Value;
+        if (IsNetworkWorld)
+        {
+            if (!cropSeed)
+            {
+                ReportBlockedAction(
+                    "network-tree-planting-unavailable",
+                    "Tree planting is not yet available in multiplayer.");
+                return;
+            }
+            SendNetworkAction(new PlantCropAction(
+                slot, plantX + .5f, plantY + .5f,
+                checked((short)_activeWorldLevel),
+                NetworkChunkRevision(
+                    new(plantX + .5f, plantY + .5f), _activeWorldLevel)));
+            return;
+        }
         if (!inventory.TryTake(slot, 1, out _)) return;
         if (cropSeed)
         {

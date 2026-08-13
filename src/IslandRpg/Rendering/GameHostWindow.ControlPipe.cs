@@ -1338,7 +1338,7 @@ internal sealed partial class GameHostWindow
                     QueueWorldStorage(groundObject);
                     return true;
                 }
-                _worldActions.QueueGroundObjectPickup(groundObject);
+                QueueGroundObjectPickup(groundObject);
                 return true;
             case "gather_fibres":
             case "gather_berries":

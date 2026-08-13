@@ -14,7 +14,8 @@ public readonly record struct WorldTransactionContext(
     Guid CommandId,
     ActorId ActorId,
     uint ExpectedActorRevision,
-    uint ExpectedInventoryRevision);
+    uint ExpectedInventoryRevision,
+    string? PayloadFingerprint = null);
 
 public enum WorldTransactionStatus
 {
@@ -58,7 +59,9 @@ public enum WorldTransactionStatus
     InvalidExcavation,
     MissingExcavationTool,
     ExcavationCadenceLocked,
-    InvalidCaveLink
+    InvalidCaveLink,
+    NotCrop,
+    CropNotReady
 }
 
 public enum WorldObjectChangeKind
@@ -221,6 +224,20 @@ public sealed record DropInventoryItemTransaction(
     Vector2 Position,
     int WorldLevel,
     uint ExpectedChunkRevision);
+
+public sealed record PlantCropTransaction(
+    WorldTransactionContext Context,
+    Guid CropObjectId,
+    int SeedInventorySlot,
+    Vector2 Position,
+    int WorldLevel,
+    uint ExpectedChunkRevision,
+    double GameSeconds);
+
+public sealed record HarvestCropTransaction(
+    WorldTransactionContext Context,
+    WorldObjectHandle Crop,
+    double GameSeconds);
 
 public sealed record OpenWorldContainerTransaction(
     WorldTransactionContext Context,

@@ -96,6 +96,115 @@ internal static class ResourceAuthorityChecks
                 "a rejected strike must not dirty the sparse chunk");
         });
 
+        checks.Add("tree misses advance actor revision exactly once", () =>
+        {
+            (ResourceFixture Fixture,
+                WorldTransactionActorInput Actor,
+                ResourceTransactionResult Result)? selected = null;
+            for (var attempt = 1; attempt <= 512; attempt++)
+            {
+                var trialFixture = Fixture(new ActorId(Guid.Parse(
+                    $"6c000000-0000-0000-0000-{attempt:D12}")));
+                var inventory = trialFixture.Actor.Gameplay.Inventory.Slots
+                    .Select(value => value.Slot == 4
+                        ? new InventorySlotSnapshot(
+                            value.Slot, ItemIds.StoneAxe, 1)
+                        : value)
+                    .ToImmutableArray();
+                var trialActor = trialFixture.Actor with
+                {
+                    Gameplay = trialFixture.Actor.Gameplay with
+                    {
+                        Inventory = trialFixture.Actor.Gameplay.Inventory with
+                        {
+                            Slots = inventory
+                        }
+                    }
+                };
+                var result = trialFixture.Authority.Execute(
+                    trialActor,
+                    new StrikeTreeTransaction(
+                        trialFixture.Context, trialFixture.Reference, 4, 2));
+                if (result.Accepted && !result.Hit && !result.ToolWorn)
+                {
+                    selected = (trialFixture, trialActor, result);
+                    break;
+                }
+            }
+
+            CheckAssert.True(selected is not null,
+                "a deterministic clean tree miss fixture must exist");
+            var (fixture, actor, miss) = selected!.Value;
+            CheckAssert.Equal(actor.Gameplay.ActorRevision + 1,
+                miss.ActorRevision,
+                "an accepted tree miss must advance actor revision once");
+            CheckAssert.Equal(actor.Gameplay.Inventory.Revision,
+                miss.InventoryRevision,
+                "a clean tree miss must not advance inventory revision");
+            CheckAssert.True(miss.NodeDelta is null &&
+                             miss.ChunkDelta is null,
+                "a tree miss must not publish a fake resource mutation");
+
+            var currentActor = actor with
+            {
+                Gameplay = miss.Gameplay!.Value
+            };
+            var staleReplay = fixture.Authority.Execute(
+                currentActor,
+                new StrikeTreeTransaction(
+                    fixture.Context with
+                    {
+                        CommandId = Guid.NewGuid(),
+                        ExpectedInventoryRevision = miss.InventoryRevision
+                    },
+                    fixture.Reference, 4, 4));
+            CheckAssert.Equal(ResourceTransactionStatus.StaleActorRevision,
+                staleReplay.Status,
+                "an evicted tree-miss replay must fail its old actor revision");
+            CheckAssert.Equal(1UL,
+                fixture.Authority.CaptureCheckpoint()
+                    .ActorCadences.Single().ActionOrdinal,
+                "a stale tree-miss replay must not consume another ordinal");
+        });
+
+        checks.Add("resource attempt overflow rejects before mutation", () =>
+        {
+            var fixture = Fixture();
+            var slots = fixture.Actor.Gameplay.Inventory.Slots
+                .Select(value => value.Slot == 4
+                    ? new InventorySlotSnapshot(
+                        value.Slot, ItemIds.StoneAxe, 1)
+                    : value)
+                .ToImmutableArray();
+            var gameplay = fixture.Actor.Gameplay with
+            {
+                ActorRevision = uint.MaxValue,
+                Inventory = fixture.Actor.Gameplay.Inventory with
+                {
+                    Slots = slots
+                }
+            };
+            var actor = fixture.Actor with { Gameplay = gameplay };
+            var result = fixture.Authority.Execute(
+                actor,
+                new StrikeTreeTransaction(
+                    fixture.Context with
+                    {
+                        ExpectedActorRevision = uint.MaxValue
+                    },
+                    fixture.Reference, 4, 2));
+
+            CheckAssert.Equal(ResourceTransactionStatus.InvalidCommand,
+                result.Status,
+                "an accepted attempt that cannot advance actor revision must reject");
+            CheckAssert.Equal((uint)0,
+                fixture.Authority.CaptureChunkRevision(fixture.Chunk),
+                "revision overflow must reject before resource mutation");
+            CheckAssert.Equal(0,
+                fixture.Authority.CaptureCheckpoint().ActorCadences.Length,
+                "revision overflow must reject before cadence consumption");
+        });
+
         checks.Add("resource authority uses the exact axe slot and tree reward", () =>
         {
             var fixture = Fixture();
@@ -130,6 +239,10 @@ internal static class ResourceAuthorityChecks
                     fixture.Reference, 4, 2));
             CheckAssert.True(hit.Accepted,
                 "the selected usable axe slot must be accepted");
+            CheckAssert.Equal(
+                actor.Gameplay.ActorRevision + 1,
+                hit.ActorRevision,
+                "an accepted tree strike must advance actor revision exactly once");
             if (!hit.Rewards.IsDefaultOrEmpty)
             {
                 var descriptor = fixture.Catalog.DescribeChunk(

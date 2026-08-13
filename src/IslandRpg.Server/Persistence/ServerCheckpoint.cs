@@ -28,7 +28,8 @@ public sealed record ServerCheckpoint(
     IReadOnlyList<ServerBoatCheckpoint>? Boats = null,
     ServerCombatCheckpoint? Combat = null)
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int LegacyElapsedDeadlineSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 }
 
 public sealed record ServerActorCheckpoint(
@@ -72,7 +73,13 @@ public sealed record ServerActorCheckpoint(
     int PoisonDamage = 0,
     Guid? CombatTargetEnemyId = null,
     ulong CombatAttackSequence = 0,
-    long NextCombatAttackTick = 0)
+    long NextCombatAttackTick = 0,
+    float StarvationDamageRemainder = 0,
+    float HealthRegenerationRemainder = 0,
+    IReadOnlyList<IslandRpg.Gameplay.QuestProgress>? Quests = null,
+    float TimedHealingRemainingHealth = 0,
+    float TimedHealingRemainingSeconds = 0,
+    float TimedHealingFractionalHealth = 0)
 {
     // Keep credentials out of accidental structured-log interpolation.
     public override string ToString() =>

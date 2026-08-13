@@ -104,6 +104,7 @@ internal static class CombatServerIntegrationChecks
                 Enumerable.Range(0, PlayerInventory.Capacity).Select(index =>
                     new InventorySlotSnapshot(index, null, 0))
                     .ToImmutableArray()),
+            AdventureExperience: AdventureService.ExperienceForLevel(15),
             MaximumHealth: 128,
             AttackExperience: 17,
             StrengthExperience: 19,

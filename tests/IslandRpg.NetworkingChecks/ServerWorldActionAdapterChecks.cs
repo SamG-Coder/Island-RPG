@@ -36,6 +36,8 @@ internal static class ServerWorldActionAdapterChecks
         [
             new PickUpWorldObjectAction(ObjectReference),
             new DropInventoryItemAction(3, 2, 65, -95, 0, 8),
+            new PlantCropAction(3, 65.5f, -94.5f, 0, 8),
+            new HarvestCropAction(ObjectReference),
             new OpenContainerAction(ObjectReference),
             new ContainerTransferAction(
                 ObjectReference, 7, ContainerTransferDirection.Withdraw,
@@ -53,6 +55,8 @@ internal static class ServerWorldActionAdapterChecks
         [
             typeof(PickUpWorldObjectIntent),
             typeof(DropInventoryItemIntent),
+            typeof(PlantCropIntent),
+            typeof(HarvestCropIntent),
             typeof(OpenWorldContainerIntent),
             typeof(TransferWorldContainerIntent),
             typeof(AddCampfireFuelIntent),
@@ -82,7 +86,7 @@ internal static class ServerWorldActionAdapterChecks
                 "the actor optimistic lock must survive projection");
         }
 
-        var transfer = (TransferWorldContainerIntent)ToIntent(payloads[3]);
+        var transfer = (TransferWorldContainerIntent)ToIntent(payloads[5]);
         CheckAssert.Equal(7u, transfer.Container.ExpectedContainerRevision,
             "container transfer must carry its private revision lock");
         CheckAssert.Equal(WorldContainerTransferDirection.Withdraw,

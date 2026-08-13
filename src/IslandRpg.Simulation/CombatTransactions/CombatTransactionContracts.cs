@@ -230,7 +230,8 @@ public sealed record AuthoritativeCombatOptions
 
     public int EnemyAttackIntervalTicks { get; init; } = 120;
 
-    public int RespawnDelayTicks { get; init; } = 300;
+    public int RespawnDelayTicks { get; init; } =
+        AuthoritativeCombatTransactions.DefaultRespawnDelayTicks;
 
     public int DeathRetentionTicks { get; init; } = 90;
 

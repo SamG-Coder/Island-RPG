@@ -18,6 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\IslandRpg.Client\IslandRpg.Client.csproj" />
     <ProjectReference Include="..\IslandRpg.Core\IslandRpg.Core.csproj" />
+    <ProjectReference Include="..\IslandRpg.Protocol\IslandRpg.Protocol.csproj" />
     <PackageReference Include="FontStashSharp.PlatformAgnostic" Version="1.5.6" />
     <PackageReference Include="NAudio" Version="2.3.0" />
     <PackageReference Include="OpenTK" Version="4.9.4" />
@@ -103,6 +104,7 @@
     <Compile Remove="Gameplay\ActorActionService.cs" />
     <Compile Remove="Gameplay\WoodcuttingSkill.cs" />
     <Compile Remove="Gameplay\FarmingSkill.cs" />
+    <Compile Remove="Gameplay\CropService.cs" />
     <Compile Remove="Gameplay\MiningSkill.cs" />
     <Compile Remove="Gameplay\ResourceStrikeService.cs" />
     <Compile Remove="Gameplay\EntityAction.cs" />
@@ -119,6 +121,7 @@
     <Compile Remove="Gameplay\ConstructionService.cs" />
     <Compile Remove="Gameplay\StorageContainerService.cs" />
     <Compile Remove="Gameplay\WorldItemContainerService.cs" />
+    <Compile Remove="Gameplay\QuestService.cs" />
     <Compile Remove="Gameplay\GateAccessState.cs" />
     <Compile Remove="Gameplay\GateService.cs" />
     <Compile Remove="World\WorldDomain.cs" />

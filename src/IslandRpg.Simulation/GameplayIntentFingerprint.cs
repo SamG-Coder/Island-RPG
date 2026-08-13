@@ -195,6 +195,17 @@ public static class GameplayIntentFingerprint
             case RespawnIntent:
                 writer.Tag(36);
                 break;
+            case PlantCropIntent value:
+                writer.Tag(37);
+                writer.Int32(value.SeedInventorySlot);
+                writer.Vector(value.Position);
+                writer.Int32(value.WorldLevel);
+                writer.UInt32(value.ExpectedChunkRevision);
+                break;
+            case HarvestCropIntent value:
+                writer.Tag(38);
+                writer.Handle(value.Crop);
+                break;
             default:
                 throw new NotSupportedException(
                     $"Gameplay intent type '{intent.GetType().Name}' has no canonical fingerprint.");

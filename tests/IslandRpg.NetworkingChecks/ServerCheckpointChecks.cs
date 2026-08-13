@@ -1,6 +1,7 @@
 using IslandRpg.Gameplay;
 using IslandRpg.Server.Persistence;
 using IslandRpg.Simulation;
+using System.Text.Json;
 
 namespace IslandRpg.NetworkingChecks;
 
@@ -37,6 +38,151 @@ internal static class ServerCheckpointChecks
             CheckAssert.Equal(.1375,
                 loaded.Checkpoint.Boats![0].PlanningCooldownSeconds,
                 "boat planning cooldown must survive exact server JSON storage");
+        });
+
+        checks.Add("server checkpoint JSON restores canonical quest counters", () =>
+        {
+            using var folder = TemporaryFolder.Create();
+            var store = new ServerCheckpointStore(folder.Path);
+            var source = CreateCheckpoint(revision: 1);
+            var progress = QuestService.Apply(
+                QuestService.Normalize(null),
+                0,
+                new QuestEvent(
+                    QuestEventType.GatherItem,
+                    ItemIds.LargeRock),
+                completionTick: source.Tick).Progress;
+            source = source with
+            {
+                Actors = [source.Actors[0] with
+                {
+                    Quests = progress
+                }]
+            };
+
+            store.Save(source);
+            var loaded = store.Load(source.WorldId)!.Checkpoint;
+            var normalized = QuestService.Normalize(
+                loaded.Actors[0].Quests);
+
+            QuestService.Validate(normalized);
+            CheckAssert.Equal(1,
+                normalized[0].ObjectiveCounts!
+                    .GetValueOrDefault("large-rocks"),
+                "JSON dictionary counters must normalize back to compact authority state");
+        });
+
+        checks.Add("server checkpoint migrates legacy world deadlines exactly", () =>
+        {
+            using var folder = TemporaryFolder.Create();
+            var store = new ServerCheckpointStore(folder.Path);
+            var source = CreateCheckpoint(revision: 1);
+            const double elapsedRealSeconds = 1;
+            var campfire = new ServerWorldObjectCheckpoint(
+                Guid.Parse("51000000-0000-0000-0000-000000000001"),
+                ItemIds.Campfire,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                0,
+                0,
+                0,
+                null,
+                null,
+                false,
+                ItemIds.Logs,
+                elapsedRealSeconds + 300,
+                1,
+                WorldGateAccessState.None,
+                false,
+                []);
+            var resourceChunk = new ServerResourceChunkCheckpoint(
+                0,
+                0,
+                0,
+                1,
+                [new ServerResourceNodeCheckpoint(
+                    Guid.Parse("51000000-0000-0000-0000-000000000002"),
+                    IslandRpg.Resources.ResourceNodeKind.FibreShrub,
+                    1,
+                    0,
+                    0,
+                    elapsedRealSeconds + 300,
+                    true)]);
+            source = source with
+            {
+                SchemaVersion =
+                    ServerCheckpoint.LegacyElapsedDeadlineSchemaVersion,
+                Tick = SimulationTiming.TicksPerSecond,
+                Actors = [source.Actors[0] with
+                {
+                    AdventureExperience = 75,
+                    MaximumHealth = AdventureService.BaseMaximumHealth,
+                    Health = 90
+                }],
+                WorldObjects = [.. source.WorldObjects, campfire],
+                Resources = new([resourceChunk],
+                [new ServerResourceCadenceCheckpoint(
+                    source.Actors[0].ActorId,
+                    IslandRpg.Resources.ResourceActionKind.GatherFibre,
+                    12.5,
+                    1)])
+            };
+            var options = new IslandRpg.Server.ServerOptions(
+                System.Net.IPAddress.Loopback,
+                38_740,
+                source.WorldId,
+                source.WorldSeed,
+                source.BuildVersion,
+                source.ContentVersion,
+                8);
+
+            var checkpointPath = store.CheckpointPath(source.WorldId);
+            Directory.CreateDirectory(Path.GetDirectoryName(checkpointPath)!);
+            File.WriteAllText(checkpointPath, JsonSerializer.Serialize(source));
+            var loaded = store.Load(source.WorldId)!.Checkpoint;
+            var simulation = ServerCheckpointMapper.ToSimulation(
+                loaded, options);
+            CheckAssert.Equal(102,
+                simulation.Actors[0].Gameplay.MaximumHealth,
+                "legacy Adventure XP must migrate to canonical maximum health");
+            CheckAssert.Equal(92, simulation.Actors[0].Gameplay.Health,
+                "legacy migration must preserve the actor's missing-health delta");
+            var expectedWorldDeadline =
+                AuthoritativeWorldTime.FromElapsedRealSeconds(
+                    elapsedRealSeconds) + 300;
+            CheckAssert.Equal(expectedWorldDeadline,
+                simulation.World.Objects.Single(value =>
+                    value.Object.ObjectId == campfire.ObjectId)
+                    .Object.LitUntilGameSeconds,
+                "legacy campfire remainder must move into world-game time");
+            CheckAssert.Equal(expectedWorldDeadline,
+                simulation.Resources!.Chunks.Single().Nodes.Single()
+                    .ReadyAtGameSeconds,
+                "legacy renewable remainder must move into world-game time");
+            CheckAssert.Equal(12.5,
+                simulation.Resources.ActorCadences.Single()
+                    .ReadyAtGameSeconds,
+                "resource action cadence must remain elapsed-real time");
+
+            var upgraded = ServerCheckpointMapper.ToDurable(
+                simulation, options, 2);
+            CheckAssert.Equal(ServerCheckpoint.CurrentSchemaVersion,
+                upgraded.SchemaVersion,
+                "the next save must atomically upgrade the schema");
+            CheckAssert.Equal(expectedWorldDeadline,
+                upgraded.WorldObjects.Single(value =>
+                    value.ObjectId == campfire.ObjectId)
+                    .LitUntilGameSeconds,
+                "upgraded campfire deadline must not migrate twice");
+            CheckAssert.Equal(expectedWorldDeadline,
+                upgraded.Resources!.Chunks.Single().Nodes.Single()
+                    .ReadyAtGameSeconds,
+                "upgraded resource deadline must not migrate twice");
         });
 
         checks.Add("server checkpoint rejects stale asynchronous writes", () =>
@@ -89,6 +235,45 @@ internal static class ServerCheckpointChecks
                 () => ServerCheckpointStore.Validate(
                     source with { Actors = [invalidActor] }, source.WorldId),
                 "partial player inventories must never become durable");
+
+            var terminalRevision = source.Actors[0] with
+            {
+                ActorRevision = uint.MaxValue
+            };
+            CheckAssert.Throws<InvalidDataException>(
+                () => ServerCheckpointStore.Validate(
+                    source with { Actors = [terminalRevision] },
+                    source.WorldId),
+                "terminal actor revisions must never become durable");
+        });
+
+        checks.Add("server checkpoint enforces current adventure health invariant", () =>
+        {
+            var source = CreateCheckpoint(revision: 1);
+            var inconsistent = source.Actors[0] with
+            {
+                AdventureExperience = 75,
+                MaximumHealth = AdventureService.BaseMaximumHealth,
+                Health = 90
+            };
+            CheckAssert.Throws<InvalidDataException>(
+                () => ServerCheckpointStore.Validate(
+                    source with { Actors = [inconsistent] }, source.WorldId),
+                "the current schema must reject a noncanonical Adventure-derived maximum health");
+
+            var excessiveExperience = checked(
+                AdventureService.ExperienceForLevel(
+                    AdventureService.MaximumLevel) + 1);
+            var uncapped = source.Actors[0] with
+            {
+                AdventureExperience = excessiveExperience,
+                MaximumHealth = AdventureService.MaximumHealth(
+                    excessiveExperience)
+            };
+            CheckAssert.Throws<InvalidDataException>(
+                () => ServerCheckpointStore.Validate(
+                    source with { Actors = [uncapped] }, source.WorldId),
+                "Adventure XP beyond the canonical cap must not become durable");
         });
 
         checks.Add("server checkpoint rejects inconsistent combat life state", () =>

@@ -17,6 +17,7 @@ checks.Add("check runner executes deterministic assertions", () =>
 });
 
 AuthoritativeSessionChecks.Register(checks);
+TimedHealingAuthorityChecks.Register(checks);
 AuthoritativeNavigationChecks.Register(checks);
 ProtocolChecks.Register(checks);
 UdpSnapshotTransportChecks.Register(checks);
@@ -38,6 +39,9 @@ MiningResourceAuthorityChecks.Register(checks);
 ResourceProtocolClientChecks.Register(checks);
 WorldRuleChecks.Register(checks);
 WorldTransactionChecks.Register(checks);
+CropWorldTransactionChecks.Register(checks);
+QuestAuthorityDomainChecks.Register(checks);
+QuestSessionAuthorityChecks.Register(checks);
 CaveAuthorityChecks.Register(checks);
 BoatFishingAuthorityChecks.Register(checks);
 BoatFishingServerIntegrationChecks.Register(checks);

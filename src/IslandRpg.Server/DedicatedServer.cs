@@ -1293,7 +1293,10 @@ public sealed class DedicatedServer : IAsyncDisposable
             CombatActionProtocolAdapter.ToStatusFlags(
                 gameplay.StatusFlags(
                     tick / (double)SimulationTiming.TicksPerSecond)),
-            gameplay.CombatTargetEnemyId?.Value ?? Guid.Empty);
+            gameplay.CombatTargetEnemyId?.Value ?? Guid.Empty,
+            flags.HasFlag(PlayerStateFlags.Actor)
+                ? WorldActionProtocolAdapter.ToQuestStates(gameplay)
+                : []);
 
     private void BroadcastCookingCompletion(CookingCompletionSnapshot value)
     {
@@ -1392,7 +1395,10 @@ public sealed class DedicatedServer : IAsyncDisposable
         CombatActionProtocolAdapter.ToStatusFlags(
             gameplay.StatusFlags(
                 tick / (double)SimulationTiming.TicksPerSecond)),
-        gameplay.CombatTargetEnemyId?.Value ?? Guid.Empty);
+        gameplay.CombatTargetEnemyId?.Value ?? Guid.Empty,
+        flags.HasFlag(PlayerStateFlags.Actor)
+            ? WorldActionProtocolAdapter.ToQuestStates(gameplay)
+            : []);
 
     internal async Task DisconnectAsync(
         ClientConnection connection,

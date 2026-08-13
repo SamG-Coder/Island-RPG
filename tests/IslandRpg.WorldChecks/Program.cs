@@ -10800,11 +10800,11 @@ try
                 QuestStatus.Complete,
                 new Dictionary<string, int>
                 {
-                    ["rocks"] = 1,
-                    ["sticks"] = 1,
-                    ["fibres"] = 1
+                    ["large-rocks"] = 5,
+                    ["sticks"] = 2,
+                    ["fibres"] = 2
                 },
-                DateTime.UtcNow)
+                0L)
         ],
         Inventory = PlayerInventory.Normalize(["logs", "oak_logs"])
     };
@@ -10860,7 +10860,7 @@ try
             MeleeCombatStance.Defensive &&
             loadedPlayer.Quests?.Single().Status ==
             QuestStatus.Complete &&
-            loadedPlayer.Quests[0].ObjectiveCounts?["sticks"] == 1 &&
+            loadedPlayer.Quests[0].ObjectiveCounts?["sticks"] == 2 &&
             loadedPlayer.Inventory?.Length == PlayerInventory.Capacity &&
             loadedPlayer.Inventory[0] == "logs" &&
             loadedPlayer.Inventory[1] == "oak_logs" &&

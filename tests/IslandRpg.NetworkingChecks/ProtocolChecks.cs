@@ -210,9 +210,9 @@ internal static class ProtocolChecks
     private static void ProtocolEnforcesInputBounds()
     {
         CheckAssert.Equal(
-            (ushort)10,
+            (ushort)11,
             ProtocolConstants.CurrentVersion,
-            "durable combat targets require protocol v10");
+            "durable combat targets and quest state require protocol v11");
         var multibyteName = string.Concat(
             Enumerable.Repeat("界", ProtocolLimits.PlayerNameBytes));
         CheckAssert.Throws<ProtocolException>(
@@ -260,6 +260,10 @@ internal static class ProtocolChecks
             new CombineItemsAction(4, 7),
             new CraftRecipeAction("reinforced-fishing-net"),
             new ConsumeItemAction(11),
+            new PlantCropAction(3, 12.5f, -8.5f, 0, 9),
+            new HarvestCropAction(new WorldObjectReference(
+                Guid.Parse("77777777-0000-0000-0000-000000000002"),
+                1, -2, 0, 4, 9)),
             new CookOnCampfireAction(
                 new WorldObjectReference(
                     Guid.Parse("77777777-0000-0000-0000-000000000001"),
@@ -466,6 +470,15 @@ internal static class ProtocolChecks
         CheckAssert.Throws<ProtocolException>(
             () => ReliableProtocolCodec.Encode(validDelta with
             {
+                Quests = [new QuestProgressState(
+                    "washed-ashore", 2, -1,
+                    [new QuestObjectiveState("large-rocks", 1)])],
+            }),
+            "partial quest state cannot be sent in a private actor section");
+
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(validDelta with
+            {
                 Flags = PlayerStateFlags.Inventory,
                 BaselineActorRevision = validDelta.ActorRevision,
                 CombatTargetEnemyId = commandId,
@@ -502,9 +515,18 @@ internal static class ProtocolChecks
         var encoded = ReliableProtocolCodec.Encode(expected);
         var actual = (PlayerStateMessage)ReliableProtocolCodec.Decode(encoded);
         CheckAssert.Equal(
-            expected with { InventorySlots = actual.InventorySlots },
+            expected with
+            {
+                InventorySlots = actual.InventorySlots,
+                Quests = actual.Quests,
+            },
             actual,
             "player state metadata and scalar values must round trip exactly");
+        if (actual.Flags.HasFlag(PlayerStateFlags.Actor))
+            CheckAssert.Equal(
+                ProtocolLimits.MaxQuestStates,
+                actual.Quests!.Count,
+                "actor state must carry the complete canonical private quest section");
         CheckAssert.SequenceEqual(
             expected.InventorySlots,
             actual.InventorySlots,
