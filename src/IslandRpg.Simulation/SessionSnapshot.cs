@@ -44,7 +44,8 @@ public readonly record struct PlayerGameplaySnapshot(
     float WellFedSeconds,
     int CraftingExperience,
     int CookingExperience,
-    PlayerInventorySnapshot Inventory);
+    PlayerInventorySnapshot Inventory,
+    int WoodcuttingExperience = 0);
 
 public readonly record struct ChatMessageSnapshot(
     long MessageId,

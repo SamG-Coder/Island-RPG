@@ -214,7 +214,8 @@ public sealed record PlayerStateMessage(
     float WellFedSeconds,
     int CraftingExperience,
     int CookingExperience,
-    IReadOnlyList<InventorySlotState> InventorySlots) : IProtocolMessage
+    IReadOnlyList<InventorySlotState> InventorySlots,
+    int WoodcuttingExperience = 0) : IProtocolMessage
 {
     public ProtocolMessageKind Kind => ProtocolMessageKind.PlayerState;
 }

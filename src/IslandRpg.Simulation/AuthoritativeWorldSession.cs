@@ -21,6 +21,7 @@ public sealed class AuthoritativeWorldSession
     private readonly IWorldNavigationQuery _navigation;
     private readonly IWorldNavigationObstacleSource _obstacles;
     private readonly AuthoritativeWorldTransactions _worldTransactions;
+    private readonly AuthoritativeResourceTransactions? _resourceTransactions;
     private readonly Channel<QueuedOperation> _inbound;
     private readonly Dictionary<ActorId, MutableActor> _actors = [];
     private readonly Dictionary<PlayerId, ActorId> _actorsByPlayer = [];
@@ -38,7 +39,8 @@ public sealed class AuthoritativeWorldSession
         SessionId? sessionId = null,
         IWorldNavigationQuery? navigation = null,
         IWorldNavigationObstacleSource? obstacles = null,
-        AuthoritativeWorldTransactions? worldTransactions = null)
+        AuthoritativeWorldTransactions? worldTransactions = null,
+        AuthoritativeResourceTransactions? resourceTransactions = null)
     {
         _limits = (limits ?? SimulationLimits.Default).ValidatedCopy();
         _identitySource = identitySource ?? new SecureSessionIdentitySource();
@@ -46,6 +48,7 @@ public sealed class AuthoritativeWorldSession
         _obstacles = obstacles ?? EmptyWorldNavigationObstacleSource.Instance;
         _worldTransactions = worldTransactions ??
             new AuthoritativeWorldTransactions();
+        _resourceTransactions = resourceTransactions;
         Id = sessionId is { } provided && provided.Value != Guid.Empty
             ? provided
             : SessionId.New();
@@ -88,6 +91,8 @@ public sealed class AuthoritativeWorldSession
     /// committed. Observers must be fast and must not mutate the session.
     /// </summary>
     public event Action<WorldTransactionResult>? WorldTransactionCommitted;
+
+    public event Action<ResourceTransactionResult>? ResourceTransactionCommitted;
 
     public event Action<CookingCompletionSnapshot>? CookingCompleted;
 
@@ -313,7 +318,8 @@ public sealed class AuthoritativeWorldSession
                 Clock.SnapshotSequence,
                 actors,
                 _worldTransactions.CaptureCheckpoint(),
-                cooking);
+                cooking,
+                _resourceTransactions?.CaptureCheckpoint());
         }
         finally
         {
@@ -459,8 +465,26 @@ public sealed class AuthoritativeWorldSession
                     throw new InvalidDataException(
                         "A cooking job does not reference its persisted campfire.");
             }
-            // Both restorers validate completely before their first commit.
+            if (_resourceTransactions is not null &&
+                checkpoint.Resources is null)
+            {
+                throw new InvalidDataException(
+                    "A resource-enabled session requires resource checkpoint state.");
+            }
+            if (checkpoint.Resources is { } pendingResources)
+            {
+                if (_resourceTransactions is null)
+                    throw new InvalidDataException(
+                        "The checkpoint has resource state but this session has no resource authority.");
+                _resourceTransactions.ValidateCheckpoint(pendingResources);
+            }
+            // Resource validation precedes the world commit. Each restorer
+            // then validates completely before mutating its own aggregate.
             _worldTransactions.RestoreCheckpoint(checkpoint.World);
+            if (checkpoint.Resources is { } resources)
+            {
+                _resourceTransactions!.RestoreCheckpoint(resources);
+            }
             Clock.Restore(checkpoint.Tick, checkpoint.SnapshotSequence);
             foreach (var value in actors) _actors.Add(value.Key, value.Value);
             foreach (var value in actorsByPlayer)
@@ -859,6 +883,11 @@ public sealed class AuthoritativeWorldSession
             return ProcessWorldIntent(actor, world);
         }
 
+        if (intent is ResourceGameplayIntent resource)
+        {
+            return ProcessResourceIntent(actor, resource);
+        }
+
         if (intent.ExpectedInventoryRevision !=
             actor.Gameplay.InventoryRevision)
         {
@@ -1079,6 +1108,106 @@ public sealed class AuthoritativeWorldSession
             WorldTransactionStatus.NotCookable => IntentStatus.NotCookable,
             WorldTransactionStatus.CookingLocked => IntentStatus.CookingLocked,
             WorldTransactionStatus.AlreadyCooking => IntentStatus.AlreadyCooking,
+            _ => throw new ArgumentOutOfRangeException(nameof(status))
+        };
+
+    private IntentResult ProcessResourceIntent(
+        MutableActor actor,
+        ResourceGameplayIntent intent)
+    {
+        if (_resourceTransactions is null)
+        {
+            return Rejected(
+                IntentStatus.InvalidIntent,
+                actor,
+                "This session has no authoritative resource catalog.",
+                intent.CommandId);
+        }
+
+        var context = new WorldTransactionContext(
+            intent.CommandId,
+            actor.Identity.ActorId,
+            intent.ExpectedActorRevision,
+            intent.ExpectedInventoryRevision);
+        var input = new WorldTransactionActorInput(
+            actor.Identity.ActorId,
+            actor.Position,
+            actor.WorldLevel,
+            actor.Gameplay.ToSnapshot());
+        var gameSeconds = Clock.Current.ElapsedSeconds;
+        var transaction = intent switch
+        {
+            GatherTreeStickIntent gather => _resourceTransactions.Execute(
+                input,
+                new GatherTreeStickTransaction(
+                    context, gather.Node, gameSeconds)),
+            StrikeTreeIntent strike => _resourceTransactions.Execute(
+                input,
+                new StrikeTreeTransaction(
+                    context, strike.Node, strike.ToolInventorySlot,
+                    gameSeconds)),
+            _ => throw new InvalidOperationException(
+                "The resource gameplay intent type is unsupported.")
+        };
+
+        if (transaction.Accepted && transaction.Gameplay is { } gameplay &&
+            (gameplay.ActorRevision != actor.Gameplay.ActorRevision ||
+             gameplay.Inventory.Revision != actor.Gameplay.InventoryRevision ||
+             gameplay.WoodcuttingExperience !=
+             actor.Gameplay.WoodcuttingExperience))
+            actor.Gameplay.ReplaceWith(gameplay);
+        // Accepted misses still carry authoritative hit/damage feedback and
+        // cadence progression even though no node revision changed.
+        if (transaction.Accepted)
+            ResourceTransactionCommitted?.Invoke(transaction);
+
+        return new IntentResult(
+            MapResourceStatus(transaction.Status),
+            actor.LastProcessedCommandSequence,
+            transaction.Accepted
+                ? null
+                : string.IsNullOrWhiteSpace(transaction.Detail)
+                    ? transaction.Status.ToString()
+                    : transaction.Detail)
+        {
+            CommandId = intent.CommandId,
+            InventoryRevision = actor.Gameplay.InventoryRevision,
+            ActorRevision = actor.Gameplay.ActorRevision,
+            Gameplay = actor.Gameplay.ToSnapshot(),
+            ResourceTransaction = transaction
+        };
+    }
+
+    private static IntentStatus MapResourceStatus(
+        ResourceTransactionStatus status) => status switch
+        {
+            ResourceTransactionStatus.Accepted => IntentStatus.Accepted,
+            ResourceTransactionStatus.InvalidCommand =>
+                IntentStatus.WorldCommandInvalid,
+            ResourceTransactionStatus.ActorNotFound =>
+                IntentStatus.ActorNotFound,
+            ResourceTransactionStatus.DeadActor => IntentStatus.DeadActor,
+            ResourceTransactionStatus.StaleActorRevision =>
+                IntentStatus.StaleActorRevision,
+            ResourceTransactionStatus.StaleInventoryRevision =>
+                IntentStatus.StaleInventoryRevision,
+            ResourceTransactionStatus.ResourceNotFound =>
+                IntentStatus.ResourceNotFound,
+            ResourceTransactionStatus.WrongResourceKind =>
+                IntentStatus.WrongResourceKind,
+            ResourceTransactionStatus.StaleNodeRevision =>
+                IntentStatus.StaleNodeRevision,
+            ResourceTransactionStatus.StaleResourceChunkRevision =>
+                IntentStatus.StaleResourceChunkRevision,
+            ResourceTransactionStatus.WrongWorldLevel =>
+                IntentStatus.WrongWorldLevel,
+            ResourceTransactionStatus.OutOfRange => IntentStatus.OutOfRange,
+            ResourceTransactionStatus.InventoryFull =>
+                IntentStatus.InventoryFull,
+            ResourceTransactionStatus.MissingTool => IntentStatus.MissingTool,
+            ResourceTransactionStatus.CadenceLocked =>
+                IntentStatus.ResourceCadenceLocked,
+            ResourceTransactionStatus.Depleted => IntentStatus.ResourceDepleted,
             _ => throw new ArgumentOutOfRangeException(nameof(status))
         };
 
@@ -2071,6 +2200,8 @@ public sealed class AuthoritativeWorldSession
 
         public int CookingExperience { get; set; }
 
+        public int WoodcuttingExperience { get; set; }
+
         public void ReplaceWith(PlayerGameplaySnapshot snapshot)
         {
             if (snapshot.ActorRevision == 0 ||
@@ -2082,7 +2213,8 @@ public sealed class AuthoritativeWorldSession
                 !float.IsFinite(snapshot.WellFedSeconds) ||
                 snapshot.WellFedSeconds < 0 ||
                 snapshot.CraftingExperience < 0 ||
-                snapshot.CookingExperience < 0)
+                snapshot.CookingExperience < 0 ||
+                snapshot.WoodcuttingExperience < 0)
             {
                 throw new InvalidOperationException(
                     "The world transaction returned invalid actor state.");
@@ -2131,6 +2263,7 @@ public sealed class AuthoritativeWorldSession
             WellFedSeconds = snapshot.WellFedSeconds;
             CraftingExperience = snapshot.CraftingExperience;
             CookingExperience = snapshot.CookingExperience;
+            WoodcuttingExperience = snapshot.WoodcuttingExperience;
         }
 
         public PlayerGameplaySnapshot ToSnapshot()
@@ -2155,7 +2288,8 @@ public sealed class AuthoritativeWorldSession
                 CookingExperience,
                 new PlayerInventorySnapshot(
                     InventoryRevision,
-                    slots.MoveToImmutable()));
+                    slots.MoveToImmutable()),
+                WoodcuttingExperience);
         }
     }
 

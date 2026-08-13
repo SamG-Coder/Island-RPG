@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -7,6 +8,7 @@ using System.Numerics;
 using System.Security.Cryptography;
 using IslandRpg.Navigation;
 using IslandRpg.Protocol;
+using IslandRpg.Resources;
 using IslandRpg.Server.Persistence;
 using IslandRpg.Simulation;
 
@@ -33,6 +35,9 @@ public sealed class DedicatedServer : IAsyncDisposable
     private int _worldBootstrapPending = 1;
     private readonly object _worldBootstrapSync = new();
     private WorldBootstrapState _worldBootstrap = WorldBootstrapState.Empty;
+    private readonly object _resourceBootstrapSync = new();
+    private ResourceBootstrapState _resourceBootstrap =
+        ResourceBootstrapState.Empty;
     private readonly ServerCheckpointStore? _checkpointStore;
     private readonly ServerCheckpointWriter? _checkpointWriter;
     private readonly IDisposable? _worldLease;
@@ -49,11 +54,19 @@ public sealed class DedicatedServer : IAsyncDisposable
             options.ListenAddress.AddressFamily,
             SocketType.Dgram,
             ProtocolType.Udp);
+        var resourceCatalog = new ProceduralResourceCatalog(
+            new SurfaceTreeResourceDescriptorSource());
+        var resourceTransactions = new AuthoritativeResourceTransactions(
+            options.WorldSeed,
+            resourceCatalog);
         _session = new AuthoritativeWorldSession(
             SimulationLimits.Default with { MaximumActors = options.MaximumClients },
             sessionId: new SessionId(options.WorldId),
-            navigation: new ProceduralSurfaceNavigationQuery(options.WorldSeed));
+            navigation: new ProceduralSurfaceNavigationQuery(options.WorldSeed),
+            resourceTransactions: resourceTransactions);
         _session.WorldTransactionCommitted += ApplyWorldTransactionToBootstrap;
+        _session.ResourceTransactionCommitted +=
+            ApplyResourceTransactionToBootstrap;
         _session.CookingCompleted += BroadcastCookingCompletion;
         if (!string.IsNullOrWhiteSpace(options.SaveRoot))
         {
@@ -413,6 +426,23 @@ public sealed class DedicatedServer : IAsyncDisposable
         }
     }
 
+    internal void QueueResourceBaselines(ClientConnection connection)
+    {
+        var bootstrap = Volatile.Read(ref _resourceBootstrap);
+        foreach (var chunk in bootstrap.Chunks)
+        {
+            if (!connection.TryQueueSequenced(sequence =>
+                    ResourceActionProtocolAdapter.ToBaseline(
+                        sequence,
+                        checked((ulong)CurrentTick),
+                        chunk)))
+            {
+                connection.Stop();
+                return;
+            }
+        }
+    }
+
     internal async Task<IntentResult> ProcessCommandAsync(
         ClientConnection connection,
         AuthenticatedPlayer player,
@@ -435,7 +465,10 @@ public sealed class DedicatedServer : IAsyncDisposable
                     action,
                     out var worldIntent)
                     ? worldIntent!
-                    : ToGameplayIntent(action),
+                    : action.Payload is ResourceActionPayload resource
+                        ? ResourceActionProtocolAdapter.ToIntent(
+                            action, resource)
+                        : ToGameplayIntent(action),
             _ => throw new CommandFailure(
                 CommandRejectionCode.Invalid,
                 $"Message {message.Kind} is not valid after handshake.")
@@ -462,6 +495,12 @@ public sealed class DedicatedServer : IAsyncDisposable
         IntentResult result)
     {
         var tick = checked((ulong)CurrentTick);
+        if (command.Payload is ResourceActionPayload resourceAction)
+        {
+            QueueResourceActionOutcome(
+                connection, player, command, resourceAction, result, tick);
+            return;
+        }
         if (result.WorldTransaction is { } transaction)
         {
             QueueWorldActionOutcome(
@@ -499,6 +538,50 @@ public sealed class DedicatedServer : IAsyncDisposable
                 0,
                 0)))
             connection.Stop();
+    }
+
+    private void QueueResourceActionOutcome(
+        ClientConnection connection,
+        AuthenticatedPlayer player,
+        ActionCommandMessage command,
+        ResourceActionPayload action,
+        IntentResult result,
+        ulong tick)
+    {
+        // Accepted gameplay state must precede the presentation receipt so a
+        // continuous authored action reads the new optimistic revisions.
+        if (result.Accepted && !result.Duplicate &&
+            !connection.TryQueueSequenced(sequence =>
+                ToPlayerStateMessage(
+                    sequence,
+                    tick,
+                    player,
+                    result.Gameplay,
+                    PlayerStateFlags.Baseline |
+                    PlayerStateFlags.Actor |
+                    PlayerStateFlags.Inventory,
+                    0,
+                    0)))
+        {
+            connection.Stop();
+            return;
+        }
+        if (!connection.TryQueueSequenced(sequence =>
+                ResourceActionProtocolAdapter.ToPrivateResult(
+                    sequence, tick, command, action, result)))
+        {
+            connection.Stop();
+            return;
+        }
+        if (result.Duplicate) return;
+        if (result.ResourceTransaction is { } transaction &&
+            ResourceActionProtocolAdapter.ToPublicDelta(
+                1, tick, transaction) is not null)
+        {
+            Broadcast((_, sequence) =>
+                ResourceActionProtocolAdapter.ToPublicDelta(
+                    sequence, tick, transaction)!);
+        }
     }
 
     private void QueueWorldActionOutcome(
@@ -664,6 +747,15 @@ public sealed class DedicatedServer : IAsyncDisposable
             IntentStatus.NotCookable or
             IntentStatus.CookingLocked or
             IntentStatus.InvalidCampfireState => CommandRejectionCode.Impossible,
+        IntentStatus.ResourceCadenceLocked => CommandRejectionCode.RateLimited,
+        IntentStatus.StaleNodeRevision or
+            IntentStatus.StaleResourceChunkRevision =>
+            CommandRejectionCode.OutOfOrder,
+        IntentStatus.ResourceNotFound or
+            IntentStatus.WrongResourceKind or
+            IntentStatus.MissingTool or
+            IntentStatus.ResourceDepleted or
+            IntentStatus.OutOfRange => CommandRejectionCode.Impossible,
         IntentStatus.QueueFull => CommandRejectionCode.ServerBusy,
         _ => CommandRejectionCode.Invalid
     };
@@ -724,7 +816,8 @@ public sealed class DedicatedServer : IAsyncDisposable
             gameplay.Inventory.Slots.Select(slot => new InventorySlotState(
                 slot.Slot,
                 slot.ItemId ?? string.Empty,
-                slot.Quantity)).ToArray());
+                slot.Quantity)).ToArray(),
+            gameplay.WoodcuttingExperience);
 
     private void BroadcastCookingCompletion(CookingCompletionSnapshot value)
     {
@@ -791,7 +884,8 @@ public sealed class DedicatedServer : IAsyncDisposable
         gameplay.CraftingExperience,
         gameplay.CookingExperience,
         gameplay.Inventory.Slots.Select(slot => new InventorySlotState(
-            slot.Slot, slot.ItemId ?? string.Empty, slot.Quantity)).ToArray());
+            slot.Slot, slot.ItemId ?? string.Empty, slot.Quantity)).ToArray(),
+        gameplay.WoodcuttingExperience);
 
     internal Task DisconnectAsync(ClientConnection connection, AuthenticatedPlayer player) =>
         _session.EnqueueDisconnectAsync(new DisconnectRequest(
@@ -828,7 +922,7 @@ public sealed class DedicatedServer : IAsyncDisposable
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            Console.Error.WriteLine($"Connection {connection.Id}: {exception.Message}");
+            Console.Error.WriteLine($"Connection {connection.Id}: {exception}");
         }
         finally
         {
@@ -863,6 +957,7 @@ public sealed class DedicatedServer : IAsyncDisposable
                     _session.SeedWorldObject(value);
             }
             RefreshWorldBootstrap();
+            RefreshResourceBootstrap();
             _nextAutosaveTick = checked(
                 _session.Clock.Tick + AutosaveTicks(_options.AutosaveInterval));
         }
@@ -999,6 +1094,43 @@ public sealed class DedicatedServer : IAsyncDisposable
             Volatile.Write(ref _worldBootstrap, new WorldBootstrapState(
                 Array.AsReadOnly(nextObjects),
                 Array.AsReadOnly(nextChunks)));
+        }
+    }
+
+    private void RefreshResourceBootstrap()
+    {
+        var checkpoint = _session.CaptureCheckpoint().Resources ??
+                         AuthoritativeResourceTransactionsCheckpoint.Empty;
+        Volatile.Write(ref _resourceBootstrap, new ResourceBootstrapState(
+            Array.AsReadOnly(checkpoint.Chunks.ToArray())));
+    }
+
+    private void ApplyResourceTransactionToBootstrap(
+        ResourceTransactionResult transaction)
+    {
+        if (transaction.NodeDelta is not { } node ||
+            transaction.ChunkDelta is not { } revision)
+            return;
+        lock (_resourceBootstrapSync)
+        {
+            var chunks = _resourceBootstrap.Chunks.ToDictionary(
+                static value => value.Chunk);
+            chunks.TryGetValue(revision.Chunk, out var existing);
+            var nodes = existing?.Nodes.ToDictionary(
+                static value => value.Id) ?? [];
+            nodes[node.Current.Id] = node.Current;
+            chunks[revision.Chunk] = new ResourceChunkSparseState(
+                revision.Chunk,
+                revision.CurrentRevision,
+                nodes.Values.OrderBy(static value => value.Id.Value)
+                    .ToImmutableArray());
+            Volatile.Write(ref _resourceBootstrap,
+                new ResourceBootstrapState(Array.AsReadOnly(
+                    chunks.Values
+                        .OrderBy(static value => value.Chunk.WorldLevel)
+                        .ThenBy(static value => value.Chunk.X)
+                        .ThenBy(static value => value.Chunk.Y)
+                        .ToArray())));
         }
     }
 
@@ -1213,6 +1345,13 @@ internal sealed record WorldBootstrapState(
     public static WorldBootstrapState Empty { get; } = new(
         Array.Empty<WorldObjectBaseline>(),
         Array.Empty<WorldChunkRevisionState>());
+}
+
+internal sealed record ResourceBootstrapState(
+    IReadOnlyList<ResourceChunkSparseState> Chunks)
+{
+    public static ResourceBootstrapState Empty { get; } = new(
+        Array.Empty<ResourceChunkSparseState>());
 }
 
 internal readonly record struct AuthenticatedPlayer(

@@ -191,7 +191,8 @@ public static class WorldActionProtocolAdapter
             gameplay.WellFedSeconds,
             gameplay.CraftingExperience,
             gameplay.CookingExperience,
-            slots);
+            slots,
+            gameplay.WoodcuttingExperience);
     }
 
     /// <summary>

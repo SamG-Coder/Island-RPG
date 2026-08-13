@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.IO.Compression;
 using IslandRpg.Gameplay;
+using IslandRpg.Resources;
 using OpenTK.Mathematics;
 
 namespace IslandRpg.World;
@@ -141,17 +142,20 @@ internal static class InfiniteWorldGenerator
                     Surface(heights[x, y + 1]),
                     region);
 
-                var chance =
-                    WorldTreeCatalog.SpawnChance(region, average);
-                if (UnitHash(seed, worldX, worldY, 91) >= chance)
+                if (!SurfaceTreeCatalog.TryDescribeAt(
+                        seed,
+                        worldX,
+                        worldY,
+                        (ProceduralSurfaceTerrain.Region)region,
+                        (ProceduralSurfaceTerrain.Material)biome,
+                        average,
+                        out var treeVisual))
                     continue;
-                var tile = tiles[y * WorldChunk.Size + x];
-                var graphic =
-                    WorldTreeCatalog.SelectGraphic(seed, tile);
-                var frame = WorldTreeCatalog.SelectFrame(
-                    seed, worldX, worldY, graphic);
                 trees.Add(new(
-                    worldX, worldY, graphic, frame));
+                    worldX,
+                    worldY,
+                    treeVisual.GraphicName,
+                    treeVisual.FrameIndex));
             }
         }
 

@@ -198,9 +198,9 @@ internal static class ProtocolChecks
     private static void ProtocolEnforcesInputBounds()
     {
         CheckAssert.Equal(
-            (ushort)4,
+            (ushort)5,
             ProtocolConstants.CurrentVersion,
-            "timed authoritative cooking requires protocol v4");
+            "authoritative procedural resources require protocol v5");
         var multibyteName = string.Concat(
             Enumerable.Repeat("界", ProtocolLimits.PlayerNameBytes));
         CheckAssert.Throws<ProtocolException>(

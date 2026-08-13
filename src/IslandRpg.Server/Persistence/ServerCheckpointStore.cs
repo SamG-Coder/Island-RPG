@@ -224,6 +224,7 @@ public sealed class ServerCheckpointStore
                 !float.IsFinite(actor.Hunger) || actor.Hunger is < 0 or > 100 ||
                 !float.IsFinite(actor.WellFedSeconds) || actor.WellFedSeconds < 0 ||
                 actor.CraftingExperience < 0 || actor.CookingExperience < 0 ||
+                actor.WoodcuttingExperience < 0 ||
                 actor.ReconnectTokenHash is not { Length: 32 } ||
                 actor.Inventory is null || actor.Inventory.Count != PlayerInventoryCapacity ||
                 actor.CommandReceipts is null ||
@@ -306,6 +307,55 @@ public sealed class ServerCheckpointStore
                     "A cooking-job checkpoint is invalid.");
             ValidateText(job.RawItemId, 128, nameof(job.RawItemId));
             ValidateText(job.ResultItemId, 128, nameof(job.ResultItemId));
+        }
+
+        ValidateResources(value.Resources, actors);
+    }
+
+    private static void ValidateResources(
+        ServerResourceCheckpoint? resources,
+        IReadOnlySet<Guid> actors)
+    {
+        resources ??= new ServerResourceCheckpoint([], []);
+        if (resources.Chunks is null || resources.ActorCadences is null ||
+            resources.Chunks.Count > MaximumChunkRevisions ||
+            resources.ActorCadences.Count > MaximumActors * 2)
+            throw new InvalidDataException(
+                "The resource checkpoint collection limits are invalid.");
+        var chunks = new HashSet<(int X, int Y, int Level)>();
+        var nodes = new HashSet<Guid>();
+        foreach (var chunk in resources.Chunks)
+        {
+            if (chunk.Revision == 0 || chunk.Nodes is null ||
+                chunk.Nodes.Count > 4_096 ||
+                !chunks.Add((chunk.X, chunk.Y, chunk.WorldLevel)))
+                throw new InvalidDataException(
+                    "A resource chunk checkpoint is invalid.");
+            foreach (var node in chunk.Nodes)
+            {
+                if (node.NodeId == Guid.Empty || !nodes.Add(node.NodeId) ||
+                    !Enum.IsDefined(node.Kind) || node.NodeRevision == 0 ||
+                    node.NodeRevision > chunk.Revision || node.Health < 0 ||
+                    node.Remaining < 0 ||
+                    !double.IsFinite(node.ReadyAtGameSeconds) ||
+                    node.ReadyAtGameSeconds < 0)
+                    throw new InvalidDataException(
+                        "A resource node checkpoint is invalid.");
+            }
+        }
+        var cadences = new HashSet<(
+            Guid ActorId, IslandRpg.Resources.ResourceActionKind Action)>();
+        foreach (var cadence in resources.ActorCadences)
+        {
+            if (!actors.Contains(cadence.ActorId) ||
+                cadence.Action is not IslandRpg.Resources.ResourceActionKind.CutTree
+                    and not IslandRpg.Resources.ResourceActionKind.GatherTreeStick ||
+                !double.IsFinite(cadence.ReadyAtGameSeconds) ||
+                cadence.ReadyAtGameSeconds < 0 ||
+                cadence.ActionOrdinal == 0 ||
+                !cadences.Add((cadence.ActorId, cadence.Action)))
+                throw new InvalidDataException(
+                    "A resource cadence checkpoint is invalid.");
         }
     }
 

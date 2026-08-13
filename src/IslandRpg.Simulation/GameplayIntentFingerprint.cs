@@ -100,6 +100,15 @@ public static class GameplayIntentFingerprint
                 writer.Handle(value.Campfire);
                 writer.Int32(value.InventorySlot);
                 break;
+            case GatherTreeStickIntent value:
+                writer.Tag(16);
+                writer.Resource(value.Node);
+                break;
+            case StrikeTreeIntent value:
+                writer.Tag(17);
+                writer.Resource(value.Node);
+                writer.Int32(value.ToolInventorySlot);
+                break;
             default:
                 throw new NotSupportedException(
                     $"Gameplay intent type '{intent.GetType().Name}' has no canonical fingerprint.");
@@ -155,6 +164,16 @@ public static class GameplayIntentFingerprint
             UInt32(value.ExpectedObjectRevision);
             UInt32(value.ExpectedChunkRevision);
             UInt32(value.ExpectedContainerRevision);
+        }
+
+        public void Resource(IslandRpg.Resources.ResourceNodeReference value)
+        {
+            Guid(value.Id.Value);
+            Int32(value.Chunk.X);
+            Int32(value.Chunk.Y);
+            Int32(value.Chunk.WorldLevel);
+            UInt32(value.ExpectedNodeRevision);
+            UInt32(value.ExpectedResourceChunkRevision);
         }
 
         public void Text(string? value)

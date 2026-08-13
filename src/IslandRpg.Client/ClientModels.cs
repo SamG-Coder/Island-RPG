@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
 using IslandRpg.Protocol;
+using IslandRpg.Resources;
+using IslandRpg.Simulation;
 
 namespace IslandRpg.Client;
 
@@ -40,7 +42,8 @@ public sealed record NetworkPlayerGameplayState(
     float WellFedSeconds,
     int CraftingExperience,
     int CookingExperience,
-    IReadOnlyList<InventorySlotState> InventorySlots);
+    IReadOnlyList<InventorySlotState> InventorySlots,
+    int WoodcuttingExperience = 0);
 
 /// <summary>
 /// Immutable public projection of a server-authored world object. Container
@@ -79,6 +82,24 @@ public sealed record NetworkContainerState(
     public Guid ObjectId => Reference.ObjectId;
 }
 
+/// <summary>
+/// Immutable sparse resource overlay and retained revision high-water for one
+/// procedural chunk. A missing ID has its deterministic default revision zero.
+/// </summary>
+public sealed record NetworkResourceChunkState(
+    WorldChunkKey Chunk,
+    uint ResourceChunkRevision,
+    IReadOnlyDictionary<ResourceNodeId, ResourceNodeSparseState> Nodes,
+    IReadOnlyDictionary<ResourceNodeId, uint> NodeRevisionHighWater);
+
+public sealed record NetworkResourceChange(
+    ResourceNodeDeltaKind Kind,
+    ResourceNodeId NodeId,
+    WorldChunkKey Chunk,
+    uint NodeRevision,
+    uint ResourceChunkRevision,
+    ResourceNodeSparseState? State);
+
 public readonly record struct NetworkWorldChunk(
     int ChunkX,
     int ChunkY,
@@ -110,7 +131,8 @@ public sealed record NetworkGameClientState(
     NetworkPlayerGameplayState? Gameplay,
     IReadOnlyDictionary<Guid, NetworkWorldObjectState> WorldObjects,
     IReadOnlyDictionary<NetworkWorldChunk, uint> WorldChunkRevisions,
-    IReadOnlyDictionary<Guid, NetworkContainerState> Containers)
+    IReadOnlyDictionary<Guid, NetworkContainerState> Containers,
+    IReadOnlyDictionary<WorldChunkKey, NetworkResourceChunkState> ResourceChunks)
 {
     private static readonly IReadOnlyDictionary<Guid, NetworkPlayerPresence> EmptyPlayers =
         new ReadOnlyDictionary<Guid, NetworkPlayerPresence>(new Dictionary<Guid, NetworkPlayerPresence>());
@@ -122,6 +144,8 @@ public sealed record NetworkGameClientState(
         new ReadOnlyDictionary<NetworkWorldChunk, uint>(new Dictionary<NetworkWorldChunk, uint>());
     private static readonly IReadOnlyDictionary<Guid, NetworkContainerState> EmptyContainers =
         new ReadOnlyDictionary<Guid, NetworkContainerState>(new Dictionary<Guid, NetworkContainerState>());
+    private static readonly IReadOnlyDictionary<WorldChunkKey, NetworkResourceChunkState> EmptyResourceChunks =
+        new ReadOnlyDictionary<WorldChunkKey, NetworkResourceChunkState>(new Dictionary<WorldChunkKey, NetworkResourceChunkState>());
 
     public static NetworkGameClientState Disconnected { get; } = new(
         NetworkGameClientStatus.Disconnected,
@@ -142,7 +166,8 @@ public sealed record NetworkGameClientState(
         null,
         EmptyWorldObjects,
         EmptyWorldChunkRevisions,
-        EmptyContainers);
+        EmptyContainers,
+        EmptyResourceChunks);
 }
 
 public sealed record NetworkChatEvent(
@@ -178,6 +203,12 @@ public sealed class NetworkCookingResultEventArgs(
     CookingResultMessage result) : EventArgs
 {
     public CookingResultMessage Result { get; } = result;
+}
+
+public sealed class NetworkResourceActionResultEventArgs(
+    ResourceActionResultMessage result) : EventArgs
+{
+    public ResourceActionResultMessage Result { get; } = result;
 }
 
 public sealed class NetworkPlayerEventArgs(NetworkPlayerPresence player) : EventArgs
@@ -222,4 +253,14 @@ public sealed class NetworkContainerStateEventArgs(
     NetworkContainerState state) : EventArgs
 {
     public NetworkContainerState State { get; } = state;
+}
+
+public sealed class NetworkResourcesChangedEventArgs(
+    WorldChunkKey chunk,
+    bool isBaseline,
+    IReadOnlyList<NetworkResourceChange> changes) : EventArgs
+{
+    public WorldChunkKey Chunk { get; } = chunk;
+    public bool IsBaseline { get; } = isBaseline;
+    public IReadOnlyList<NetworkResourceChange> Changes { get; } = changes;
 }

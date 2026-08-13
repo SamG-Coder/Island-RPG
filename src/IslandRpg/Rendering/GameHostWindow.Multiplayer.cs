@@ -89,6 +89,9 @@ internal sealed partial class GameHostWindow
         _networkClient.CookingCompleted += (_, value) =>
             _networkEvents.Enqueue(() => HandleNetworkCookingResult(
                 value.Result));
+        _networkClient.ResourceActionCompleted += (_, value) =>
+            _networkEvents.Enqueue(() => HandleNetworkResourceActionResult(
+                value.Result));
         _networkClient.PlayerStateChanged += (_, value) =>
             _networkEvents.Enqueue(() => ApplyNetworkPlayerState(value.State));
         _networkClient.WorldObjectsChanged += (_, value) =>
@@ -97,6 +100,9 @@ internal sealed partial class GameHostWindow
         _networkClient.ContainerStateChanged += (_, value) =>
             _networkEvents.Enqueue(() =>
                 ApplyNetworkContainerState(value.State));
+        _networkClient.ResourcesChanged += (_, value) =>
+            _networkEvents.Enqueue(() =>
+                HandleNetworkResourcesChanged(value));
         _networkClient.PlayerJoined += (_, value) =>
             _networkEvents.Enqueue(() => _chatUi.AddMessage(
                 $"{value.Player.PlayerName} joined the world.",
@@ -144,6 +150,7 @@ internal sealed partial class GameHostWindow
 
     private void EnterNetworkWorld(HandshakeAcceptedMessage accepted)
     {
+        ClearNetworkResourceProjection();
         ClearNetworkWorldObjects();
         CancelWorldLevelWork(clearMinimap: true);
         FinishPendingMenuChunk();
@@ -199,7 +206,10 @@ internal sealed partial class GameHostWindow
         if (state.Status is NetworkGameClientStatus.Disconnected or
             NetworkGameClientStatus.Disconnecting or
             NetworkGameClientStatus.Faulted)
+        {
+            ClearNetworkResourceProjection();
             ClearNetworkWorldObjects();
+        }
         if (state.Status == NetworkGameClientStatus.Faulted)
             _chatUi.AddMessage(
                 $"Network connection lost: {state.LastError ?? "unknown error"}",
@@ -260,6 +270,8 @@ internal sealed partial class GameHostWindow
     private void ApplyNetworkPlayerState(NetworkPlayerGameplayState state)
     {
         if (_activePlayer is null) return;
+        ObserveNetworkResourceGameplayState(
+            state, _activePlayer.WoodcuttingExperience);
         var items = new string?[PlayerInventory.Capacity];
         var quantities = new int[PlayerInventory.Capacity];
         foreach (var slot in state.InventorySlots)
@@ -278,6 +290,7 @@ internal sealed partial class GameHostWindow
             WellFedSeconds = state.WellFedSeconds,
             CraftingExperience = state.CraftingExperience,
             CookingExperience = state.CookingExperience,
+            WoodcuttingExperience = state.WoodcuttingExperience,
             UpdatedUtc = DateTime.UtcNow
         };
         if (_activeInventorySlot >= 0 &&
@@ -303,6 +316,7 @@ internal sealed partial class GameHostWindow
             SendNetworkStop();
         }
         UpdatePendingNetworkWorldAction();
+        UpdateNetworkResourceInteraction();
         UpdateNativeCursor();
         FollowPlayer();
     }
@@ -326,12 +340,14 @@ internal sealed partial class GameHostWindow
             var entity = snapshot.EntityId == _networkClient.State.PlayerEntityId
                 ? _player!
                 : GetOrCreateNetworkActor(snapshot.EntityId, position);
-            var preserveCookingAction =
+            var preservePresentedAction =
                 snapshot.EntityId == _networkClient.State.PlayerEntityId &&
-                _networkCookingPresentationOwned &&
-                entity.Action == EntityAction.Gather;
+                ((_networkCookingPresentationOwned &&
+                  entity.Action == EntityAction.Gather) ||
+                 (_networkResourcePresentationOwned &&
+                  entity.Action is EntityAction.Gather or EntityAction.Work));
             SyncNetworkEntity(entity, position, velocity, snapshot.State,
-                elapsed, preserveCookingAction);
+                elapsed, preservePresentedAction);
             if (snapshot.EntityId == _networkClient.State.PlayerEntityId)
                 _activeWorldLevel = snapshot.WorldLevel;
         }
@@ -406,19 +422,25 @@ internal sealed partial class GameHostWindow
             1 + (int)(id % 7));
     }
 
-    private void SendNetworkWalk(Vector2 target)
+    private void SendNetworkWalk(
+        Vector2 target,
+        bool preserveResourceAction = false)
     {
         if (_networkClient?.IsConnected != true) return;
         ReleaseNetworkCookingPresentation();
+        if (!preserveResourceAction)
+            CancelNetworkResourceInteraction();
         _moveMarker = new MoveMarker(target, 0);
         QueueNetworkSend(cancellationToken => _networkClient.SendWalkAsync(
             target.X, target.Y, _activeWorldLevel, cancellationToken).AsTask());
     }
 
-    private void SendNetworkStop()
+    private void SendNetworkStop(bool preserveResourceAction = false)
     {
         if (_networkClient?.IsConnected != true) return;
         ReleaseNetworkCookingPresentation();
+        if (!preserveResourceAction)
+            CancelNetworkResourceInteraction();
         QueueNetworkSend(cancellationToken =>
             _networkClient.SendStopAsync(cancellationToken).AsTask());
     }
@@ -538,6 +560,7 @@ internal sealed partial class GameHostWindow
 
     private void DisposeNetworkClient()
     {
+        ClearNetworkResourceProjection();
         ResetNetworkContainerInteraction();
         ClearNetworkWorldObjects();
         _networkCancellation?.Cancel();
@@ -556,6 +579,7 @@ internal sealed partial class GameHostWindow
 
     private void LeaveNetworkWorldProjection()
     {
+        ClearNetworkResourceProjection();
         ResetNetworkContainerInteraction();
         ClearNetworkWorldObjects();
         _networkWorldEntered = false;

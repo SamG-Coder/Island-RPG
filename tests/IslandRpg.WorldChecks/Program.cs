@@ -9,6 +9,7 @@ using OpenTK.Mathematics;
 using StbImageSharp;
 
 WorldCheckProcess.DisableWindowsCrashDialogs();
+SurfaceTreeResourceChecks.Run();
 
 var slimeExportIndex = Array.FindIndex(
     args, value => value.Equals(

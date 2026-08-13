@@ -8,4 +8,7 @@
     <!-- Public wire records are self-describing; comments focus on protocol invariants. -->
     <NoWarn>$(NoWarn);1591</NoWarn>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../IslandRpg.Core/IslandRpg.Core.csproj" />
+  </ItemGroup>
 </Project>

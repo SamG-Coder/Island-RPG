@@ -42,7 +42,8 @@ public sealed record AuthoritativeSessionCheckpoint(
     long SnapshotSequence,
     ImmutableArray<AuthoritativeActorCheckpoint> Actors,
     AuthoritativeWorldTransactionsCheckpoint World,
-    ImmutableArray<AuthoritativeCookingJobCheckpoint> CookingJobs = default);
+    ImmutableArray<AuthoritativeCookingJobCheckpoint> CookingJobs = default,
+    AuthoritativeResourceTransactionsCheckpoint? Resources = null);
 
 public sealed record AuthoritativeCookingJobCheckpoint(
     Guid CommandId,

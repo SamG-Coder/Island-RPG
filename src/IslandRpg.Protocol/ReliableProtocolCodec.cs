@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using IslandRpg.Resources;
+using IslandRpg.Simulation;
 
 namespace IslandRpg.Protocol;
 
@@ -205,6 +207,15 @@ public static class ReliableProtocolCodec
             case WorldChunkRevisionBatchMessage value:
                 WriteWorldChunkRevisionBatch(writer, value);
                 break;
+            case ResourceChunkBaselineMessage value:
+                WriteResourceChunkBaseline(writer, value);
+                break;
+            case ResourceNodeDeltaBatchMessage value:
+                WriteResourceNodeDeltaBatch(writer, value);
+                break;
+            case ResourceActionResultMessage value:
+                WriteResourceActionResult(writer, value);
+                break;
             default:
                 throw new ProtocolException($"Unsupported message type {message.GetType().FullName}.");
         }
@@ -278,6 +289,12 @@ public static class ReliableProtocolCodec
                 ReadContainerState(sequence, tick, ref reader),
             ProtocolMessageKind.WorldChunkRevisionBatch =>
                 ReadWorldChunkRevisionBatch(sequence, tick, ref reader),
+            ProtocolMessageKind.ResourceChunkBaseline =>
+                ReadResourceChunkBaseline(sequence, tick, ref reader),
+            ProtocolMessageKind.ResourceNodeDeltaBatch =>
+                ReadResourceNodeDeltaBatch(sequence, tick, ref reader),
+            ProtocolMessageKind.ResourceActionResult =>
+                ReadResourceActionResult(sequence, tick, ref reader),
             _ => throw new ProtocolException($"Unsupported reliable message kind {header.Kind}."),
         };
     }
@@ -392,6 +409,10 @@ public static class ReliableProtocolCodec
                 writer.WriteByte((byte)ActionCommandKind.DemolishWorldObject);
                 WriteWorldObjectReference(writer, action.Object);
                 break;
+            case ResourceActionPayload action:
+                writer.WriteByte((byte)ActionCommandKind.ResourceAction);
+                WriteResourceAction(writer, action);
+                break;
             default:
                 throw new ProtocolException(
                     $"Unsupported action payload type {value.Payload.GetType().FullName}.");
@@ -456,6 +477,7 @@ public static class ReliableProtocolCodec
             ActionCommandKind.DemolishWorldObject =>
                 new DemolishWorldObjectAction(
                     ReadWorldObjectReference(ref reader)),
+            ActionCommandKind.ResourceAction => ReadResourceAction(ref reader),
             _ => throw new ProtocolException($"Unsupported action command kind {kind}."),
         };
         return new ActionCommandMessage(
@@ -482,6 +504,84 @@ public static class ReliableProtocolCodec
             definitionId, inventorySlot, x, y, worldLevel, rotation,
             reader.ReadUInt32());
     }
+
+    private static void WriteResourceAction(
+        WireWriter writer,
+        ResourceActionPayload action)
+    {
+        EnsureDefined(action.Action, nameof(action.Action));
+        WriteResourceNodeReference(writer, action.Resource);
+        if (action.ToolInventorySlot < -1 ||
+            action.ToolInventorySlot >= ProtocolLimits.PlayerInventorySlots)
+        {
+            throw new ProtocolException(
+                "Resource-action tool slots must be -1 or a valid inventory slot.");
+        }
+        if (action.Action == ResourceActionKind.GatherTreeStick &&
+            action.ToolInventorySlot != -1)
+        {
+            throw new ProtocolException(
+                "Gathering a loose tree stick cannot specify a tool slot.");
+        }
+        writer.WriteByte((byte)action.Action);
+        writer.WriteInt16((short)action.ToolInventorySlot);
+    }
+
+    private static ResourceActionPayload ReadResourceAction(
+        ref WireReader reader)
+    {
+        var resource = ReadResourceNodeReference(ref reader);
+        var action = ReadEnum<ResourceActionKind>(
+            reader.ReadByte(), "ResourceActionKind");
+        var toolSlot = reader.ReadInt16();
+        if (toolSlot < -1 || toolSlot >= ProtocolLimits.PlayerInventorySlots)
+        {
+            throw new ProtocolException(
+                "Resource-action tool slots must be -1 or a valid inventory slot.");
+        }
+        if (action == ResourceActionKind.GatherTreeStick &&
+            toolSlot != -1)
+        {
+            throw new ProtocolException(
+                "Gathering a loose tree stick cannot specify a tool slot.");
+        }
+        return new ResourceActionPayload(action, resource, toolSlot);
+    }
+
+    private static void WriteResourceNodeReference(
+        WireWriter writer,
+        ResourceNodeReference value)
+    {
+        EnsureResourceNodeId(value.Id);
+        writer.WriteGuid(value.Id.Value);
+        WriteResourceChunk(writer, value.Chunk);
+        writer.WriteUInt32(value.ExpectedNodeRevision);
+        writer.WriteUInt32(value.ExpectedResourceChunkRevision);
+    }
+
+    private static ResourceNodeReference ReadResourceNodeReference(
+        ref WireReader reader)
+    {
+        var result = new ResourceNodeReference(
+            new ResourceNodeId(reader.ReadGuid()),
+            ReadResourceChunk(ref reader),
+            reader.ReadUInt32(),
+            reader.ReadUInt32());
+        EnsureResourceNodeId(result.Id);
+        return result;
+    }
+
+    private static void WriteResourceChunk(
+        WireWriter writer,
+        WorldChunkKey value)
+    {
+        writer.WriteInt32(value.X);
+        writer.WriteInt32(value.Y);
+        writer.WriteInt32(value.WorldLevel);
+    }
+
+    private static WorldChunkKey ReadResourceChunk(ref WireReader reader) =>
+        new(reader.ReadInt32(), reader.ReadInt32(), reader.ReadInt32());
 
     private static void WriteWorldObjectReference(
         WireWriter writer,
@@ -761,6 +861,306 @@ public static class ReliableProtocolCodec
         }
     }
 
+    private static void WriteResourceChunkBaseline(
+        WireWriter writer,
+        ResourceChunkBaselineMessage value)
+    {
+        ValidateResourceBaseline(value);
+        WriteResourceChunk(writer, value.Chunk);
+        writer.WriteUInt32(value.ResourceChunkRevision);
+        writer.WriteUInt16((ushort)value.Nodes.Count);
+        foreach (var node in value.Nodes) WriteResourceNodeState(writer, node);
+        writer.WriteUInt16((ushort)value.Tombstones.Count);
+        foreach (var tombstone in value.Tombstones)
+        {
+            writer.WriteGuid(tombstone.Id.Value);
+            writer.WriteUInt32(tombstone.Revision);
+        }
+    }
+
+    private static ResourceChunkBaselineMessage ReadResourceChunkBaseline(
+        ulong sequence,
+        ulong tick,
+        ref WireReader reader)
+    {
+        var chunk = ReadResourceChunk(ref reader);
+        var chunkRevision = reader.ReadUInt32();
+        var nodeCount = reader.ReadUInt16();
+        if (nodeCount > ProtocolLimits.MaxResourceNodesPerBatch)
+            throw new ProtocolException("Resource baseline node count exceeds its hard limit.");
+        var nodes = new ResourceNodeSparseState[nodeCount];
+        for (var index = 0; index < nodes.Length; index++)
+            nodes[index] = ReadResourceNodeState(ref reader);
+        var tombstoneCount = reader.ReadUInt16();
+        if (nodeCount + tombstoneCount > ProtocolLimits.MaxResourceNodesPerBatch)
+            throw new ProtocolException("Resource baseline state exceeds its hard limit.");
+        var tombstones = new ResourceNodeRevisionState[tombstoneCount];
+        for (var index = 0; index < tombstones.Length; index++)
+        {
+            tombstones[index] = new ResourceNodeRevisionState(
+                new ResourceNodeId(reader.ReadGuid()), reader.ReadUInt32());
+        }
+        var result = new ResourceChunkBaselineMessage(
+            sequence, tick, chunk, chunkRevision, nodes, tombstones);
+        ValidateResourceBaseline(result);
+        return result;
+    }
+
+    private static void ValidateResourceBaseline(ResourceChunkBaselineMessage value)
+    {
+        if (value.Nodes is null || value.Tombstones is null)
+            throw new ProtocolException("Resource baseline collections cannot be null.");
+        if (value.Nodes.Count + value.Tombstones.Count >
+            ProtocolLimits.MaxResourceNodesPerBatch)
+            throw new ProtocolException("Resource baseline state exceeds its hard limit.");
+        if (value.ResourceChunkRevision == 0 &&
+            (value.Nodes.Count != 0 || value.Tombstones.Count != 0))
+            throw new ProtocolException("An unmodified resource chunk cannot contain sparse state.");
+
+        var ids = new HashSet<ResourceNodeId>();
+        foreach (var node in value.Nodes)
+        {
+            ValidateResourceNodeState(node);
+            if (node.Chunk != value.Chunk)
+                throw new ProtocolException("Resource baseline node belongs to a different chunk.");
+            if (node.NodeRevision > value.ResourceChunkRevision)
+                throw new ProtocolException("A resource node revision cannot exceed its chunk revision.");
+            if (!ids.Add(node.Id))
+                throw new ProtocolException("Resource baseline contains a duplicate node ID.");
+        }
+        foreach (var tombstone in value.Tombstones)
+        {
+            EnsureResourceNodeId(tombstone.Id);
+            if (tombstone.Revision == 0)
+                throw new ProtocolException("Resource tombstone revisions must be positive.");
+            if (tombstone.Revision > value.ResourceChunkRevision)
+                throw new ProtocolException("A resource tombstone revision cannot exceed its chunk revision.");
+            if (!ids.Add(tombstone.Id))
+                throw new ProtocolException("Resource baseline contains a duplicate node ID.");
+        }
+    }
+
+    private static void WriteResourceNodeDeltaBatch(
+        WireWriter writer,
+        ResourceNodeDeltaBatchMessage value)
+    {
+        ValidateResourceDeltas(value.Deltas);
+        writer.WriteUInt16((ushort)value.Deltas.Count);
+        foreach (var delta in value.Deltas)
+        {
+            writer.WriteByte((byte)delta.Kind);
+            WriteResourceNodeReference(writer, delta.Reference);
+            writer.WriteUInt32(delta.CurrentNodeRevision);
+            writer.WriteUInt32(delta.CurrentResourceChunkRevision);
+            if (delta.Kind == ResourceNodeDeltaKind.Upsert)
+                WriteResourceNodeState(writer, delta.State!);
+        }
+    }
+
+    private static ResourceNodeDeltaBatchMessage ReadResourceNodeDeltaBatch(
+        ulong sequence,
+        ulong tick,
+        ref WireReader reader)
+    {
+        var count = reader.ReadUInt16();
+        if (count is < 1 or > ProtocolLimits.MaxResourceNodesPerBatch)
+            throw new ProtocolException("Resource delta count is outside its hard limit.");
+        var deltas = new ResourceNodeDelta[count];
+        for (var index = 0; index < deltas.Length; index++)
+        {
+            var kind = ReadEnum<ResourceNodeDeltaKind>(
+                reader.ReadByte(), "ResourceNodeDeltaKind");
+            var reference = ReadResourceNodeReference(ref reader);
+            var nodeRevision = reader.ReadUInt32();
+            var chunkRevision = reader.ReadUInt32();
+            deltas[index] = new ResourceNodeDelta(
+                kind,
+                reference,
+                nodeRevision,
+                chunkRevision,
+                kind == ResourceNodeDeltaKind.Upsert
+                    ? ReadResourceNodeState(ref reader)
+                    : null);
+        }
+        ValidateResourceDeltas(deltas);
+        return new ResourceNodeDeltaBatchMessage(sequence, tick, deltas);
+    }
+
+    private static void ValidateResourceDeltas(
+        IReadOnlyList<ResourceNodeDelta>? deltas)
+    {
+        if (deltas is null || deltas.Count is < 1 or
+            > ProtocolLimits.MaxResourceNodesPerBatch)
+            throw new ProtocolException("Resource delta count is outside its hard limit.");
+
+        var ids = new HashSet<ResourceNodeId>();
+        var chunks = new Dictionary<WorldChunkKey, (uint Expected, uint Current)>();
+        foreach (var delta in deltas)
+        {
+            EnsureDefined(delta.Kind, nameof(delta.Kind));
+            EnsureResourceNodeId(delta.Reference.Id);
+            if (!ids.Add(delta.Reference.Id))
+                throw new ProtocolException("One resource batch changed a node more than once.");
+            if (delta.CurrentNodeRevision <= delta.Reference.ExpectedNodeRevision)
+                throw new ProtocolException("A resource delta must advance its node revision.");
+            if (delta.CurrentResourceChunkRevision <=
+                delta.Reference.ExpectedResourceChunkRevision)
+                throw new ProtocolException("A resource delta must advance its chunk revision.");
+            if (delta.CurrentNodeRevision > delta.CurrentResourceChunkRevision)
+                throw new ProtocolException("A resource node revision cannot exceed its chunk revision.");
+            var transition = (
+                delta.Reference.ExpectedResourceChunkRevision,
+                delta.CurrentResourceChunkRevision);
+            if (chunks.TryGetValue(delta.Reference.Chunk, out var existing) &&
+                existing != transition)
+                throw new ProtocolException("One resource chunk has conflicting atomic transitions.");
+            chunks[delta.Reference.Chunk] = transition;
+
+            if (delta.Kind == ResourceNodeDeltaKind.Upsert)
+            {
+                if (delta.State is not { } state)
+                    throw new ProtocolException("A resource upsert omitted state.");
+                ValidateResourceNodeState(state);
+                if (state.Id != delta.Reference.Id ||
+                    state.Chunk != delta.Reference.Chunk ||
+                    state.NodeRevision != delta.CurrentNodeRevision)
+                    throw new ProtocolException("A resource upsert does not match its reference.");
+            }
+            else if (delta.State is not null)
+            {
+                throw new ProtocolException("A resource removal cannot include state.");
+            }
+        }
+    }
+
+    private static void WriteResourceActionResult(
+        WireWriter writer,
+        ResourceActionResultMessage value)
+    {
+        ValidateResourceActionResult(value);
+        writer.WriteGuid(value.CommandId);
+        writer.WriteBoolean(value.Accepted);
+        writer.WriteByte((byte)value.RejectionCode);
+        writer.WriteString(value.Detail, ProtocolLimits.DetailBytes,
+            nameof(value.Detail));
+        writer.WriteUInt32(value.ActorRevision);
+        writer.WriteUInt32(value.InventoryRevision);
+        writer.WriteByte((byte)value.Action);
+        WriteResourceNodeReference(writer, value.Resource);
+        writer.WriteByte((byte)value.Rewards.Count);
+        foreach (var reward in value.Rewards)
+        {
+            writer.WriteString(reward.ItemId, ProtocolLimits.ItemIdBytes,
+                nameof(reward.ItemId));
+            writer.WriteUInt16((ushort)reward.Quantity);
+        }
+        writer.WriteBoolean(value.Hit);
+        writer.WriteInt32(value.Damage);
+        writer.WriteBoolean(value.ToolWorn);
+    }
+
+    private static ResourceActionResultMessage ReadResourceActionResult(
+        ulong sequence,
+        ulong tick,
+        ref WireReader reader)
+    {
+        var commandId = reader.ReadGuid();
+        EnsureCommandId(commandId);
+        var accepted = reader.ReadBoolean();
+        var rejection = ReadEnum<CommandRejectionCode>(
+            reader.ReadByte(), "CommandRejectionCode");
+        var detail = reader.ReadString(ProtocolLimits.DetailBytes, "Detail");
+        var actorRevision = reader.ReadUInt32();
+        var inventoryRevision = reader.ReadUInt32();
+        var action = ReadEnum<ResourceActionKind>(
+            reader.ReadByte(), "ResourceActionKind");
+        var resource = ReadResourceNodeReference(ref reader);
+        var count = reader.ReadByte();
+        if (count > ProtocolLimits.MaxResourceRewardsPerAction)
+            throw new ProtocolException("Resource reward count exceeds its hard limit.");
+        var rewards = new ResourceItemRewardState[count];
+        for (var index = 0; index < rewards.Length; index++)
+        {
+            rewards[index] = new ResourceItemRewardState(
+                ReadIdentifier(ref reader, ProtocolLimits.ItemIdBytes,
+                    "RewardItemId"),
+                reader.ReadUInt16());
+        }
+        var result = new ResourceActionResultMessage(
+            sequence, tick, commandId, accepted, rejection, detail,
+            actorRevision, inventoryRevision, action, resource, rewards,
+            reader.ReadBoolean(), reader.ReadInt32(), reader.ReadBoolean());
+        ValidateResourceActionResult(result);
+        return result;
+    }
+
+    private static void ValidateResourceActionResult(
+        ResourceActionResultMessage value)
+    {
+        EnsureCommandId(value.CommandId);
+        ValidateActionResult(value.Accepted, value.RejectionCode);
+        EnsureDefined(value.Action, nameof(value.Action));
+        EnsureResourceNodeId(value.Resource.Id);
+        if (value.Rewards is null || value.Rewards.Count >
+            ProtocolLimits.MaxResourceRewardsPerAction)
+            throw new ProtocolException("Resource reward count exceeds its hard limit.");
+        if (value.Damage < 0 || !value.Hit && value.Damage != 0)
+            throw new ProtocolException("Resource damage is inconsistent with its hit flag.");
+        foreach (var reward in value.Rewards)
+        {
+            EnsureIdentifier(reward.ItemId, nameof(reward.ItemId));
+            if (reward.Quantity is < 1 or > ProtocolLimits.MaxInventoryQuantity)
+                throw new ProtocolException("Resource reward quantity is outside its wire bounds.");
+        }
+    }
+
+    private static void WriteResourceNodeState(
+        WireWriter writer,
+        ResourceNodeSparseState value)
+    {
+        ValidateResourceNodeState(value);
+        writer.WriteGuid(value.Id.Value);
+        writer.WriteByte((byte)value.Kind);
+        WriteResourceChunk(writer, value.Chunk);
+        writer.WriteUInt32(value.NodeRevision);
+        writer.WriteInt32(value.Health);
+        writer.WriteInt32(value.Remaining);
+        writer.WriteDouble(value.ReadyAtGameSeconds);
+        writer.WriteBoolean(value.Depleted);
+    }
+
+    private static ResourceNodeSparseState ReadResourceNodeState(
+        ref WireReader reader)
+    {
+        var result = new ResourceNodeSparseState(
+            new ResourceNodeId(reader.ReadGuid()),
+            ReadEnum<ResourceNodeKind>(reader.ReadByte(), "ResourceNodeKind"),
+            ReadResourceChunk(ref reader),
+            reader.ReadUInt32(),
+            reader.ReadInt32(),
+            reader.ReadInt32(),
+            reader.ReadDouble(),
+            reader.ReadBoolean());
+        ValidateResourceNodeState(result);
+        return result;
+    }
+
+    private static void ValidateResourceNodeState(ResourceNodeSparseState value)
+    {
+        EnsureResourceNodeId(value.Id);
+        EnsureDefined(value.Kind, nameof(value.Kind));
+        if (value.NodeRevision == 0)
+            throw new ProtocolException("Sparse resource node revisions must be positive.");
+        if (value.Health < 0 || value.Remaining < 0)
+            throw new ProtocolException("Resource node quantities cannot be negative.");
+        if (value.Depleted != (value.Health == 0))
+            throw new ProtocolException(
+                "Resource depletion must match zero resource health.");
+        if (!double.IsFinite(value.ReadyAtGameSeconds) ||
+            value.ReadyAtGameSeconds < 0)
+            throw new ProtocolException("Resource node ready time must be finite and non-negative.");
+    }
+
     private static void WriteContainerState(
         WireWriter writer,
         ContainerStateMessage value)
@@ -1024,6 +1424,7 @@ public static class ReliableProtocolCodec
             writer.WriteString(slot.ItemId, ProtocolLimits.ItemIdBytes, nameof(slot.ItemId));
             writer.WriteUInt16((ushort)slot.Quantity);
         }
+        writer.WriteInt32(value.WoodcuttingExperience);
     }
 
     private static PlayerStateMessage ReadPlayerState(
@@ -1058,6 +1459,7 @@ public static class ReliableProtocolCodec
                 reader.ReadString(ProtocolLimits.ItemIdBytes, "ItemId"),
                 reader.ReadUInt16());
         }
+        var woodcuttingExperience = reader.ReadInt32();
 
         var result = new PlayerStateMessage(
             sequence,
@@ -1074,7 +1476,8 @@ public static class ReliableProtocolCodec
             wellFedSeconds,
             craftingExperience,
             cookingExperience,
-            inventorySlots);
+            inventorySlots,
+            woodcuttingExperience);
         ValidatePlayerState(result);
         return result;
     }
@@ -1132,7 +1535,8 @@ public static class ReliableProtocolCodec
             throw new ProtocolException("WellFedSeconds cannot be negative.");
         }
 
-        if (value.CraftingExperience < 0 || value.CookingExperience < 0)
+        if (value.CraftingExperience < 0 || value.CookingExperience < 0 ||
+            value.WoodcuttingExperience < 0)
         {
             throw new ProtocolException("Skill experience cannot be negative.");
         }
@@ -1222,6 +1626,12 @@ public static class ReliableProtocolCodec
         {
             throw new ProtocolException("World object ID cannot be empty.");
         }
+    }
+
+    private static void EnsureResourceNodeId(ResourceNodeId resourceNodeId)
+    {
+        if (resourceNodeId.IsEmpty)
+            throw new ProtocolException("Resource node ID cannot be empty.");
     }
 
     private static void EnsureDefined<TEnum>(TEnum value, string fieldName)

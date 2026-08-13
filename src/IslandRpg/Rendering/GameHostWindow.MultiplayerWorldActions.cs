@@ -2,6 +2,7 @@ using IslandRpg.Client;
 using IslandRpg.Gameplay;
 using IslandRpg.Protocol;
 using IslandRpg.Rendering.Ui;
+using IslandRpg.Resources;
 using IslandRpg.World;
 using OpenTK.Mathematics;
 
@@ -117,6 +118,21 @@ internal sealed partial class GameHostWindow
             if (TryGetNetworkGroundObjectUnderMouse(
                     SceneMousePosition(), out var contextObject, out _))
                 OpenNetworkGroundObjectContext(contextObject, target);
+            else if (TryGetTreeUnderMouse(
+                         SceneMousePosition(), out var contextTree))
+            {
+                _treeContextTarget = contextTree;
+                _treeContextWalkTarget = target;
+                _inventoryContext.Close();
+                _groundObjectContext.Close();
+                _fishContext.Close();
+                _vegetationContext.Close();
+                _miningContext.Close();
+                _treeContext.Open(
+                    MouseState.Position,
+                    ["Chop tree", "Gather sticks", "Walk Here", "Examine"],
+                    SceneClientBounds(), 142);
+            }
             else
             {
                 _pendingNetworkWorldAction = null;
@@ -140,6 +156,12 @@ internal sealed partial class GameHostWindow
                 QueueNetworkObjectAction(
                     NetworkWorldActionKind.PickUp, groundObject);
         }
+        else if (!placingObject && leftDown && !_gameLeftWasDown &&
+                 !IsPointerOverGameUi(MouseState.Position) &&
+                 TryGetTreeUnderMouse(
+                     SceneMousePosition(), out var actionTree))
+            QueueNetworkTreeAction(
+                actionTree, ResourceActionKind.CutTree);
 
         _gameRightWasDown = rightDown;
         _gameLeftWasDown = leftDown;

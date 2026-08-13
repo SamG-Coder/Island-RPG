@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Numerics;
+using IslandRpg.Resources;
 using IslandRpg.Simulation;
 
 namespace IslandRpg.Server.Persistence;
@@ -60,7 +61,9 @@ public static class ServerCheckpointMapper
                     value.Experience,
                     value.Burnt,
                     value.DropObjectId,
-                    value.CompletesAtTick)).ToArray());
+                    value.CompletesAtTick)).ToArray(),
+            ToDurable(source.Resources ??
+                AuthoritativeResourceTransactionsCheckpoint.Empty));
     }
 
     public static AuthoritativeSessionCheckpoint ToSimulation(
@@ -117,7 +120,8 @@ public static class ServerCheckpointMapper
                     value.Experience,
                     value.Burnt,
                     value.DropObjectId,
-                    value.CompletesAtTick)).ToImmutableArray());
+                    value.CompletesAtTick)).ToImmutableArray(),
+            ToSimulation(source.Resources));
     }
 
     private static ServerActorCheckpoint ToDurable(
@@ -148,7 +152,8 @@ public static class ServerCheckpointMapper
                 receipt.CommandId,
                 receipt.PayloadFingerprint,
                 receipt.Status,
-                receipt.Error)).ToArray());
+                receipt.Error)).ToArray(),
+        value.Gameplay.WoodcuttingExperience);
 
     private static AuthoritativeActorCheckpoint ToSimulation(
         ServerActorCheckpoint value) => new(
@@ -173,7 +178,8 @@ public static class ServerCheckpointMapper
                     new InventorySlotSnapshot(
                         slot.Slot,
                         slot.ItemId,
-                        slot.Quantity)).ToImmutableArray())),
+                        slot.Quantity)).ToImmutableArray()),
+            value.WoodcuttingExperience),
         value.ReconnectTokenHash.ToImmutableArray(),
         value.CommandReceipts.Select(static receipt =>
             new AuthoritativeCommandReceiptCheckpoint(
@@ -181,6 +187,59 @@ public static class ServerCheckpointMapper
                 receipt.PayloadFingerprint,
                 receipt.Status,
                 receipt.Error)).ToImmutableArray());
+
+    private static ServerResourceCheckpoint ToDurable(
+        AuthoritativeResourceTransactionsCheckpoint value) => new(
+        value.Chunks.Select(static chunk =>
+            new ServerResourceChunkCheckpoint(
+                chunk.Chunk.X,
+                chunk.Chunk.Y,
+                chunk.Chunk.WorldLevel,
+                chunk.ResourceChunkRevision,
+                chunk.Nodes.Select(static node =>
+                    new ServerResourceNodeCheckpoint(
+                        node.Id.Value,
+                        node.Kind,
+                        node.NodeRevision,
+                        node.Health,
+                        node.Remaining,
+                        node.ReadyAtGameSeconds,
+                        node.Depleted)).ToArray())).ToArray(),
+        value.ActorCadences.Select(static cadence =>
+            new ServerResourceCadenceCheckpoint(
+                cadence.ActorId.Value,
+                cadence.Action,
+                cadence.ReadyAtGameSeconds,
+                cadence.ActionOrdinal)).ToArray());
+
+    private static AuthoritativeResourceTransactionsCheckpoint ToSimulation(
+        ServerResourceCheckpoint? value)
+    {
+        value ??= new ServerResourceCheckpoint([], []);
+        return new AuthoritativeResourceTransactionsCheckpoint(
+            value.Chunks.Select(static chunk =>
+                new ResourceChunkSparseState(
+                    new WorldChunkKey(chunk.X, chunk.Y, chunk.WorldLevel),
+                    chunk.Revision,
+                    chunk.Nodes.Select(node =>
+                        new ResourceNodeSparseState(
+                            new ResourceNodeId(node.NodeId),
+                            node.Kind,
+                            new WorldChunkKey(
+                                chunk.X, chunk.Y, chunk.WorldLevel),
+                            node.NodeRevision,
+                            node.Health,
+                            node.Remaining,
+                            node.ReadyAtGameSeconds,
+                            node.Depleted)).ToImmutableArray()))
+                .ToImmutableArray(),
+            value.ActorCadences.Select(static cadence =>
+                new ResourceActorCadenceCheckpoint(
+                    new ActorId(cadence.ActorId),
+                    cadence.Action,
+                    cadence.ReadyAtGameSeconds,
+                    cadence.ActionOrdinal)).ToImmutableArray());
+    }
 
     private static ServerWorldObjectCheckpoint ToDurable(
         AuthoritativeWorldObjectCheckpoint value)

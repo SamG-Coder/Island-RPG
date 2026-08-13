@@ -14,6 +14,7 @@ using IslandRpg.Rendering.Ui;
 using StbImageSharp;
 using System.Buffers;
 using IslandRpg.Client;
+using IslandRpg.Resources;
 
 namespace IslandRpg.Rendering;
 
@@ -2345,7 +2346,16 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void QueueTreeAction(
         IslandTree tree, WorldActionType actionType)
-        => _worldActions.QueueTree(tree, actionType);
+    {
+        if (IsNetworkWorld)
+            QueueNetworkTreeAction(
+                tree,
+                actionType == WorldActionType.CutTree
+                    ? ResourceActionKind.CutTree
+                    : ResourceActionKind.GatherTreeStick);
+        else
+            _worldActions.QueueTree(tree, actionType);
+    }
 
     internal void TryStartTreeCutting(Vector2 target)
     {
@@ -5456,6 +5466,11 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private void RenderTreeHealthBars(Vector4 scene)
     {
+        if (IsNetworkWorld)
+        {
+            RenderNetworkTreeHealthBars(scene);
+            return;
+        }
         foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible))
         foreach (var instance in gpu.Chunk.TreeInstances)
         {
@@ -6449,9 +6464,13 @@ internal sealed partial class GameHostWindow : GameWindow
                      .OrderBy(item => item.Tree.X + item.Tree.Y))
         {
             var tree = item.Tree;
-            var treeInstance = item.Gpu.Chunk.TreeInstances.FirstOrDefault(
-                instance => instance.X == tree.X && instance.Y == tree.Y);
-            var isStump = treeInstance?.State == TreeLifecycleState.Stump;
+            var treeInstance = IsNetworkWorld
+                ? null
+                : item.Gpu.Chunk.TreeInstances.FirstOrDefault(
+                    instance => instance.X == tree.X && instance.Y == tree.Y);
+            var isStump = IsNetworkWorld
+                ? IsNetworkTreeDepleted(tree)
+                : treeInstance?.State == TreeLifecycleState.Stump;
             var visibleName = isStump
                 ? StumpAtlasKey(tree.GraphicName, shadow: false)
                 : WorldTreeCatalog.AtlasKey(tree);
@@ -8499,6 +8518,7 @@ internal sealed partial class GameHostWindow : GameWindow
     private void UnloadWorldChunk(ChunkCoordinate coordinate, bool save)
     {
         if (!_worldChunks.Remove(coordinate, out var gpu)) return;
+        ForgetNetworkResourceChunk(coordinate);
         if (save) QueueChunkSave(gpu.Chunk);
         GL.DeleteBuffer(gpu.Vbo);
         GL.DeleteTexture(gpu.WeightsA);

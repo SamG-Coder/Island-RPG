@@ -1,4 +1,5 @@
 using System.Numerics;
+using IslandRpg.Resources;
 
 namespace IslandRpg.Simulation;
 
@@ -110,6 +111,36 @@ public abstract record WorldGameplayIntent(
         CommandId,
         ExpectedInventoryRevision,
         ExpectedActorRevision);
+
+public abstract record ResourceGameplayIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    ResourceNodeReference Node) : GameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record GatherTreeStickIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    ResourceNodeReference Node) : ResourceGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision,
+        Node);
+
+public sealed record StrikeTreeIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    ResourceNodeReference Node,
+    int ToolInventorySlot) : ResourceGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision,
+        Node);
 
 public sealed record PickUpWorldObjectIntent(
     Guid CommandId,
@@ -348,7 +379,14 @@ public enum IntentStatus
     NoDemolitionRefund,
     AlreadyCooking,
     NotCookable,
-    CookingLocked
+    CookingLocked,
+    ResourceNotFound,
+    WrongResourceKind,
+    StaleNodeRevision,
+    StaleResourceChunkRevision,
+    MissingTool,
+    ResourceCadenceLocked,
+    ResourceDepleted
 }
 
 public readonly record struct CookingCompletionSnapshot(
@@ -396,4 +434,6 @@ public readonly record struct IntentResult(
     /// are safe to broadcast; gameplay and container state are requester-only.
     /// </summary>
     public WorldTransactionResult? WorldTransaction { get; init; }
+
+    public ResourceTransactionResult? ResourceTransaction { get; init; }
 }

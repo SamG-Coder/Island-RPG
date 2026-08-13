@@ -25,6 +25,8 @@ ClientWorldStateChecks.Register(checks);
 ItemContainerChecks.Register(checks);
 CoreCombatChecks.Register(checks);
 ResourceIdentityChecks.Register(checks);
+ResourceAuthorityChecks.Register(checks);
+ResourceProtocolClientChecks.Register(checks);
 WorldRuleChecks.Register(checks);
 WorldTransactionChecks.Register(checks);
 SessionWorldTransactionChecks.Register(checks);
@@ -32,5 +34,6 @@ ServerWorldActionAdapterChecks.Register(checks);
 ServerCheckpointChecks.Register(checks);
 LoopbackChecks.Register(checks);
 ServerRestartLoopbackChecks.Register(checks);
+ServerResourceIntegrationChecks.Register(checks);
 
 return await checks.RunAsync(CancellationToken.None);

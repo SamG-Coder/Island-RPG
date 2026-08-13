@@ -20,7 +20,8 @@ public sealed record ServerCheckpoint(
     IReadOnlyList<ServerActorCheckpoint> Actors,
     IReadOnlyList<ServerWorldObjectCheckpoint> WorldObjects,
     IReadOnlyList<ServerChunkRevisionCheckpoint> ChunkRevisions,
-    IReadOnlyList<ServerCookingJobCheckpoint>? CookingJobs = null)
+    IReadOnlyList<ServerCookingJobCheckpoint>? CookingJobs = null,
+    ServerResourceCheckpoint? Resources = null)
 {
     public const int CurrentSchemaVersion = 1;
 }
@@ -43,7 +44,8 @@ public sealed record ServerActorCheckpoint(
     uint InventoryRevision,
     IReadOnlyList<ServerInventorySlotCheckpoint> Inventory,
     byte[] ReconnectTokenHash,
-    IReadOnlyList<ServerCommandReceiptCheckpoint> CommandReceipts)
+    IReadOnlyList<ServerCommandReceiptCheckpoint> CommandReceipts,
+    int WoodcuttingExperience = 0)
 {
     // Keep credentials out of accidental structured-log interpolation.
     public override string ToString() =>
@@ -112,6 +114,32 @@ public sealed record ServerCookingJobCheckpoint(
     bool Burnt,
     Guid DropObjectId,
     long CompletesAtTick);
+
+public sealed record ServerResourceCheckpoint(
+    IReadOnlyList<ServerResourceChunkCheckpoint> Chunks,
+    IReadOnlyList<ServerResourceCadenceCheckpoint> ActorCadences);
+
+public sealed record ServerResourceChunkCheckpoint(
+    int X,
+    int Y,
+    int WorldLevel,
+    uint Revision,
+    IReadOnlyList<ServerResourceNodeCheckpoint> Nodes);
+
+public sealed record ServerResourceNodeCheckpoint(
+    Guid NodeId,
+    IslandRpg.Resources.ResourceNodeKind Kind,
+    uint NodeRevision,
+    int Health,
+    int Remaining,
+    double ReadyAtGameSeconds,
+    bool Depleted);
+
+public sealed record ServerResourceCadenceCheckpoint(
+    Guid ActorId,
+    IslandRpg.Resources.ResourceActionKind Action,
+    double ReadyAtGameSeconds,
+    ulong ActionOrdinal);
 
 public sealed record ServerCheckpointLoadResult(
     ServerCheckpoint Checkpoint,

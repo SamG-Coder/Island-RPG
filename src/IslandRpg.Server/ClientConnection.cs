@@ -184,6 +184,7 @@ internal sealed class ClientConnection : IAsyncDisposable
                 return;
             }
             _server.QueueWorldObjectBaselines(this);
+            _server.QueueResourceBaselines(this);
 
             Authenticated = true;
             PlayerId = player.Value.Identity.PlayerId.Value;

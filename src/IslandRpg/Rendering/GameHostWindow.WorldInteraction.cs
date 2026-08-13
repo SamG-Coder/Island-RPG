@@ -85,16 +85,20 @@ internal sealed partial class GameHostWindow
         {
             if (!IsChunkVisible(gpu)) continue;
             _stumpHoverScratch.Clear();
-            foreach (var instance in gpu.Chunk.TreeInstances)
-                if (instance.State == TreeLifecycleState.Stump)
-                    _stumpHoverScratch.Add(
-                        WorldHoverSelection.TileKey(
-                            instance.X, instance.Y));
+            if (!IsNetworkWorld)
+            {
+                foreach (var instance in gpu.Chunk.TreeInstances)
+                    if (instance.State == TreeLifecycleState.Stump)
+                        _stumpHoverScratch.Add(
+                            WorldHoverSelection.TileKey(
+                                instance.X, instance.Y));
+            }
             foreach (var tree in gpu.Chunk.Trees)
             {
                 if (_stumpHoverScratch.Contains(
                         WorldHoverSelection.TileKey(
                             tree.X, tree.Y)) ||
+                    IsNetworkWorld && IsNetworkTreeDepleted(tree) ||
                     !_treeAtlas.TryGetValue(
                         WorldTreeCatalog.AtlasKey(tree),
                         out var entry))

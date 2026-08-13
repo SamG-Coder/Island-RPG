@@ -5,7 +5,7 @@ public static class ProtocolConstants
 {
     public const uint ReliableMagic = 0x49525047; // IRPG
     public const uint SnapshotMagic = 0x49525544; // IRUD
-    public const ushort CurrentVersion = 4;
+    public const ushort CurrentVersion = 5;
     public const int ReliableHeaderSize = 28;
     public const int TcpLengthPrefixSize = sizeof(uint);
     public const int MaxReliableFrameBytes = 64 * 1024;
@@ -32,6 +32,8 @@ public static class ProtocolLimits
     public const int MaxContainerTransferQuantity = ushort.MaxValue;
     public const int MaxWorldObjectsPerBatch = 512;
     public const int MaxWorldChunkRevisionsPerBatch = 512;
+    public const int MaxResourceNodesPerBatch = 512;
+    public const int MaxResourceRewardsPerAction = 8;
     public const int MinConstructionRotation = 0;
     public const int MaxConstructionRotation = 3;
     public const float MaxPlayerHunger = 100;
@@ -59,6 +61,9 @@ public enum ProtocolMessageKind : byte
     ContainerState = 38,
     WorldChunkRevisionBatch = 39,
     CookingResult = 40,
+    ResourceChunkBaseline = 41,
+    ResourceNodeDeltaBatch = 42,
+    ResourceActionResult = 43,
 }
 
 [Flags]
@@ -144,6 +149,13 @@ public enum ActionCommandKind : byte
     BuildConstruction = 13,
     DemolishWorldObject = 14,
     CookOnCampfire = 15,
+    ResourceAction = 16,
+}
+
+public enum ResourceNodeDeltaKind : byte
+{
+    Upsert = 1,
+    Remove = 2,
 }
 
 public enum ContainerTransferDirection : byte

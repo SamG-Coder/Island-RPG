@@ -5,6 +5,8 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Threading.Channels;
 using IslandRpg.Protocol;
+using IslandRpg.Resources;
+using IslandRpg.Simulation;
 
 namespace IslandRpg.Client;
 
@@ -49,8 +51,55 @@ public sealed class NetworkGameClient : IAsyncDisposable
     public event EventHandler<NetworkPlayerStateEventArgs>? PlayerStateChanged;
     public event EventHandler<NetworkActionResultEventArgs>? ActionCompleted;
     public event EventHandler<NetworkCookingResultEventArgs>? CookingCompleted;
+    public event EventHandler<NetworkResourceActionResultEventArgs>?
+        ResourceActionCompleted;
     public event EventHandler<NetworkWorldObjectsChangedEventArgs>? WorldObjectsChanged;
     public event EventHandler<NetworkContainerStateEventArgs>? ContainerStateChanged;
+    public event EventHandler<NetworkResourcesChangedEventArgs>? ResourcesChanged;
+
+    /// <summary>
+    /// Resolves the exact optimistic-concurrency token for one known sparse or
+    /// tombstoned resource. Procedural nodes absent from authoritative state
+    /// have revision zero and should use the chunk overload.
+    /// </summary>
+    public bool TryGetResourceReference(
+        ResourceNodeId nodeId,
+        out ResourceNodeReference reference)
+    {
+        foreach (var pair in State.ResourceChunks)
+        {
+            if (pair.Value.NodeRevisionHighWater.TryGetValue(
+                    nodeId, out var nodeRevision))
+            {
+                reference = new ResourceNodeReference(
+                    nodeId,
+                    pair.Key,
+                    nodeRevision,
+                    pair.Value.ResourceChunkRevision);
+                return true;
+            }
+        }
+        reference = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Resolves an exact resource reference in a known chunk. This also covers
+    /// an untouched deterministic node, whose node revision is zero.
+    /// </summary>
+    public ResourceNodeReference GetResourceReference(
+        WorldChunkKey chunk,
+        ResourceNodeId nodeId)
+    {
+        State.ResourceChunks.TryGetValue(chunk, out var state);
+        var nodeRevision = 0u;
+        state?.NodeRevisionHighWater.TryGetValue(nodeId, out nodeRevision);
+        return new ResourceNodeReference(
+            nodeId,
+            chunk,
+            nodeRevision,
+            state?.ResourceChunkRevision ?? 0);
+    }
 
     public async Task<HandshakeAcceptedMessage> ConnectAsync(
         string host,
@@ -189,7 +238,8 @@ public sealed class NetworkGameClient : IAsyncDisposable
                     null,
                     ReadOnly(new Dictionary<Guid, NetworkWorldObjectState>()),
                     ReadOnly(new Dictionary<NetworkWorldChunk, uint>()),
-                    ReadOnly(new Dictionary<Guid, NetworkContainerState>())));
+                    ReadOnly(new Dictionary<Guid, NetworkContainerState>()),
+                    ReadOnly(new Dictionary<WorldChunkKey, NetworkResourceChunkState>())));
                 _readerTask = RunReaderAsync(stream, _connectionCancellation.Token);
                 _writerTask = RunWriterAsync(stream, _outbound.Reader, _connectionCancellation.Token);
                 if (_snapshotSocket is not null)
@@ -437,6 +487,11 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 Raise(CookingCompleted,
                     new NetworkCookingResultEventArgs(result));
                 break;
+            case ResourceActionResultMessage result:
+                UpdateTick(result.Tick);
+                Raise(ResourceActionCompleted,
+                    new NetworkResourceActionResultEventArgs(result));
+                break;
             case PlayerStateMessage playerState:
             {
                 var merged = MergePlayerState(State, playerState);
@@ -479,6 +534,12 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 break;
             case ContainerStateMessage container:
                 ConsumeContainer(container);
+                break;
+            case ResourceChunkBaselineMessage resources:
+                ConsumeResourceBaseline(resources);
+                break;
+            case ResourceNodeDeltaBatchMessage resources:
+                ConsumeResourceDeltas(resources);
                 break;
             default:
                 throw new ProtocolException($"The server sent invalid reliable message kind {message.Kind} after handshake.");
@@ -858,6 +919,221 @@ public sealed class NetworkGameClient : IAsyncDisposable
         };
     }
 
+    private void ConsumeResourceBaseline(ResourceChunkBaselineMessage message)
+    {
+        NetworkGameClientState next;
+        NetworkResourceChunkState? accepted = null;
+        IReadOnlyList<NetworkResourceChange> changes = [];
+        lock (_stateSync)
+        {
+            _state.ResourceChunks.TryGetValue(message.Chunk, out var previous);
+            if (previous is not null &&
+                message.ResourceChunkRevision < previous.ResourceChunkRevision)
+            {
+                next = _state with
+                {
+                    ServerTick = Math.Max(_state.ServerTick, message.Tick),
+                };
+            }
+            else
+            {
+                var projected = ProjectResourceBaseline(message);
+                if (previous is not null &&
+                    previous.NodeRevisionHighWater.Any(pair =>
+                        !projected.NodeRevisionHighWater.TryGetValue(
+                            pair.Key, out var revision) ||
+                        revision < pair.Value))
+                {
+                    throw new ProtocolException(
+                        "A resource baseline regressed retained node revisions.");
+                }
+                if (previous is not null &&
+                    message.ResourceChunkRevision == previous.ResourceChunkRevision)
+                {
+                    if (!EquivalentResourceChunk(previous, projected))
+                    {
+                        throw new ProtocolException(
+                            "Equal resource chunk revisions contained different state.");
+                    }
+                    next = _state with
+                    {
+                        ServerTick = Math.Max(_state.ServerTick, message.Tick),
+                    };
+                }
+                else
+                {
+                    var chunks = _state.ResourceChunks.ToDictionary();
+                    chunks[message.Chunk] = projected;
+                    accepted = projected;
+                    changes = DescribeResourceBaselineChanges(previous, projected);
+                    next = _state with
+                    {
+                        ServerTick = Math.Max(_state.ServerTick, message.Tick),
+                        ResourceChunks = ReadOnly(chunks),
+                    };
+                }
+            }
+            Volatile.Write(ref _state, next);
+        }
+
+        Raise(StateChanged, new NetworkClientStateChangedEventArgs(next));
+        if (accepted is not null)
+            Raise(ResourcesChanged, new NetworkResourcesChangedEventArgs(
+                accepted.Chunk, true, changes));
+    }
+
+    private void ConsumeResourceDeltas(ResourceNodeDeltaBatchMessage message)
+    {
+        NetworkGameClientState next;
+        var accepted = new List<(WorldChunkKey Chunk,
+            IReadOnlyList<NetworkResourceChange> Changes)>();
+        lock (_stateSync)
+        {
+            var chunks = _state.ResourceChunks.ToDictionary();
+            foreach (var group in message.Deltas.GroupBy(
+                         static delta => delta.Reference.Chunk))
+            {
+                chunks.TryGetValue(group.Key, out var previous);
+                var first = group.First();
+                if (group.Any(delta =>
+                        delta.Reference.ExpectedResourceChunkRevision !=
+                        first.Reference.ExpectedResourceChunkRevision ||
+                        delta.CurrentResourceChunkRevision !=
+                        first.CurrentResourceChunkRevision))
+                {
+                    throw new ProtocolException(
+                        "One resource chunk contained conflicting atomic revisions.");
+                }
+                var knownChunkRevision =
+                    previous?.ResourceChunkRevision ?? 0;
+                if (first.CurrentResourceChunkRevision <= knownChunkRevision)
+                    continue;
+                if (first.Reference.ExpectedResourceChunkRevision !=
+                    knownChunkRevision)
+                {
+                    throw new ProtocolException(
+                        "A resource delta does not match the current chunk revision.");
+                }
+
+                var nodes = previous?.Nodes.ToDictionary() ??
+                    new Dictionary<ResourceNodeId, ResourceNodeSparseState>();
+                var highWater = previous?.NodeRevisionHighWater.ToDictionary() ??
+                    new Dictionary<ResourceNodeId, uint>();
+                var changes = new List<NetworkResourceChange>();
+                foreach (var delta in group)
+                {
+                    highWater.TryGetValue(delta.Reference.Id, out var knownNode);
+                    if (delta.Reference.ExpectedNodeRevision != knownNode)
+                    {
+                        throw new ProtocolException(
+                            "A resource delta does not match the current node revision.");
+                    }
+                    highWater[delta.Reference.Id] = delta.CurrentNodeRevision;
+                    if (delta.Kind == ResourceNodeDeltaKind.Upsert)
+                        nodes[delta.Reference.Id] = delta.State!;
+                    else
+                        nodes.Remove(delta.Reference.Id);
+                    changes.Add(new NetworkResourceChange(
+                        delta.Kind,
+                        delta.Reference.Id,
+                        group.Key,
+                        delta.CurrentNodeRevision,
+                        delta.CurrentResourceChunkRevision,
+                        delta.State));
+                }
+                chunks[group.Key] = new NetworkResourceChunkState(
+                    group.Key,
+                    first.CurrentResourceChunkRevision,
+                    ReadOnly(nodes),
+                    ReadOnly(highWater));
+                accepted.Add((group.Key, Array.AsReadOnly(changes.ToArray())));
+            }
+
+            next = _state with
+            {
+                ServerTick = Math.Max(_state.ServerTick, message.Tick),
+                ResourceChunks = accepted.Count == 0
+                    ? _state.ResourceChunks
+                    : ReadOnly(chunks),
+            };
+            Volatile.Write(ref _state, next);
+        }
+
+        Raise(StateChanged, new NetworkClientStateChangedEventArgs(next));
+        foreach (var item in accepted)
+            Raise(ResourcesChanged, new NetworkResourcesChangedEventArgs(
+                item.Chunk, false, item.Changes));
+    }
+
+    private static NetworkResourceChunkState ProjectResourceBaseline(
+        ResourceChunkBaselineMessage message)
+    {
+        var nodes = message.Nodes.ToDictionary(static value => value.Id);
+        var highWater = nodes.ToDictionary(
+            static pair => pair.Key,
+            static pair => pair.Value.NodeRevision);
+        foreach (var tombstone in message.Tombstones)
+            highWater[tombstone.Id] = tombstone.Revision;
+        return new NetworkResourceChunkState(
+            message.Chunk,
+            message.ResourceChunkRevision,
+            ReadOnly(nodes),
+            ReadOnly(highWater));
+    }
+
+    private static bool EquivalentResourceChunk(
+        NetworkResourceChunkState left,
+        NetworkResourceChunkState right) =>
+        left.Chunk == right.Chunk &&
+        left.ResourceChunkRevision == right.ResourceChunkRevision &&
+        left.Nodes.Count == right.Nodes.Count &&
+        left.Nodes.All(pair =>
+            right.Nodes.TryGetValue(pair.Key, out var value) &&
+            pair.Value == value) &&
+        left.NodeRevisionHighWater.Count == right.NodeRevisionHighWater.Count &&
+        left.NodeRevisionHighWater.All(pair =>
+            right.NodeRevisionHighWater.TryGetValue(pair.Key, out var value) &&
+            pair.Value == value);
+
+    private static IReadOnlyList<NetworkResourceChange>
+        DescribeResourceBaselineChanges(
+            NetworkResourceChunkState? previous,
+            NetworkResourceChunkState current)
+    {
+        var result = new List<NetworkResourceChange>();
+        if (previous is not null)
+        {
+            foreach (var pair in previous.Nodes)
+            {
+                if (current.Nodes.ContainsKey(pair.Key)) continue;
+                current.NodeRevisionHighWater.TryGetValue(
+                    pair.Key, out var revision);
+                result.Add(new NetworkResourceChange(
+                    ResourceNodeDeltaKind.Remove,
+                    pair.Key,
+                    current.Chunk,
+                    revision,
+                    current.ResourceChunkRevision,
+                    null));
+            }
+        }
+        foreach (var pair in current.Nodes)
+        {
+            if (previous is not null &&
+                previous.Nodes.TryGetValue(pair.Key, out var old) &&
+                old == pair.Value)
+                continue;
+            result.Add(new NetworkResourceChange(
+                ResourceNodeDeltaKind.Upsert,
+                pair.Key,
+                current.Chunk,
+                pair.Value.NodeRevision,
+                current.ResourceChunkRevision,
+                pair.Value));
+        }
+        return Array.AsReadOnly(result.ToArray());
+    }
+
     private static NetworkContainerState ProjectBaseline(
         ContainerStateMessage message)
     {
@@ -1036,7 +1312,10 @@ public sealed class NetworkGameClient : IAsyncDisposable
             actorChanged
                 ? message.CookingExperience
                 : previous!.CookingExperience,
-            Array.AsReadOnly(slots));
+            Array.AsReadOnly(slots),
+            actorChanged
+                ? message.WoodcuttingExperience
+                : previous!.WoodcuttingExperience);
     }
 
     private void UpdateTick(ulong tick) => UpdateState(current => current with { ServerTick = Math.Max(current.ServerTick, tick) });
