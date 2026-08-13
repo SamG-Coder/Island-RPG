@@ -59,6 +59,17 @@ internal sealed partial class GameHostWindow
     private bool TryAddCampfireFuel(
         Guid campfireId, int inventorySlot, string fuelItemId)
     {
+        if (IsNetworkWorld)
+        {
+            if (!_networkWorldObjects.TryGetValue(
+                    campfireId, out var networkCampfire))
+                return false;
+            QueueNetworkObjectAction(
+                NetworkWorldActionKind.AddCampfireFuel,
+                networkCampfire,
+                inventorySlot);
+            return true;
+        }
         if (_activePlayer is null ||
             !InventoryContainsAt(inventorySlot, fuelItemId))
             return false;
@@ -93,6 +104,12 @@ internal sealed partial class GameHostWindow
 
     private void QueueCampfireLight(WorldGroundObject campfire)
     {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkObjectAction(
+                NetworkWorldActionKind.LightCampfire, campfire);
+            return;
+        }
         if (_activePlayer is null) return;
         if (!CampfireService.CanLight(
                 campfire, _activePlayer.Inventory ?? [], _worldGameSeconds))
@@ -112,6 +129,12 @@ internal sealed partial class GameHostWindow
 
     private void QueueCampfireFuelPickup(WorldGroundObject campfire)
     {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkObjectAction(
+                NetworkWorldActionKind.TakeCampfireFuel, campfire);
+            return;
+        }
         if (_activePlayer is null) return;
         if (campfire.FuelItemId is not { } fuelItemId ||
             !ActivePlayerInventory().CanAdd(fuelItemId))
@@ -169,6 +192,15 @@ internal sealed partial class GameHostWindow
 
     private void TryTakeCampfireFuel(Guid campfireId)
     {
+        if (IsNetworkWorld)
+        {
+            if (_networkWorldObjects.TryGetValue(
+                    campfireId, out var networkCampfire))
+                QueueNetworkObjectAction(
+                    NetworkWorldActionKind.TakeCampfireFuel,
+                    networkCampfire);
+            return;
+        }
         if (_activePlayer is null) return;
         var location = FindGroundObjectLocation(campfireId);
         if (location is null) return;
@@ -201,6 +233,15 @@ internal sealed partial class GameHostWindow
 
     internal void TryLightCampfire(Guid campfireId)
     {
+        if (IsNetworkWorld)
+        {
+            if (_networkWorldObjects.TryGetValue(
+                    campfireId, out var networkCampfire))
+                QueueNetworkObjectAction(
+                    NetworkWorldActionKind.LightCampfire,
+                    networkCampfire);
+            return;
+        }
         if (_activePlayer is null) return;
         var location = FindGroundObjectLocation(campfireId);
         if (location is null) return;

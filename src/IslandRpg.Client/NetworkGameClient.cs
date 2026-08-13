@@ -17,6 +17,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
     private const int OutboundCapacity = 256;
     private readonly object _stateSync = new();
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
+    private readonly SemaphoreSlim _commandAuthorship = new(1, 1);
     private NetworkGameClientState _state = NetworkGameClientState.Disconnected;
     private TcpClient? _tcpClient;
     private NetworkStream? _stream;
@@ -288,6 +289,9 @@ public sealed class NetworkGameClient : IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         await DisconnectAsync().ConfigureAwait(false);
+        await _commandAuthorship.WaitAsync().ConfigureAwait(false);
+        _commandAuthorship.Release();
+        _commandAuthorship.Dispose();
         _lifecycle.Dispose();
     }
 
@@ -295,12 +299,39 @@ public sealed class NetworkGameClient : IAsyncDisposable
         Func<ulong, IProtocolMessage> factory,
         CancellationToken cancellationToken)
     {
-        if (State.Status != NetworkGameClientStatus.Connected || _outbound is null)
+        ObjectDisposedException.ThrowIf(
+            Volatile.Read(ref _disposed) != 0, this);
+        var authoredOutbound = _outbound;
+        if (State.Status != NetworkGameClientStatus.Connected ||
+            authoredOutbound is null)
             throw new InvalidOperationException("The client is not connected.");
-        var sequence = NextSequence();
-        var message = factory(sequence);
-        await _outbound.Writer.WriteAsync(message, cancellationToken).ConfigureAwait(false);
-        return sequence;
+        // Sequence allocation and channel publication are one ordered operation.
+        // Allocating first and then concurrently awaiting WriteAsync allowed a
+        // later sequence to enter the channel (and TCP stream) before an earlier
+        // one. Holding this gate through admission also prevents cancellation
+        // from consuming an unpublished command sequence.
+        await _commandAuthorship.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (State.Status != NetworkGameClientStatus.Connected ||
+                !ReferenceEquals(_outbound, authoredOutbound))
+                throw new InvalidOperationException(
+                    "The client connection changed before the command was published.");
+            var outbound = authoredOutbound;
+            if (!await outbound.Writer.WaitToWriteAsync(cancellationToken)
+                    .ConfigureAwait(false))
+                throw new InvalidOperationException("The network command queue is closed.");
+
+            var sequence = NextSequence();
+            var message = factory(sequence);
+            if (!outbound.Writer.TryWrite(message))
+                throw new InvalidOperationException("The network command queue closed before publication.");
+            return sequence;
+        }
+        finally
+        {
+            _commandAuthorship.Release();
+        }
     }
 
     private async Task RunWriterAsync(
@@ -437,6 +468,9 @@ public sealed class NetworkGameClient : IAsyncDisposable
             case WorldObjectDeltaBatchMessage worldObjects:
                 ConsumeWorldObjects(worldObjects);
                 break;
+            case WorldChunkRevisionBatchMessage chunks:
+                ConsumeWorldChunkRevisions(chunks);
+                break;
             case ContainerStateMessage container:
                 ConsumeContainer(container);
                 break;
@@ -526,6 +560,59 @@ public sealed class NetworkGameClient : IAsyncDisposable
     private void ConsumeWorldObjects(WorldObjectDeltaBatchMessage message) =>
         ApplyWorldObjectChanges(message.Tick, message.Deltas);
 
+    private void ConsumeWorldChunkRevisions(
+        WorldChunkRevisionBatchMessage message)
+    {
+        NetworkGameClientState next;
+        lock (_stateSync)
+        {
+            // Validate the full batch before publishing any revision. This is
+            // deliberately repeated after wire validation so direct transport
+            // adapters cannot partially mutate client state either.
+            var incoming = new Dictionary<NetworkWorldChunk, uint>(
+                message.Chunks.Count);
+            foreach (var value in message.Chunks)
+            {
+                if (value.Revision == 0)
+                    throw new ProtocolException(
+                        "World-chunk revisions must be positive.");
+                var chunk = new NetworkWorldChunk(
+                    value.ChunkX,
+                    value.ChunkY,
+                    value.WorldLevel);
+                if (incoming.TryGetValue(chunk, out var duplicate) &&
+                    duplicate != value.Revision)
+                {
+                    throw new ProtocolException(
+                        "One world-chunk batch contained conflicting duplicate entries.");
+                }
+                incoming[chunk] = value.Revision;
+            }
+
+            Dictionary<NetworkWorldChunk, uint>? revisions = null;
+            foreach (var pair in incoming)
+            {
+                _state.WorldChunkRevisions.TryGetValue(
+                    pair.Key,
+                    out var current);
+                if (pair.Value <= current) continue;
+                revisions ??= _state.WorldChunkRevisions.ToDictionary();
+                revisions[pair.Key] = pair.Value;
+            }
+
+            next = _state with
+            {
+                ServerTick = Math.Max(_state.ServerTick, message.Tick),
+                WorldChunkRevisions = revisions is null
+                    ? _state.WorldChunkRevisions
+                    : ReadOnly(revisions),
+            };
+            Volatile.Write(ref _state, next);
+        }
+
+        Raise(StateChanged, new NetworkClientStateChangedEventArgs(next));
+    }
+
     private void ApplyWorldObjectChanges(
         ulong tick,
         IReadOnlyList<WorldObjectDelta> deltas)
@@ -538,60 +625,80 @@ public sealed class NetworkGameClient : IAsyncDisposable
             var chunks = _state.WorldChunkRevisions.ToDictionary();
             var objectRevisions = new Dictionary<Guid, uint>(
                 _worldObjectRevisions);
-            foreach (var delta in deltas)
+            var seenObjects = new HashSet<Guid>();
+            foreach (var group in deltas.GroupBy(static delta =>
+                         Chunk(delta.Reference)))
             {
-                var id = delta.Reference.ObjectId;
-                var chunk = Chunk(delta.Reference);
+                var chunk = group.Key;
                 chunks.TryGetValue(chunk, out var knownChunk);
-                objectRevisions.TryGetValue(id, out var knownRevision);
-                if (delta.CurrentChunkRevision <= knownChunk)
+                var expectedChunk = group.First().Reference.ExpectedChunkRevision;
+                var currentChunk = group.First().CurrentChunkRevision;
+                if (group.Any(delta =>
+                        delta.Reference.ExpectedChunkRevision != expectedChunk ||
+                        delta.CurrentChunkRevision != currentChunk))
+                {
+                    throw new ProtocolException(
+                        "One atomic world batch contained conflicting chunk revisions.");
+                }
+                if (currentChunk <= knownChunk)
                     continue;
-                if (delta.Reference.ExpectedChunkRevision != knownChunk)
+                if (expectedChunk != knownChunk)
                     throw new ProtocolException(
                         "A world-object delta does not match the current chunk revision.");
-                if (delta.CurrentChunkRevision <=
-                    delta.Reference.ExpectedChunkRevision)
+                if (currentChunk <= expectedChunk)
                 {
                     throw new ProtocolException(
                         "A world-object delta did not advance its chunk revision.");
                 }
-                if (delta.Reference.ExpectedObjectRevision != knownRevision)
-                    throw new ProtocolException(
-                        "A world-object delta does not match the current object revision.");
 
-                if (delta.Kind == WorldObjectDeltaKind.Upsert)
+                foreach (var delta in group)
                 {
-                    if (delta.State is not { } state)
+                    var id = delta.Reference.ObjectId;
+                    if (!seenObjects.Add(id))
                         throw new ProtocolException(
-                            "A world-object upsert omitted its state.");
-                    if (state.ChunkRevision != delta.CurrentChunkRevision ||
-                        state.ObjectRevision <= knownRevision)
-                    {
+                            "One atomic world batch changed the same object more than once.");
+                    objectRevisions.TryGetValue(id, out var knownRevision);
+                    if (delta.Reference.ExpectedObjectRevision != knownRevision)
                         throw new ProtocolException(
-                            "A world-object upsert did not advance its revisions.");
-                    }
-                    var projected = Project(state);
-                    objects[id] = projected;
-                    objectRevisions[id] = state.ObjectRevision;
-                    chunks[chunk] = delta.CurrentChunkRevision;
-                    accepted.Add(new(
-                        WorldObjectDeltaKind.Upsert,
-                        id,
-                        delta.CurrentChunkRevision,
-                        state.ObjectRevision,
-                        projected));
-                    continue;
-                }
+                            "A world-object delta does not match the current object revision.");
 
-                objects.Remove(id);
-                objectRevisions[id] = knownRevision;
-                chunks[chunk] = delta.CurrentChunkRevision;
-                accepted.Add(new(
-                    WorldObjectDeltaKind.Remove,
-                    id,
-                    delta.CurrentChunkRevision,
-                    knownRevision,
-                    null));
+                    if (delta.Kind == WorldObjectDeltaKind.Upsert)
+                    {
+                        if (delta.State is not { } state)
+                            throw new ProtocolException(
+                                "A world-object upsert omitted its state.");
+                        if (state.ChunkRevision != currentChunk ||
+                            state.ObjectRevision <= knownRevision ||
+                            Chunk(state) != chunk || state.ObjectId != id)
+                        {
+                            throw new ProtocolException(
+                                "A world-object upsert did not match its atomic revisions.");
+                        }
+                        var projected = Project(state);
+                        objects[id] = projected;
+                        objectRevisions[id] = state.ObjectRevision;
+                        accepted.Add(new(
+                            WorldObjectDeltaKind.Upsert,
+                            id,
+                            currentChunk,
+                            state.ObjectRevision,
+                            projected));
+                        continue;
+                    }
+
+                    if (delta.State is not null)
+                        throw new ProtocolException(
+                            "A world-object removal unexpectedly carried state.");
+                    objects.Remove(id);
+                    objectRevisions[id] = knownRevision;
+                    accepted.Add(new(
+                        WorldObjectDeltaKind.Remove,
+                        id,
+                        currentChunk,
+                        knownRevision,
+                        null));
+                }
+                chunks[chunk] = currentChunk;
             }
 
             next = _state with
@@ -659,10 +766,20 @@ public sealed class NetworkGameClient : IAsyncDisposable
                         throw new ProtocolException(
                             "Equal container revisions contained different state.");
                     }
-                    next = _state with
+                    if (message.ContainerRevision == previous.ContainerRevision)
                     {
-                        ServerTick = Math.Max(_state.ServerTick, message.Tick),
-                    };
+                        ValidateContainerReferenceProgression(
+                            previous.Reference, message.Container);
+                        accepted = ProjectBaseline(message);
+                        next = WithContainer(_state, message.Tick, accepted);
+                    }
+                    else
+                    {
+                        next = _state with
+                        {
+                            ServerTick = Math.Max(_state.ServerTick, message.Tick),
+                        };
+                    }
                     Volatile.Write(ref _state, next);
                 }
                 else
@@ -680,6 +797,8 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 if (previous is null)
                     throw new ProtocolException(
                         "A container delta arrived before its baseline.");
+                ValidateContainerReferenceProgression(
+                    previous.Reference, message.Container);
                 if (message.BaselineContainerRevision !=
                     previous.ContainerRevision)
                 {
@@ -702,7 +821,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 var slots = previous.Slots.ToArray();
                 foreach (var slot in message.Slots) slots[slot.Slot] = slot;
                 accepted = new NetworkContainerState(
-                    message.Container.ObjectId,
+                    message.Container,
                     message.ContainerRevision,
                     message.DefinitionId,
                     message.Access,
@@ -739,7 +858,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
         var slots = new ContainerSlotState[message.SlotCount];
         foreach (var slot in message.Slots) slots[slot.Slot] = slot;
         return new NetworkContainerState(
-            message.Container.ObjectId,
+            message.Container,
             message.ContainerRevision,
             message.DefinitionId,
             message.Access,
@@ -760,7 +879,10 @@ public sealed class NetworkGameClient : IAsyncDisposable
             value.Rotation,
             value.Health,
             value.MaximumHealth,
-            value.HasContainer);
+            value.HasContainer,
+            value.FuelItemId,
+            value.LitUntilGameSeconds,
+            value.GateState);
 
     private static bool EquivalentObject(
         NetworkWorldObjectState left,
@@ -778,6 +900,22 @@ public sealed class NetworkGameClient : IAsyncDisposable
             StringComparison.Ordinal) &&
         previous.Access == message.Access &&
         previous.Slots.SequenceEqual(message.Slots);
+
+    private static void ValidateContainerReferenceProgression(
+        WorldObjectReference previous,
+        WorldObjectReference current)
+    {
+        if (previous.ObjectId != current.ObjectId ||
+            previous.ChunkX != current.ChunkX ||
+            previous.ChunkY != current.ChunkY ||
+            previous.WorldLevel != current.WorldLevel ||
+            current.ExpectedObjectRevision < previous.ExpectedObjectRevision ||
+            current.ExpectedChunkRevision < previous.ExpectedChunkRevision)
+        {
+            throw new ProtocolException(
+                "An equal container baseline regressed its world-object reference.");
+        }
+    }
 
     private static NetworkWorldChunk Chunk(WorldObjectState value) =>
         new(value.ChunkX, value.ChunkY, value.WorldLevel);
@@ -963,7 +1101,9 @@ public sealed class NetworkGameClient : IAsyncDisposable
         new BoundedChannelOptions(OutboundCapacity)
         {
             SingleReader = true,
-            SingleWriter = false,
+            // QueueCommandAsync serializes authorship and admission, allowing
+            // the channel to use its lower-overhead single-writer path.
+            SingleWriter = true,
             FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false,
         });

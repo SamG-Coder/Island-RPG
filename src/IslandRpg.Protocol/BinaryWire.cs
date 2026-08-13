@@ -28,6 +28,7 @@ internal sealed class WireWriter
     public void WriteInt32(int value) => Write(value, BinaryPrimitives.WriteInt32LittleEndian);
     public void WriteUInt64(ulong value) => Write(value, BinaryPrimitives.WriteUInt64LittleEndian);
     public void WriteSingle(float value) => WriteUInt32(BitConverter.SingleToUInt32Bits(value));
+    public void WriteDouble(double value) => WriteUInt64(BitConverter.DoubleToUInt64Bits(value));
 
     public void WriteGuid(Guid value)
     {
@@ -126,6 +127,7 @@ internal ref struct WireReader
     public int ReadInt32() => BinaryPrimitives.ReadInt32LittleEndian(Take(sizeof(int)));
     public ulong ReadUInt64() => BinaryPrimitives.ReadUInt64LittleEndian(Take(sizeof(ulong)));
     public float ReadSingle() => BitConverter.UInt32BitsToSingle(ReadUInt32());
+    public double ReadDouble() => BitConverter.UInt64BitsToDouble(ReadUInt64());
 
     public Guid ReadGuid()
     {

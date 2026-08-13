@@ -22,6 +22,9 @@ internal static class NetworkGameClientStateChecks
         checks.Add(
             "network client actions require a baseline and encode its revisions",
             RequiresBaselineAndEncodesActionRevisionsAsync);
+        checks.Add(
+            "network client publishes concurrent commands in sequence order",
+            PublishesConcurrentCommandsInSequenceOrderAsync);
     }
 
     private static async ValueTask AppliesBaselineAndDeltaAsync(
@@ -249,6 +252,50 @@ internal static class NetworkGameClientStateChecks
             "the encoded action payload must round trip through the real stream");
 
         await client.DisconnectAsync(cancellationToken);
+    }
+
+    private static async ValueTask PublishesConcurrentCommandsInSequenceOrderAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var client = new NetworkGameClient(TimeSpan.Zero);
+        await using var peer = await ScriptedPeer.ConnectAsync(
+            client,
+            cancellationToken);
+
+        const int commandCount = 384;
+        using var start = new ManualResetEventSlim(false);
+        var sends = Enumerable.Range(0, commandCount)
+            .Select(index => Task.Run(async () =>
+            {
+                start.Wait(cancellationToken);
+                return await client.SendChatAsync(
+                    $"ordered-{index}",
+                    cancellationToken: cancellationToken);
+            }, cancellationToken))
+            .ToArray();
+        start.Set();
+
+        var received = new List<ulong>(commandCount);
+        for (var index = 0; index < commandCount; index++)
+        {
+            var message = await peer.ReceiveAsync(cancellationToken);
+            CheckAssert.True(message is ChatCommandMessage,
+                "every concurrent send must publish a chat command");
+            received.Add(message.Sequence);
+        }
+        var returned = await Task.WhenAll(sends).WaitAsync(
+            Timeout, cancellationToken);
+
+        CheckAssert.SequenceEqual(
+            Enumerable.Range(0, commandCount)
+                .Select(index => ScriptedPeer.FirstCommandSequence +
+                    checked((ulong)index)),
+            received,
+            "TCP publication order must exactly follow assigned command sequences");
+        CheckAssert.SequenceEqual(
+            received.Order(),
+            returned.Order(),
+            "every sequence returned to concurrent callers must be published once");
     }
 
     private static InventorySlotState[] CreateFullInventory() =>

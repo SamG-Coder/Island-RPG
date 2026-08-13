@@ -59,9 +59,11 @@ internal sealed partial class GameHostWindow
 {
     private readonly NetworkLaunchOptions? _networkLaunch;
     private readonly ConcurrentQueue<Action> _networkEvents = new();
+    private readonly object _networkSendSync = new();
     private readonly Dictionary<ulong, WorldEntity> _networkActors = [];
     private NetworkGameClient? _networkClient;
     private CancellationTokenSource? _networkCancellation;
+    private Task _networkSendTail = Task.CompletedTask;
     private bool _networkConnectStarted;
     private bool _networkWorldEntered;
     private double _nextNetworkMutationWarningAt;
@@ -86,6 +88,12 @@ internal sealed partial class GameHostWindow
             _networkEvents.Enqueue(() => HandleNetworkActionResult(value.Result));
         _networkClient.PlayerStateChanged += (_, value) =>
             _networkEvents.Enqueue(() => ApplyNetworkPlayerState(value.State));
+        _networkClient.WorldObjectsChanged += (_, value) =>
+            _networkEvents.Enqueue(() =>
+                ApplyNetworkWorldObjectChanges(value.Changes));
+        _networkClient.ContainerStateChanged += (_, value) =>
+            _networkEvents.Enqueue(() =>
+                ApplyNetworkContainerState(value.State));
         _networkClient.PlayerJoined += (_, value) =>
             _networkEvents.Enqueue(() => _chatUi.AddMessage(
                 $"{value.Player.PlayerName} joined the world.",
@@ -133,6 +141,7 @@ internal sealed partial class GameHostWindow
 
     private void EnterNetworkWorld(HandshakeAcceptedMessage accepted)
     {
+        ClearNetworkWorldObjects();
         CancelWorldLevelWork(clearMinimap: true);
         FinishPendingMenuChunk();
         foreach (var coordinate in _worldChunks.Keys.ToArray())
@@ -158,6 +167,8 @@ internal sealed partial class GameHostWindow
         _networkWorldEntered = true;
         _networkWorldClockTick = accepted.Tick;
         UpdateNetworkWorldClock(accepted.Tick);
+        SynchronizeNetworkWorldObjects(
+            _networkClient?.State.WorldObjects.Values ?? []);
         _playerDefeated = false;
         _modalScreen.Close(ModalScreenKind.Death);
         _villagers.Clear();
@@ -182,6 +193,10 @@ internal sealed partial class GameHostWindow
             _networkWorldClockTick = state.ServerTick;
             UpdateNetworkWorldClock(state.ServerTick);
         }
+        if (state.Status is NetworkGameClientStatus.Disconnected or
+            NetworkGameClientStatus.Disconnecting or
+            NetworkGameClientStatus.Faulted)
+            ClearNetworkWorldObjects();
         if (state.Status == NetworkGameClientStatus.Faulted)
             _chatUi.AddMessage(
                 $"Network connection lost: {state.LastError ?? "unknown error"}",
@@ -212,12 +227,13 @@ internal sealed partial class GameHostWindow
 
     private void HandleNetworkActionResult(ActionResultMessage result)
     {
-        if (result.Accepted) return;
-        _chatUi.AddMessage(
-            string.IsNullOrWhiteSpace(result.Detail)
-                ? $"Server rejected the action ({result.RejectionCode})."
-                : result.Detail,
-            ChatMessageStyle.Warning);
+        HandleNetworkWorldActionResult(result);
+        if (!result.Accepted)
+            _chatUi.AddMessage(
+                string.IsNullOrWhiteSpace(result.Detail)
+                    ? $"Server rejected the action ({result.RejectionCode})."
+                    : result.Detail,
+                ChatMessageStyle.Warning);
     }
 
     private void ApplyNetworkPlayerState(NetworkPlayerGameplayState state)
@@ -257,17 +273,15 @@ internal sealed partial class GameHostWindow
             OpenTK.Windowing.GraphicsLibraryFramework.MouseButton.Right);
         var leftDown = MouseState.IsButtonDown(
             OpenTK.Windowing.GraphicsLibraryFramework.MouseButton.Left);
-        if (rightDown && !_gameRightWasDown &&
-            !IsPointerOverGameUi(MouseState.Position))
-            SendNetworkWalk(ScreenToTerrain(SceneMousePosition()));
-        if (leftDown && !_gameLeftWasDown &&
-            !IsPointerOverGameUi(MouseState.Position))
-            WarnNetworkMutationUnavailable();
+        UpdateNetworkWorldInteractionInput(leftDown, rightDown);
         if (!_chatUi.Input.Focused && KeyboardState.IsKeyPressed(
                 OpenTK.Windowing.GraphicsLibraryFramework.Keys.X))
+        {
+            _pendingNetworkWorldAction = null;
+            StopNetworkRepeatedConstruction();
             SendNetworkStop();
-        _gameRightWasDown = rightDown;
-        _gameLeftWasDown = leftDown;
+        }
+        UpdatePendingNetworkWorldAction();
         UpdateNativeCursor();
         FollowPlayer();
     }
@@ -369,14 +383,15 @@ internal sealed partial class GameHostWindow
     {
         if (_networkClient?.IsConnected != true) return;
         _moveMarker = new MoveMarker(target, 0);
-        QueueNetworkSend(() => _networkClient.SendWalkAsync(
-            target.X, target.Y, _activeWorldLevel).AsTask());
+        QueueNetworkSend(cancellationToken => _networkClient.SendWalkAsync(
+            target.X, target.Y, _activeWorldLevel, cancellationToken).AsTask());
     }
 
     private void SendNetworkStop()
     {
         if (_networkClient?.IsConnected != true) return;
-        QueueNetworkSend(() => _networkClient.SendStopAsync().AsTask());
+        QueueNetworkSend(cancellationToken =>
+            _networkClient.SendStopAsync(cancellationToken).AsTask());
     }
 
     private void SendNetworkChat(string text)
@@ -388,8 +403,9 @@ internal sealed partial class GameHostWindow
             return;
         }
         ShowOverheadSpeech(text);
-        QueueNetworkSend(() => _networkClient.SendChatAsync(
-            text, ProtocolChatChannel.Local).AsTask());
+        QueueNetworkSend(cancellationToken => _networkClient.SendChatAsync(
+            text, ProtocolChatChannel.Local,
+            cancellationToken: cancellationToken).AsTask());
     }
 
     private void SendNetworkInventorySwap(int source, int target) =>
@@ -404,7 +420,9 @@ internal sealed partial class GameHostWindow
     private void SendNetworkConsume(int slot) =>
         SendNetworkAction(new ConsumeItemAction(slot));
 
-    private void SendNetworkAction(IActionCommandPayload payload)
+    private void SendNetworkAction(
+        IActionCommandPayload payload,
+        Guid commandId = default)
     {
         if (_networkClient?.IsConnected != true)
         {
@@ -412,22 +430,46 @@ internal sealed partial class GameHostWindow
                 "Not connected to the server.", ChatMessageStyle.Warning);
             return;
         }
-        QueueNetworkSend(() =>
-            _networkClient.SendActionAsync(payload).AsTask());
+        QueueNetworkSend(cancellationToken =>
+            _networkClient.SendActionAsync(
+                payload, commandId, cancellationToken).AsTask());
     }
 
-    private void QueueNetworkSend(Func<Task> send)
+    private void QueueNetworkSend(Func<CancellationToken, Task> send)
     {
-        _ = Task.Run(async () =>
+        ArgumentNullException.ThrowIfNull(send);
+        var cancellationToken = _networkCancellation?.Token ??
+            new CancellationToken(canceled: true);
+        lock (_networkSendSync)
         {
-            try { await send().ConfigureAwait(false); }
-            catch (Exception exception)
-            {
-                _networkEvents.Enqueue(() => _chatUi.AddMessage(
-                    $"Network command failed: {exception.Message}",
-                    ChatMessageStyle.Warning));
-            }
-        });
+            _networkSendTail = SendNetworkInOrderAsync(
+                _networkSendTail, send, cancellationToken);
+        }
+    }
+
+    private async Task SendNetworkInOrderAsync(
+        Task previous,
+        Func<CancellationToken, Task> send,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            // A single tail preserves the order authored by the update thread,
+            // including while the transport channel is applying backpressure.
+            await previous.ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            await send(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            _networkEvents.Enqueue(() => _chatUi.AddMessage(
+                $"Network command failed: {exception.Message}",
+                ChatMessageStyle.Warning));
+        }
     }
 
     private void WarnNetworkMutationUnavailable()
@@ -467,12 +509,26 @@ internal sealed partial class GameHostWindow
 
     private void DisposeNetworkClient()
     {
+        ResetNetworkContainerInteraction();
+        ClearNetworkWorldObjects();
         _networkCancellation?.Cancel();
+        Task sendTail;
+        lock (_networkSendSync) sendTail = _networkSendTail;
+        try { sendTail.GetAwaiter().GetResult(); }
+        catch { }
+        lock (_networkSendSync) _networkSendTail = Task.CompletedTask;
         _networkCancellation?.Dispose();
         _networkCancellation = null;
         if (_networkClient is null) return;
         try { _networkClient.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
         catch { }
         _networkClient = null;
+    }
+
+    private void LeaveNetworkWorldProjection()
+    {
+        ResetNetworkContainerInteraction();
+        ClearNetworkWorldObjects();
+        _networkWorldEntered = false;
     }
 }

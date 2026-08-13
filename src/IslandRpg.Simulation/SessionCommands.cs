@@ -99,6 +99,121 @@ public sealed record ConsumeFoodIntent(
         ExpectedInventoryRevision,
         ExpectedActorRevision);
 
+/// <summary>
+/// Base for revision-checked world mutations. These transport-independent
+/// commands are translated into atomic transactions by the session owner.
+/// </summary>
+public abstract record WorldGameplayIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision) : GameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record PickUpWorldObjectIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Object) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record DropInventoryItemIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    int InventorySlot,
+    int Quantity,
+    Vector2 Position,
+    int WorldLevel,
+    uint ExpectedChunkRevision) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record OpenWorldContainerIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Container) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record TransferWorldContainerIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Container,
+    WorldContainerTransferDirection Direction,
+    int InventorySlot,
+    int ContainerSlot,
+    int Quantity) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record AddCampfireFuelIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Campfire,
+    int InventorySlot) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record TakeCampfireFuelIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Campfire) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record LightCampfireIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Campfire) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record PlaceConstructionIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    string DefinitionId,
+    Vector2 Position,
+    int WorldLevel,
+    int Rotation,
+    uint ExpectedChunkRevision) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record BuildConstructionIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Construction) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record DemolishWorldObjectIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Object) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
 public readonly record struct ActorCommand(
     ClientConnectionId ConnectionId,
     PlayerId PlayerId,
@@ -192,7 +307,35 @@ public enum IntentStatus
     MissingStation,
     InventoryFull,
     ItemNotConsumable,
-    AlreadyFull
+    AlreadyFull,
+    WorldCommandInvalid,
+    ActorNotFound,
+    DeadActor,
+    ObjectNotFound,
+    ObjectLocationMismatch,
+    StaleObjectRevision,
+    StaleChunkRevision,
+    StaleContainerRevision,
+    WrongWorldLevel,
+    OutOfRange,
+    AccessDenied,
+    InvalidItem,
+    InvalidQuantity,
+    ItemUnavailable,
+    NotPortable,
+    NotContainer,
+    ContainerFull,
+    ContainerItemUnavailable,
+    ContainerDepositDenied,
+    NotCampfire,
+    InvalidCampfireState,
+    CampfireLightingRequirementsMissing,
+    InvalidConstruction,
+    MissingConstructionResources,
+    ConstructionLocked,
+    InvalidPlacement,
+    NotConstructionSite,
+    NoDemolitionRefund
 }
 
 public readonly record struct IntentResult(
@@ -219,4 +362,10 @@ public readonly record struct IntentResult(
     public bool Duplicate { get; init; }
 
     public PlayerGameplaySnapshot Gameplay { get; init; }
+
+    /// <summary>
+    /// Complete immutable receipt for a world command. Object and chunk deltas
+    /// are safe to broadcast; gameplay and container state are requester-only.
+    /// </summary>
+    public WorldTransactionResult? WorldTransaction { get; init; }
 }

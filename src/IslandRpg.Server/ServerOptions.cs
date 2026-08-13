@@ -13,6 +13,8 @@ public sealed record ServerOptions(
     int MaximumClients)
 {
     public const ushort DefaultPort = 38_740;
+    public static readonly TimeSpan DefaultAutosaveInterval =
+        TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Trusted host bootstrap used by scenarios and tests. Network clients
@@ -22,6 +24,21 @@ public sealed record ServerOptions(
         Array.Empty<InitialInventoryItem>();
 
     public float StartingHunger { get; init; } = 100f;
+
+    /// <summary>
+    /// Dedicated-server save root. Empty disables persistence, which is useful
+    /// for deterministic tests and disposable hosts.
+    /// </summary>
+    public string? SaveRoot { get; init; }
+
+    public TimeSpan AutosaveInterval { get; init; } = DefaultAutosaveInterval;
+
+    /// <summary>
+    /// Trusted host bootstrap for deterministic scenarios and integration
+    /// checks. Production clients cannot author world seeds through the wire.
+    /// </summary>
+    public IReadOnlyList<WorldObjectSeed> StartingWorldObjects { get; init; } =
+        Array.Empty<WorldObjectSeed>();
 
     /// <summary>
     /// UDP snapshot port. Zero asks the operating system for an available port;
@@ -39,6 +56,8 @@ public sealed record ServerOptions(
         var buildVersion = "0.3.0";
         var contentVersion = "base";
         var maximumClients = 64;
+        string? saveRoot = null;
+        var autosaveInterval = DefaultAutosaveInterval;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -86,6 +105,25 @@ public sealed record ServerOptions(
 
                     index++;
                     break;
+                case "--save-root":
+                    saveRoot = Path.GetFullPath(RequireValue(option, value));
+                    index++;
+                    break;
+                case "--autosave-seconds":
+                    value = RequireValue(option, value);
+                    if (!double.TryParse(
+                            value,
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out var seconds) ||
+                        seconds is < 1 or > 3_600)
+                    {
+                        throw new ArgumentException(
+                            "--autosave-seconds must be between 1 and 3600.");
+                    }
+                    autosaveInterval = TimeSpan.FromSeconds(seconds);
+                    index++;
+                    break;
                 case "--help":
                 case "-h":
                     throw new ShowHelpException();
@@ -103,7 +141,11 @@ public sealed record ServerOptions(
             worldSeed,
             buildVersion,
             contentVersion,
-            maximumClients);
+            maximumClients)
+        {
+            SaveRoot = saveRoot,
+            AutosaveInterval = autosaveInterval
+        };
     }
 
     public static void PrintUsage(TextWriter writer)
@@ -120,6 +162,8 @@ public sealed record ServerOptions(
         writer.WriteLine("  --build-version <value>   Required client build (default 0.3.0)");
         writer.WriteLine("  --content-version <value> Required content version (default base)");
         writer.WriteLine("  --max-clients <count>     Concurrent connections, 1-1024 (default 64)");
+        writer.WriteLine("  --save-root <directory>   Enable authoritative checkpoint persistence");
+        writer.WriteLine("  --autosave-seconds <n>    Autosave interval, 1-3600 (default 30)");
         writer.WriteLine("  -h, --help                Show this help");
     }
 

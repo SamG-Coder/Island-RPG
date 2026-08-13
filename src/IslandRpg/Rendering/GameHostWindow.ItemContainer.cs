@@ -1,4 +1,5 @@
 using IslandRpg.Gameplay;
+using IslandRpg.Protocol;
 using IslandRpg.Rendering.Ui;
 using IslandRpg.World;
 using OpenTK.Mathematics;
@@ -71,6 +72,7 @@ internal sealed partial class GameHostWindow
         SaveOpenWorldStorage();
         _itemContainerWindow.Close();
         _openWorldStorageId = null;
+        if (IsNetworkWorld) ResetNetworkContainerInteraction();
         _itemContainerContext.Close();
         _itemContainerContextSource = ItemContainerContextSource.None;
         _itemContainerContextSlot = -1;
@@ -186,6 +188,22 @@ internal sealed partial class GameHostWindow
 
     private void TransferAllToOpenContainer()
     {
+        if (IsNetworkWorld)
+        {
+            var transfers = new List<PendingNetworkContainerTransfer>();
+            var items = _activePlayer?.Inventory ?? [];
+            var quantities = _activePlayer?.InventoryQuantities ?? [];
+            for (var slot = 0; slot < items.Length; slot++)
+                if (items[slot] is not null &&
+                    quantities.ElementAtOrDefault(slot) > 0)
+                    transfers.Add(new(
+                        ContainerTransferDirection.Deposit,
+                        slot,
+                        -1,
+                        quantities[slot]));
+            StartNetworkContainerTransfers(transfers);
+            return;
+        }
         if (_activePlayer is null ||
             _itemContainerWindow.Container is not { } container ||
             !container.Definition.AllowsDeposit)
@@ -206,6 +224,13 @@ internal sealed partial class GameHostWindow
 
     private void DepositOneIntoOpenContainer(int slot)
     {
+        if (IsNetworkWorld)
+        {
+            StartNetworkContainerTransfers([
+                new(ContainerTransferDirection.Deposit, slot, -1, 1)
+            ]);
+            return;
+        }
         if (_activePlayer is null ||
             _itemContainerWindow.Container is not { } container ||
             !container.Definition.AllowsDeposit ||
@@ -221,6 +246,33 @@ internal sealed partial class GameHostWindow
     private void DepositMatchingIntoOpenContainer(
         string itemId, int maximum)
     {
+        if (IsNetworkWorld)
+        {
+            var transfers = new List<PendingNetworkContainerTransfer>();
+            var items = _activePlayer?.Inventory ?? [];
+            var quantities = _activePlayer?.InventoryQuantities ?? [];
+            var remaining = maximum;
+            for (var slot = 0;
+                 slot < items.Length && remaining > 0;
+                 slot++)
+            {
+                if (!string.Equals(
+                        items[slot], itemId,
+                        StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var quantity = Math.Min(
+                    quantities.ElementAtOrDefault(slot), remaining);
+                if (quantity <= 0) continue;
+                transfers.Add(new(
+                    ContainerTransferDirection.Deposit,
+                    slot,
+                    -1,
+                    quantity));
+                remaining -= quantity;
+            }
+            StartNetworkContainerTransfers(transfers);
+            return;
+        }
         if (_activePlayer is null ||
             _itemContainerWindow.Container is not { } container ||
             !container.Definition.AllowsDeposit)
@@ -237,6 +289,18 @@ internal sealed partial class GameHostWindow
         int maximum,
         bool announceLoot = true)
     {
+        if (IsNetworkWorld)
+        {
+            var networkAvailable = _itemContainerWindow.Container?.Quantities
+                .ElementAtOrDefault(slot) ?? 0;
+            var networkQuantity = Math.Min(networkAvailable, maximum);
+            if (networkQuantity <= 0) return false;
+            StartNetworkContainerTransfers([
+                new(ContainerTransferDirection.Withdraw, -1, slot,
+                    networkQuantity)
+            ]);
+            return true;
+        }
         if (_activePlayer is null ||
             _itemContainerWindow.Container is not { } container)
             return false;
@@ -320,6 +384,10 @@ internal sealed partial class GameHostWindow
 
     private void SaveOpenWorldStorage()
     {
+        // Network container contents are an authoritative server projection.
+        // They must never be copied into the client's procedural chunk cache.
+        if (IsNetworkWorld) return;
+
         if (_openWorldStorageId is not { } storageId ||
             _itemContainerWindow.Container is not { } container)
             return;
@@ -336,6 +404,11 @@ internal sealed partial class GameHostWindow
 
     private void QueueWorldStorage(WorldGroundObject storage)
     {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkOpenContainer(storage);
+            return;
+        }
         if (!WorldItemContainerService.IsContainer(storage.ItemId))
             return;
         _worldActions.QueuePath(

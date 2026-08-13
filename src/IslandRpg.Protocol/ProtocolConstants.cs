@@ -5,7 +5,7 @@ public static class ProtocolConstants
 {
     public const uint ReliableMagic = 0x49525047; // IRPG
     public const uint SnapshotMagic = 0x49525544; // IRUD
-    public const ushort CurrentVersion = 2;
+    public const ushort CurrentVersion = 3;
     public const int ReliableHeaderSize = 28;
     public const int TcpLengthPrefixSize = sizeof(uint);
     public const int MaxReliableFrameBytes = 64 * 1024;
@@ -31,6 +31,7 @@ public static class ProtocolLimits
     public const int MaxContainerSlots = 128;
     public const int MaxContainerTransferQuantity = ushort.MaxValue;
     public const int MaxWorldObjectsPerBatch = 512;
+    public const int MaxWorldChunkRevisionsPerBatch = 512;
     public const int MinConstructionRotation = 0;
     public const int MaxConstructionRotation = 3;
     public const float MaxPlayerHunger = 100;
@@ -56,6 +57,7 @@ public enum ProtocolMessageKind : byte
     WorldObjectState = 36,
     WorldObjectDeltaBatch = 37,
     ContainerState = 38,
+    WorldChunkRevisionBatch = 39,
 }
 
 [Flags]
@@ -73,6 +75,15 @@ public enum ServerCapabilities : uint
     None = 0,
     UdpSnapshots = 1 << 0,
     DeltaSnapshots = 1 << 1,
+}
+
+/// <summary>Public visual/access state for a gate world object.</summary>
+public enum WorldObjectGateState : byte
+{
+    None,
+    Unlocked,
+    Opened,
+    Locked,
 }
 
 public enum HandshakeRejectionCode : byte

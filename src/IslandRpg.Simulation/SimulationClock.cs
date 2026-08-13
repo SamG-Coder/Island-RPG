@@ -48,4 +48,17 @@ public sealed class DeterministicSimulationClock
         SnapshotSequence = checked(SnapshotSequence + 1);
         return SnapshotSequence;
     }
+
+    internal void Restore(long tick, long snapshotSequence)
+    {
+        if (tick < 0 || snapshotSequence < 0 ||
+            snapshotSequence > tick / SimulationTiming.TicksPerSnapshot)
+        {
+            throw new InvalidDataException(
+                "The simulation clock checkpoint is invalid.");
+        }
+
+        Tick = tick;
+        SnapshotSequence = snapshotSequence;
+    }
 }

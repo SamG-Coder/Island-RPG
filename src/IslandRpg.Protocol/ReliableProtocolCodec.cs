@@ -199,6 +199,9 @@ public static class ReliableProtocolCodec
             case ContainerStateMessage value:
                 WriteContainerState(writer, value);
                 break;
+            case WorldChunkRevisionBatchMessage value:
+                WriteWorldChunkRevisionBatch(writer, value);
+                break;
             default:
                 throw new ProtocolException($"Unsupported message type {message.GetType().FullName}.");
         }
@@ -268,6 +271,8 @@ public static class ReliableProtocolCodec
                 ReadWorldObjectDeltaBatch(sequence, tick, ref reader),
             ProtocolMessageKind.ContainerState =>
                 ReadContainerState(sequence, tick, ref reader),
+            ProtocolMessageKind.WorldChunkRevisionBatch =>
+                ReadWorldChunkRevisionBatch(sequence, tick, ref reader),
             _ => throw new ProtocolException($"Unsupported reliable message kind {header.Kind}."),
         };
     }
@@ -512,6 +517,12 @@ public static class ReliableProtocolCodec
         writer.WriteInt32(value.Health);
         writer.WriteInt32(value.MaximumHealth);
         writer.WriteBoolean(value.HasContainer);
+        writer.WriteString(
+            value.FuelItemId,
+            ProtocolLimits.ItemIdBytes,
+            nameof(value.FuelItemId));
+        writer.WriteDouble(value.LitUntilGameSeconds);
+        writer.WriteByte((byte)value.GateState);
     }
 
     private static WorldObjectState ReadWorldObjectState(
@@ -531,7 +542,10 @@ public static class ReliableProtocolCodec
             reader.ReadByte(),
             reader.ReadInt32(),
             reader.ReadInt32(),
-            reader.ReadBoolean());
+            reader.ReadBoolean(),
+            reader.ReadString(ProtocolLimits.ItemIdBytes, "FuelItemId"),
+            reader.ReadDouble(),
+            (WorldObjectGateState)reader.ReadByte());
         ValidateWorldObjectState(result);
         return result;
     }
@@ -549,6 +563,14 @@ public static class ReliableProtocolCodec
             throw new ProtocolException(
                 "World-object health must be between zero and its maximum.");
         }
+        if (value.FuelItemId.Length > 0)
+            EnsureIdentifier(value.FuelItemId, nameof(value.FuelItemId));
+        if (!double.IsFinite(value.LitUntilGameSeconds) ||
+            value.LitUntilGameSeconds < 0)
+            throw new ProtocolException(
+                "World-object burn time must be finite and non-negative.");
+        if (!Enum.IsDefined(value.GateState))
+            throw new ProtocolException("World-object gate state is invalid.");
     }
 
     private static void WriteWorldObjectDeltaBatch(
@@ -650,6 +672,79 @@ public static class ReliableProtocolCodec
         }
 
         return new WorldObjectDeltaBatchMessage(sequence, tick, deltas);
+    }
+
+    private static void WriteWorldChunkRevisionBatch(
+        WireWriter writer,
+        WorldChunkRevisionBatchMessage value)
+    {
+        ValidateWorldChunkRevisionBatch(value.Chunks);
+        writer.WriteUInt16((ushort)value.Chunks.Count);
+        foreach (var chunk in value.Chunks)
+        {
+            writer.WriteInt32(chunk.ChunkX);
+            writer.WriteInt32(chunk.ChunkY);
+            writer.WriteInt16(chunk.WorldLevel);
+            writer.WriteUInt32(chunk.Revision);
+        }
+    }
+
+    private static WorldChunkRevisionBatchMessage ReadWorldChunkRevisionBatch(
+        ulong sequence,
+        ulong tick,
+        ref WireReader reader)
+    {
+        var count = reader.ReadUInt16();
+        if (count is < 1 or > ProtocolLimits.MaxWorldChunkRevisionsPerBatch)
+        {
+            throw new ProtocolException(
+                $"World-chunk revision count must be between 1 and " +
+                $"{ProtocolLimits.MaxWorldChunkRevisionsPerBatch}.");
+        }
+
+        var chunks = new WorldChunkRevisionState[count];
+        for (var index = 0; index < chunks.Length; index++)
+        {
+            chunks[index] = new WorldChunkRevisionState(
+                reader.ReadInt32(),
+                reader.ReadInt32(),
+                reader.ReadInt16(),
+                reader.ReadUInt32());
+        }
+        ValidateWorldChunkRevisionBatch(chunks);
+        return new WorldChunkRevisionBatchMessage(sequence, tick, chunks);
+    }
+
+    private static void ValidateWorldChunkRevisionBatch(
+        IReadOnlyList<WorldChunkRevisionState>? chunks)
+    {
+        if (chunks is null)
+            throw new ProtocolException(
+                "World-chunk revisions cannot be null.");
+        if (chunks.Count is < 1 or
+            > ProtocolLimits.MaxWorldChunkRevisionsPerBatch)
+        {
+            throw new ProtocolException(
+                $"World-chunk revision count must be between 1 and " +
+                $"{ProtocolLimits.MaxWorldChunkRevisionsPerBatch}.");
+        }
+
+        var revisions = new Dictionary<(int X, int Y, short Level), uint>(
+            chunks.Count);
+        foreach (var chunk in chunks)
+        {
+            if (chunk.Revision == 0)
+                throw new ProtocolException(
+                    "World-chunk revisions must be positive.");
+            var key = (chunk.ChunkX, chunk.ChunkY, chunk.WorldLevel);
+            if (revisions.TryGetValue(key, out var revision) &&
+                revision != chunk.Revision)
+            {
+                throw new ProtocolException(
+                    "One world-chunk batch contained conflicting duplicate entries.");
+            }
+            revisions[key] = chunk.Revision;
+        }
     }
 
     private static void WriteContainerState(

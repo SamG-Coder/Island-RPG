@@ -19,6 +19,7 @@ public sealed class AuthoritativeWorldSession
     private readonly ISessionIdentitySource _identitySource;
     private readonly IWorldNavigationQuery _navigation;
     private readonly IWorldNavigationObstacleSource _obstacles;
+    private readonly AuthoritativeWorldTransactions _worldTransactions;
     private readonly Channel<QueuedOperation> _inbound;
     private readonly Dictionary<ActorId, MutableActor> _actors = [];
     private readonly Dictionary<PlayerId, ActorId> _actorsByPlayer = [];
@@ -34,12 +35,15 @@ public sealed class AuthoritativeWorldSession
         ISessionIdentitySource? identitySource = null,
         SessionId? sessionId = null,
         IWorldNavigationQuery? navigation = null,
-        IWorldNavigationObstacleSource? obstacles = null)
+        IWorldNavigationObstacleSource? obstacles = null,
+        AuthoritativeWorldTransactions? worldTransactions = null)
     {
         _limits = (limits ?? SimulationLimits.Default).ValidatedCopy();
         _identitySource = identitySource ?? new SecureSessionIdentitySource();
         _navigation = navigation ?? OpenWorldNavigationQuery.Instance;
         _obstacles = obstacles ?? EmptyWorldNavigationObstacleSource.Instance;
+        _worldTransactions = worldTransactions ??
+            new AuthoritativeWorldTransactions();
         Id = sessionId is { } provided && provided.Value != Guid.Empty
             ? provided
             : SessionId.New();
@@ -76,6 +80,12 @@ public sealed class AuthoritativeWorldSession
     /// The last 20 Hz publication. It is immutable and safe to read from any thread.
     /// </summary>
     public SessionSnapshot LatestSnapshot => Volatile.Read(ref _latestSnapshot);
+
+    /// <summary>
+    /// Raised on the single authority thread after a world transaction has
+    /// committed. Observers must be fast and must not mutate the session.
+    /// </summary>
+    public event Action<WorldTransactionResult>? WorldTransactionCommitted;
 
     public Task<JoinResult> EnqueueJoinAsync(JoinRequest request)
     {
@@ -208,6 +218,189 @@ public sealed class AuthoritativeWorldSession
         try
         {
             return CaptureSnapshotCore(Clock.SnapshotSequence);
+        }
+        finally
+        {
+            ExitOwner();
+        }
+    }
+
+    /// <summary>
+    /// Trusted owner-thread seam for initial world generation and persistence
+    /// restoration. Network input must never call this method directly.
+    /// </summary>
+    public AuthoritativeWorldObjectSnapshot SeedWorldObject(
+        WorldObjectSeed seed)
+    {
+        EnterOwner();
+        try
+        {
+            return _worldTransactions.AddObject(seed);
+        }
+        finally
+        {
+            ExitOwner();
+        }
+    }
+
+    /// <summary>
+    /// Captures one immutable world object on the session owner thread.
+    /// </summary>
+    public AuthoritativeWorldObjectSnapshot CaptureWorldObject(Guid objectId)
+    {
+        EnterOwner();
+        try
+        {
+            return _worldTransactions.CaptureObject(objectId);
+        }
+        finally
+        {
+            ExitOwner();
+        }
+    }
+
+    /// <summary>
+    /// Captures the authoritative revision used to optimistic-lock a chunk.
+    /// </summary>
+    public uint CaptureWorldChunkRevision(WorldChunkKey chunk)
+    {
+        EnterOwner();
+        try
+        {
+            return _worldTransactions.CaptureChunkRevision(chunk);
+        }
+        finally
+        {
+            ExitOwner();
+        }
+    }
+
+    /// <summary>
+    /// Captures all durable authority state on the owning simulation thread.
+    /// Reconnect hashes are copied into immutable storage and never logged.
+    /// </summary>
+    public AuthoritativeSessionCheckpoint CaptureCheckpoint()
+    {
+        EnterOwner();
+        try
+        {
+            var actors = _actors.Values
+                .OrderBy(static value => value.Identity.PlayerId.Value)
+                .Select(static value => new AuthoritativeActorCheckpoint(
+                    value.Identity,
+                    value.DisplayName,
+                    value.Position,
+                    value.WorldLevel,
+                    value.LastProcessedCommandSequence,
+                    value.DisconnectedAtTick,
+                    value.Gameplay.ToSnapshot(),
+                    ImmutableArray.CreateRange(value.ReconnectTokenHash),
+                    value.CaptureReceipts()))
+                .ToImmutableArray();
+            return new(
+                Id,
+                Clock.Tick,
+                Clock.SnapshotSequence,
+                actors,
+                _worldTransactions.CaptureCheckpoint());
+        }
+        finally
+        {
+            ExitOwner();
+        }
+    }
+
+    /// <summary>
+    /// Restores trusted durable state into a pristine matching session. All
+    /// actors start disconnected; clients must prove their reconnect token.
+    /// </summary>
+    public void RestoreCheckpoint(AuthoritativeSessionCheckpoint checkpoint)
+    {
+        EnterOwner();
+        try
+        {
+            ArgumentNullException.ThrowIfNull(checkpoint);
+            if (checkpoint.SessionId != Id || Clock.Tick != 0 ||
+                Clock.SnapshotSequence != 0 || _actors.Count != 0 ||
+                _actorsByPlayer.Count != 0 || _playersByConnection.Count != 0 ||
+                _chatHistory.Count != 0 || _nextChatMessageId != 0)
+            {
+                throw new InvalidOperationException(
+                    "A checkpoint can only restore a pristine matching session.");
+            }
+
+            if (checkpoint.Actors.IsDefault ||
+                checkpoint.Actors.Length > _limits.MaximumActors)
+            {
+                throw new InvalidDataException(
+                    "The checkpoint exceeds the session actor limit.");
+            }
+
+            var validatedClock = new DeterministicSimulationClock();
+            validatedClock.Restore(
+                checkpoint.Tick,
+                checkpoint.SnapshotSequence);
+
+            var actors = new Dictionary<ActorId, MutableActor>();
+            var actorsByPlayer = new Dictionary<PlayerId, ActorId>();
+            foreach (var value in checkpoint.Actors)
+            {
+                if (value.Identity.PlayerId.Value == Guid.Empty ||
+                    value.Identity.ActorId.Value == Guid.Empty ||
+                    !TryNormalizeDisplayName(value.DisplayName, out var name) ||
+                    name != value.DisplayName ||
+                    !TrySanitizePosition(value.Position, out var position) ||
+                    position != value.Position ||
+                    !_navigation.SupportsWorldLevel(value.WorldLevel) ||
+                    value.LastProcessedCommandSequence < 0 ||
+                    value.DisconnectedAtTick is < 0 ||
+                    value.DisconnectedAtTick > checkpoint.Tick ||
+                    value.ReconnectTokenHash.Length != 32 ||
+                    value.CommandReceipts.IsDefault ||
+                    value.CommandReceipts.Length >
+                        _limits.CommandReceiptCapacity ||
+                    actors.ContainsKey(value.Identity.ActorId) ||
+                    actorsByPlayer.ContainsKey(value.Identity.PlayerId))
+                {
+                    throw new InvalidDataException(
+                        "The checkpoint contains an invalid actor.");
+                }
+
+                var actor = new MutableActor(
+                    value.Identity,
+                    name,
+                    position,
+                    value.WorldLevel,
+                    default,
+                    value.ReconnectTokenHash.ToArray())
+                {
+                    Connected = false,
+                    LastProcessedCommandSequence =
+                        value.LastProcessedCommandSequence,
+                    // A running server may checkpoint a connected actor. On
+                    // restore every actor is offline until it proves its
+                    // reconnect token, so record the restart as the point at
+                    // which that connection was lost.
+                    DisconnectedAtTick = value.DisconnectedAtTick ?? checkpoint.Tick
+                };
+                actor.Gameplay.ReplaceWith(value.Gameplay);
+                actor.RestoreReceipts(
+                    value.CommandReceipts,
+                    _limits.CommandReceiptCapacity);
+                actors.Add(value.Identity.ActorId, actor);
+                actorsByPlayer.Add(
+                    value.Identity.PlayerId,
+                    value.Identity.ActorId);
+            }
+
+            // Both restorers validate completely before their first commit.
+            _worldTransactions.RestoreCheckpoint(checkpoint.World);
+            Clock.Restore(checkpoint.Tick, checkpoint.SnapshotSequence);
+            foreach (var value in actors) _actors.Add(value.Key, value.Value);
+            foreach (var value in actorsByPlayer)
+                _actorsByPlayer.Add(value.Key, value.Value);
+            Volatile.Write(ref _latestSnapshot,
+                CaptureSnapshotCore(Clock.SnapshotSequence));
         }
         finally
         {
@@ -506,13 +699,31 @@ public sealed class AuthoritativeWorldSession
                 actor.LastProcessedCommandSequence = command.Sequence;
             }
 
-            if (!Equals(receipt.Intent, replayed))
+            if (!string.Equals(
+                    receipt.PayloadFingerprint,
+                    GameplayIntentFingerprint.Create(replayed),
+                    StringComparison.Ordinal))
             {
                 return Rejected(
                     IntentStatus.CommandIdConflict,
                     actor,
                     "The command identifier is already bound to a different gameplay request.",
                     replayed.CommandId);
+            }
+
+            if (receipt.Restored)
+            {
+                return new IntentResult(
+                    receipt.Result.Status,
+                    actor.LastProcessedCommandSequence,
+                    receipt.Result.Error)
+                {
+                    CommandId = replayed.CommandId,
+                    InventoryRevision = actor.Gameplay.InventoryRevision,
+                    ActorRevision = actor.Gameplay.ActorRevision,
+                    Duplicate = true,
+                    Gameplay = actor.Gameplay.ToSnapshot()
+                };
             }
 
             return receipt.Result with
@@ -573,6 +784,13 @@ public sealed class AuthoritativeWorldSession
                 "Gameplay commands require a non-empty command identifier.");
         }
 
+        // The world aggregate performs the same actor/inventory optimistic
+        // concurrency checks and preserves its exact rejection receipt.
+        if (intent is WorldGameplayIntent world)
+        {
+            return ProcessWorldIntent(actor, world);
+        }
+
         if (intent.ExpectedInventoryRevision !=
             actor.Gameplay.InventoryRevision)
         {
@@ -607,6 +825,189 @@ public sealed class AuthoritativeWorldSession
                 intent.CommandId)
         };
     }
+
+    private IntentResult ProcessWorldIntent(
+        MutableActor actor,
+        WorldGameplayIntent intent)
+    {
+        if (intent is PlaceConstructionIntent placement &&
+            (!_navigation.SupportsWorldLevel(placement.WorldLevel) ||
+             !_navigation.CanStandAt(placement.Position, placement.WorldLevel)))
+        {
+            return Rejected(
+                IntentStatus.InvalidPlacement,
+                actor,
+                "Construction must be placed on traversable terrain.",
+                intent.CommandId);
+        }
+
+        var gameSeconds = Clock.Current.ElapsedSeconds;
+        var context = new WorldTransactionContext(
+            intent.CommandId,
+            actor.Identity.ActorId,
+            intent.ExpectedActorRevision,
+            intent.ExpectedInventoryRevision);
+        var input = new WorldTransactionActorInput(
+            actor.Identity.ActorId,
+            actor.Position,
+            actor.WorldLevel,
+            actor.Gameplay.ToSnapshot());
+        var transaction = intent switch
+        {
+            PickUpWorldObjectIntent pickUp => _worldTransactions.Execute(
+                input,
+                new PickUpWorldObjectTransaction(context, pickUp.Object)),
+            DropInventoryItemIntent drop => _worldTransactions.Execute(
+                input,
+                new DropInventoryItemTransaction(
+                    context,
+                    drop.InventorySlot,
+                    drop.Quantity,
+                    drop.Position,
+                    drop.WorldLevel,
+                    drop.ExpectedChunkRevision)),
+            OpenWorldContainerIntent open => _worldTransactions.Execute(
+                input,
+                new OpenWorldContainerTransaction(context, open.Container)),
+            TransferWorldContainerIntent transfer => _worldTransactions.Execute(
+                input,
+                new TransferWorldContainerTransaction(
+                    context,
+                    transfer.Container,
+                    transfer.Direction,
+                    transfer.InventorySlot,
+                    transfer.ContainerSlot,
+                    transfer.Quantity)),
+            AddCampfireFuelIntent fuel => _worldTransactions.Execute(
+                input,
+                new AddCampfireFuelTransaction(
+                    context,
+                    fuel.Campfire,
+                    fuel.InventorySlot,
+                    gameSeconds)),
+            TakeCampfireFuelIntent takeFuel => _worldTransactions.Execute(
+                input,
+                new TakeCampfireFuelTransaction(
+                    context,
+                    takeFuel.Campfire,
+                    gameSeconds)),
+            LightCampfireIntent light => _worldTransactions.Execute(
+                input,
+                new LightCampfireTransaction(
+                    context,
+                    light.Campfire,
+                    gameSeconds)),
+            PlaceConstructionIntent place => _worldTransactions.Execute(
+                input,
+                new PlaceConstructionTransaction(
+                    context,
+                    place.DefinitionId,
+                    place.Position,
+                    place.WorldLevel,
+                    place.Rotation,
+                    place.ExpectedChunkRevision)),
+            BuildConstructionIntent build => _worldTransactions.Execute(
+                input,
+                new BuildConstructionTransaction(
+                    context,
+                    build.Construction)),
+            DemolishWorldObjectIntent demolish => _worldTransactions.Execute(
+                input,
+                new DemolishWorldObjectTransaction(context, demolish.Object)),
+            _ => throw new InvalidOperationException(
+                "The world gameplay intent type is unsupported.")
+        };
+
+        // Accepted read-only operations intentionally return the same actor
+        // revisions. Mutating operations return a replacement immutable
+        // snapshot, which becomes the session's sole mutable actor state once.
+        if (transaction.Accepted && transaction.Gameplay is { } gameplay &&
+            (gameplay.ActorRevision != actor.Gameplay.ActorRevision ||
+             gameplay.Inventory.Revision != actor.Gameplay.InventoryRevision))
+        {
+            actor.Gameplay.ReplaceWith(gameplay);
+        }
+
+        if (transaction.Accepted &&
+            (!transaction.ObjectDeltas.IsDefaultOrEmpty ||
+             !transaction.ChunkDeltas.IsDefaultOrEmpty))
+            WorldTransactionCommitted?.Invoke(transaction);
+
+        return new IntentResult(
+            MapWorldStatus(transaction.Status),
+            actor.LastProcessedCommandSequence,
+            transaction.Accepted
+                ? null
+                : string.IsNullOrWhiteSpace(transaction.Detail)
+                    ? transaction.Status.ToString()
+                    : transaction.Detail)
+        {
+            CommandId = intent.CommandId,
+            InventoryRevision = actor.Gameplay.InventoryRevision,
+            ActorRevision = actor.Gameplay.ActorRevision,
+            Gameplay = actor.Gameplay.ToSnapshot(),
+            WorldTransaction = transaction
+        };
+    }
+
+    private static IntentStatus MapWorldStatus(
+        WorldTransactionStatus status) => status switch
+        {
+            WorldTransactionStatus.Accepted => IntentStatus.Accepted,
+            WorldTransactionStatus.InvalidCommand =>
+                IntentStatus.WorldCommandInvalid,
+            WorldTransactionStatus.CommandIdConflict =>
+                IntentStatus.CommandIdConflict,
+            WorldTransactionStatus.ActorNotFound => IntentStatus.ActorNotFound,
+            WorldTransactionStatus.DeadActor => IntentStatus.DeadActor,
+            WorldTransactionStatus.StaleActorRevision =>
+                IntentStatus.StaleActorRevision,
+            WorldTransactionStatus.StaleInventoryRevision =>
+                IntentStatus.StaleInventoryRevision,
+            WorldTransactionStatus.ObjectNotFound => IntentStatus.ObjectNotFound,
+            WorldTransactionStatus.ObjectLocationMismatch =>
+                IntentStatus.ObjectLocationMismatch,
+            WorldTransactionStatus.StaleObjectRevision =>
+                IntentStatus.StaleObjectRevision,
+            WorldTransactionStatus.StaleChunkRevision =>
+                IntentStatus.StaleChunkRevision,
+            WorldTransactionStatus.StaleContainerRevision =>
+                IntentStatus.StaleContainerRevision,
+            WorldTransactionStatus.WrongWorldLevel =>
+                IntentStatus.WrongWorldLevel,
+            WorldTransactionStatus.OutOfRange => IntentStatus.OutOfRange,
+            WorldTransactionStatus.AccessDenied => IntentStatus.AccessDenied,
+            WorldTransactionStatus.InvalidItem => IntentStatus.InvalidItem,
+            WorldTransactionStatus.InvalidQuantity => IntentStatus.InvalidQuantity,
+            WorldTransactionStatus.InvalidInventorySlot =>
+                IntentStatus.InvalidInventorySlot,
+            WorldTransactionStatus.ItemUnavailable => IntentStatus.ItemUnavailable,
+            WorldTransactionStatus.InventoryFull => IntentStatus.InventoryFull,
+            WorldTransactionStatus.NotPortable => IntentStatus.NotPortable,
+            WorldTransactionStatus.NotContainer => IntentStatus.NotContainer,
+            WorldTransactionStatus.ContainerFull => IntentStatus.ContainerFull,
+            WorldTransactionStatus.ContainerItemUnavailable =>
+                IntentStatus.ContainerItemUnavailable,
+            WorldTransactionStatus.ContainerDepositDenied =>
+                IntentStatus.ContainerDepositDenied,
+            WorldTransactionStatus.NotCampfire => IntentStatus.NotCampfire,
+            WorldTransactionStatus.InvalidCampfireState =>
+                IntentStatus.InvalidCampfireState,
+            WorldTransactionStatus.CampfireLightingRequirementsMissing =>
+                IntentStatus.CampfireLightingRequirementsMissing,
+            WorldTransactionStatus.InvalidConstruction =>
+                IntentStatus.InvalidConstruction,
+            WorldTransactionStatus.MissingConstructionResources =>
+                IntentStatus.MissingConstructionResources,
+            WorldTransactionStatus.ConstructionLocked =>
+                IntentStatus.ConstructionLocked,
+            WorldTransactionStatus.InvalidPlacement => IntentStatus.InvalidPlacement,
+            WorldTransactionStatus.NotConstructionSite =>
+                IntentStatus.NotConstructionSite,
+            WorldTransactionStatus.NoDemolitionRefund =>
+                IntentStatus.NoDemolitionRefund,
+            _ => throw new ArgumentOutOfRangeException(nameof(status))
+        };
 
     private static IntentResult ProcessSwapInventorySlots(
         MutableActor actor,
@@ -1290,8 +1691,67 @@ public sealed class AuthoritativeWorldSession
 
             _receipts.Add(
                 intent.CommandId,
-                new CommandReceipt(intent, result));
+                new CommandReceipt(
+                    GameplayIntentFingerprint.Create(intent),
+                    result,
+                    Restored: false));
             _receiptOrder.Enqueue(intent.CommandId);
+        }
+
+        public ImmutableArray<AuthoritativeCommandReceiptCheckpoint>
+            CaptureReceipts()
+        {
+            var result = ImmutableArray.CreateBuilder<
+                AuthoritativeCommandReceiptCheckpoint>(_receiptOrder.Count);
+            foreach (var commandId in _receiptOrder)
+            {
+                var receipt = _receipts[commandId];
+                result.Add(new AuthoritativeCommandReceiptCheckpoint(
+                    commandId,
+                    receipt.PayloadFingerprint,
+                    receipt.Result.Status,
+                    receipt.Result.Error));
+            }
+
+            return result.MoveToImmutable();
+        }
+
+        public void RestoreReceipts(
+            ImmutableArray<AuthoritativeCommandReceiptCheckpoint> receipts,
+            int capacity)
+        {
+            if (receipts.IsDefault || receipts.Length > capacity ||
+                _receipts.Count != 0 || _receiptOrder.Count != 0)
+            {
+                throw new InvalidDataException(
+                    "The checkpoint command receipt history is invalid.");
+            }
+
+            foreach (var value in receipts)
+            {
+                if (value.CommandId == Guid.Empty ||
+                    !GameplayIntentFingerprint.IsValid(
+                        value.PayloadFingerprint) ||
+                    !Enum.IsDefined(value.Status) ||
+                    value.Error is { Length: > 512 } ||
+                    value.Error?.Any(char.IsControl) == true ||
+                    !_receipts.TryAdd(value.CommandId, new CommandReceipt(
+                        value.PayloadFingerprint,
+                        new IntentResult(
+                            value.Status,
+                            LastProcessedCommandSequence,
+                            value.Error)
+                        {
+                            CommandId = value.CommandId
+                        },
+                        Restored: true)))
+                {
+                    throw new InvalidDataException(
+                        "The checkpoint contains an invalid command receipt.");
+                }
+
+                _receiptOrder.Enqueue(value.CommandId);
+            }
         }
 
         public ActorSnapshot ToSnapshot() => new(
@@ -1335,6 +1795,68 @@ public sealed class AuthoritativeWorldSession
 
         public int CookingExperience { get; set; }
 
+        public void ReplaceWith(PlayerGameplaySnapshot snapshot)
+        {
+            if (snapshot.ActorRevision == 0 ||
+                snapshot.Inventory.Revision == 0 ||
+                snapshot.Inventory.Capacity != PlayerInventory.Capacity ||
+                snapshot.Health is < 0 or > MaximumHealth ||
+                !float.IsFinite(snapshot.Hunger) ||
+                snapshot.Hunger is < 0 or > SurvivalService.MaximumHunger ||
+                !float.IsFinite(snapshot.WellFedSeconds) ||
+                snapshot.WellFedSeconds < 0 ||
+                snapshot.CraftingExperience < 0 ||
+                snapshot.CookingExperience < 0)
+            {
+                throw new InvalidOperationException(
+                    "The world transaction returned invalid actor state.");
+            }
+
+            var inventory = PlayerInventory.CreateContainer();
+            var seen = new bool[inventory.Capacity];
+            foreach (var slot in snapshot.Inventory.Slots)
+            {
+                if ((uint)slot.Slot >= (uint)inventory.Capacity ||
+                    seen[slot.Slot])
+                {
+                    throw new InvalidOperationException(
+                        "The world transaction returned invalid inventory slots.");
+                }
+
+                seen[slot.Slot] = true;
+                if (slot.ItemId is null && slot.Quantity == 0)
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(slot.ItemId) ||
+                    slot.Quantity <= 0 ||
+                    !inventory.TrySetSlot(
+                        slot.Slot,
+                        slot.ItemId,
+                        slot.Quantity))
+                {
+                    throw new InvalidOperationException(
+                        "The world transaction returned an invalid inventory item.");
+                }
+            }
+
+            if (seen.Any(value => !value))
+            {
+                throw new InvalidOperationException(
+                    "The world transaction returned an incomplete inventory.");
+            }
+
+            Inventory = inventory;
+            InventoryRevision = snapshot.Inventory.Revision;
+            ActorRevision = snapshot.ActorRevision;
+            Health = snapshot.Health;
+            Hunger = snapshot.Hunger;
+            WellFedSeconds = snapshot.WellFedSeconds;
+            CraftingExperience = snapshot.CraftingExperience;
+            CookingExperience = snapshot.CookingExperience;
+        }
+
         public PlayerGameplaySnapshot ToSnapshot()
         {
             var slots = ImmutableArray.CreateBuilder<InventorySlotSnapshot>(
@@ -1362,6 +1884,7 @@ public sealed class AuthoritativeWorldSession
     }
 
     private sealed record CommandReceipt(
-        GameplayIntent Intent,
-        IntentResult Result);
+        string PayloadFingerprint,
+        IntentResult Result,
+        bool Restored);
 }

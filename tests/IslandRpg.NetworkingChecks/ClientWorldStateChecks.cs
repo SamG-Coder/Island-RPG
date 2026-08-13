@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using IslandRpg.Client;
@@ -23,8 +24,20 @@ internal static class ClientWorldStateChecks
             "network client atomically merges private container deltas",
             MergesPrivateContainerStateAsync);
         checks.Add(
+            "network client signals identical container open baselines",
+            SignalsIdenticalContainerOpenBaselinesAsync);
+        checks.Add(
             "network client preserves container state on revision mismatch",
             PreservesContainerOnMismatchAsync);
+        checks.Add(
+            "network client applies every object in one chunk transaction",
+            AppliesMultiObjectChunkTransactionAsync);
+        checks.Add(
+            "network client receives empty chunk revision baselines",
+            ReceivesEmptyChunkRevisionBaselineAsync);
+        checks.Add(
+            "network client rejects malformed chunk revisions atomically",
+            RejectsMalformedChunkRevisionBaselineAsync);
     }
 
     private static async ValueTask AppliesWorldObjectChangesAsync(
@@ -222,6 +235,10 @@ internal static class ClientWorldStateChecks
             cancellationToken);
 
         var merged = client.State.Containers[id];
+        CheckAssert.Equal(
+            new WorldObjectReference(id, 3, -2, 0, 5, 0),
+            merged.Reference,
+            "a container delta must retain its exact current world reference");
         CheckAssert.SequenceEqual(
             new[]
             {
@@ -302,6 +319,192 @@ internal static class ClientWorldStateChecks
             "a rejected container delta must not raise an event");
     }
 
+    private static async ValueTask SignalsIdenticalContainerOpenBaselinesAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var client = new NetworkGameClient(TimeSpan.Zero);
+        await using var peer = await ScriptedWorldPeer.ConnectAsync(
+            client,
+            cancellationToken);
+        var id = Guid.NewGuid();
+        var observed = new List<NetworkContainerState>();
+        client.ContainerStateChanged += (_, args) =>
+        {
+            lock (observed) observed.Add(args.State);
+        };
+        var slots = new[]
+        {
+            new ContainerSlotState(0, "slime_gel", 2),
+            new ContainerSlotState(1, string.Empty, 0),
+        };
+        var first = Container(
+            2, 450, id, 0, 7, true, slots,
+            objectRevision: 7, chunkRevision: 19);
+        var repeated = first with { Sequence = 3, Tick = 451 };
+
+        await peer.SendAsync(first, cancellationToken);
+        await peer.SendAsync(repeated, cancellationToken);
+        await EventuallyAsync(
+            () =>
+            {
+                lock (observed) return observed.Count == 2;
+            },
+            "an identical baseline did not signal the second open response",
+            cancellationToken);
+
+        NetworkContainerState latest;
+        lock (observed) latest = observed[^1];
+        CheckAssert.Equal(first.Container, latest.Reference,
+            "container projections must retain exact object and chunk revisions");
+        CheckAssert.Equal(7u, latest.ContainerRevision,
+            "an identical open response must retain the container revision");
+        CheckAssert.SequenceEqual(slots, latest.Slots,
+            "an identical open response must retain the complete slot baseline");
+    }
+
+    private static async ValueTask AppliesMultiObjectChunkTransactionAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var client = new NetworkGameClient(TimeSpan.Zero);
+        await using var peer = await ScriptedWorldPeer.ConnectAsync(
+            client,
+            cancellationToken);
+        var first = World(Guid.NewGuid(), 1, 1, 100);
+        var second = first with { ObjectId = Guid.NewGuid(), X = first.X + .25f };
+        var changes = 0;
+        client.WorldObjectsChanged += (_, args) =>
+            Interlocked.Add(ref changes, args.Changes.Count);
+
+        await peer.SendAsync(
+            new WorldObjectDeltaBatchMessage(
+                2,
+                500,
+                [
+                    new(
+                        WorldObjectDeltaKind.Upsert,
+                        new(first.ObjectId, first.ChunkX, first.ChunkY,
+                            first.WorldLevel, 0, 0),
+                        1,
+                        first),
+                    new(
+                        WorldObjectDeltaKind.Upsert,
+                        new(second.ObjectId, second.ChunkX, second.ChunkY,
+                            second.WorldLevel, 0, 0),
+                        1,
+                        second),
+                ]),
+            cancellationToken);
+
+        await EventuallyAsync(
+            () => client.State.WorldObjects.Count == 2,
+            "one chunk transaction did not apply every object delta",
+            cancellationToken);
+        CheckAssert.Equal(2, Volatile.Read(ref changes),
+            "both objects in the transaction must publish together");
+        CheckAssert.Equal(1u, client.State.WorldChunkRevisions[
+                new NetworkWorldChunk(3, -2, 0)],
+            "one chunk transaction must advance the chunk revision once");
+    }
+
+    private static async ValueTask ReceivesEmptyChunkRevisionBaselineAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var client = new NetworkGameClient(TimeSpan.Zero);
+        await using var peer = await ScriptedWorldPeer.ConnectAsync(
+            client,
+            cancellationToken);
+        var emptyChunk = new NetworkWorldChunk(-21, 34, -1);
+
+        await peer.SendAsync(
+            new WorldChunkRevisionBatchMessage(
+                2,
+                600,
+                [new(emptyChunk.ChunkX, emptyChunk.ChunkY,
+                    emptyChunk.WorldLevel, 17)]),
+            cancellationToken);
+        await EventuallyAsync(
+            () => client.State.WorldChunkRevisions.TryGetValue(
+                    emptyChunk,
+                    out var revision) &&
+                revision == 17,
+            "the empty chunk revision baseline was not published",
+            cancellationToken);
+
+        CheckAssert.Equal(0, client.State.WorldObjects.Count,
+            "a chunk baseline must not invent a public world object");
+        CheckAssert.Equal(17u, client.State.WorldChunkRevisions[emptyChunk],
+            "callers must be able to resolve an empty chunk revision from State");
+
+        await peer.SendAsync(
+            new WorldChunkRevisionBatchMessage(
+                3,
+                601,
+                [new(emptyChunk.ChunkX, emptyChunk.ChunkY,
+                    emptyChunk.WorldLevel, 12)]),
+            cancellationToken);
+        await EventuallyAsync(
+            () => client.State.ServerTick >= 601,
+            "the stale chunk baseline was not consumed",
+            cancellationToken);
+        CheckAssert.Equal(17u, client.State.WorldChunkRevisions[emptyChunk],
+            "chunk revision baselines must apply monotonically");
+    }
+
+    private static async ValueTask RejectsMalformedChunkRevisionBaselineAsync(
+        CancellationToken cancellationToken)
+    {
+        await AssertMalformedChunkBatchAsync(
+            frame =>
+            {
+                // Copy the first entry's complete chunk key over the second
+                // while retaining its different revision.
+                frame.AsSpan(
+                        ProtocolConstants.ReliableHeaderSize + 2,
+                        sizeof(int) * 2 + sizeof(short))
+                    .CopyTo(frame.AsSpan(
+                        ProtocolConstants.ReliableHeaderSize + 16));
+            },
+            "conflicting duplicate",
+            cancellationToken);
+        await AssertMalformedChunkBatchAsync(
+            frame => BinaryPrimitives.WriteUInt32LittleEndian(
+                frame.AsSpan(
+                    ProtocolConstants.ReliableHeaderSize + 26),
+                0),
+            "positive",
+            cancellationToken);
+    }
+
+    private static async ValueTask AssertMalformedChunkBatchAsync(
+        Action<byte[]> corrupt,
+        string expectedError,
+        CancellationToken cancellationToken)
+    {
+        await using var client = new NetworkGameClient(TimeSpan.Zero);
+        await using var peer = await ScriptedWorldPeer.ConnectAsync(
+            client,
+            cancellationToken);
+        var valid = ReliableProtocolCodec.Encode(
+            new WorldChunkRevisionBatchMessage(
+                2,
+                700,
+                [new(4, 8, 0, 11), new(5, 9, 0, 12)]));
+        corrupt(valid);
+        await peer.SendRawAsync(valid, cancellationToken);
+        await EventuallyAsync(
+            () => client.State.Status == NetworkGameClientStatus.Faulted,
+            "the malformed chunk baseline did not fault the client",
+            cancellationToken);
+
+        CheckAssert.Equal(0, client.State.WorldChunkRevisions.Count,
+            "a malformed chunk batch must not partially publish revisions");
+        CheckAssert.True(
+            client.State.LastError?.Contains(
+                expectedError,
+                StringComparison.OrdinalIgnoreCase) == true,
+            "the malformed chunk fault must explain its rejected revision");
+    }
+
     private static WorldObjectState World(
         Guid id,
         uint chunkRevision,
@@ -320,7 +523,10 @@ internal static class ClientWorldStateChecks
             1,
             health,
             100,
-            true);
+            true,
+            string.Empty,
+            0,
+            WorldObjectGateState.None);
 
     private static WorldObjectReference Reference(WorldObjectState state) =>
         new(
@@ -348,11 +554,14 @@ internal static class ClientWorldStateChecks
         uint revision,
         bool isBaseline,
         IReadOnlyList<ContainerSlotState> slots,
-        int slotCount = 0) =>
+        int slotCount = 0,
+        uint? objectRevision = null,
+        uint chunkRevision = 0) =>
         new(
             sequence,
             tick,
-            new WorldObjectReference(id, 3, -2, 0, revision, 0),
+            new WorldObjectReference(
+                id, 3, -2, 0, objectRevision ?? revision, chunkRevision),
             baselineRevision,
             revision,
             "storage_chest",
@@ -474,6 +683,22 @@ internal static class ClientWorldStateChecks
                     cancellationToken)
                 .AsTask()
                 .WaitAsync(Timeout, cancellationToken);
+
+        public async ValueTask SendRawAsync(
+            byte[] frame,
+            CancellationToken cancellationToken)
+        {
+            var prefix = new byte[sizeof(uint)];
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                prefix,
+                checked((uint)frame.Length));
+            await _stream.WriteAsync(prefix, cancellationToken)
+                .AsTask()
+                .WaitAsync(Timeout, cancellationToken);
+            await _stream.WriteAsync(frame, cancellationToken)
+                .AsTask()
+                .WaitAsync(Timeout, cancellationToken);
+        }
 
         public ValueTask DisposeAsync()
         {

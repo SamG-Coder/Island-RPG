@@ -410,6 +410,17 @@ internal sealed partial class GameHostWindow
                 "No green wall segments can be placed on that line.");
             return false;
         }
+        if (IsNetworkWorld)
+        {
+            StartNetworkConstructionPlacements(valid.Select(node =>
+                new PendingNetworkWorldAction(
+                    NetworkWorldActionKind.PlaceConstruction,
+                    node.Target,
+                    InventorySlot: 0,
+                    DefinitionId: recipe.ResultItemId,
+                    Rotation: node.Frame)));
+            return true;
+        }
         var resolved = new List<(
             GpuWorldChunk Chunk, Vector2 Target, int Frame)>();
         foreach (var node in valid)
@@ -494,6 +505,12 @@ internal sealed partial class GameHostWindow
 
     private void DemolishPlayerConstruction(WorldGroundObject site)
     {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkObjectAction(
+                NetworkWorldActionKind.Demolish, site);
+            return;
+        }
         if (_activePlayer is null ||
             !ConstructionService.IsConstructionSite(site) ||
             !string.Equals(site.OwnerId, _activePlayer.Id,
@@ -527,6 +544,19 @@ internal sealed partial class GameHostWindow
     private bool PlacePlayerBuildingFoundation(
         GroundDropPreview preview, CraftingRecipe recipe)
     {
+        if (IsNetworkWorld)
+        {
+            if (!preview.Valid) return false;
+            StartNetworkConstructionPlacements([
+                new PendingNetworkWorldAction(
+                    NetworkWorldActionKind.PlaceConstruction,
+                    preview.Target,
+                    InventorySlot: preview.InventorySlot,
+                    DefinitionId: recipe.ResultItemId,
+                    Rotation: preview.Rotation)
+            ]);
+            return true;
+        }
         if (_activePlayer is null) return false;
         if (!CanPlacePlaceableObjectAt(
                 preview.ItemId, preview.Target, out var gpu, out var reason,
@@ -584,6 +614,12 @@ internal sealed partial class GameHostWindow
     private void QueuePlayerConstructionWork(
         WorldGroundObject site, bool preserveSequence = false)
     {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkObjectAction(
+                NetworkWorldActionKind.BuildConstruction, site);
+            return;
+        }
         if (_player is null ||
             !ConstructionService.IsConstructionSite(site))
             return;

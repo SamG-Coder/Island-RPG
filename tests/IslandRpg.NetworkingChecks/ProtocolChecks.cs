@@ -31,6 +31,12 @@ internal static class ProtocolChecks
         checks.Add(
             "world action protocol rejects malformed and oversized state",
             WorldActionProtocolRejectsMalformedState);
+        checks.Add(
+            "world chunk revision batches round trip exactly",
+            WorldChunkRevisionBatchesRoundTrip);
+        checks.Add(
+            "world chunk revision batches reject malformed state",
+            WorldChunkRevisionBatchesRejectMalformedState);
     }
 
     private static void ReliableMessagesRoundTrip()
@@ -192,9 +198,9 @@ internal static class ProtocolChecks
     private static void ProtocolEnforcesInputBounds()
     {
         CheckAssert.Equal(
-            (ushort)2,
+            (ushort)3,
             ProtocolConstants.CurrentVersion,
-            "the expanded world-action wire contract must use protocol v2");
+            "public world visual state requires protocol v3");
         var multibyteName = string.Concat(
             Enumerable.Repeat("界", ProtocolLimits.PlayerNameBytes));
         CheckAssert.Throws<ProtocolException>(
@@ -522,7 +528,10 @@ internal static class ProtocolChecks
             2,
             80,
             120,
-            true);
+            true,
+            "logs",
+            944.5,
+            WorldObjectGateState.None);
         var reference = new WorldObjectReference(
             objectId, 5, -8, 0, 11, 32);
 
@@ -750,7 +759,10 @@ internal static class ProtocolChecks
             0,
             1,
             10,
-            false);
+            false,
+            "logs",
+            15,
+            WorldObjectGateState.None);
         var tooManyDeltas = Enumerable.Range(
                 0,
                 ProtocolLimits.MaxWorldObjectsPerBatch + 1)
@@ -862,5 +874,97 @@ internal static class ProtocolChecks
         CheckAssert.Throws<ProtocolException>(
             () => ReliableProtocolCodec.Decode(validState),
             "non-finite public object positions must be rejected from wire data");
+    }
+
+    private static void WorldChunkRevisionBatchesRoundTrip()
+    {
+        var expected = new WorldChunkRevisionBatchMessage(
+            910,
+            1200,
+            [
+                new(-9, 13, -2, 41),
+                new(0, 0, 0, 1),
+                new(80, -45, 3, uint.MaxValue),
+            ]);
+
+        var encoded = ReliableProtocolCodec.Encode(expected);
+        var actual = (WorldChunkRevisionBatchMessage)
+            ReliableProtocolCodec.Decode(encoded);
+        CheckAssert.Equal(
+            expected with { Chunks = actual.Chunks },
+            actual,
+            "chunk revision metadata must round trip exactly");
+        CheckAssert.SequenceEqual(
+            expected.Chunks,
+            actual.Chunks,
+            "every chunk revision must round trip exactly");
+    }
+
+    private static void WorldChunkRevisionBatchesRejectMalformedState()
+    {
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(
+                new WorldChunkRevisionBatchMessage(1, 1, [])),
+            "empty chunk revision batches must be rejected");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(
+                new WorldChunkRevisionBatchMessage(
+                    1,
+                    1,
+                    [new(2, 3, 0, 0)])),
+            "zero chunk revisions must be rejected");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(
+                new WorldChunkRevisionBatchMessage(
+                    1,
+                    1,
+                    [new(2, 3, 0, 4), new(2, 3, 0, 5)])),
+            "conflicting duplicate chunks must be rejected");
+
+        var oversized = Enumerable.Range(
+                0,
+                ProtocolLimits.MaxWorldChunkRevisionsPerBatch + 1)
+            .Select(static index => new WorldChunkRevisionState(
+                index,
+                0,
+                0,
+                1))
+            .ToArray();
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(
+                new WorldChunkRevisionBatchMessage(1, 1, oversized)),
+            "chunk revision batches must enforce their hard count limit");
+
+        var valid = ReliableProtocolCodec.Encode(
+            new WorldChunkRevisionBatchMessage(
+                1,
+                1,
+                [new(2, 3, 0, 4), new(9, 8, 1, 5)]));
+        var zeroWireRevision = valid.ToArray();
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            zeroWireRevision.AsSpan(
+                ProtocolConstants.ReliableHeaderSize + 12),
+            0);
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Decode(zeroWireRevision),
+            "zero wire revisions must be rejected");
+
+        var conflictingWireDuplicate = valid.ToArray();
+        valid.AsSpan(
+                ProtocolConstants.ReliableHeaderSize + 2,
+                sizeof(int) * 2 + sizeof(short))
+            .CopyTo(conflictingWireDuplicate.AsSpan(
+                ProtocolConstants.ReliableHeaderSize + 16));
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Decode(conflictingWireDuplicate),
+            "conflicting duplicate wire chunks must be rejected atomically");
+
+        var oversizedWireCount = valid.ToArray();
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            oversizedWireCount.AsSpan(ProtocolConstants.ReliableHeaderSize),
+            ProtocolLimits.MaxWorldChunkRevisionsPerBatch + 1);
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Decode(oversizedWireCount),
+            "oversized wire chunk counts must be rejected before allocation");
     }
 }

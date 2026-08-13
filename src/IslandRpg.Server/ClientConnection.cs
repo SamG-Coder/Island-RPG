@@ -15,6 +15,7 @@ internal sealed class ClientConnection : IAsyncDisposable
     private readonly Channel<IProtocolMessage> _outbound;
     private readonly EntitySnapshot[] _snapshotSelection =
         new EntitySnapshot[UdpSnapshotCodec.MaxEntitiesPerDatagram];
+    private readonly object _outboundSync = new();
     private long _nextOutboundSequence;
     private int _disposed;
 
@@ -67,8 +68,29 @@ internal sealed class ClientConnection : IAsyncDisposable
         await Completion.ConfigureAwait(false);
     }
 
-    public ulong NextOutboundSequence() =>
-        checked((ulong)Interlocked.Increment(ref _nextOutboundSequence));
+    public ulong NextOutboundSequence()
+    {
+        lock (_outboundSync)
+        {
+            return checked((ulong)++_nextOutboundSequence);
+        }
+    }
+
+    /// <summary>
+    /// Allocates a reliable sequence and publishes its message under the same
+    /// lock. Concurrent broadcasts can therefore never enter the channel in a
+    /// different order from their wire sequence numbers.
+    /// </summary>
+    public bool TryQueueSequenced(Func<ulong, IProtocolMessage> createMessage)
+    {
+        ArgumentNullException.ThrowIfNull(createMessage);
+        lock (_outboundSync)
+        {
+            if (_lifetime.IsCancellationRequested) return false;
+            var sequence = checked((ulong)++_nextOutboundSequence);
+            return _outbound.Writer.TryWrite(createMessage(sequence));
+        }
+    }
 
     public ushort NextSnapshotSequence() =>
         unchecked((ushort)Interlocked.Increment(ref _nextSnapshotSequence));
@@ -98,8 +120,14 @@ internal sealed class ClientConnection : IAsyncDisposable
         DeltaSnapshotsEnabled = endpoint is not null && deltaSnapshotsEnabled;
     }
 
-    public bool TryQueue(IProtocolMessage message) =>
-        !_lifetime.IsCancellationRequested && _outbound.Writer.TryWrite(message);
+    public bool TryQueue(IProtocolMessage message)
+    {
+        lock (_outboundSync)
+        {
+            return !_lifetime.IsCancellationRequested &&
+                _outbound.Writer.TryWrite(message);
+        }
+    }
 
     public void Stop() => _lifetime.Cancel();
 
@@ -155,6 +183,7 @@ internal sealed class ClientConnection : IAsyncDisposable
             {
                 return;
             }
+            _server.QueueWorldObjectBaselines(this);
 
             Authenticated = true;
             PlayerId = player.Value.Identity.PlayerId.Value;
@@ -198,8 +227,8 @@ internal sealed class ClientConnection : IAsyncDisposable
                         this, player.Value, actionCommand, result);
                     continue;
                 }
-                if (!TryQueue(new CommandResultMessage(
-                    NextOutboundSequence(),
+                if (!TryQueueSequenced(sequence => new CommandResultMessage(
+                    sequence,
                     checked((ulong)_server.CurrentTick),
                     message.Sequence,
                     accepted,

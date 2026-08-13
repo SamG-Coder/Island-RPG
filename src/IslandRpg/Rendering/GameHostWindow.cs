@@ -542,7 +542,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _gameUi.CraftingButton.Clicked += () =>
             OpenCraftingWindow();
         _gameUi.BuildButton.Clicked += () =>
-            RunLocalOnlyUiAction(ToggleBuildingPanel);
+            ToggleBuildingPanel();
         _gameUi.QuestButton.Clicked += () =>
             OpenQuestWindow();
         _gameUi.DisembarkButton.Clicked +=
@@ -1475,6 +1475,7 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var coordinate in _worldChunks.Keys.ToArray())
             UnloadWorldChunk(coordinate, save: true);
         _saveTail.GetAwaiter().GetResult();
+        LeaveNetworkWorldProjection();
 
         _activeWorld = null;
         _activePlayer = null;
@@ -2115,10 +2116,8 @@ internal sealed partial class GameHostWindow : GameWindow
         UpdateCraftingWindowInput(MouseState.Position, leftDown);
         UpdateSkillsPanelInput(MouseState.Position, leftDown);
         if (!IsNetworkWorld)
-        {
             UpdateCombatPanelInput(MouseState.Position, leftDown);
-            UpdateBuildingPanelInput(MouseState.Position, leftDown);
-        }
+        UpdateBuildingPanelInput(MouseState.Position, leftDown);
         var rightDown = MouseState.IsButtonDown(MouseButton.Right);
         if (_gameUi.ActivePanel == GameUiPanel.Inventory)
             UpdateInventoryInteraction(
@@ -4901,6 +4900,9 @@ internal sealed partial class GameHostWindow : GameWindow
         var groundObject = _groundObjectContextTarget;
         _groundObjectContextTarget = null;
         if (groundObject is null) return;
+        if (TryHandleNetworkGroundObjectContextSelection(
+                groundObject, option))
+            return;
         if (ConstructionService.IsConstructionSite(groundObject))
         {
             if (option == 0)
@@ -6481,8 +6483,10 @@ internal sealed partial class GameHostWindow : GameWindow
                 visibleName);
         }
 
-        var wallCells = visibleChunks
-            .SelectMany(gpu => gpu.Chunk.GroundObjects)
+        var visibleGroundObjects =
+            CollectVisibleGroundObjects(visibleChunks);
+        var wallCells = visibleGroundObjects
+            .Select(item => item.Object)
             .Where(value => WallCatalog.IsWall(value.ItemId))
             .GroupBy(value => value.ItemId, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
@@ -6492,9 +6496,7 @@ internal sealed partial class GameHostWindow : GameWindow
                     (int)MathF.Floor(value.Y))).ToHashSet(),
                 StringComparer.OrdinalIgnoreCase);
         if (renderGroundObjectsAndFish)
-        foreach (var item in visibleChunks
-                     .SelectMany(gpu => gpu.Chunk.GroundObjects.Select(
-                         groundObject => (Object: groundObject, Gpu: gpu))))
+        foreach (var item in visibleGroundObjects)
         {
             string itemAtlasKey;
             string? shadowAtlasKey;
@@ -6536,7 +6538,7 @@ internal sealed partial class GameHostWindow : GameWindow
                         item.Object, _worldGameSeconds, _clock);
             }
             var world = GroundObjectWorld(item.Object);
-            var objectOpacity = item.Gpu.Opacity *
+            var objectOpacity = item.Opacity *
                 distantDetailOpacity *
                 CaveEntranceService.Opacity(item.Object) *
                 LootBagOpacity(item.Object);

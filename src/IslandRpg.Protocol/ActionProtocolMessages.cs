@@ -211,7 +211,10 @@ public readonly record struct WorldObjectState(
     int Rotation,
     int Health,
     int MaximumHealth,
-    bool HasContainer);
+    bool HasContainer,
+    string FuelItemId,
+    double LitUntilGameSeconds,
+    WorldObjectGateState GateState);
 
 public sealed record WorldObjectStateMessage(
     ulong Sequence,

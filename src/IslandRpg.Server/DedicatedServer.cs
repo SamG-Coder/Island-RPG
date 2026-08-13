@@ -7,6 +7,7 @@ using System.Numerics;
 using System.Security.Cryptography;
 using IslandRpg.Navigation;
 using IslandRpg.Protocol;
+using IslandRpg.Server.Persistence;
 using IslandRpg.Simulation;
 
 namespace IslandRpg.Server;
@@ -24,9 +25,21 @@ public sealed class DedicatedServer : IAsyncDisposable
     private readonly CancellationTokenSource _lifetime = new();
     private readonly TaskCompletionSource<IPEndPoint> _startedSignal =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _stoppedSignal =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Thread _simulationThread;
     private ushort _boundSnapshotPort;
     private int _started;
+    private int _worldBootstrapPending = 1;
+    private readonly object _worldBootstrapSync = new();
+    private WorldBootstrapState _worldBootstrap = WorldBootstrapState.Empty;
+    private readonly ServerCheckpointStore? _checkpointStore;
+    private readonly ServerCheckpointWriter? _checkpointWriter;
+    private readonly IDisposable? _worldLease;
+    private readonly ServerCheckpointLoadResult? _checkpointToRestore;
+    private long _checkpointRevision;
+    private long _nextAutosaveTick;
+    private int _disposed;
 
     public DedicatedServer(ServerOptions options)
     {
@@ -40,6 +53,23 @@ public sealed class DedicatedServer : IAsyncDisposable
             SimulationLimits.Default with { MaximumActors = options.MaximumClients },
             sessionId: new SessionId(options.WorldId),
             navigation: new ProceduralSurfaceNavigationQuery(options.WorldSeed));
+        _session.WorldTransactionCommitted += ApplyWorldTransactionToBootstrap;
+        if (!string.IsNullOrWhiteSpace(options.SaveRoot))
+        {
+            _checkpointStore = new ServerCheckpointStore(options.SaveRoot);
+            _worldLease = _checkpointStore.AcquireWorldLease(options.WorldId);
+            try
+            {
+                _checkpointToRestore = _checkpointStore.Load(options.WorldId);
+                _checkpointRevision = _checkpointToRestore?.Checkpoint.Revision ?? 0;
+                _checkpointWriter = new ServerCheckpointWriter(_checkpointStore);
+            }
+            catch
+            {
+                _worldLease.Dispose();
+                throw;
+            }
+        }
         _clientSlots = new SemaphoreSlim(options.MaximumClients, options.MaximumClients);
         _simulationThread = new Thread(SimulationLoop)
         {
@@ -69,22 +99,24 @@ public sealed class DedicatedServer : IAsyncDisposable
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             _lifetime.Token);
-        _listener.Start(_options.MaximumClients);
-        _snapshotSocket.Bind(new IPEndPoint(
-            _options.ListenAddress,
-            _options.SnapshotPort));
-        _boundSnapshotPort = checked((ushort)
-            ((IPEndPoint)_snapshotSocket.LocalEndPoint!).Port);
-        var boundEndpoint = (IPEndPoint)_listener.LocalEndpoint;
-        BoundEndpoint = boundEndpoint;
-        _startedSignal.TrySetResult(boundEndpoint);
-        _simulationThread.Start();
-        Console.WriteLine(
-            $"Island RPG server listening on {boundEndpoint} " +
-            $"(world {_options.WorldId:N}, seed {_options.WorldSeed}, max {_options.MaximumClients}).");
-
+        var simulationStarted = false;
         try
         {
+            _listener.Start(_options.MaximumClients);
+            _snapshotSocket.Bind(new IPEndPoint(
+                _options.ListenAddress,
+                _options.SnapshotPort));
+            _boundSnapshotPort = checked((ushort)
+                ((IPEndPoint)_snapshotSocket.LocalEndPoint!).Port);
+            var boundEndpoint = (IPEndPoint)_listener.LocalEndpoint;
+            BoundEndpoint = boundEndpoint;
+            _startedSignal.TrySetResult(boundEndpoint);
+            _simulationThread.Start();
+            simulationStarted = true;
+            Console.WriteLine(
+                $"Island RPG server listening on {boundEndpoint} " +
+                $"(world {_options.WorldId:N}, seed {_options.WorldSeed}, max {_options.MaximumClients}).");
+
             while (!linked.IsCancellationRequested)
             {
                 var tcpClient = await _listener.AcceptTcpClientAsync(linked.Token).ConfigureAwait(false);
@@ -110,23 +142,35 @@ public sealed class DedicatedServer : IAsyncDisposable
         }
         finally
         {
-            if (!_startedSignal.Task.IsCompleted)
+            try
             {
-                _startedSignal.TrySetCanceled(linked.Token);
-            }
+                if (!_startedSignal.Task.IsCompleted)
+                    _startedSignal.TrySetCanceled(linked.Token);
 
-            _listener.Stop();
-            foreach (var connection in _clients.Values)
+                _listener.Stop();
+                foreach (var connection in _clients.Values)
+                    connection.Stop();
+
+                await Task.WhenAll(_clients.Values.Select(static value => value.Completion))
+                    .ConfigureAwait(false);
+                _lifetime.Cancel();
+                if (simulationStarted &&
+                    !_simulationThread.Join(TimeSpan.FromSeconds(10)))
+                    throw new TimeoutException(
+                        "The authoritative simulation thread did not stop cleanly.");
+                if (_checkpointWriter is not null)
+                {
+                    await _checkpointWriter.FlushAsync().ConfigureAwait(false);
+                    await _checkpointWriter.DisposeAsync().ConfigureAwait(false);
+                }
+                Console.WriteLine("Island RPG server stopped.");
+            }
+            finally
             {
-                connection.Stop();
+                _worldLease?.Dispose();
+                _snapshotSocket.Close();
+                _stoppedSignal.TrySetResult();
             }
-
-            await Task.WhenAll(_clients.Values.Select(static value => value.Completion))
-                .ConfigureAwait(false);
-            _lifetime.Cancel();
-            _simulationThread.Join(TimeSpan.FromSeconds(5));
-            _snapshotSocket.Close();
-            Console.WriteLine("Island RPG server stopped.");
         }
     }
 
@@ -315,7 +359,8 @@ public sealed class DedicatedServer : IAsyncDisposable
         AuthenticatedPlayer player)
     {
         return ToPlayerStateMessage(
-            connection,
+            connection.NextOutboundSequence(),
+            checked((ulong)CurrentTick),
             player,
             player.Gameplay,
             PlayerStateFlags.Baseline |
@@ -323,6 +368,48 @@ public sealed class DedicatedServer : IAsyncDisposable
             PlayerStateFlags.Inventory,
             baselineActorRevision: 0,
             baselineInventoryRevision: 0);
+    }
+
+    internal void QueueWorldObjectBaselines(ClientConnection connection)
+    {
+        var bootstrap = Volatile.Read(ref _worldBootstrap);
+        var chunkRevisions = bootstrap.ChunkRevisions;
+        for (var offset = 0; offset < chunkRevisions.Count;
+             offset += ProtocolLimits.MaxWorldChunkRevisionsPerBatch)
+        {
+            var count = Math.Min(
+                ProtocolLimits.MaxWorldChunkRevisionsPerBatch,
+                chunkRevisions.Count - offset);
+            var batch = new WorldChunkRevisionState[count];
+            for (var index = 0; index < count; index++)
+                batch[index] = chunkRevisions[offset + index];
+            if (!connection.TryQueueSequenced(sequence =>
+                    new WorldChunkRevisionBatchMessage(
+                        sequence,
+                        checked((ulong)CurrentTick),
+                        batch)))
+            {
+                connection.Stop();
+                return;
+            }
+        }
+
+        // Chunk revisions precede object baselines so an object-free chunk is
+        // still actionable and every following object can reference a known
+        // authoritative chunk revision.
+        foreach (var value in bootstrap.Objects)
+        {
+            if (!connection.TryQueueSequenced(sequence =>
+                    WorldActionProtocolAdapter.ToPublicWorldState(
+                        sequence,
+                        checked((ulong)CurrentTick),
+                        value.Object,
+                        value.ChunkRevision)))
+            {
+                connection.Stop();
+                return;
+            }
+        }
     }
 
     internal async Task<IntentResult> ProcessCommandAsync(
@@ -342,7 +429,12 @@ public sealed class DedicatedServer : IAsyncDisposable
                 walk.WorldLevel),
             StopCommandMessage => StopIntent.Instance,
             ChatCommandMessage chat => new ChatIntent(chat.Text),
-            ActionCommandMessage action => ToGameplayIntent(action),
+            ActionCommandMessage action =>
+                WorldActionProtocolAdapter.TryToWorldIntent(
+                    action,
+                    out var worldIntent)
+                    ? worldIntent!
+                    : ToGameplayIntent(action),
             _ => throw new CommandFailure(
                 CommandRejectionCode.Invalid,
                 $"Message {message.Kind} is not valid after handshake.")
@@ -368,10 +460,18 @@ public sealed class DedicatedServer : IAsyncDisposable
         ActionCommandMessage command,
         IntentResult result)
     {
+        var tick = checked((ulong)CurrentTick);
+        if (result.WorldTransaction is { } transaction)
+        {
+            QueueWorldActionOutcome(
+                connection, player, command, result, transaction, tick);
+            return;
+        }
+
         var rejection = MapRejection(result.Status);
-        if (!connection.TryQueue(new ActionResultMessage(
-                connection.NextOutboundSequence(),
-                checked((ulong)CurrentTick),
+        if (!connection.TryQueueSequenced(sequence => new ActionResultMessage(
+                sequence,
+                tick,
                 command.CommandId,
                 result.Accepted,
                 rejection,
@@ -387,8 +487,9 @@ public sealed class DedicatedServer : IAsyncDisposable
         // transaction. The transport can replace this with section deltas
         // later without changing the authoritative transaction boundary.
         if (!result.Accepted || result.Duplicate) return;
-        if (!connection.TryQueue(ToPlayerStateMessage(
-                connection,
+        if (!connection.TryQueueSequenced(sequence => ToPlayerStateMessage(
+                sequence,
+                tick,
                 player,
                 result.Gameplay,
                 PlayerStateFlags.Baseline |
@@ -399,9 +500,69 @@ public sealed class DedicatedServer : IAsyncDisposable
             connection.Stop();
     }
 
+    private void QueueWorldActionOutcome(
+        ClientConnection connection,
+        AuthenticatedPlayer player,
+        ActionCommandMessage command,
+        IntentResult result,
+        WorldTransactionResult transaction,
+        ulong tick)
+    {
+        if (!connection.TryQueueSequenced(sequence =>
+                WorldActionProtocolAdapter.ToActionResult(
+                    sequence, tick, transaction)))
+        {
+            connection.Stop();
+            return;
+        }
+
+        // Duplicate receipts acknowledge the requester but never publish the
+        // same public mutation twice. The original receipt already advanced
+        // every observer's chunk/object revisions.
+        if (result.Duplicate) return;
+
+        if (WorldActionProtocolAdapter.ToPrivatePlayerState(
+                1,
+                tick,
+                player.Identity.PlayerId.Value,
+                StableNetworkId(player.Identity.ActorId.Value),
+                command,
+                transaction) is not null &&
+            !connection.TryQueueSequenced(sequence =>
+                WorldActionProtocolAdapter.ToPrivatePlayerState(
+                    sequence,
+                    tick,
+                    player.Identity.PlayerId.Value,
+                    StableNetworkId(player.Identity.ActorId.Value),
+                    command,
+                    transaction)!))
+        {
+            connection.Stop();
+            return;
+        }
+
+        if (WorldActionProtocolAdapter.ToPrivateContainerBaseline(
+                1, tick, command, transaction) is not null &&
+            !connection.TryQueueSequenced(sequence =>
+                WorldActionProtocolAdapter.ToPrivateContainerBaseline(
+                    sequence, tick, command, transaction)!))
+        {
+            connection.Stop();
+            return;
+        }
+
+        if (WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
+                1, tick, transaction) is not null)
+        {
+            Broadcast((candidate, sequence) =>
+                WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
+                    sequence, tick, transaction)!);
+        }
+    }
+
     internal void BroadcastPlayerJoined(Guid playerId, string playerName) =>
-        Broadcast(connection => new PlayerJoinedMessage(
-            connection.NextOutboundSequence(),
+        Broadcast((connection, sequence) => new PlayerJoinedMessage(
+            sequence,
             checked((ulong)_session.LatestSnapshot.Clock.Tick),
             playerId,
             playerName));
@@ -417,8 +578,8 @@ public sealed class DedicatedServer : IAsyncDisposable
         // snapshot alone has entity IDs but intentionally carries no names.
         foreach (var player in _connectedPlayers.OrderBy(static value => value.Key))
         {
-            if (!joinedConnection.TryQueue(new PlayerJoinedMessage(
-                    joinedConnection.NextOutboundSequence(),
+            if (!joinedConnection.TryQueueSequenced(sequence => new PlayerJoinedMessage(
+                    sequence,
                     checked((ulong)_session.LatestSnapshot.Clock.Tick),
                     player.Key,
                     player.Value)))
@@ -435,8 +596,8 @@ public sealed class DedicatedServer : IAsyncDisposable
                 continue;
             }
 
-            if (!connection.TryQueue(new PlayerJoinedMessage(
-                    connection.NextOutboundSequence(),
+            if (!connection.TryQueueSequenced(sequence => new PlayerJoinedMessage(
+                    sequence,
                     checked((ulong)_session.LatestSnapshot.Clock.Tick),
                     playerId,
                     playerName)))
@@ -449,8 +610,8 @@ public sealed class DedicatedServer : IAsyncDisposable
     internal void BroadcastPlayerLeft(Guid playerId, PlayerLeaveReason reason, string detail)
     {
         _connectedPlayers.TryRemove(playerId, out _);
-        Broadcast(connection => new PlayerLeftMessage(
-            connection.NextOutboundSequence(),
+        Broadcast((connection, sequence) => new PlayerLeftMessage(
+            sequence,
             checked((ulong)_session.LatestSnapshot.Clock.Tick),
             playerId,
             reason,
@@ -469,8 +630,8 @@ public sealed class DedicatedServer : IAsyncDisposable
                 continue;
             }
 
-            if (!connection.TryQueue(new ChatBroadcastMessage(
-                connection.NextOutboundSequence(),
+            if (!connection.TryQueueSequenced(sequence => new ChatBroadcastMessage(
+                sequence,
                 checked((ulong)_session.LatestSnapshot.Clock.Tick),
                 sender.Identity.PlayerId.Value,
                 sender.DisplayName,
@@ -532,16 +693,17 @@ public sealed class DedicatedServer : IAsyncDisposable
                 "The action payload is unsupported.")
         };
 
-    private PlayerStateMessage ToPlayerStateMessage(
-        ClientConnection connection,
+    private static PlayerStateMessage ToPlayerStateMessage(
+        ulong sequence,
+        ulong tick,
         AuthenticatedPlayer player,
         PlayerGameplaySnapshot gameplay,
         PlayerStateFlags flags,
         uint baselineActorRevision,
         uint baselineInventoryRevision) =>
         new(
-            connection.NextOutboundSequence(),
-            checked((ulong)CurrentTick),
+            sequence,
+            tick,
             player.Identity.PlayerId.Value,
             StableNetworkId(player.Identity.ActorId.Value),
             flags,
@@ -564,13 +726,26 @@ public sealed class DedicatedServer : IAsyncDisposable
             connection.Id,
             player.Identity.PlayerId));
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _lifetime.Cancel();
         _listener.Stop();
+        if (Volatile.Read(ref _started) != 0)
+        {
+            // RunAsync owns connection drain, authority join and the final
+            // durable flush. Disposal waits for that one shutdown path.
+            await _stoppedSignal.Task.ConfigureAwait(false);
+        }
+        else
+        {
+            if (_checkpointWriter is not null)
+                await _checkpointWriter.DisposeAsync().ConfigureAwait(false);
+            _worldLease?.Dispose();
+            _snapshotSocket.Dispose();
+        }
         _lifetime.Dispose();
         _clientSlots.Dispose();
-        return ValueTask.CompletedTask;
     }
 
     private async Task ObserveConnectionAsync(ClientConnection connection)
@@ -598,6 +773,28 @@ public sealed class DedicatedServer : IAsyncDisposable
         var tickDuration = Stopwatch.Frequency / (double)SimulationTiming.TicksPerSecond;
         var nextTick = stopwatch.ElapsedTicks;
 
+        if (Interlocked.Exchange(ref _worldBootstrapPending, 0) != 0)
+        {
+            if (_checkpointToRestore is { } load)
+            {
+                _session.RestoreCheckpoint(
+                    ServerCheckpointMapper.ToSimulation(
+                        load.Checkpoint,
+                        _options));
+                if (load.RecoveredFromBackup)
+                    Console.Error.WriteLine(
+                        "Recovered the authoritative world from its last known good backup.");
+            }
+            else
+            {
+                foreach (var value in _options.StartingWorldObjects)
+                    _session.SeedWorldObject(value);
+            }
+            RefreshWorldBootstrap();
+            _nextAutosaveTick = checked(
+                _session.Clock.Tick + AutosaveTicks(_options.AutosaveInterval));
+        }
+
         while (!cancellationToken.IsCancellationRequested)
         {
             nextTick += (long)tickDuration;
@@ -605,6 +802,14 @@ public sealed class DedicatedServer : IAsyncDisposable
             if (tick.PublishedSnapshot is { } snapshot)
             {
                 BroadcastSnapshot(snapshot);
+            }
+            if (_checkpointWriter is not null &&
+                _session.Clock.Tick >= _nextAutosaveTick)
+            {
+                QueueCheckpoint();
+                _nextAutosaveTick = checked(
+                    _session.Clock.Tick +
+                    AutosaveTicks(_options.AutosaveInterval));
             }
 
             while (!cancellationToken.IsCancellationRequested)
@@ -629,7 +834,104 @@ public sealed class DedicatedServer : IAsyncDisposable
             // Never skip simulation steps. If overloaded, successive iterations run
             // immediately until authoritative time catches wall time again.
         }
+
+        if (_checkpointWriter is not null) QueueCheckpoint();
     }
+
+    private void QueueCheckpoint()
+    {
+        var revision = checked(++_checkpointRevision);
+        var durable = ServerCheckpointMapper.ToDurable(
+            _session.CaptureCheckpoint(),
+            _options,
+            revision);
+        if (!_checkpointWriter!.TryQueue(durable))
+            throw new InvalidOperationException(
+                "The newest authoritative checkpoint was not accepted.");
+    }
+
+    private void RefreshWorldBootstrap()
+    {
+        var checkpoint = _session.CaptureCheckpoint().World;
+        var chunks = checkpoint.ChunkRevisions.ToDictionary(
+            static value => value.Chunk,
+            static value => value.Revision);
+        var chunkRevisions = checkpoint.ChunkRevisions.Select(value =>
+            new WorldChunkRevisionState(
+                value.Chunk.X,
+                value.Chunk.Y,
+                checked((short)value.Chunk.WorldLevel),
+                value.Revision)).ToArray();
+        var baselines = checkpoint.Objects.Select(value =>
+            new WorldObjectBaseline(
+                value.Object,
+                chunks[value.Object.Chunk])).ToArray();
+        lock (_worldBootstrapSync)
+            Volatile.Write(ref _worldBootstrap, new WorldBootstrapState(
+                Array.AsReadOnly(baselines),
+                Array.AsReadOnly(chunkRevisions)));
+    }
+
+    private void ApplyWorldTransactionToBootstrap(
+        WorldTransactionResult transaction)
+    {
+        lock (_worldBootstrapSync)
+        {
+            var current = _worldBootstrap;
+            var chunks = current.ChunkRevisions.ToDictionary(
+                static value => new WorldChunkKey(
+                    value.ChunkX,
+                    value.ChunkY,
+                    value.WorldLevel),
+                static value => value.Revision);
+            foreach (var delta in transaction.ChunkDeltas)
+            {
+                chunks.TryGetValue(delta.Chunk, out var known);
+                if (known != delta.PreviousRevision &&
+                    known != delta.CurrentRevision)
+                    throw new InvalidOperationException(
+                        "The public world bootstrap lost its chunk revision chain.");
+                chunks[delta.Chunk] = delta.CurrentRevision;
+            }
+
+            var objects = current.Objects.ToDictionary(
+                static value => value.Object.ObjectId);
+            foreach (var delta in transaction.ObjectDeltas)
+            {
+                if (delta.Kind == WorldObjectChangeKind.Removed)
+                {
+                    objects.Remove(delta.ObjectId);
+                    continue;
+                }
+                if (delta.Object is not { } value ||
+                    !chunks.TryGetValue(delta.Chunk, out var chunkRevision))
+                    throw new InvalidOperationException(
+                        "A committed object has no authoritative chunk revision.");
+                objects[delta.ObjectId] = new WorldObjectBaseline(
+                    value, chunkRevision);
+            }
+
+            var nextChunks = chunks
+                .OrderBy(static value => value.Key.WorldLevel)
+                .ThenBy(static value => value.Key.X)
+                .ThenBy(static value => value.Key.Y)
+                .Select(static value => new WorldChunkRevisionState(
+                    value.Key.X,
+                    value.Key.Y,
+                    checked((short)value.Key.WorldLevel),
+                    value.Value))
+                .ToArray();
+            var nextObjects = objects.Values
+                .OrderBy(static value => value.Object.ObjectId)
+                .ToArray();
+            Volatile.Write(ref _worldBootstrap, new WorldBootstrapState(
+                Array.AsReadOnly(nextObjects),
+                Array.AsReadOnly(nextChunks)));
+        }
+    }
+
+    private static long AutosaveTicks(TimeSpan interval) => checked((long)
+        Math.Ceiling(interval.TotalSeconds * SimulationTiming.TicksPerSecond));
 
     private void BroadcastSnapshot(SessionSnapshot snapshot)
     {
@@ -667,8 +969,8 @@ public sealed class DedicatedServer : IAsyncDisposable
             // lost, reordered, filtered, or a client cannot use UDP at all.
             if (!connection.UdpSnapshotsEnabled || reliableRecovery)
             {
-                if (!connection.TryQueue(new EntitySnapshotMessage(
-                        connection.NextOutboundSequence(),
+                if (!connection.TryQueueSequenced(sequence => new EntitySnapshotMessage(
+                        sequence,
                         checked((ulong)snapshot.Clock.Tick),
                         new SnapshotMetadata(
                             connection.DatagramToken,
@@ -771,11 +1073,15 @@ public sealed class DedicatedServer : IAsyncDisposable
         return result[..count];
     }
 
-    private void Broadcast(Func<ClientConnection, IProtocolMessage> createMessage)
+    private void Broadcast(
+        Func<ClientConnection, ulong, IProtocolMessage> createMessage)
     {
         foreach (var connection in _clients.Values)
         {
-            if (connection.Authenticated && !connection.TryQueue(createMessage(connection)))
+            if (connection.Authenticated &&
+                !connection.TryQueueSequenced(sequence => createMessage(
+                    connection,
+                    sequence)))
             {
                 connection.Stop();
             }
@@ -822,6 +1128,19 @@ public sealed class DedicatedServer : IAsyncDisposable
             ? address
             : address.MapToIPv6();
     }
+}
+
+internal readonly record struct WorldObjectBaseline(
+    AuthoritativeWorldObjectSnapshot Object,
+    uint ChunkRevision);
+
+internal sealed record WorldBootstrapState(
+    IReadOnlyList<WorldObjectBaseline> Objects,
+    IReadOnlyList<WorldChunkRevisionState> ChunkRevisions)
+{
+    public static WorldBootstrapState Empty { get; } = new(
+        Array.Empty<WorldObjectBaseline>(),
+        Array.Empty<WorldChunkRevisionState>());
 }
 
 internal readonly record struct AuthenticatedPlayer(

@@ -141,6 +141,9 @@ internal sealed partial class GameHostWindow
         out WorldGroundObject groundObject,
         out GpuWorldChunk chunk)
     {
+        if (IsNetworkWorld)
+            return TryGetNetworkGroundObjectUnderMouse(
+                mouse, out groundObject, out chunk);
         groundObject = null!;
         chunk = null!;
         var selectedDepth = float.NegativeInfinity;
@@ -291,7 +294,13 @@ internal sealed partial class GameHostWindow
     }
 
     private void QueueGroundObjectPickup(WorldGroundObject groundObject)
-        => _worldActions.QueueGroundObjectPickup(groundObject);
+    {
+        if (IsNetworkWorld)
+            QueueNetworkObjectAction(
+                NetworkWorldActionKind.PickUp, groundObject);
+        else
+            _worldActions.QueueGroundObjectPickup(groundObject);
+    }
 
     private void TryPickUpGroundObject(Guid groundObjectId)
     {
@@ -652,6 +661,25 @@ internal sealed partial class GameHostWindow
     private void QueueGroundObjectDrop(GroundDropPreview preview)
     {
         if (_player is null || !preview.Valid) return;
+        if (IsNetworkWorld)
+        {
+            if (preview.TargetObjectId is { } targetObjectId &&
+                _networkWorldObjects.TryGetValue(
+                    targetObjectId, out var targetObject) &&
+                CampfireService.IsCampfire(targetObject))
+            {
+                QueueNetworkObjectAction(
+                    NetworkWorldActionKind.AddCampfireFuel,
+                    targetObject,
+                    preview.InventorySlot);
+                return;
+            }
+            QueueNetworkPointAction(
+                NetworkWorldActionKind.Drop,
+                preview.Target,
+                preview.InventorySlot);
+            return;
+        }
         if (preview.TargetObjectId is { } cookingFireId &&
             CookingSkill.TryProfile(preview.ItemId, out _) &&
             FindGroundObject(cookingFireId) is { } cookingFire)
@@ -1501,6 +1529,19 @@ internal sealed partial class GameHostWindow
                           itemClearance * itemClearance))
                 return false;
         }
+
+        if (IsNetworkWorld && _networkWorldObjects.Values.Any(item =>
+                PlaceableObjectCatalog.TryGet(
+                    item.ItemId, out var definition)
+                    ? PlaceableObjectCatalog.ContainsPoint(
+                        definition,
+                        new Vector2(item.X, item.Y),
+                        candidate,
+                        itemClearance)
+                    : (candidate - new Vector2(
+                          item.X, item.Y)).LengthSquared <
+                      itemClearance * itemClearance))
+            return false;
 
         return true;
     }

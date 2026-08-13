@@ -3,6 +3,7 @@ using System.Net;
 using IslandRpg.Client;
 using IslandRpg.Protocol;
 using IslandRpg.Server;
+using IslandRpg.Simulation;
 
 namespace IslandRpg.NetworkingChecks;
 
@@ -29,6 +30,9 @@ internal static class LoopbackChecks
         checks.Add(
             "real loopback negotiates UDP snapshots with TCP recovery",
             NegotiatesUdpSnapshotsAsync);
+        checks.Add(
+            "real loopback world actions split public and private state",
+            ReplicatesWorldActionsWithoutPrivateLeaksAsync);
     }
 
     private static async ValueTask ReplicatesTwoClientsAsync(CancellationToken cancellationToken)
@@ -278,6 +282,85 @@ internal static class LoopbackChecks
             "UDP snapshot receipt must not disturb the reliable session");
     }
 
+    private static async ValueTask ReplicatesWorldActionsWithoutPrivateLeaksAsync(
+        CancellationToken cancellationToken)
+    {
+        var pickupId = Guid.Parse(
+            "81000000-0000-0000-0000-000000000001");
+        var chestId = Guid.Parse(
+            "81000000-0000-0000-0000-000000000002");
+        await using var fixture = await LoopbackFixture.StartAsync(
+            cancellationToken,
+            startingWorldObjects:
+            [
+                new WorldObjectSeed(pickupId, "large_rock", new(.5f, 0)),
+                new WorldObjectSeed(
+                    chestId,
+                    "storage_chest",
+                    new(1, 0),
+                    ContainerItems:
+                    [("slime_gel", 3, "private-owner")]),
+            ]);
+        await using var requester = new NetworkGameClient(TimeSpan.Zero);
+        await using var observer = new NetworkGameClient(TimeSpan.Zero);
+        await fixture.ConnectAsync(
+            requester, "Requester", cancellationToken);
+        await fixture.ConnectAsync(observer, "Observer", cancellationToken);
+        await EventuallyAsync(
+            () => requester.State.Gameplay is not null &&
+                  observer.State.Gameplay is not null,
+            "both clients did not receive private gameplay baselines",
+            cancellationToken);
+
+        var removalObserved = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        observer.WorldObjectsChanged += (_, args) =>
+        {
+            if (args.Changes.Any(value =>
+                    value.ObjectId == pickupId &&
+                    value.Kind == WorldObjectDeltaKind.Remove))
+                removalObserved.TrySetResult(true);
+        };
+        var pickup = await SendAndAwaitActionAsync(
+            requester,
+            new PickUpWorldObjectAction(
+                new WorldObjectReference(pickupId, 0, 0, 0, 1, 2)),
+            cancellationToken);
+        CheckAssert.True(pickup.Accepted,
+            $"the authoritative pickup was rejected: {pickup.Detail}");
+        await removalObserved.Task.WaitAsync(Timeout, cancellationToken);
+        await EventuallyAsync(
+            () => requester.State.Gameplay is { } gameplay &&
+                  CountItem(gameplay, "large_rock") == 1,
+            "the requester did not receive its private pickup inventory",
+            cancellationToken);
+        CheckAssert.Equal(0,
+            CountItem(observer.State.Gameplay!, "large_rock"),
+            "an observer must not receive another player's private inventory");
+
+        var privateContainerEvents = 0;
+        observer.ContainerStateChanged += (_, _) =>
+            Interlocked.Increment(ref privateContainerEvents);
+        var opened = await SendAndAwaitActionAsync(
+            requester,
+            new OpenContainerAction(
+                new WorldObjectReference(chestId, 0, 0, 0, 1, 3)),
+            cancellationToken);
+        CheckAssert.True(opened.Accepted,
+            $"the authoritative container open was rejected: {opened.Detail}");
+        await EventuallyAsync(
+            () => requester.State.Containers.TryGetValue(chestId, out var value) &&
+                  value.Slots.Any(slot =>
+                      slot.ItemId == "slime_gel" && slot.Quantity == 3),
+            "the requester did not receive the private container baseline",
+            cancellationToken);
+        await Task.Delay(100, cancellationToken);
+        CheckAssert.Equal(0, Volatile.Read(ref privateContainerEvents),
+            "the observer received requester-only container contents");
+        CheckAssert.False(observer.State.Containers.ContainsKey(chestId),
+            "the observer retained requester-only container contents");
+    }
+
     private static int CountItem(
         NetworkPlayerGameplayState state,
         string itemId) => state.InventorySlots.Sum(slot =>
@@ -420,7 +503,9 @@ internal static class LoopbackChecks
         public IPEndPoint Endpoint { get; }
         public Guid WorldId { get; }
 
-        public static async Task<LoopbackFixture> StartAsync(CancellationToken cancellationToken)
+        public static async Task<LoopbackFixture> StartAsync(
+            CancellationToken cancellationToken,
+            IReadOnlyList<WorldObjectSeed>? startingWorldObjects = null)
         {
             var worldId = Guid.NewGuid();
             var server = new DedicatedServer(new ServerOptions(
@@ -437,7 +522,9 @@ internal static class LoopbackChecks
                     new("plant_fibres", 3),
                     new("wild_berries", 1)
                 ],
-                StartingHunger = 80f
+                StartingHunger = 80f,
+                StartingWorldObjects = startingWorldObjects ??
+                    Array.Empty<WorldObjectSeed>()
             });
             var shutdown = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var serverTask = server.RunAsync(shutdown.Token);

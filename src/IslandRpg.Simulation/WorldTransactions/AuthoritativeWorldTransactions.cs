@@ -15,7 +15,7 @@ public sealed class AuthoritativeWorldTransactions
     public const float InteractionRange = 3f;
     private const int MaximumRememberedCommands = 4096;
 
-    private readonly int _ownerThreadId = Environment.CurrentManagedThreadId;
+    private int? _ownerThreadId;
     private readonly Dictionary<Guid, ObjectState> _objects = [];
     private readonly Dictionary<WorldChunkKey, uint> _chunkRevisions = [];
     private readonly Dictionary<(ActorId ActorId, Guid CommandId),
@@ -33,7 +33,8 @@ public sealed class AuthoritativeWorldTransactions
         EnsureOwner();
         if (seed.ObjectId == Guid.Empty || !IsFinite(seed.Position) ||
             seed.ObjectRevision == 0 || seed.ContainerRevision == 0 ||
-            string.IsNullOrWhiteSpace(seed.DefinitionId))
+            string.IsNullOrWhiteSpace(seed.DefinitionId) ||
+            !ValidGateState(seed.DefinitionId, seed.GateState))
             throw new ArgumentException("The world-object seed is invalid.", nameof(seed));
         var value = new WorldGroundObject(
             seed.ObjectId,
@@ -47,7 +48,8 @@ public sealed class AuthoritativeWorldTransactions
             seed.MaximumHealth,
             OwnerId: seed.OwnerId,
             GroupOwnerId: seed.GroupOwnerId,
-            VisualFrame: seed.Rotation);
+            VisualFrame: seed.Rotation,
+            GateState: ToCoreGateState(seed.GateState));
         if (seed.ContainerItems is { Count: > 0 })
         {
             if (!StorageContainerService.IsStorage(seed.DefinitionId))
@@ -84,6 +86,127 @@ public sealed class AuthoritativeWorldTransactions
     {
         EnsureOwner();
         return ChunkRevision(chunk);
+    }
+
+    public AuthoritativeWorldTransactionsCheckpoint CaptureCheckpoint()
+    {
+        EnsureOwner();
+        var objects = _objects.Values
+            .OrderBy(static value => value.Value.Id)
+            .Select(value => new AuthoritativeWorldObjectCheckpoint(
+                Snapshot(value),
+                StorageContainerService.IsStorage(value.Value.ItemId)
+                    ? ContainerSnapshot(value)
+                    : null))
+            .ToImmutableArray();
+        var chunks = _chunkRevisions
+            .OrderBy(static value => value.Key.WorldLevel)
+            .ThenBy(static value => value.Key.X)
+            .ThenBy(static value => value.Key.Y)
+            .Select(static value => new AuthoritativeChunkRevisionSnapshot(
+                value.Key, value.Value))
+            .ToImmutableArray();
+        return new(objects, chunks);
+    }
+
+    /// <summary>
+    /// Replaces an empty aggregate with trusted persisted state. Unlike
+    /// AddObject, this path never increments revisions while restoring them.
+    /// Validation is completed into temporary collections before committing.
+    /// </summary>
+    public void RestoreCheckpoint(
+        AuthoritativeWorldTransactionsCheckpoint checkpoint)
+    {
+        EnsureOwner();
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (checkpoint.Objects.IsDefault ||
+            checkpoint.ChunkRevisions.IsDefault)
+        {
+            throw new InvalidDataException(
+                "The world checkpoint is incomplete.");
+        }
+        if (_objects.Count != 0 || _chunkRevisions.Count != 0 ||
+            _commandResults.Count != 0)
+        {
+            throw new InvalidOperationException(
+                "World state can only be restored into an empty aggregate.");
+        }
+
+        var chunks = new Dictionary<WorldChunkKey, uint>();
+        foreach (var entry in checkpoint.ChunkRevisions)
+        {
+            if (entry.Revision == 0 ||
+                !chunks.TryAdd(entry.Chunk, entry.Revision))
+            {
+                throw new InvalidDataException(
+                    "The world checkpoint contains an invalid chunk revision.");
+            }
+        }
+
+        var objects = new Dictionary<Guid, ObjectState>();
+        foreach (var entry in checkpoint.Objects)
+        {
+            var snapshot = entry.Object;
+            if (snapshot.ObjectId == Guid.Empty ||
+                string.IsNullOrWhiteSpace(snapshot.DefinitionId) ||
+                !IsFinite(snapshot.Position) ||
+                snapshot.ObjectRevision == 0 ||
+                snapshot.ContainerRevision == 0 ||
+                snapshot.Health < 0 || snapshot.MaximumHealth < 0 ||
+                snapshot.MaximumHealth > 0 &&
+                snapshot.Health > snapshot.MaximumHealth ||
+                !double.IsFinite(snapshot.LitUntilGameSeconds) ||
+                snapshot.LitUntilGameSeconds < 0 ||
+                snapshot.Chunk != WorldChunkKey.At(
+                    snapshot.Position, snapshot.Chunk.WorldLevel) ||
+                !chunks.ContainsKey(snapshot.Chunk) ||
+                snapshot.FiremakingLevel is < 1 or > 20 ||
+                !ValidGateState(snapshot.DefinitionId, snapshot.GateState) ||
+                objects.ContainsKey(snapshot.ObjectId))
+            {
+                throw new InvalidDataException(
+                    "The world checkpoint contains an invalid object.");
+            }
+
+            WorldContainerContents? contents = null;
+            var isStorage = StorageContainerService.IsStorage(
+                snapshot.DefinitionId);
+            if (isStorage != snapshot.HasContainer ||
+                isStorage != (entry.Container is not null))
+            {
+                throw new InvalidDataException(
+                    "The world checkpoint container metadata is inconsistent.");
+            }
+
+            if (entry.Container is { } container)
+            {
+                contents = RestoreContainer(snapshot, container, chunks);
+            }
+
+            var value = new WorldGroundObject(
+                snapshot.ObjectId,
+                snapshot.DefinitionId,
+                snapshot.Position.X,
+                snapshot.Position.Y,
+                snapshot.FuelItemId,
+                snapshot.LitUntilGameSeconds,
+                snapshot.FiremakingLevel,
+                snapshot.Health,
+                snapshot.MaximumHealth,
+                contents,
+                snapshot.OwnerId,
+                snapshot.GroupOwnerId,
+                snapshot.Rotation,
+                ToCoreGateState(snapshot.GateState));
+            objects.Add(snapshot.ObjectId, new ObjectState(
+                value,
+                snapshot.Chunk,
+                snapshot.ObjectRevision,
+                snapshot.ContainerRevision));
+        }
+
+        foreach (var value in chunks) _chunkRevisions.Add(value.Key, value.Value);
+        foreach (var value in objects) _objects.Add(value.Key, value.Value);
     }
 
     public WorldTransactionResult Execute(
@@ -619,9 +742,106 @@ public sealed class AuthoritativeWorldTransactions
             state.Value.OwnerId, state.Value.GroupOwnerId,
             state.Value.Container is not null ||
             StorageContainerService.IsStorage(state.Value.ItemId),
-            state.Value.FuelItemId, state.Value.LitUntilGameSeconds);
+            state.Value.FuelItemId, state.Value.LitUntilGameSeconds,
+            state.Value.FiremakingLevel,
+            FromCoreGateState(state.Value));
 
-    private static WorldContainerSnapshot ContainerSnapshot(ObjectState state)
+    private static WorldContainerContents RestoreContainer(
+        AuthoritativeWorldObjectSnapshot snapshot,
+        WorldContainerSnapshot container,
+        IReadOnlyDictionary<WorldChunkKey, uint> chunks)
+    {
+        var definition = StorageContainerService.Definition(
+            snapshot.ObjectId, snapshot.DefinitionId);
+        if (container.ObjectId != snapshot.ObjectId ||
+            container.Chunk != snapshot.Chunk ||
+            container.ChunkRevision != chunks[snapshot.Chunk] ||
+            container.ObjectRevision != snapshot.ObjectRevision ||
+            container.ContainerRevision != snapshot.ContainerRevision ||
+            !string.Equals(container.DefinitionId, snapshot.DefinitionId,
+                StringComparison.OrdinalIgnoreCase) ||
+            container.AllowsDeposit != definition.AllowsDeposit ||
+            container.Slots.Length != definition.Capacity)
+        {
+            throw new InvalidDataException(
+                "The world checkpoint contains invalid container metadata.");
+        }
+
+        var items = new string?[definition.Capacity];
+        var quantities = new int[definition.Capacity];
+        var owners = new string?[definition.Capacity];
+        var seen = new bool[definition.Capacity];
+        foreach (var slot in container.Slots)
+        {
+            if ((uint)slot.Slot >= (uint)definition.Capacity ||
+                seen[slot.Slot])
+            {
+                throw new InvalidDataException(
+                    "The world checkpoint contains invalid container slots.");
+            }
+
+            seen[slot.Slot] = true;
+            if (slot.ItemId is null && slot.Quantity == 0)
+            {
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(slot.ItemId) ||
+                slot.Quantity <= 0 ||
+                !ItemCatalog.TryGet(slot.ItemId, out var item) ||
+                slot.Quantity > 1 && !item.CanStack)
+            {
+                throw new InvalidDataException(
+                    "The world checkpoint contains an invalid container item.");
+            }
+
+            items[slot.Slot] = slot.ItemId;
+            quantities[slot.Slot] = slot.Quantity;
+            owners[slot.Slot] = slot.OwnerId;
+        }
+        if (seen.Any(value => !value))
+        {
+            throw new InvalidDataException(
+                "The world checkpoint container baseline is incomplete.");
+        }
+        return new WorldContainerContents(items, quantities, owners);
+    }
+
+    private static bool ValidGateState(
+        string definitionId,
+        WorldGateAccessState state) => GateCatalog.IsGate(definitionId)
+        ? state != WorldGateAccessState.None &&
+          Enum.IsDefined(state)
+        : state == WorldGateAccessState.None;
+
+    private static GateAccessState ToCoreGateState(WorldGateAccessState value) =>
+        value switch
+        {
+            WorldGateAccessState.None or WorldGateAccessState.Unlocked =>
+                GateAccessState.Unlocked,
+            WorldGateAccessState.Opened => GateAccessState.Opened,
+            WorldGateAccessState.Locked => GateAccessState.Locked,
+            _ => throw new ArgumentOutOfRangeException(nameof(value))
+        };
+
+    private static WorldGateAccessState FromCoreGateState(
+        WorldGroundObject value)
+    {
+        if (!GateCatalog.IsGate(value.ItemId))
+        {
+            return WorldGateAccessState.None;
+        }
+
+        return value.GateState switch
+        {
+            GateAccessState.Unlocked => WorldGateAccessState.Unlocked,
+            GateAccessState.Opened => WorldGateAccessState.Opened,
+            GateAccessState.Locked => WorldGateAccessState.Locked,
+            _ => throw new ArgumentOutOfRangeException(nameof(value))
+        };
+    }
+
+    private WorldContainerSnapshot ContainerSnapshot(ObjectState state)
     {
         var container = StorageContainerService.Open(state.Value);
         var items = container.Items;
@@ -631,7 +851,8 @@ public sealed class AuthoritativeWorldTransactions
             container.Definition.Capacity);
         for (var slot = 0; slot < container.Definition.Capacity; slot++)
             slots.Add(new(slot, items[slot], quantities[slot], owners[slot]));
-        return new(state.Value.Id, state.ObjectRevision,
+        return new(state.Value.Id, state.Chunk, ChunkRevision(state.Chunk),
+            state.ObjectRevision,
             state.ContainerRevision, state.Value.ItemId,
             container.Definition.AllowsDeposit, slots.MoveToImmutable());
     }
@@ -696,7 +917,9 @@ public sealed class AuthoritativeWorldTransactions
 
     private void EnsureOwner()
     {
-        if (Environment.CurrentManagedThreadId != _ownerThreadId)
+        var currentThreadId = Environment.CurrentManagedThreadId;
+        _ownerThreadId ??= currentThreadId;
+        if (currentThreadId != _ownerThreadId)
             throw new InvalidOperationException(
                 "World transactions must execute on their owning simulation thread.");
     }

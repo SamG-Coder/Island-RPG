@@ -60,18 +60,24 @@ public sealed record NetworkWorldObjectState(
     int Rotation,
     int Health,
     int MaximumHealth,
-    bool HasContainer);
+    bool HasContainer,
+    string FuelItemId,
+    double LitUntilGameSeconds,
+    WorldObjectGateState GateState);
 
 /// <summary>
 /// Immutable private state for one container currently known to this client.
 /// Slot indexes remain stable and the list is replaced atomically per update.
 /// </summary>
 public sealed record NetworkContainerState(
-    Guid ObjectId,
+    WorldObjectReference Reference,
     uint ContainerRevision,
     string DefinitionId,
     ContainerAccessMode Access,
-    IReadOnlyList<ContainerSlotState> Slots);
+    IReadOnlyList<ContainerSlotState> Slots)
+{
+    public Guid ObjectId => Reference.ObjectId;
+}
 
 public readonly record struct NetworkWorldChunk(
     int ChunkX,

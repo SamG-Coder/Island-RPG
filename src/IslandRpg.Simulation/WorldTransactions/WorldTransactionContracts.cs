@@ -78,6 +78,18 @@ public enum WorldObjectChangeKind
     Removed
 }
 
+/// <summary>
+/// Transport-neutral gate state. None distinguishes non-gate objects from an
+/// unlocked gate without exposing the Core-only gameplay enum.
+/// </summary>
+public enum WorldGateAccessState : byte
+{
+    None,
+    Unlocked,
+    Opened,
+    Locked
+}
+
 public readonly record struct WorldInventorySlotSnapshot(
     int Slot,
     string? ItemId,
@@ -107,7 +119,9 @@ public sealed record AuthoritativeWorldObjectSnapshot(
     string? GroupOwnerId,
     bool HasContainer,
     string? FuelItemId,
-    double LitUntilGameSeconds);
+    double LitUntilGameSeconds,
+    int FiremakingLevel = 1,
+    WorldGateAccessState GateState = WorldGateAccessState.None);
 
 public readonly record struct WorldContainerSlotSnapshot(
     int Slot,
@@ -117,6 +131,8 @@ public readonly record struct WorldContainerSlotSnapshot(
 
 public sealed record WorldContainerSnapshot(
     Guid ObjectId,
+    WorldChunkKey Chunk,
+    uint ChunkRevision,
     uint ObjectRevision,
     uint ContainerRevision,
     string DefinitionId,
@@ -165,8 +181,25 @@ public sealed record WorldObjectSeed(
     string? OwnerId = null,
     string? GroupOwnerId = null,
     int Rotation = -1,
+    WorldGateAccessState GateState = WorldGateAccessState.None,
     IReadOnlyList<(string ItemId, int Quantity, string? OwnerId)>?
         ContainerItems = null);
+
+public readonly record struct AuthoritativeChunkRevisionSnapshot(
+    WorldChunkKey Chunk,
+    uint Revision);
+
+public sealed record AuthoritativeWorldObjectCheckpoint(
+    AuthoritativeWorldObjectSnapshot Object,
+    WorldContainerSnapshot? Container);
+
+/// <summary>
+/// Complete committed world-object state. Command replay caches are transient;
+/// stable objects, exact revisions and private container slots are durable.
+/// </summary>
+public sealed record AuthoritativeWorldTransactionsCheckpoint(
+    ImmutableArray<AuthoritativeWorldObjectCheckpoint> Objects,
+    ImmutableArray<AuthoritativeChunkRevisionSnapshot> ChunkRevisions);
 
 public sealed record PickUpWorldObjectTransaction(
     WorldTransactionContext Context,

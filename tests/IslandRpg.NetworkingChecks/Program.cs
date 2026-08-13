@@ -25,6 +25,10 @@ ClientWorldStateChecks.Register(checks);
 ItemContainerChecks.Register(checks);
 WorldRuleChecks.Register(checks);
 WorldTransactionChecks.Register(checks);
+SessionWorldTransactionChecks.Register(checks);
+ServerWorldActionAdapterChecks.Register(checks);
+ServerCheckpointChecks.Register(checks);
 LoopbackChecks.Register(checks);
+ServerRestartLoopbackChecks.Register(checks);
 
 return await checks.RunAsync(CancellationToken.None);
