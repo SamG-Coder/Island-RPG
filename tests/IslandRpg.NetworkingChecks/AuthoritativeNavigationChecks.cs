@@ -27,6 +27,9 @@ internal static class AuthoritativeNavigationChecks
             "procedural navigation is stable across seams and negative coordinates",
             ProceduralCoordinatesAreDeterministic);
         checks.Add(
+            "procedural cave navigation is headless and deterministic",
+            ProceduralCaveNavigationIsDeterministic);
+        checks.Add(
             "authoritative movement consumes the full sixty tick budget",
             SixtyTickDistanceIsExact);
     }
@@ -215,6 +218,44 @@ internal static class AuthoritativeNavigationChecks
         CheckAssert.True(MathF.Abs(actor.Position.X - 2.8f) < .0001f &&
                          MathF.Abs(actor.Position.Y) < .0001f,
             $"sixty flat ticks must travel exactly one second: {actor.Position}");
+    }
+
+    private static void ProceduralCaveNavigationIsDeterministic()
+    {
+        const long seed = 73_731;
+        var first = new ProceduralWorldNavigationQuery(seed);
+        var second = new ProceduralWorldNavigationQuery(seed);
+        CheckAssert.True(first.SupportsWorldLevel(-1) &&
+                         first.SupportsWorldLevel(0) &&
+                         !first.SupportsWorldLevel(1),
+            "the canonical query must expose only authored world levels");
+
+        var foundFloor = false;
+        for (var y = -48; y <= 48 && !foundFloor; y++)
+        for (var x = -48; x <= 48 && !foundFloor; x++)
+        {
+            var point = new Vector2(x + .5f, y + .5f);
+            if (!first.CanStandAt(point, -1)) continue;
+            foundFloor = true;
+            CheckAssert.True(second.CanStandAt(point, -1),
+                "the same seed must reproduce underground passability");
+            CheckAssert.Equal(first.HeightAt(point, -1),
+                second.HeightAt(point, -1),
+                "the same seed must reproduce underground floor height");
+            CheckAssert.False(first.IsWading(point, -1),
+                "underground water does not use the surface wading penalty");
+
+            var route = GridPathfinder.Find(
+                first, point, point + new Vector2(.25f, 0),
+                worldLevel: -1);
+            CheckAssert.True(route.Count > 0,
+                "a cave-floor actor must be routable by the headless query");
+        }
+
+        CheckAssert.True(foundFloor,
+            "the deterministic cave fixture must contain walkable floor");
+        CheckAssert.False(first.CanStandAt(new(float.NaN, 0), -1),
+            "non-finite cave coordinates must be rejected");
     }
 
     private static AuthoritativeWorldSession NewSession(

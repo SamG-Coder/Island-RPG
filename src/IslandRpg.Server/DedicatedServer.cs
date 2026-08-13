@@ -65,7 +65,7 @@ public sealed class DedicatedServer : IAsyncDisposable
         _session = new AuthoritativeWorldSession(
             SimulationLimits.Default with { MaximumActors = options.MaximumClients },
             sessionId: new SessionId(options.WorldId),
-            navigation: new ProceduralSurfaceNavigationQuery(options.WorldSeed),
+            navigation: new ProceduralWorldNavigationQuery(options.WorldSeed),
             resourceTransactions: resourceTransactions);
         _session.WorldTransactionCommitted += ApplyWorldTransactionToBootstrap;
         _session.ResourceTransactionCommitted +=

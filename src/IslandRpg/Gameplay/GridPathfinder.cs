@@ -100,49 +100,20 @@ internal static class GridPathfinder
 internal sealed class SoloWorldNavigationQuery :
     CoreNavigation.IWorldNavigationQuery
 {
-    [ThreadStatic]
-    private static Dictionary<long, CaveHydrologyField.SamplingContext>?
-        _caveContexts;
-    private readonly CoreNavigation.ProceduralSurfaceNavigationQuery _surface;
-    private readonly CaveHydrologyField.SamplingContext _cave;
+    private readonly CoreNavigation.ProceduralWorldNavigationQuery _world;
 
-    public SoloWorldNavigationQuery(long seed)
-    {
-        _surface = new CoreNavigation.ProceduralSurfaceNavigationQuery(seed);
-        var contexts = _caveContexts ??= [];
-        if (contexts.TryGetValue(seed, out var cave))
-        {
-            _cave = cave;
-        }
-        else
-        {
-            _cave = new CaveHydrologyField.SamplingContext(seed);
-            if (contexts.Count >= 4) contexts.Clear();
-            contexts[seed] = _cave;
-        }
-    }
+    public SoloWorldNavigationQuery(long seed) =>
+        _world = new CoreNavigation.ProceduralWorldNavigationQuery(seed);
 
     public bool SupportsWorldLevel(int worldLevel) =>
-        worldLevel is (int)WorldLevel.Overworld or
-            (int)WorldLevel.Underground;
+        _world.SupportsWorldLevel(worldLevel);
 
     public bool CanStandAt(NumericsVector2 point, int worldLevel)
-    {
-        if (worldLevel == (int)WorldLevel.Underground)
-            return _cave.Density(point.X, point.Y) >=
-                   CaveHydrologyField.Boundary;
-        return _surface.CanStandAt(point, worldLevel);
-    }
+        => _world.CanStandAt(point, worldLevel);
 
     public float HeightAt(NumericsVector2 point, int worldLevel)
-    {
-        if (worldLevel == (int)WorldLevel.Underground)
-            return MathF.Round(UndergroundWorldGenerator.Height(
-                _cave.Density(point.X, point.Y)));
-        return _surface.HeightAt(point, worldLevel);
-    }
+        => _world.HeightAt(point, worldLevel);
 
     public bool IsWading(NumericsVector2 point, int worldLevel) =>
-        worldLevel == (int)WorldLevel.Overworld &&
-        _surface.IsWading(point, worldLevel);
+        _world.IsWading(point, worldLevel);
 }
