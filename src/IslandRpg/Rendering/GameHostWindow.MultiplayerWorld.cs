@@ -46,6 +46,8 @@ internal sealed partial class GameHostWindow
             ContinueNetworkConstruction(change);
             ObserveNetworkCaveWorldChange(change);
         }
+        if (_craftingWindowOpen)
+            RefreshNearbyCraftingStations();
     }
 
     private void SynchronizeNetworkWorldObjects(

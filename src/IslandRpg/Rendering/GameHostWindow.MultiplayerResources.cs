@@ -274,6 +274,18 @@ internal sealed partial class GameHostWindow
         TryDescribeNetworkTree(tree, out var target) &&
         NetworkTreeIsDepleted(target);
 
+    private bool NetworkTreeBlocksWorld(IslandTree tree)
+    {
+        if (!TryDescribeNetworkTree(tree, out var target)) return true;
+        var state = TryGetNetworkTreeState(target, out var current)
+            ? current
+            : null;
+        return NetworkResourceObstacleRules.BlocksWorld(
+            ResourceNodeKind.Tree,
+            regrowthGameSeconds: 0,
+            state);
+    }
+
     private bool NetworkTreeActionStillValid(NetworkTreeAction action)
     {
         if (_networkClient?.IsConnected != true ||

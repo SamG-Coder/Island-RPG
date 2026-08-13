@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Numerics;
+using IslandRpg.Gameplay;
 using IslandRpg.Simulation;
 
 namespace IslandRpg.NetworkingChecks;
@@ -16,6 +17,8 @@ internal static class WorldTransactionChecks
     private const string Wall = "wooden_wall";
     private const string LootBag = "loot_bag";
     private const string SlimeGel = "slime_gel";
+    private const string CookingPot = "cooking_pot";
+    private const string Workbench = "workbench";
 
     public static void Register(CheckRunner checks)
     {
@@ -35,6 +38,10 @@ internal static class WorldTransactionChecks
             CookingCleanupRefundsDeadActors);
         checks.Add("world construction place build demolish is authoritative",
             ConstructionLifecycleIsAuthoritative);
+        checks.Add("world furniture placement is atomic owned and collision safe",
+            FurniturePlacementIsAtomicAndCollisionSafe);
+        checks.Add("world dynamic obstacles and cross chunk footprints stay canonical",
+            DynamicObstaclesAndCrossChunkFootprintsAreCanonical);
     }
 
     private static void PickupDropAtomicAndRevisioned()
@@ -513,6 +520,299 @@ internal static class WorldTransactionChecks
             "demolition should emit removal");
         CheckAssert.Equal(1, Count(demolished.Gameplay!.Value, Log),
             "demolition should apply the shared refund item");
+    }
+
+    private static void FurniturePlacementIsAtomicAndCollisionSafe()
+    {
+        var actor = Actor(new ActorId(Guid.NewGuid()),
+            [(CookingPot, 1), (Workbench, 1)], new Vector2(1, 1));
+        var generated = Guid.NewGuid();
+        var authority = new AuthoritativeWorldTransactions(() => generated);
+        var position = new Vector2(1.45f, 1.45f);
+        var chunk = WorldChunkKey.At(position, 0);
+        var placed = authority.Execute(actor,
+            new PlaceInventoryWorldObjectTransaction(
+                Context(actor), CookingPot,
+                Slot(actor.Gameplay, CookingPot), position, 0, 0,
+                authority.CaptureChunkRevision(chunk)));
+        CheckAssert.True(placed.Accepted,
+            "an exact carried furniture item should place atomically");
+        CheckAssert.Equal(generated, placed.ObjectDeltas.Single().ObjectId,
+            "furniture should use one authority-issued identity");
+        CheckAssert.Equal(actor.ActorId.ToString(),
+            placed.ObjectDeltas.Single().Object!.OwnerId,
+            "placed furniture should retain actor ownership");
+        CheckAssert.Equal(0, Count(placed.Gameplay!.Value, CookingPot),
+            "placement should consume exactly one carried object");
+
+        actor = actor with { Gameplay = placed.Gameplay.Value };
+        var beforeRevision = authority.CaptureChunkRevision(chunk);
+        var blocked = authority.Execute(actor,
+            new PlaceInventoryWorldObjectTransaction(
+                Context(actor), Workbench,
+                Slot(actor.Gameplay, Workbench), new Vector2(1, 1.5f),
+                0, 0, beforeRevision));
+        CheckAssert.Equal(WorldTransactionStatus.InvalidPlacement,
+            blocked.Status,
+            "overlapping furniture should reject without mutation");
+        CheckAssert.Equal(1, Count(blocked.Gameplay!.Value, Workbench),
+            "rejected placement must retain the exact inventory item");
+        CheckAssert.Equal(beforeRevision,
+            authority.CaptureChunkRevision(chunk),
+            "rejected placement must not advance the chunk");
+
+        var wrongItem = authority.Execute(actor,
+            new PlaceInventoryWorldObjectTransaction(
+                Context(actor), CookingPot,
+                Slot(actor.Gameplay, Workbench), new Vector2(2.45f, 2.45f),
+                0, 0, beforeRevision));
+        CheckAssert.Equal(WorldTransactionStatus.ItemUnavailable,
+            wrongItem.Status,
+            "the authority must bind definition to the exact inventory slot");
+
+        var storageActor = Actor(
+            new ActorId(Guid.NewGuid()),
+            [(Chest, 1)],
+            new Vector2(1, 1));
+        var storageAuthority = new AuthoritativeWorldTransactions();
+        var storagePosition = new Vector2(1.625f, 1.375f);
+        var storage = storageAuthority.Execute(
+            storageActor,
+            new PlaceInventoryWorldObjectTransaction(
+                Context(storageActor),
+                Chest.ToUpperInvariant(),
+                Slot(storageActor.Gameplay, Chest),
+                storagePosition,
+                0,
+                0,
+                storageAuthority.CaptureChunkRevision(
+                    WorldChunkKey.At(storagePosition, 0))));
+        CheckAssert.True(storage.Accepted,
+            "case-insensitive client input should resolve a canonical definition");
+        CheckAssert.Equal(Chest,
+            storage.ObjectDeltas.Single().Object!.DefinitionId,
+            "placed furniture must persist its canonical definition ID");
+        CheckAssert.True(
+            storageAuthority.CaptureCheckpoint().Objects.Single().Container
+                is not null,
+            "a canonically persisted storage item must remain a durable container");
+    }
+
+    private static void DynamicObstaclesAndCrossChunkFootprintsAreCanonical()
+    {
+        PlaceableWorldObjectRules.TryGetCollision(
+            "gate_8185", out var gateDefinition);
+        for (var rotation = 0; rotation < 4; rotation++)
+        {
+            var gatePosition = new Vector2(31.5f, 0);
+            var gateObstacles = PlaceableWorldObjectRules.CollisionObstacles(
+                gateDefinition, gatePosition, rotation);
+            var wallPosition = gateObstacles[^1].Center - new Vector2(.25f);
+            var actor = Actor(
+                new ActorId(Guid.NewGuid()),
+                [(Log, 1), (Hammer, 1)],
+                wallPosition);
+            var authority = new AuthoritativeWorldTransactions();
+            authority.AddObject(new(
+                Guid.NewGuid(),
+                "gate_8185",
+                gatePosition,
+                Rotation: rotation,
+                GateState: WorldGateAccessState.Unlocked));
+            var targetChunk = WorldChunkKey.At(wallPosition, 0);
+            CheckAssert.True(targetChunk != WorldChunkKey.At(gatePosition, 0),
+                $"gate rotation {rotation} must exercise cross-chunk collision");
+            var crossChunk = authority.Execute(actor,
+                new PlaceConstructionTransaction(
+                    Context(actor), Wall, wallPosition, 0, 0,
+                    authority.CaptureChunkRevision(targetChunk)));
+            CheckAssert.Equal(WorldTransactionStatus.InvalidPlacement,
+                crossChunk.Status,
+                $"canonical gate rotation {rotation} must block intersecting construction across chunks");
+            CheckAssert.Equal(1, Count(crossChunk.Gameplay!.Value, Log),
+                "cross-chunk collision rejection must preserve construction resources");
+        }
+
+        var diagonalGateAuthority = new AuthoritativeWorldTransactions();
+        diagonalGateAuthority.AddObject(new(
+            Guid.NewGuid(),
+            "gate_8185",
+            new Vector2(2, 2),
+            Rotation: 2,
+            GateState: WorldGateAccessState.Unlocked));
+        var outerEdgeWallPosition = new Vector2(.5f, .5f);
+        var outerEdgeActor = Actor(
+            new ActorId(Guid.NewGuid()),
+            [(Log, 1), (Hammer, 1)],
+            outerEdgeWallPosition);
+        var outerEdgeChunk = WorldChunkKey.At(outerEdgeWallPosition, 0);
+        var outerEdgeBlocked = diagonalGateAuthority.Execute(
+            outerEdgeActor,
+            new PlaceConstructionTransaction(
+                Context(outerEdgeActor),
+                Wall,
+                outerEdgeWallPosition,
+                0,
+                0,
+                diagonalGateAuthority.CaptureChunkRevision(
+                    outerEdgeChunk)));
+        CheckAssert.Equal(
+            WorldTransactionStatus.InvalidPlacement,
+            outerEdgeBlocked.Status,
+            "diagonal gate authored clearance must block construction beyond its navigation contact");
+        CheckAssert.Equal(1,
+            Count(outerEdgeBlocked.Gameplay!.Value, Log),
+            "outer-edge placement rejection must preserve construction resources");
+
+        var looseItemAuthority = new AuthoritativeWorldTransactions();
+        looseItemAuthority.AddObject(new(
+            Guid.NewGuid(), Log, new Vector2(1.1f, 2)));
+        var looseItemActor = Actor(
+            new ActorId(Guid.NewGuid()),
+            [(Workbench, 1)],
+            new Vector2(2, 2));
+        var furniturePosition = new Vector2(2, 2);
+        var looseItemChunk = WorldChunkKey.At(furniturePosition, 0);
+        var looseItemBlocked = looseItemAuthority.Execute(
+            looseItemActor,
+            new PlaceInventoryWorldObjectTransaction(
+                Context(looseItemActor),
+                Workbench,
+                Slot(looseItemActor.Gameplay, Workbench),
+                furniturePosition,
+                0,
+                0,
+                looseItemAuthority.CaptureChunkRevision(looseItemChunk)));
+        CheckAssert.Equal(
+            WorldTransactionStatus.InvalidPlacement,
+            looseItemBlocked.Status,
+            "an uncatalogued point in authored clearance must block furniture beyond navigation contact");
+        CheckAssert.Equal(1,
+            Count(looseItemBlocked.Gameplay!.Value, Workbench),
+            "loose-item placement rejection must preserve carried furniture");
+
+        var furnitureAuthority = new AuthoritativeWorldTransactions();
+        furnitureAuthority.AddObject(new(
+            Guid.NewGuid(), Workbench, new Vector2(1, 0)));
+        var furnitureActor = Actor(
+            new ActorId(Guid.NewGuid()),
+            [(Log, 1), (Hammer, 1)],
+            new Vector2(1, 0));
+        var furnitureChunk = WorldChunkKey.At(new Vector2(1, 0), 0);
+        var furnitureBlocked = furnitureAuthority.Execute(furnitureActor,
+            new PlaceConstructionTransaction(
+                Context(furnitureActor), Wall, new Vector2(1, 0), 0, 0,
+                furnitureAuthority.CaptureChunkRevision(furnitureChunk)));
+        CheckAssert.Equal(WorldTransactionStatus.InvalidPlacement,
+            furnitureBlocked.Status,
+            "construction must use the same footprint collision as furniture");
+
+        var generated = Guid.NewGuid();
+        var lifecycleAuthority = new AuthoritativeWorldTransactions(
+            () => generated);
+        var lifecycleActor = Actor(
+            new ActorId(Guid.NewGuid()),
+            [(Log, 1), (Hammer, 1)],
+            Vector2.Zero);
+        var lifecycleChunk = WorldChunkKey.At(Vector2.Zero, 0);
+        var placed = lifecycleAuthority.Execute(lifecycleActor,
+            new PlaceConstructionTransaction(
+                Context(lifecycleActor), Wall, Vector2.Zero, 0, 0,
+                lifecycleAuthority.CaptureChunkRevision(lifecycleChunk)));
+        CheckAssert.True(placed.Accepted,
+            "the isolated construction fixture must place");
+        var obstacle = lifecycleAuthority.GetObstacles(0).Single();
+        CheckAssert.True(obstacle.Contains(Vector2.Zero, clearance: 0),
+            "unfinished construction must become solid immediately");
+
+        lifecycleActor = lifecycleActor with
+        {
+            Gameplay = placed.Gameplay!.Value
+        };
+        var site = placed.ObjectDeltas.Single().Object!;
+        var demolished = lifecycleAuthority.Execute(lifecycleActor,
+            new DemolishWorldObjectTransaction(
+                Context(lifecycleActor),
+                Handle(site, placed.ChunkDeltas.Single().CurrentRevision)));
+        CheckAssert.True(demolished.Accepted,
+            "the unfinished site must demolish through authority");
+        CheckAssert.Equal(0, lifecycleAuthority.GetObstacles(0).Count,
+            "demolition must invalidate and remove the dynamic obstacle");
+
+        var terminalChunk = WorldChunkKey.At(new Vector2(1.45f), 0);
+        var terminalAuthority = new AuthoritativeWorldTransactions();
+        terminalAuthority.RestoreCheckpoint(new(
+            [],
+            [new AuthoritativeChunkRevisionSnapshot(
+                terminalChunk, uint.MaxValue)]));
+        var terminalFurnitureActor = Actor(
+            new ActorId(Guid.NewGuid()),
+            [(CookingPot, 1)],
+            new Vector2(1.45f));
+        terminalFurnitureActor = terminalFurnitureActor with
+        {
+            Gameplay = terminalFurnitureActor.Gameplay with
+            {
+                ActorRevision = uint.MaxValue,
+                Inventory = terminalFurnitureActor.Gameplay.Inventory with
+                {
+                    Revision = uint.MaxValue
+                }
+            }
+        };
+        var terminalFurniture = terminalAuthority.Execute(
+            terminalFurnitureActor,
+            new PlaceInventoryWorldObjectTransaction(
+                Context(terminalFurnitureActor),
+                CookingPot,
+                Slot(terminalFurnitureActor.Gameplay, CookingPot),
+                new Vector2(1.45f),
+                0,
+                0,
+                uint.MaxValue));
+        CheckAssert.Equal(WorldTransactionStatus.InvalidCommand,
+            terminalFurniture.Status,
+            "terminal placement revisions must reject before mutation");
+        CheckAssert.Equal(1,
+            Count(terminalFurniture.Gameplay!.Value, CookingPot),
+            "terminal furniture rejection must retain inventory atomically");
+
+        var terminalConstructionActor = Actor(
+            new ActorId(Guid.NewGuid()),
+            [(Log, 1), (Hammer, 1)],
+            new Vector2(1.45f));
+        terminalConstructionActor = terminalConstructionActor with
+        {
+            Gameplay = terminalConstructionActor.Gameplay with
+            {
+                ActorRevision = uint.MaxValue,
+                Inventory = terminalConstructionActor.Gameplay.Inventory with
+                {
+                    Revision = uint.MaxValue
+                }
+            }
+        };
+        var terminalConstruction = terminalAuthority.Execute(
+            terminalConstructionActor,
+            new PlaceConstructionTransaction(
+                Context(terminalConstructionActor),
+                Wall,
+                new Vector2(1.45f),
+                0,
+                0,
+                uint.MaxValue));
+        CheckAssert.Equal(WorldTransactionStatus.InvalidCommand,
+            terminalConstruction.Status,
+            "terminal construction revisions must reject before mutation");
+        CheckAssert.Equal(1,
+            Count(terminalConstruction.Gameplay!.Value, Log),
+            "terminal construction rejection must retain resources atomically");
+        CheckAssert.Equal(0,
+            terminalAuthority.CaptureCheckpoint().Objects.Length,
+            "terminal revision rejection must not insert world objects");
+        CheckAssert.Equal(uint.MaxValue,
+            terminalAuthority.CaptureChunkRevision(terminalChunk),
+            "terminal revision rejection must not advance its chunk");
     }
 
     private static WorldTransactionActorInput Actor(

@@ -81,6 +81,19 @@ public sealed record DropInventoryItemAction(
     public ActionCommandKind Kind => ActionCommandKind.DropInventoryItem;
 }
 
+public sealed record PlaceInventoryWorldObjectAction(
+    string DefinitionId,
+    int InventorySlot,
+    float X,
+    float Y,
+    short WorldLevel,
+    int Rotation,
+    uint ExpectedChunkRevision) : IActionCommandPayload
+{
+    public ActionCommandKind Kind =>
+        ActionCommandKind.PlaceInventoryWorldObject;
+}
+
 public sealed record OpenContainerAction(
     WorldObjectReference Object) : IActionCommandPayload
 {

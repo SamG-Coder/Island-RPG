@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Numerics;
 using IslandRpg.Boats;
 using IslandRpg.Client;
@@ -31,6 +32,9 @@ internal static class BoatFishingServerIntegrationChecks
         checks.Add(
             "real server provisions boats only for island-start worlds",
             ProvisionsOnlyForIslandWorldsAsync);
+        checks.Add(
+            "omitted boat removal is stale without a reliable sequence gap",
+            OmittedBoatRemovalIsStaleWithoutSequenceGapAsync);
         checks.Add(
             "real server replicates boat fishing UDP privacy and restart",
             ReplicatesBoatFishingAndRestartAsync);
@@ -105,6 +109,101 @@ internal static class BoatFishingServerIntegrationChecks
             "boat entity IDs must remain disjoint from actor IDs");
         CheckAssert.True((islandAccepted.PlayerEntityId & (1UL << 63)) == 0,
             "actor entity IDs must remain in the low-bit namespace");
+    }
+
+    private static async ValueTask
+        OmittedBoatRemovalIsStaleWithoutSequenceGapAsync(
+            CancellationToken cancellationToken)
+    {
+        var worldId = Guid.Parse("959e9fe3-82ba-5b83-bba0-25882a1fc7d8");
+        await using var server = new DedicatedServer(new ServerOptions(
+            IPAddress.Loopback,
+            0,
+            worldId,
+            47,
+            BuildVersion,
+            ContentVersion,
+            1));
+        await using var connection = new ClientConnection(
+            ClientConnectionId.New(),
+            new TcpClient(AddressFamily.InterNetwork),
+            server,
+            cancellationToken);
+
+        CheckAssert.True(connection.TryQueuePublicBootstrapAndActivate(
+                Array.Empty<WorldChunkRevisionState>(),
+                Array.Empty<ResourceChunkSparseState>(),
+                Array.Empty<AuthoritativeBoatSnapshot>(),
+                Array.Empty<AuthoritativeEnemySnapshot>(),
+                1,
+                sequence =>
+                [
+                    new BoatBaselineMessage(sequence, 1,
+                        Array.Empty<BoatState>())
+                ]),
+            "the empty boat baseline could not initialize public high-water");
+
+        var boatId = Guid.Parse("86041049-ae45-5d79-a867-7386110eeb45");
+        ulong removalSequence = 0;
+        CheckAssert.True(connection.TryQueuePublicSequenced(sequence =>
+            {
+                removalSequence = sequence;
+                return new BoatDeltaBatchMessage(
+                    sequence,
+                    2,
+                    [new BoatDelta(
+                        BoatDeltaKind.Remove,
+                        new IslandRpg.Protocol.BoatReference(boatId, 7),
+                        8,
+                        null)]);
+            }),
+            "a removal already represented by the baseline must be stale");
+        CheckAssert.Equal(2UL, removalSequence,
+            "the stale removal was offered the first post-baseline sequence");
+
+        var staleUpsert = new BoatState(
+            boatId,
+            1UL << 63,
+            8,
+            Guid.Parse("453474a9-98a2-5015-bad6-2ef8272f7b1c"),
+            string.Empty,
+            Guid.Empty,
+            0,
+            1,
+            2,
+            1,
+            0,
+            0,
+            false);
+        CheckAssert.Throws<InvalidOperationException>(() =>
+                connection.TryQueuePublicSequenced(sequence =>
+                    new BoatDeltaBatchMessage(
+                        sequence,
+                        3,
+                        [new BoatDelta(
+                            BoatDeltaKind.Upsert,
+                            new IslandRpg.Protocol.BoatReference(boatId, 7),
+                            8,
+                            staleUpsert)])),
+            "an unknown upsert must still fail its retained revision chain");
+
+        ulong addSequence = 0;
+        var added = staleUpsert with { Revision = 1 };
+        CheckAssert.True(connection.TryQueuePublicSequenced(sequence =>
+            {
+                addSequence = sequence;
+                return new BoatDeltaBatchMessage(
+                    sequence,
+                    4,
+                    [new BoatDelta(
+                        BoatDeltaKind.Upsert,
+                        new IslandRpg.Protocol.BoatReference(boatId, 0),
+                        1,
+                        added)]);
+            }),
+            "a legitimate first upsert must remain admissible");
+        CheckAssert.Equal(removalSequence, addSequence,
+            "filtering the stale removal must not consume a reliable sequence");
     }
 
     private static async ValueTask ReplicatesBoatFishingAndRestartAsync(

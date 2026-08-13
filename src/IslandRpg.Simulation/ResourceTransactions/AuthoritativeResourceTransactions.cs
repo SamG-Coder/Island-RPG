@@ -131,6 +131,54 @@ public sealed class AuthoritativeResourceTransactions
             !EffectiveState(value).Depleted);
     }
 
+    /// <summary>
+    /// Tests only the procedural chunks touched by an axis-aligned placement
+    /// footprint. Sparse depletion is honored, so harvested vegetation and
+    /// felled trees stop blocking while fish schools never block dry-world
+    /// placement.
+    /// </summary>
+    public bool HasBlockingResourceInFootprint(
+        Vector2 center,
+        int worldLevel,
+        Vector2 footprint)
+    {
+        EnsureOwner();
+        if (!IsFinite(center) || !IsFinite(footprint) ||
+            footprint.X <= 0 || footprint.Y <= 0)
+            return false;
+
+        var maximumPadding = .34f;
+        var half = footprint * .5f + new Vector2(maximumPadding);
+        var minimum = WorldChunkKey.At(center - half, worldLevel);
+        var maximum = WorldChunkKey.At(center + half, worldLevel);
+        for (var chunkY = minimum.Y; chunkY <= maximum.Y; chunkY++)
+        for (var chunkX = minimum.X; chunkX <= maximum.X; chunkX++)
+        {
+            var chunk = new WorldChunkKey(chunkX, chunkY, worldLevel);
+            foreach (var descriptor in _catalog.DescribeChunk(
+                         _worldSeed, chunk))
+            {
+                if (descriptor.Kind == ResourceNodeKind.FishSchool)
+                    continue;
+                var state = EffectiveState(descriptor);
+                if (state.Depleted && descriptor.RegrowthGameSeconds <= 0)
+                    continue;
+                var padding = descriptor.Kind == ResourceNodeKind.BerryBush
+                    ? .34f
+                    : descriptor.Kind == ResourceNodeKind.FibreShrub
+                        ? .22f
+                        : .28f;
+                if (MathF.Abs(descriptor.Position.X - center.X) <
+                        footprint.X * .5f + padding &&
+                    MathF.Abs(descriptor.Position.Y - center.Y) <
+                        footprint.Y * .5f + padding)
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
     public AuthoritativeResourceTransactionsCheckpoint CaptureCheckpoint()
     {
         EnsureOwner();
@@ -156,6 +204,22 @@ public sealed class AuthoritativeResourceTransactions
                 value.Value.ActionOrdinal))
             .ToImmutableArray();
         return new(chunks, cadences);
+    }
+
+    /// <summary>
+    /// Removes rate-limit state for an expired disconnected actor so a
+    /// checkpoint cannot retain a cadence that references no player.
+    /// </summary>
+    public void ForgetActor(ActorId actorId)
+    {
+        EnsureOwner();
+        if (actorId.Value == Guid.Empty)
+            throw new ArgumentException(
+                "A valid actor identity is required.", nameof(actorId));
+        foreach (var key in _cadences.Keys
+                     .Where(key => key.ActorId == actorId)
+                     .ToArray())
+            _cadences.Remove(key);
     }
 
     public void RestoreCheckpoint(

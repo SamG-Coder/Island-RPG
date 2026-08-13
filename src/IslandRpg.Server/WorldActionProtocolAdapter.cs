@@ -37,6 +37,17 @@ public static class WorldActionProtocolAdapter
                 new Vector2(value.X, value.Y),
                 value.WorldLevel,
                 value.ExpectedChunkRevision),
+            PlaceInventoryWorldObjectAction value =>
+                new PlaceInventoryWorldObjectIntent(
+                    command.CommandId,
+                    command.InventoryRevision,
+                    command.ActorRevision,
+                    value.DefinitionId,
+                    value.InventorySlot,
+                    new Vector2(value.X, value.Y),
+                    value.WorldLevel,
+                    value.Rotation,
+                    value.ExpectedChunkRevision),
             PlantCropAction value => new PlantCropIntent(
                 command.CommandId, command.InventoryRevision,
                 command.ActorRevision, value.SeedInventorySlot,

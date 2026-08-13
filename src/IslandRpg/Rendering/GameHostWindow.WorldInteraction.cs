@@ -702,9 +702,13 @@ internal sealed partial class GameHostWindow
             }
         DropToGround:
             QueueNetworkPointAction(
-                NetworkWorldActionKind.Drop,
+                PlaceableObjectCatalog.IsPlaceable(preview.ItemId)
+                    ? NetworkWorldActionKind.PlaceInventoryWorldObject
+                    : NetworkWorldActionKind.Drop,
                 preview.Target,
-                preview.InventorySlot);
+                preview.InventorySlot,
+                definitionId: preview.ItemId,
+                rotation: preview.Rotation);
             return;
         }
         if (preview.TargetObjectId is { } cookingFireId &&

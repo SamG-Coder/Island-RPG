@@ -404,6 +404,25 @@ public static class ReliableProtocolCodec
                 writer.WriteInt16(action.WorldLevel);
                 writer.WriteUInt32(action.ExpectedChunkRevision);
                 break;
+            case PlaceInventoryWorldObjectAction action:
+                EnsureIdentifier(action.DefinitionId, nameof(action.DefinitionId));
+                EnsureConstructionRotation(action.Rotation);
+                EnsureFinite(action.X, nameof(action.X));
+                EnsureFinite(action.Y, nameof(action.Y));
+                writer.WriteByte(
+                    (byte)ActionCommandKind.PlaceInventoryWorldObject);
+                writer.WriteString(
+                    action.DefinitionId,
+                    ProtocolLimits.DefinitionIdBytes,
+                    nameof(action.DefinitionId));
+                WriteInventorySlot(
+                    writer, action.InventorySlot, nameof(action.InventorySlot));
+                writer.WriteSingle(action.X);
+                writer.WriteSingle(action.Y);
+                writer.WriteInt16(action.WorldLevel);
+                writer.WriteByte((byte)action.Rotation);
+                writer.WriteUInt32(action.ExpectedChunkRevision);
+                break;
             case OpenContainerAction action:
                 writer.WriteByte((byte)ActionCommandKind.OpenContainer);
                 WriteWorldObjectReference(writer, action.Object);
@@ -525,6 +544,8 @@ public static class ReliableProtocolCodec
                 ReadFinite(ref reader, "Y"),
                 reader.ReadInt16(),
                 reader.ReadUInt32()),
+            ActionCommandKind.PlaceInventoryWorldObject =>
+                ReadPlaceInventoryWorldObject(ref reader),
             ActionCommandKind.OpenContainer => new OpenContainerAction(
                 ReadWorldObjectReference(ref reader)),
             ActionCommandKind.ContainerTransfer => new ContainerTransferAction(
@@ -579,6 +600,22 @@ public static class ReliableProtocolCodec
         var rotation = reader.ReadByte();
         EnsureConstructionRotation(rotation);
         return new PlaceConstructionAction(
+            definitionId, inventorySlot, x, y, worldLevel, rotation,
+            reader.ReadUInt32());
+    }
+
+    private static PlaceInventoryWorldObjectAction
+        ReadPlaceInventoryWorldObject(ref WireReader reader)
+    {
+        var definitionId = ReadIdentifier(
+            ref reader, ProtocolLimits.DefinitionIdBytes, "DefinitionId");
+        var inventorySlot = ReadInventorySlot(ref reader, "InventorySlot");
+        var x = ReadFinite(ref reader, "X");
+        var y = ReadFinite(ref reader, "Y");
+        var worldLevel = reader.ReadInt16();
+        var rotation = reader.ReadByte();
+        EnsureConstructionRotation(rotation);
+        return new PlaceInventoryWorldObjectAction(
             definitionId, inventorySlot, x, y, worldLevel, rotation,
             reader.ReadUInt32());
     }

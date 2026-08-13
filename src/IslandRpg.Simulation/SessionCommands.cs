@@ -280,6 +280,20 @@ public sealed record DropInventoryItemIntent(
         ExpectedInventoryRevision,
         ExpectedActorRevision);
 
+public sealed record PlaceInventoryWorldObjectIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    string DefinitionId,
+    int InventorySlot,
+    Vector2 Position,
+    int WorldLevel,
+    int Rotation,
+    uint ExpectedChunkRevision) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
 public sealed record PlantCropIntent(
     Guid CommandId,
     uint ExpectedInventoryRevision,
@@ -493,7 +507,9 @@ public enum ReconnectStatus
     UnknownPlayer,
     InvalidToken,
     AlreadyConnected,
-    ConnectionAlreadyJoined
+    ConnectionAlreadyJoined,
+    SessionFull,
+    ExpiredPlayer
 }
 
 public readonly record struct ReconnectResult(

@@ -210,9 +210,9 @@ internal static class ProtocolChecks
     private static void ProtocolEnforcesInputBounds()
     {
         CheckAssert.Equal(
-            (ushort)11,
+            (ushort)12,
             ProtocolConstants.CurrentVersion,
-            "durable combat targets and quest state require protocol v11");
+            "authoritative furniture placement requires protocol v12");
         var multibyteName = string.Concat(
             Enumerable.Repeat("界", ProtocolLimits.PlayerNameBytes));
         CheckAssert.Throws<ProtocolException>(
@@ -546,6 +546,8 @@ internal static class ProtocolChecks
         [
             new PickUpWorldObjectAction(objectReference),
             new DropInventoryItemAction(4, 3, 12.5f, -9.25f, 0, 72),
+            new PlaceInventoryWorldObjectAction(
+                "cooking_pot", 4, 12.5f, -9.25f, 0, 0, 72),
             new OpenContainerAction(objectReference),
             new ContainerTransferAction(
                 objectReference,
@@ -1054,6 +1056,36 @@ internal static class ProtocolChecks
                 new PlaceConstructionAction(
                     "wooden_wall", 0, 0, 0, 0, 4, 1))),
             "construction rotations outside quarter turns must be rejected");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1,
+                1,
+                commandId,
+                0,
+                0,
+                new PlaceInventoryWorldObjectAction(
+                    "workbench", 0, float.PositiveInfinity, 0, 0, 0, 1))),
+            "inventory furniture coordinates must be finite");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1,
+                1,
+                commandId,
+                0,
+                0,
+                new PlaceInventoryWorldObjectAction(
+                    string.Empty, 0, 0, 0, 0, 0, 1))),
+            "inventory furniture must identify its definition");
+        CheckAssert.Throws<ProtocolException>(
+            () => ReliableProtocolCodec.Encode(new ActionCommandMessage(
+                1,
+                1,
+                commandId,
+                0,
+                0,
+                new PlaceInventoryWorldObjectAction(
+                    "workbench", 0, 0, 0, 0, 4, 1))),
+            "inventory furniture rotations outside quarter turns must be rejected");
 
         var oversizedDefinition = string.Concat(
             Enumerable.Repeat(

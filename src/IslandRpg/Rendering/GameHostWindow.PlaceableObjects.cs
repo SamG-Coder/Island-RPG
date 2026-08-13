@@ -159,6 +159,8 @@ internal sealed partial class GameHostWindow
             if (!IsActiveWorldChunk(gpu)) continue;
             foreach (var tree in gpu.Chunk.Trees)
             {
+                if (IsNetworkWorld && !NetworkTreeBlocksWorld(tree))
+                    continue;
                 var atlasKey = WorldTreeCatalog.AtlasKey(tree);
                 if (!TryGroundContact(atlasKey, out var contact))
                     continue;
@@ -177,7 +179,7 @@ internal sealed partial class GameHostWindow
                 var stableKey = WorldMiningIdentity.StableKey(
                     vegetation, vegetationIndex);
                 if (IsNetworkWorld
-                        ? IsNetworkMiningDepleted(stableKey)
+                        ? !NetworkMiningBlocksWorld(stableKey)
                         : gpu.Chunk.MiningStates.Any(state =>
                             state.StableKey == stableKey &&
                             state.Health == 0))
@@ -193,6 +195,9 @@ internal sealed partial class GameHostWindow
 
             foreach (var groundObject in gpu.Chunk.GroundObjects)
             {
+                if (IsNetworkWorld &&
+                    _networkKnownWorldObjectIds.Contains(groundObject.Id))
+                    continue;
                 if (!PlaceableObjectCatalog.TryGet(
                         groundObject.ItemId, out var definition))
                     continue;
@@ -215,6 +220,30 @@ internal sealed partial class GameHostWindow
                     obstacles.AddRange(
                         PlaceableObjectCatalog.NavigationObstacles(
                             groundObject));
+            }
+        }
+        if (IsNetworkWorld)
+        {
+            foreach (var (objectId, groundObject) in _networkWorldObjects)
+            {
+                if (!_networkWorldObjectChunks.TryGetValue(
+                        objectId, out var chunk) ||
+                    chunk.Level != _activeWorldLevel)
+                    continue;
+                if (GateCatalog.IsGate(groundObject.ItemId))
+                {
+                    obstacles.AddRange(
+                        PlaceableObjectCatalog.NavigationObstacles(
+                            groundObject,
+                            includeGateMiddle:
+                                !GateService.IsOpen(groundObject)));
+                }
+                else
+                {
+                    obstacles.AddRange(
+                        PlaceableObjectCatalog.NavigationObstacles(
+                            groundObject));
+                }
             }
         }
         return obstacles.ToArray();
@@ -368,11 +397,46 @@ internal sealed partial class GameHostWindow
             return false;
         }
 
+        bool BlocksPlacement(
+            WorldGroundObject existing,
+            out string collisionReason)
+        {
+            var existingCenter = new Vector2(
+                existing.X, existing.Y);
+            if (PlaceableObjectCatalog.TryGet(
+                    existing.ItemId, out var existingDefinition))
+            {
+                if (PlaceableObjectCatalog.Overlaps(
+                        definition, target, rotation,
+                        existingDefinition, existingCenter,
+                        existing.VisualFrame,
+                        PlaceableObjectCatalog.PlacementPadding(
+                            definition, existingDefinition)))
+                {
+                    collisionReason =
+                        "Another object is blocking the footprint.";
+                    return true;
+                }
+            }
+            else if (PlaceableObjectCatalog.ContainsPoint(
+                         definition, target,
+                         existingCenter, .18f, rotation))
+            {
+                collisionReason =
+                    "An item is blocking part of the footprint.";
+                return true;
+            }
+
+            collisionReason = "";
+            return false;
+        }
+
         foreach (var chunk in _worldChunks.Values
                      .Where(IsActiveWorldChunk)
                      .Select(value => value.Chunk))
         {
             if (chunk.Trees.Any(tree =>
+                    (!IsNetworkWorld || NetworkTreeBlocksWorld(tree)) &&
                     PlaceableObjectCatalog.ContainsPoint(
                         definition,
                         target,
@@ -384,44 +448,63 @@ internal sealed partial class GameHostWindow
                 return false;
             }
 
-            if (chunk.Vegetation.Any(vegetation =>
-                    vegetation.Kind != WorldVegetationKind.Plant &&
-                    PlaceableObjectCatalog.ContainsPoint(
+            for (var vegetationIndex = 0;
+                 vegetationIndex < chunk.Vegetation.Length;
+                 vegetationIndex++)
+            {
+                var vegetation = chunk.Vegetation[vegetationIndex];
+                if (vegetation.Kind == WorldVegetationKind.Plant)
+                    continue;
+                if (IsNetworkWorld)
+                {
+                    var stableKey = WorldVegetationRenderCache.StableKey(
+                        vegetation, vegetationIndex);
+                    var blocksWorld = MiningNodeCatalog.TryGet(
+                            vegetation, out _)
+                        ? NetworkMiningBlocksWorld(stableKey)
+                        : NetworkVegetationBlocksWorld(stableKey);
+                    if (!blocksWorld) continue;
+                }
+                if (!PlaceableObjectCatalog.ContainsPoint(
                         definition,
                         target,
                         new Vector2(vegetation.X, vegetation.Y),
                         vegetation.Kind == WorldVegetationKind.BerryBush
                             ? .34f
                             : .22f,
-                        rotation)))
-            {
+                        rotation))
+                    continue;
                 reason = "Vegetation is blocking part of the footprint.";
                 return false;
             }
 
             foreach (var existing in chunk.GroundObjects)
             {
-                var existingCenter = new Vector2(
-                    existing.X, existing.Y);
-                if (PlaceableObjectCatalog.TryGet(
-                        existing.ItemId, out var existingDefinition))
+                // Authoritative objects can also remain in a generated
+                // client's chunk projection. Test their replicated copy below
+                // so each identity participates in preview collision once.
+                if (IsNetworkWorld &&
+                    _networkKnownWorldObjectIds.Contains(existing.Id))
+                    continue;
+                if (BlocksPlacement(existing, out var collisionReason))
                 {
-                    if (PlaceableObjectCatalog.Overlaps(
-                            definition, target, rotation,
-                            existingDefinition, existingCenter,
-                            existing.VisualFrame,
-                            PlaceableObjectCatalog.PlacementPadding(
-                                definition, existingDefinition)))
-                    {
-                        reason = "Another object is blocking the footprint.";
-                        return false;
-                    }
+                    reason = collisionReason;
+                    return false;
                 }
-                else if (PlaceableObjectCatalog.ContainsPoint(
-                             definition, target,
-                             existingCenter, .18f, rotation))
+            }
+        }
+
+        if (IsNetworkWorld)
+        {
+            foreach (var (objectId, existing) in _networkWorldObjects)
+            {
+                if (!_networkWorldObjectChunks.TryGetValue(
+                        objectId, out var objectChunk) ||
+                    objectChunk.Level != _activeWorldLevel)
+                    continue;
+                if (BlocksPlacement(existing, out var collisionReason))
                 {
-                    reason = "An item is blocking part of the footprint.";
+                    reason = collisionReason;
                     return false;
                 }
             }

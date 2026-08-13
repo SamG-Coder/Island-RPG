@@ -2953,6 +2953,14 @@ var frame3WallObstacle = PlaceableObjectCatalog.WallNavigationObstacle(
     plannedWall.Object! with { VisualFrame = 3 });
 var frame4WallObstacle = PlaceableObjectCatalog.WallNavigationObstacle(
     plannedWall.Object! with { VisualFrame = 4 });
+PlaceableWorldObjectRules.TryGetCollision(
+    ItemIds.WoodenWall, out var coreWallCollision);
+var coreWallObstacles = new[] { 0, 3, 4 }.Select(frame =>
+    PlaceableWorldObjectRules.CollisionObstacles(
+        coreWallCollision,
+        new System.Numerics.Vector2(
+            plannedWall.Object!.X, plannedWall.Object.Y),
+        frame).Single()).ToArray();
 Require(
     Vector2.DistanceSquared(
         frame0WallObstacle.Center,
@@ -2962,11 +2970,30 @@ Require(
             WorldPlacementGrid.CellSize)) < .000001f &&
     frame0WallObstacle.Width == 1f &&
     frame0WallObstacle.Depth == 1f &&
-    frame3WallObstacle.Width == 1f &&
-    frame3WallObstacle.Depth == .75f &&
-    frame4WallObstacle.Width == .75f &&
-    frame4WallObstacle.Depth == 1f,
-    "palisade collision must move the default square one small cell down-right and trim one depth cell for horizontal and vertical frames");
+    MathF.Abs(frame3WallObstacle.Width - 1.42f) < .000001f &&
+    MathF.Abs(frame3WallObstacle.Depth - .5f) < .000001f &&
+    MathF.Abs(frame3WallObstacle.RotationRadians + MathF.PI * .25f) <
+        .000001f &&
+    MathF.Abs(frame4WallObstacle.Width - 1.42f) < .000001f &&
+    MathF.Abs(frame4WallObstacle.Depth - .5f) < .000001f &&
+    MathF.Abs(frame4WallObstacle.RotationRadians - MathF.PI * .25f) <
+        .000001f &&
+    new[] { frame0WallObstacle, frame3WallObstacle, frame4WallObstacle }
+        .Select((clientObstacle, index) =>
+        {
+            var serverObstacle = coreWallObstacles[index];
+            return MathF.Abs(clientObstacle.Center.X -
+                             serverObstacle.Center.X) < .000001f &&
+                   MathF.Abs(clientObstacle.Center.Y -
+                             serverObstacle.Center.Y) < .000001f &&
+                   MathF.Abs(clientObstacle.Width -
+                             serverObstacle.Width) < .000001f &&
+                   MathF.Abs(clientObstacle.Depth -
+                             serverObstacle.Depth) < .000001f &&
+                   MathF.Abs(clientObstacle.RotationRadians -
+                             serverObstacle.RotationRadians) < .000001f;
+        }).All(value => value),
+    "palisade collision must move the default square one small cell down-right and follow diagonal wall bases with rotated strips");
 var diagonalBuilder = wallContactCenter + new Vector2(4, 4);
 var diagonalWorkPoint = PlaceableObjectCatalog.ClosestInteractionPoint(
     ItemIds.WoodenWall, wallStoredPosition, diagonalBuilder);
@@ -3175,8 +3202,8 @@ Require(
     "only the tier-one wooden gate must be player-facing while its DAT-sized footprint remains available");
 Require(
     GateCatalog.All.All(value =>
-        value.SideWallGraphicId == 6506 &&
-        value.SideWallGraphicName == "SGAC1NN") &&
+        GateCatalog.Orientation(value, 0).SideWallGraphicId == 6506 &&
+        GateCatalog.Orientation(value, 0).SideWallGraphicName == "SGAC1NN") &&
     GateCatalog.All.All(value =>
         value.ConstructionGraphicName.StartsWith("GTAX", StringComparison.Ordinal) &&
         value.ConstructionGraphicId > 0 &&
@@ -3215,10 +3242,10 @@ Require(
     GateVisuals.AtlasKey(centralStoneGate.ItemId) == "GATE@8185#0" &&
     GateVisuals.Resolve(gateSite) == "GTBX2CNX@8180#0" &&
     GateVisuals.ResolveShadow(gateSite) is null &&
-    GateVisuals.Resolve(ConstructionService.AddWork(gateSite, 250)) ==
+    GateVisuals.Resolve(ConstructionService.AddWork(gateSite, 150)) ==
         "GTBX2CNX@8180#1" &&
-    GateVisuals.ResolveShadow(ConstructionService.AddWork(gateSite, 250)) is null &&
-    GateVisuals.Resolve(ConstructionService.AddWork(gateSite, 400)) ==
+    GateVisuals.ResolveShadow(ConstructionService.AddWork(gateSite, 150)) is null &&
+    GateVisuals.Resolve(ConstructionService.AddWork(gateSite, 300)) ==
         "GTBX2CNX@8180#2" &&
     PlaceableObjectCatalog.RotationCount(centralStoneGate.ItemId) == 4 &&
     GateVisuals.Resolve(rotatedGateSite) == "GTAX2CNX@8179#0" &&
@@ -3276,6 +3303,36 @@ var verticalGateObstacles =
 var openVerticalGateObstacles =
     PlaceableObjectCatalog.GateNavigationObstacles(
         completedGate with { VisualFrame = 3 }, includeMiddle: false);
+PlaceableWorldObjectRules.TryGetCollision(
+    completedGate.ItemId, out var coreGateCollision);
+var clientGateObstaclesByRotation = Enumerable.Range(0, 4)
+    .Select(rotation => PlaceableObjectCatalog.GateNavigationObstacles(
+        completedGate with { VisualFrame = rotation },
+        includeMiddle: true)).ToArray();
+var serverGateObstaclesByRotation = Enumerable.Range(0, 4)
+    .Select(rotation => PlaceableWorldObjectRules.CollisionObstacles(
+        coreGateCollision,
+        new System.Numerics.Vector2(completedGate.X, completedGate.Y),
+        rotation,
+        openGate: false)).ToArray();
+var gateCollisionParity = clientGateObstaclesByRotation
+    .Select((clientObstacles, rotation) =>
+        clientObstacles.Count == serverGateObstaclesByRotation[rotation].Count &&
+        clientObstacles.Select((clientObstacle, index) =>
+        {
+            var serverObstacle = serverGateObstaclesByRotation[rotation][index];
+            return MathF.Abs(clientObstacle.Center.X -
+                             serverObstacle.Center.X) < .000001f &&
+                   MathF.Abs(clientObstacle.Center.Y -
+                             serverObstacle.Center.Y) < .000001f &&
+                   MathF.Abs(clientObstacle.Width -
+                             serverObstacle.Width) < .000001f &&
+                   MathF.Abs(clientObstacle.Depth -
+                             serverObstacle.Depth) < .000001f &&
+                   MathF.Abs(clientObstacle.RotationRadians -
+                             serverObstacle.RotationRadians) < .000001f;
+        }).All(value => value))
+    .All(value => value);
 Require(
     closedGateObstacles.Count == 3 &&
     openGateObstacles.Count == 2 &&
@@ -3313,6 +3370,7 @@ Require(
                   (completedGate.Y +
                    PlaceableObjectCatalog.ProjectedFrontOffsetPixels(
                        completedGate.ItemId) / 48f)) < .001f) &&
+    gateCollisionParity &&
     GateService.TryOpen(completedGate, out var openGate) &&
     openGate.GateState == GateAccessState.Opened &&
     GateService.IsOpen(openGate) &&
@@ -7207,9 +7265,8 @@ var atlasPages = SpriteAtlasPacker.Pack(
     new("construction:a", null, atlasProbeFrame, "construction")
 ], maximumPageSize: 64);
 Require(
-    atlasPages.Count == 3 &&
+    atlasPages.Count == 2 &&
     atlasPages.All(page => page.Width <= 64 && page.Height <= 64) &&
-    atlasPages.All(page => page.Width < 64 && page.Height < 64) &&
     atlasPages.SelectMany(page => page.Placements)
         .Select(value => value.Source.Key).Distinct().Count() == 3 &&
     atlasPages.SelectMany(page => page.Placements)
@@ -9236,15 +9293,15 @@ Require(CraftingService.TryCraft(
 var smallRockRecipe = CraftingSkill.Recipes.First(
     recipe => recipe.Id == "small-rocks");
 Require(CraftingService.TryCraft(
-        smallRockRecipe,
-        1,
-        [ItemIds.MediumRock, ItemIds.MediumRock],
-        out var craftedSmallRocks) &&
+    smallRockRecipe,
+    1,
+    [ItemIds.LargeRock, ItemIds.MediumRock],
+    out var craftedSmallRocks) &&
         craftedSmallRocks.Count(
-            item => item == ItemIds.MediumRock) == 1 &&
+            item => item == ItemIds.LargeRock) == 1 &&
         craftedSmallRocks.Count(
             item => item == ItemIds.SmallRocks) == 2,
-    "the level-one small-rock recipe must retain its striking rock and produce two small-rock items");
+    "the level-one small-rock recipe must retain its large striking rock and produce two small-rock items");
 var stonePickaxeRecipe = CraftingSkill.Recipes.First(
     recipe => recipe.Id == "stone-pickaxe");
 Require(CraftingService.TryCraft(
@@ -11321,19 +11378,25 @@ Require(
              EnemySpawnerSiteSelector.MinimumOverworldRadius) < .01f,
     "enemy spawner discovery must support an active narrow beach without selecting unconfirmed beach pockets from another biome");
 var strandedSearchOrigin = new Vector2(12.5f, 10.5f);
+var navigationRegionsBefore =
+    MacroHydrology.NavigationRegionGenerationCount;
 var strandedSearchTarget = WorldLevelNavigation.ReachableExplorationTarget(
     7319,
     strandedSearchOrigin,
     strandedSearchOrigin + new Vector2(-8, 0),
     (int)WorldLevel.Overworld);
+var navigationRegionsGenerated =
+    MacroHydrology.NavigationRegionGenerationCount -
+    navigationRegionsBefore;
 Require(
     Vector2.DistanceSquared(strandedSearchOrigin, strandedSearchTarget) > 1 &&
+    navigationRegionsGenerated is > 0 and <= 4 &&
     WorldLevelNavigation.IsWalkable(
         7319,
         (int)MathF.Floor(strandedSearchTarget.X),
         (int)MathF.Floor(strandedSearchTarget.Y),
         (int)WorldLevel.Overworld),
-    "urgent food exploration must choose a meaningful walkable route when the preferred shoreline ray is blocked");
+    "urgent food exploration must choose a meaningful walkable route while reusing its bounded seam-region hydrology working set");
 var escapedInteractionFootprint = GridPathfinder.Find(
     7319,
     Vector2.Zero,

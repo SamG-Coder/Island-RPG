@@ -32,6 +32,9 @@ internal static class AuthoritativeNavigationChecks
         checks.Add(
             "authoritative movement consumes the full sixty tick budget",
             SixtyTickDistanceIsExact);
+        checks.Add(
+            "placed world objects dynamically block and unblock authoritative routes",
+            PlacedObjectsDynamicallyBlockRoutes);
     }
 
     private static void AvoidsInvalidTerrainAndObstacles()
@@ -220,6 +223,92 @@ internal static class AuthoritativeNavigationChecks
             $"sixty flat ticks must travel exactly one second: {actor.Position}");
     }
 
+    private static void PlacedObjectsDynamicallyBlockRoutes()
+    {
+        var world = new TestNavigationQuery();
+        var authority = new AuthoritativeWorldTransactions();
+        var placement = new Vector2(2, 0);
+        var placedObject = authority.AddObject(new(
+            Guid.NewGuid(), "workbench", placement));
+        for (var index = 0; index < 2_048; index++)
+            authority.AddObject(new(
+                Guid.NewGuid(),
+                "workbench",
+                new Vector2(10_000 + index * 33, 10_000)));
+        var nearby = authority.GetObstacles(
+            0,
+            placement - new Vector2(4),
+            placement + new Vector2(4));
+        var obstacle = nearby.Single();
+        CheckAssert.True(obstacle.Contains(obstacle.Center, clearance: 0),
+            "the placed workbench must immediately enter the bounded obstacle source");
+
+        var boundedOnly = new BoundedOnlyObstacles();
+        var session = NewSession(
+            world,
+            obstacles: boundedOnly,
+            worldTransactions: authority);
+        var connection = ClientConnectionId.New();
+        var joined = Join(session, connection, Vector2.Zero);
+
+        CheckAssert.True(SendWalk(
+                session, connection, joined, 1, new Vector2(4, 0)).Accepted,
+            "the authority should find a route around the workbench");
+        for (var tick = 0; tick < 240; tick++)
+        {
+            session.Tick();
+            var position = session.CaptureSnapshot().Actors[0].Position;
+            CheckAssert.False(obstacle.Contains(position),
+                "authoritative movement must never cross the live workbench footprint");
+            if (Vector2.DistanceSquared(position, new Vector2(4, 0)) < .01f)
+                break;
+        }
+        var arrived = session.CaptureSnapshot().Actors[0];
+        CheckAssert.True(Vector2.DistanceSquared(
+                arrived.Position, new Vector2(4, 0)) < .01f,
+            "the detour should still reach the requested destination");
+
+        var pickupPending = session.EnqueueIntentAsync(new ActorCommand(
+            connection,
+            joined.Identity.PlayerId,
+            2,
+            new PickUpWorldObjectIntent(
+                Guid.NewGuid(),
+                arrived.Gameplay.Inventory.Revision,
+                arrived.Gameplay.ActorRevision,
+                new WorldObjectHandle(
+                    placedObject.ObjectId,
+                    placedObject.Chunk,
+                    placedObject.ObjectRevision,
+                    authority.CaptureChunkRevision(placedObject.Chunk),
+                    placedObject.ContainerRevision))));
+        session.Drain();
+        CheckAssert.True(pickupPending.GetAwaiter().GetResult().Accepted,
+            "removing the nearby workbench should succeed");
+        CheckAssert.Equal(0, authority.GetObstacles(
+                0,
+                placement - new Vector2(4),
+                placement + new Vector2(4)).Count,
+            "world-object removal must invalidate the local obstacle cache");
+        CheckAssert.True(boundedOnly.QueryCount > 0,
+            "pathfinding must use bounded obstacle queries while exploring");
+
+        CheckAssert.True(SendWalk(
+                session, connection, joined, 3, Vector2.Zero).Accepted,
+            "the return route should accept after obstacle removal");
+        var crossedFormerFootprint = false;
+        for (var tick = 0; tick < 240; tick++)
+        {
+            session.Tick();
+            var position = session.CaptureSnapshot().Actors[0].Position;
+            crossedFormerFootprint |= obstacle.Contains(position);
+            if (Vector2.DistanceSquared(position, Vector2.Zero) < .01f)
+                break;
+        }
+        CheckAssert.True(crossedFormerFootprint,
+            "the direct return route should cross the removed footprint");
+    }
+
     private static void ProceduralCaveNavigationIsDeterministic()
     {
         const long seed = 73_731;
@@ -261,23 +350,27 @@ internal static class AuthoritativeNavigationChecks
     private static AuthoritativeWorldSession NewSession(
         IWorldNavigationQuery navigation,
         SimulationLimits? limits = null,
-        IWorldNavigationObstacleSource? obstacles = null) => new(
+        IWorldNavigationObstacleSource? obstacles = null,
+        AuthoritativeWorldTransactions? worldTransactions = null) => new(
             limits,
             new DeterministicIdentitySource(),
             new SessionId(Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")),
             navigation,
-            obstacles);
+            obstacles,
+            worldTransactions);
 
     private static JoinResult Join(
         AuthoritativeWorldSession session,
         ClientConnectionId connection,
         Vector2 spawn,
-        int worldLevel = 0)
+        int worldLevel = 0,
+        IReadOnlyList<InitialInventoryItem>? inventory = null)
     {
         var pending = session.EnqueueJoinAsync(new JoinRequest(
             connection,
             "Pathfinder",
             spawn,
+            inventory,
             SpawnWorldLevel: worldLevel));
         session.Drain();
         var result = pending.GetAwaiter().GetResult();
@@ -333,6 +426,25 @@ internal static class AuthoritativeNavigationChecks
 
         public IReadOnlyList<NavigationObstacle> GetObstacles(int worldLevel) =>
             Values;
+    }
+
+    private sealed class BoundedOnlyObstacles :
+        IWorldNavigationObstacleSource
+    {
+        public int QueryCount { get; private set; }
+
+        public IReadOnlyList<NavigationObstacle> GetObstacles(int worldLevel) =>
+            throw new InvalidOperationException(
+                "Authoritative paths must not materialize global obstacles.");
+
+        public IReadOnlyList<NavigationObstacle> GetObstacles(
+            int worldLevel,
+            Vector2 minimum,
+            Vector2 maximum)
+        {
+            QueryCount++;
+            return [];
+        }
     }
 
     private sealed class DeterministicIdentitySource : ISessionIdentitySource

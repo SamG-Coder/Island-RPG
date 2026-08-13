@@ -103,6 +103,99 @@ public sealed class AuthoritativeBoatTransactions
             id, ownerPlayerId, position, GroupId: groupId));
     }
 
+    /// <summary>
+    /// Reports whether a new stable player raft needs an owned raft reclaimed
+    /// first. The authority uses this before actor admission so island churn
+    /// cannot exhaust the boat aggregate ahead of actor retention.
+    /// </summary>
+    public bool RequiresPlayerBoatReclamation
+    {
+        get
+        {
+            EnsureOwner();
+            return _boats.Count >= _options.MaximumBoats;
+        }
+    }
+
+    public bool HasBoatOwnedBy(PlayerId playerId)
+    {
+        EnsureOwner();
+        return playerId.Value != Guid.Empty && _boats.Values.Any(value =>
+            value.OwnerPlayerId == playerId);
+    }
+
+    /// <summary>
+    /// Atomically replaces an expired player's provisioned raft while
+    /// admitting a new player. If the replacement cannot be provisioned, the
+    /// previous raft and occupancy mapping are restored exactly.
+    /// </summary>
+    public AuthoritativeBoatSnapshot ReplacePlayerBoat(
+        PlayerId expiredOwnerPlayerId,
+        PlayerId newOwnerPlayerId,
+        Vector2 origin,
+        out ImmutableArray<BoatStateDelta> expiredBoats,
+        string? groupId = null)
+    {
+        EnsureOwner();
+        if (expiredOwnerPlayerId.Value == Guid.Empty ||
+            expiredOwnerPlayerId == newOwnerPlayerId)
+            throw new ArgumentException(
+                "A distinct expired boat owner is required.",
+                nameof(expiredOwnerPlayerId));
+
+        var retired = _boats.Values
+            .Where(value => value.OwnerPlayerId == expiredOwnerPlayerId)
+            .OrderBy(static value => value.BoatId.Value)
+            .ToArray();
+        expiredBoats = retired.Select(static value => new BoatStateDelta(
+                BoatChangeKind.Removed, value.ToSnapshot(), null))
+            .ToImmutableArray();
+        foreach (var boat in retired) RemoveBoat(boat);
+        try
+        {
+            return ProvisionPlayerBoat(newOwnerPlayerId, origin, groupId);
+        }
+        catch
+        {
+            foreach (var boat in retired) RestoreBoat(boat);
+            expiredBoats = [];
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Reclaims the stable raft and any occupancy mapping owned by an expired
+    /// player identity.
+    /// </summary>
+    public ImmutableArray<BoatStateDelta> ForgetActor(
+        PlayerId ownerPlayerId,
+        ActorId actorId)
+    {
+        EnsureOwner();
+        if (ownerPlayerId.Value == Guid.Empty)
+            throw new ArgumentException(
+                "A boat owner is required.", nameof(ownerPlayerId));
+        if (actorId.Value == Guid.Empty)
+            throw new ArgumentException(
+                "An actor identity is required.", nameof(actorId));
+        var owned = _boats.Values
+            .Where(value => value.OwnerPlayerId == ownerPlayerId)
+            .OrderBy(static value => value.BoatId.Value)
+            .ToArray();
+        var deltas = owned.Select(static value => new BoatStateDelta(
+                BoatChangeKind.Removed, value.ToSnapshot(), null))
+            .ToList();
+        foreach (var boat in owned) RemoveBoat(boat);
+        if (_boatsByOccupant.ContainsKey(actorId))
+        {
+            var detached = DetachOccupant(actorId) ??
+                throw new InvalidOperationException(
+                    "The actor boat occupancy index is inconsistent.");
+            deltas.Add(detached);
+        }
+        return deltas.ToImmutableArray();
+    }
+
     public BoatTransactionResult Execute(
         BoatTransactionActorInput actor,
         BoardBoatTransaction command)
@@ -663,6 +756,25 @@ public sealed class AuthoritativeBoatTransactions
         BoatId? except = null) =>
         _boats.Values.Any(boat =>
             boat.BoatId != except && Cell(boat.Position) == Cell(value));
+
+    private void RemoveBoat(BoatState boat)
+    {
+        if (boat.OccupantActorId is { } occupant &&
+            (!_boatsByOccupant.TryGetValue(occupant, out var indexed) ||
+             indexed != boat.BoatId || !_boatsByOccupant.Remove(occupant)))
+            throw new InvalidOperationException(
+                "The authoritative boat occupancy index is inconsistent.");
+        if (!_boats.Remove(boat.BoatId))
+            throw new InvalidOperationException(
+                "The authoritative boat registry is inconsistent.");
+    }
+
+    private void RestoreBoat(BoatState boat)
+    {
+        _boats.Add(boat.BoatId, boat);
+        if (boat.OccupantActorId is { } occupant)
+            _boatsByOccupant.Add(occupant, boat.BoatId);
+    }
 
     private static (int X, int Y) Cell(Vector2 value) =>
         ((int)MathF.Floor(value.X), (int)MathF.Floor(value.Y));

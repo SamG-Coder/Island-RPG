@@ -146,6 +146,10 @@ internal sealed partial class GameHostWindow
         if (_activePlayer is null) return false;
         if (IsNetworkWorld)
         {
+            // Presentation follows the latest replicated station set. The
+            // server still revalidates actor range and the recipe's exact
+            // station requirement when it receives the ordinary craft action.
+            RefreshNearbyCraftingStations();
             SendNetworkCraft(recipe.Id);
             return true;
         }
@@ -230,6 +234,25 @@ internal sealed partial class GameHostWindow
     {
         _nearbyCraftingStations.Clear();
         if (_player is null) return;
+        if (IsNetworkWorld)
+        {
+            var rangeSquared =
+                CraftingStationService.InteractionRange *
+                CraftingStationService.InteractionRange;
+            foreach (var (objectId, station) in _networkWorldObjects)
+            {
+                if (!_networkWorldObjectChunks.TryGetValue(
+                        objectId, out var chunk) ||
+                    chunk.Level != _activeWorldLevel ||
+                    !CraftingStationService.IsStation(station.ItemId))
+                    continue;
+                var delta = new Vector2(
+                    station.X, station.Y) - _player.Position;
+                if (delta.LengthSquared <= rangeSquared)
+                    _nearbyCraftingStations.Add(station.ItemId);
+            }
+            return;
+        }
         foreach (var gpu in _worldChunks.Values)
         {
             if (IsActiveWorldChunk(gpu) &&

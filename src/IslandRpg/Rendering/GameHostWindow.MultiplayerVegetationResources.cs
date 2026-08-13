@@ -245,6 +245,20 @@ internal sealed partial class GameHostWindow
         return !state.Depleted && state.Remaining > 0;
     }
 
+    private bool NetworkVegetationBlocksWorld(string stableKey)
+    {
+        if (!TryDescribeNetworkVegetation(stableKey, out var target) ||
+            target.Visual.ResourceKind is not { } kind)
+            return true;
+        var state = TryGetNetworkVegetationState(target, out var current)
+            ? current
+            : null;
+        return NetworkResourceObstacleRules.BlocksWorld(
+            kind,
+            target.Visual.RegrowthGameSeconds,
+            state);
+    }
+
     private bool NetworkVegetationActionStillValid(
         NetworkVegetationAction action) =>
         _networkClient?.IsConnected == true &&

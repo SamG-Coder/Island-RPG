@@ -247,6 +247,18 @@ internal sealed partial class GameHostWindow
         TryDescribeNetworkMining(stableKey, out var target) &&
         NetworkMiningIsDepleted(target);
 
+    private bool NetworkMiningBlocksWorld(string stableKey)
+    {
+        if (!TryDescribeNetworkMining(stableKey, out var target)) return true;
+        var state = TryGetNetworkMiningState(target, out var current)
+            ? current
+            : null;
+        return NetworkResourceObstacleRules.BlocksWorld(
+            ResourceNodeKind.MiningNode,
+            regrowthGameSeconds: 0,
+            state);
+    }
+
     private bool NetworkMiningActionStillValid(NetworkMiningAction action) =>
         _networkClient?.IsConnected == true &&
         action.Target.Chunk.WorldLevel == _activeWorldLevel &&

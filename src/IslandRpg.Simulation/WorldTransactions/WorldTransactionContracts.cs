@@ -225,6 +225,15 @@ public sealed record DropInventoryItemTransaction(
     int WorldLevel,
     uint ExpectedChunkRevision);
 
+public sealed record PlaceInventoryWorldObjectTransaction(
+    WorldTransactionContext Context,
+    string DefinitionId,
+    int InventorySlot,
+    Vector2 Position,
+    int WorldLevel,
+    int Rotation,
+    uint ExpectedChunkRevision);
+
 public sealed record PlantCropTransaction(
     WorldTransactionContext Context,
     Guid CropObjectId,

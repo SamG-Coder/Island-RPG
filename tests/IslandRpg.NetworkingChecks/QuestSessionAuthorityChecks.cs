@@ -436,6 +436,19 @@ internal static class QuestSessionAuthorityChecks
             "construction placement");
         AssertSingle(
             AuthoritativeWorldSession.CommittedWorldQuestEvents(
+                new PlaceInventoryWorldObjectIntent(
+                    Guid.NewGuid(), 1, 1,
+                    ItemIds.Workbench, 0, Vector2.Zero, 0, 0, 0),
+                null,
+                accepted,
+                gameplay,
+                gameplay),
+            QuestEventType.BuildObject,
+            ItemIds.Workbench,
+            1,
+            "inventory furniture placement");
+        AssertSingle(
+            AuthoritativeWorldSession.CommittedWorldQuestEvents(
                 new TraverseCaveIntent(
                     Guid.NewGuid(), 1, 1, handle),
                 target,

@@ -80,6 +80,9 @@ internal static class ProceduralSurfaceTerrain
     internal static byte SampleSurfaceHeight(long seed, int x, int y) =>
         Surface(RawHeightAt(seed, x, y));
 
+    internal static byte RawSurfaceHeightAt(long seed, int x, int y) =>
+        Surface(RawHeightAt(seed, x, y));
+
     internal static float SampleRenderedHeight(long seed, float x, float y)
     {
         var tileX = (int)MathF.Floor(x);

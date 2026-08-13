@@ -21,6 +21,8 @@ internal sealed partial class GameHostWindow
         TakeCampfireFuel,
         LightCampfire,
         CookOnCampfire,
+        UseCraftingStation,
+        PlaceInventoryWorldObject,
         PlaceConstruction,
         BuildConstruction,
         Demolish,
@@ -185,6 +187,9 @@ internal sealed partial class GameHostWindow
                 QueueCaveEntry(groundObject);
             else if (CaveEntranceService.IsDigSite(groundObject))
                 QueueContinueCaveDig(groundObject);
+            else if (CraftingStationService.IsStation(
+                         groundObject.ItemId))
+                QueueNetworkCraftingStation(groundObject);
             else if (!PlaceableObjectCatalog.IsPlaceable(
                          groundObject.ItemId) &&
                      !CaveEntranceService.IsExcavation(groundObject))
@@ -291,6 +296,10 @@ internal sealed partial class GameHostWindow
             Add("Fill hole", NetworkWorldActionKind.FillExcavation);
         else if (CropService.IsCrop(value))
             Add("Harvest", NetworkWorldActionKind.HarvestCrop);
+        else if (CraftingStationService.IsStation(value.ItemId))
+            Add(
+                CraftingStationService.ActionLabel(value.ItemId),
+                NetworkWorldActionKind.UseCraftingStation);
         else if (!PlaceableObjectCatalog.IsPlaceable(value.ItemId))
             Add("Pick up", NetworkWorldActionKind.PickUp);
 
@@ -315,6 +324,8 @@ internal sealed partial class GameHostWindow
             var action = _networkGroundObjectContextActions[option];
             if (action == NetworkWorldActionKind.OpenContainer)
                 QueueNetworkOpenContainer(value);
+            else if (action == NetworkWorldActionKind.UseCraftingStation)
+                QueueNetworkCraftingStation(value);
             else if (action == NetworkWorldActionKind.WorkExcavation)
                 QueueContinueCaveDig(value);
             else if (action == NetworkWorldActionKind.InstallCaveRope)
@@ -351,6 +362,13 @@ internal sealed partial class GameHostWindow
         _networkRequestedContainerId = value.Id;
         QueueNetworkObjectAction(
             NetworkWorldActionKind.OpenContainer, value);
+    }
+
+    private void QueueNetworkCraftingStation(WorldGroundObject value)
+    {
+        if (!CraftingStationService.IsStation(value.ItemId)) return;
+        QueueNetworkObjectAction(
+            NetworkWorldActionKind.UseCraftingStation, value);
     }
 
     private void QueueNetworkObjectAction(
@@ -416,6 +434,25 @@ internal sealed partial class GameHostWindow
     private void DispatchPendingNetworkWorldAction()
     {
         if (_pendingNetworkWorldAction is not { } pending) return;
+        if (pending.Kind == NetworkWorldActionKind.UseCraftingStation)
+        {
+            _pendingNetworkWorldAction = null;
+            if (!_networkWorldObjects.TryGetValue(
+                    pending.ObjectId, out var station) ||
+                !CraftingStationService.IsStation(station.ItemId) ||
+                !_networkWorldObjectChunks.TryGetValue(
+                    pending.ObjectId, out var stationChunk) ||
+                stationChunk.Level != _activeWorldLevel)
+            {
+                _chatUi.AddMessage(
+                    "That crafting station is no longer available.",
+                    ChatMessageStyle.Warning);
+                return;
+            }
+            SendNetworkStop();
+            OpenCraftingWindow(station.ItemId);
+            return;
+        }
         var payload = CreateNetworkWorldActionPayload(pending);
         if (payload is null)
         {
@@ -443,7 +480,9 @@ internal sealed partial class GameHostWindow
                 ExpectedConstructionMutation(commandId, payload, pending);
             _networkBuildAwaitingDelta = false;
         }
-        else if (pending.Kind == NetworkWorldActionKind.PlaceConstruction)
+        else if (pending.Kind is
+                 NetworkWorldActionKind.PlaceConstruction or
+                 NetworkWorldActionKind.PlaceInventoryWorldObject)
         {
             _networkPlacementCommandId = commandId;
             _networkExpectedPlacementMutation =
@@ -480,6 +519,28 @@ internal sealed partial class GameHostWindow
                 NextNetworkRevision(place.ExpectedChunkRevision));
         }
 
+        if (payload is PlaceInventoryWorldObjectAction furniture)
+        {
+            var chunkX = FloorDiv(
+                (int)MathF.Floor(furniture.X), WorldChunk.Size);
+            var chunkY = FloorDiv(
+                (int)MathF.Floor(furniture.Y), WorldChunk.Size);
+            return new(
+                commandId,
+                Guid.Empty,
+                furniture.DefinitionId,
+                new(furniture.X, furniture.Y),
+                furniture.Rotation,
+                chunkX,
+                chunkY,
+                furniture.WorldLevel,
+                0,
+                1,
+                furniture.ExpectedChunkRevision,
+                NextNetworkRevision(
+                    furniture.ExpectedChunkRevision));
+        }
+
         if (payload is not BuildConstructionAction build)
             return null;
         var client = _networkClient;
@@ -510,6 +571,7 @@ internal sealed partial class GameHostWindow
         PendingNetworkWorldAction action)
     {
         if (action.Kind is NetworkWorldActionKind.Drop or
+            NetworkWorldActionKind.PlaceInventoryWorldObject or
             NetworkWorldActionKind.PlaceConstruction or
             NetworkWorldActionKind.StartExcavation)
         {
@@ -522,6 +584,18 @@ internal sealed partial class GameHostWindow
                     checked((short)_activeWorldLevel),
                     action.InventorySlot,
                     chunkRevision);
+            if (action.Kind ==
+                NetworkWorldActionKind.PlaceInventoryWorldObject)
+            {
+                return new PlaceInventoryWorldObjectAction(
+                    action.DefinitionId!,
+                    action.InventorySlot,
+                    action.Target.X,
+                    action.Target.Y,
+                    checked((short)_activeWorldLevel),
+                    action.Rotation,
+                    chunkRevision);
+            }
             return action.Kind == NetworkWorldActionKind.Drop
                 ? new DropInventoryItemAction(
                     action.InventorySlot,

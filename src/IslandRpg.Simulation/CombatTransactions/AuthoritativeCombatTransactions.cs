@@ -121,6 +121,40 @@ public sealed class AuthoritativeCombatTransactions
                 now))
             .ToImmutableArray();
 
+    /// <summary>
+    /// Clears every enemy reference to an expired disconnected actor. This is
+    /// an immediate semantic transition so an intervening checkpoint cannot
+    /// retain a target that no longer exists in the session registry.
+    /// </summary>
+    public ImmutableArray<EnemyStateDelta> ForgetActor(ActorId actorId)
+    {
+        EnsureOwner();
+        if (actorId.Value == Guid.Empty)
+            throw new ArgumentException(
+                "A valid actor identity is required.", nameof(actorId));
+        var deltas = ImmutableArray.CreateBuilder<EnemyStateDelta>();
+        foreach (var enemy in _enemies.Values
+                     .Where(value => value.TargetActorId == actorId)
+                     .OrderBy(static value => value.EnemyId.Value))
+        {
+            var previous = enemy.ToSnapshot(actorId, 0);
+            enemy.TargetActorId = null;
+            enemy.ReactionReadyTick = 0;
+            enemy.BurrowEmergeTick = 0;
+            if (enemy.Alive)
+            {
+                enemy.Behavior = EnemyBehavior.Return;
+                enemy.Velocity = Vector2.Zero;
+            }
+            enemy.Revision = checked(enemy.Revision + 1);
+            deltas.Add(new EnemyStateDelta(
+                EnemyChangeKind.Updated,
+                previous,
+                enemy.ToSnapshot(null, 0)));
+        }
+        return deltas.ToImmutable();
+    }
+
     public AuthoritativeEnemySnapshot CaptureEnemy(
         EnemyId enemyId,
         ulong targetNetworkEntityId = 0,

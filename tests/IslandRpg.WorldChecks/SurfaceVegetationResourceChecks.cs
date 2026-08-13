@@ -1,4 +1,5 @@
 using IslandRpg.Resources;
+using IslandRpg.Rendering;
 using IslandRpg.Simulation;
 using IslandRpg.World;
 
@@ -9,6 +10,7 @@ internal static class SurfaceVegetationResourceChecks
         DeterministicDescriptorsAndHarvestDefaults();
         NegativeCoordinatesAndSeamIdentity();
         SoloGeneratorAndVisualParity();
+        NetworkObstacleDepletionParity();
         UnsupportedLevelsAreEmpty();
     }
 
@@ -160,6 +162,65 @@ internal static class SurfaceVegetationResourceChecks
         Assert(source.DescribeChunk(
                 1, new WorldChunkKey(0, 0, 1)).Count == 0,
             "unknown world levels must fail closed");
+    }
+
+    private static void NetworkObstacleDepletionParity()
+    {
+        var chunk = new WorldChunkKey(0, 0, 0);
+        var liveTree = new ResourceNodeSparseState(
+            new(Guid.Parse("10101010-1010-1010-1010-101010101010")),
+            ResourceNodeKind.Tree,
+            chunk,
+            NodeRevision: 1,
+            Health: 1,
+            Remaining: 0,
+            ReadyAtGameSeconds: 0,
+            Depleted: false);
+        var depletedTree = liveTree with
+        {
+            NodeRevision = 2,
+            Health = 0,
+            Depleted = true
+        };
+        var depletedMining = depletedTree with
+        {
+            Id = new(Guid.Parse("20202020-2020-2020-2020-202020202020")),
+            Kind = ResourceNodeKind.MiningNode
+        };
+        var depletedFibre = depletedTree with
+        {
+            Id = new(Guid.Parse("30303030-3030-3030-3030-303030303030")),
+            Kind = ResourceNodeKind.FibreShrub,
+            Remaining = 0,
+            ReadyAtGameSeconds =
+                SurfaceVegetationCatalog.FibreRegrowthGameSeconds
+        };
+        var depletedBerries = depletedFibre with
+        {
+            Id = new(Guid.Parse("40404040-4040-4040-4040-404040404040")),
+            Kind = ResourceNodeKind.BerryBush,
+            ReadyAtGameSeconds =
+                SurfaceVegetationCatalog.BerryRegrowthGameSeconds
+        };
+
+        Assert(
+            NetworkResourceObstacleRules.BlocksWorld(
+                ResourceNodeKind.Tree, 0, sparseState: null) &&
+            NetworkResourceObstacleRules.BlocksWorld(
+                ResourceNodeKind.Tree, 0, liveTree) &&
+            !NetworkResourceObstacleRules.BlocksWorld(
+                ResourceNodeKind.Tree, 0, depletedTree) &&
+            !NetworkResourceObstacleRules.BlocksWorld(
+                ResourceNodeKind.MiningNode, 0, depletedMining) &&
+            NetworkResourceObstacleRules.BlocksWorld(
+                ResourceNodeKind.FibreShrub,
+                SurfaceVegetationCatalog.FibreRegrowthGameSeconds,
+                depletedFibre) &&
+            NetworkResourceObstacleRules.BlocksWorld(
+                ResourceNodeKind.BerryBush,
+                SurfaceVegetationCatalog.BerryRegrowthGameSeconds,
+                depletedBerries),
+            "network prediction must release permanently depleted resources while reserving renewable vegetation for regrowth");
     }
 
     private static void Assert(bool condition, string message)

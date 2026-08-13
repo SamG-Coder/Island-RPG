@@ -84,6 +84,10 @@ internal static class WorldLevelNavigation
         int level,
         float searchDistance = 8)
     {
+        using var hydrologySampling =
+            level == (int)WorldLevel.Overworld
+                ? MacroHydrology.BeginNavigationSampling()
+                : null;
         var best = ReachableWalkableTarget(
             seed, origin, preferred, level, maximumRadius: 3);
         var bestDistanceSquared = Vector2.DistanceSquared(origin, best);

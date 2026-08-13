@@ -206,6 +206,15 @@ public static class GameplayIntentFingerprint
                 writer.Tag(38);
                 writer.Handle(value.Crop);
                 break;
+            case PlaceInventoryWorldObjectIntent value:
+                writer.Tag(39);
+                writer.Text(value.DefinitionId);
+                writer.Int32(value.InventorySlot);
+                writer.Vector(value.Position);
+                writer.Int32(value.WorldLevel);
+                writer.Int32(value.Rotation);
+                writer.UInt32(value.ExpectedChunkRevision);
+                break;
             default:
                 throw new NotSupportedException(
                     $"Gameplay intent type '{intent.GetType().Name}' has no canonical fingerprint.");

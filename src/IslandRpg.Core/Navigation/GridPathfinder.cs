@@ -34,7 +34,8 @@ public static class GridPathfinder
         int maximumVisited = 65_536,
         CancellationToken cancellationToken = default,
         int worldLevel = (int)NavigationWorldLevel.Overworld,
-        IReadOnlyList<NavigationObstacle>? obstacles = null)
+        IReadOnlyList<NavigationObstacle>? obstacles = null,
+        IWorldNavigationObstacleSource? obstacleSource = null)
     {
         ArgumentNullException.ThrowIfNull(world);
         if (maximumVisited <= 0) return [];
@@ -42,11 +43,8 @@ public static class GridPathfinder
         // An actor may begin within an interaction target's conservative
         // footprint. Ignore only those containing obstacles so the next path
         // can escape; every route starting outside still treats them as solid.
-        var routeObstacles = obstacles is null
-            ? null
-            : obstacles.Where(obstacle =>
-                    !obstacle.Contains(startPosition))
-                .ToArray();
+        var routeObstacles = new ObstacleLookup(
+            obstacles, obstacleSource, worldLevel, startPosition);
         var start = (
             X: WorldPlacementGrid.Cell(startPosition.X),
             Y: WorldPlacementGrid.Cell(startPosition.Y));
@@ -61,7 +59,7 @@ public static class GridPathfinder
             if (passability.TryGetValue((x, y), out var value))
                 return value;
             var center = WorldPlacementGrid.CellCenter(x, y);
-            value = !Contains(routeObstacles, center) &&
+            value = !routeObstacles.Contains(center) &&
                     world.CanStandAt(center, worldLevel);
             passability[(x, y)] = value;
             return value;
@@ -77,7 +75,7 @@ public static class GridPathfinder
             return value;
         }
 
-        var exactTarget = !Contains(routeObstacles, requestedTarget) &&
+        var exactTarget = !routeObstacles.Contains(requestedTarget) &&
                           world.CanStandAt(requestedTarget, worldLevel);
         var goal = ResolveGoal(
             requestedGoal,
@@ -259,5 +257,106 @@ public static class GridPathfinder
             if (obstacle.Contains(point))
                 return true;
         return false;
+    }
+
+    private sealed class ObstacleLookup
+    {
+        private const float QueryRegionSize = 32f;
+        private readonly NavigationObstacleSpatialIndex? _fixed;
+        private readonly IWorldNavigationObstacleSource? _source;
+        private readonly int _worldLevel;
+        private readonly HashSet<NavigationObstacle> _ignored;
+        private readonly Dictionary<(int X, int Y),
+            NavigationObstacleSpatialIndex> _regions = [];
+
+        public ObstacleLookup(
+            IReadOnlyList<NavigationObstacle>? fixedObstacles,
+            IWorldNavigationObstacleSource? source,
+            int worldLevel,
+            Vector2 start)
+        {
+            _source = source;
+            _worldLevel = worldLevel;
+            _ignored = [];
+            if (fixedObstacles is { Count: > 0 })
+            {
+                var included = fixedObstacles.Where(obstacle =>
+                {
+                    if (!obstacle.Contains(start)) return true;
+                    _ignored.Add(obstacle);
+                    return false;
+                }).ToArray();
+                if (included.Length > 0)
+                    _fixed = new NavigationObstacleSpatialIndex(included);
+            }
+            if (source is null) return;
+            foreach (var obstacle in source.GetObstacles(
+                         worldLevel, start, start))
+                if (obstacle.Contains(start))
+                    _ignored.Add(obstacle);
+        }
+
+        public bool Contains(Vector2 point)
+        {
+            if (_fixed?.Contains(point) == true) return true;
+            if (_source is null) return false;
+            var region = (
+                X: (int)MathF.Floor(point.X / QueryRegionSize),
+                Y: (int)MathF.Floor(point.Y / QueryRegionSize));
+            if (!_regions.TryGetValue(region, out var index))
+            {
+                var minimum = new Vector2(
+                    region.X * QueryRegionSize,
+                    region.Y * QueryRegionSize);
+                var maximum = minimum +
+                    new Vector2(QueryRegionSize, QueryRegionSize);
+                index = new NavigationObstacleSpatialIndex(
+                    _source.GetObstacles(
+                            _worldLevel, minimum, maximum)
+                        .Where(obstacle => !_ignored.Contains(obstacle)));
+                _regions.Add(region, index);
+            }
+            return index.Contains(point);
+        }
+    }
+
+    private sealed class NavigationObstacleSpatialIndex
+    {
+        private readonly Dictionary<(int X, int Y),
+            List<NavigationObstacle>> _byCell = [];
+
+        public NavigationObstacleSpatialIndex(
+            IEnumerable<NavigationObstacle> obstacles)
+        {
+            foreach (var obstacle in obstacles)
+            {
+                var half = obstacle.AxisAlignedHalfExtents(.18f);
+                var minimum = obstacle.Center - half;
+                var maximum = obstacle.Center + half;
+                var minimumX = WorldPlacementGrid.Cell(minimum.X);
+                var maximumX = WorldPlacementGrid.Cell(maximum.X);
+                var minimumY = WorldPlacementGrid.Cell(minimum.Y);
+                var maximumY = WorldPlacementGrid.Cell(maximum.Y);
+                for (var y = minimumY; y <= maximumY; y++)
+                for (var x = minimumX; x <= maximumX; x++)
+                {
+                    if (!_byCell.TryGetValue((x, y), out var values))
+                    {
+                        values = [];
+                        _byCell.Add((x, y), values);
+                    }
+                    values.Add(obstacle);
+                }
+            }
+        }
+
+        public bool Contains(Vector2 point)
+        {
+            var cell = (
+                X: WorldPlacementGrid.Cell(point.X),
+                Y: WorldPlacementGrid.Cell(point.Y));
+            return _byCell.TryGetValue(cell, out var candidates) &&
+                   candidates.Any(obstacle => obstacle.Contains(point));
+        }
     }
 }

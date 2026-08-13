@@ -77,6 +77,21 @@ public sealed class DedicatedServer : IAsyncDisposable
 
     internal Action? AfterWorldBootstrapUpdatedForTest { get; set; }
 
+    /// <summary>
+    /// Deterministic test seam immediately before one reliable message is
+    /// written. Production leaves this null.
+    /// </summary>
+    internal Func<ClientConnection, IProtocolMessage, CancellationToken,
+        ValueTask>? BeforeOutboundWriteForTest { get; set; }
+
+    /// <summary>
+    /// Bounds how long one reliable publication may retain its queued state,
+    /// including time spent behind earlier publications. The internal setter
+    /// is a deterministic transport-stall seam for integration checks.
+    /// </summary>
+    internal TimeSpan OutboundPublicationWriteTimeout { get; set; } =
+        TimeSpan.FromSeconds(30);
+
     public DedicatedServer(ServerOptions options)
         : this(options, null)
     {
@@ -129,7 +144,11 @@ public sealed class DedicatedServer : IAsyncDisposable
             navigation,
             combatOptions);
         _session = new AuthoritativeWorldSession(
-            SimulationLimits.Default with { MaximumActors = options.MaximumClients },
+            SimulationLimits.Default with
+            {
+                MaximumActors = NetworkPopulationLimits.MaximumActors,
+                MaximumConnectedActors = options.MaximumClients
+            },
             sessionId: new SessionId(options.WorldId),
             navigation: navigation,
             identitySource: identitySource,
@@ -359,8 +378,16 @@ public sealed class DedicatedServer : IAsyncDisposable
                     new ReconnectToken(request.ReconnectToken))).ConfigureAwait(false);
                 if (!result.Accepted)
                 {
+                    var code = result.Status switch
+                    {
+                        ReconnectStatus.SessionFull =>
+                            HandshakeRejectionCode.ServerFull,
+                        ReconnectStatus.ExpiredPlayer =>
+                            HandshakeRejectionCode.ReconnectExpired,
+                        _ => HandshakeRejectionCode.InvalidName
+                    };
                     throw new HandshakeFailure(
-                        HandshakeRejectionCode.InvalidName,
+                        code,
                         result.Error ?? "Reconnect was rejected.");
                 }
 
@@ -503,26 +530,59 @@ public sealed class DedicatedServer : IAsyncDisposable
             var resources = Volatile.Read(ref _resourceBootstrap);
             var boats = Volatile.Read(ref _boatBootstrap);
             var enemies = Volatile.Read(ref _enemyBootstrap);
-            connection.SetPublicBaselineHighWater(
+            var tick = checked((ulong)CurrentTick);
+            var messageCount = CountPublicBaselineMessages(
+                world, resources, boats, enemies);
+            if (!connection.TryQueuePublicBootstrapAndActivate(
                 world.ChunkRevisions,
                 resources.Chunks,
                 boats.Boats,
-                enemies.Enemies);
-            if (!QueueWorldObjectBaselines(connection, world) ||
-                !QueueResourceBaselines(connection, resources) ||
-                !QueueBoatBaseline(connection, boats) ||
-                !QueueEnemyBaseline(connection, enemies))
+                enemies.Enemies,
+                messageCount,
+                firstSequence => EnumeratePublicBaselines(
+                    firstSequence,
+                    tick,
+                    world,
+                    resources,
+                    boats,
+                    enemies)))
+            {
+                connection.Stop();
                 return false;
-            connection.Activate();
+            }
             return true;
         }
     }
 
-    private bool QueueWorldObjectBaselines(
-        ClientConnection connection,
-        WorldBootstrapState bootstrap)
+    private static int CountPublicBaselineMessages(
+        WorldBootstrapState world,
+        ResourceBootstrapState resources,
+        BoatBootstrapState boats,
+        EnemyBootstrapState enemies)
     {
-        var chunkRevisions = bootstrap.ChunkRevisions;
+        _ = boats;
+        _ = enemies;
+        var chunkBatchCount = checked(
+            (world.ChunkRevisions.Count +
+             ProtocolLimits.MaxWorldChunkRevisionsPerBatch - 1) /
+            ProtocolLimits.MaxWorldChunkRevisionsPerBatch);
+        return checked(
+            chunkBatchCount +
+            world.Objects.Count +
+            resources.Chunks.Count +
+            2); // Complete boat and enemy baselines are always present.
+    }
+
+    private static IEnumerable<IProtocolMessage> EnumeratePublicBaselines(
+        ulong firstSequence,
+        ulong tick,
+        WorldBootstrapState world,
+        ResourceBootstrapState resources,
+        BoatBootstrapState boats,
+        EnemyBootstrapState enemies)
+    {
+        var sequence = firstSequence;
+        var chunkRevisions = world.ChunkRevisions;
         for (var offset = 0; offset < chunkRevisions.Count;
              offset += ProtocolLimits.MaxWorldChunkRevisionsPerBatch)
         {
@@ -532,85 +592,44 @@ public sealed class DedicatedServer : IAsyncDisposable
             var batch = new WorldChunkRevisionState[count];
             for (var index = 0; index < count; index++)
                 batch[index] = chunkRevisions[offset + index];
-            if (!connection.TryQueueSequenced(sequence =>
-                    new WorldChunkRevisionBatchMessage(
-                        sequence,
-                        checked((ulong)CurrentTick),
-                        batch)))
-            {
-                connection.Stop();
-                return false;
-            }
+            yield return new WorldChunkRevisionBatchMessage(
+                sequence,
+                tick,
+                batch);
+            sequence = checked(sequence + 1);
         }
 
         // Chunk revisions precede object baselines so an object-free chunk is
         // still actionable and every following object can reference a known
         // authoritative chunk revision.
-        foreach (var value in bootstrap.Objects)
+        foreach (var value in world.Objects)
         {
-            if (!connection.TryQueueSequenced(sequence =>
-                    WorldActionProtocolAdapter.ToPublicWorldState(
-                        sequence,
-                        checked((ulong)CurrentTick),
-                        value.Object,
-                        value.ChunkRevision)))
-            {
-                connection.Stop();
-                return false;
-            }
+            yield return WorldActionProtocolAdapter.ToPublicWorldState(
+                sequence,
+                tick,
+                value.Object,
+                value.ChunkRevision);
+            sequence = checked(sequence + 1);
         }
-        return true;
-    }
 
-    private bool QueueResourceBaselines(
-        ClientConnection connection,
-        ResourceBootstrapState bootstrap)
-    {
-        foreach (var chunk in bootstrap.Chunks)
+        foreach (var chunk in resources.Chunks)
         {
-            if (!connection.TryQueueSequenced(sequence =>
-                    ResourceActionProtocolAdapter.ToBaseline(
-                        sequence,
-                        checked((ulong)CurrentTick),
-                        chunk)))
-            {
-                connection.Stop();
-                return false;
-            }
+            yield return ResourceActionProtocolAdapter.ToBaseline(
+                sequence,
+                tick,
+                chunk);
+            sequence = checked(sequence + 1);
         }
-        return true;
-    }
 
-    private bool QueueBoatBaseline(
-        ClientConnection connection,
-        BoatBootstrapState bootstrap)
-    {
-        if (!connection.TryQueueSequenced(sequence =>
-                BoatActionProtocolAdapter.ToBaseline(
-                    sequence,
-                    checked((ulong)CurrentTick),
-                    bootstrap.Boats)))
-        {
-            connection.Stop();
-            return false;
-        }
-        return true;
-    }
-
-    private bool QueueEnemyBaseline(
-        ClientConnection connection,
-        EnemyBootstrapState bootstrap)
-    {
-        if (!connection.TryQueueSequenced(sequence =>
-                CombatActionProtocolAdapter.ToBaseline(
-                    sequence,
-                    checked((ulong)CurrentTick),
-                    bootstrap.Enemies)))
-        {
-            connection.Stop();
-            return false;
-        }
-        return true;
+        yield return BoatActionProtocolAdapter.ToBaseline(
+            sequence,
+            tick,
+            boats.Boats);
+        sequence = checked(sequence + 1);
+        yield return CombatActionProtocolAdapter.ToBaseline(
+            sequence,
+            tick,
+            enemies.Enemies);
     }
 
     internal async Task<IntentResult> ProcessCommandAsync(

@@ -96,6 +96,81 @@ internal static class ResourceAuthorityChecks
                 "a rejected strike must not dirty the sparse chunk");
         });
 
+        checks.Add(
+            "resource placement footprint honors sparse depletion",
+            () =>
+            {
+                const long seed = 517_229;
+                var chunk = new WorldChunkKey(0, 0, 0);
+                var source = new FixedResourceSource([
+                    new ProceduralResourceSeed(
+                        ProceduralResourceKey.Tree(2, 2),
+                        new Vector2(2.5f, 2.5f),
+                        InitialHealth: 1,
+                        MaximumHealth: 1)
+                ]);
+                var catalog = new ProceduralResourceCatalog(source);
+                var authority = new AuthoritativeResourceTransactions(
+                    seed, catalog);
+                CheckAssert.True(
+                    authority.HasBlockingResourceInFootprint(
+                        new Vector2(1.75f, 2.5f), 0, new Vector2(1, 1)),
+                    "a live resource inside the edge of a footprint must block placement");
+
+                var descriptor = catalog.DescribeChunk(seed, chunk).Single();
+                authority.RestoreCheckpoint(new(
+                    [new ResourceChunkSparseState(
+                        chunk,
+                        1,
+                        [new ResourceNodeSparseState(
+                            descriptor.Id,
+                            ResourceNodeKind.Tree,
+                            chunk,
+                            1,
+                            0,
+                            0,
+                            0,
+                            true)])],
+                    []));
+                CheckAssert.False(
+                    authority.HasBlockingResourceInFootprint(
+                        new Vector2(1.75f, 2.5f), 0, new Vector2(1, 1)),
+                    "a depleted sparse resource must no longer block placement");
+
+                var renewableSource = new FixedResourceSource([
+                    new ProceduralResourceSeed(
+                        ProceduralResourceKey.Vegetation(
+                            ResourceNodeKind.BerryBush, 2, 2, 0, 0),
+                        new Vector2(2.5f, 2.5f),
+                        InitialRemaining: 1,
+                        RegrowthGameSeconds: 720)
+                ]);
+                var renewableCatalog = new ProceduralResourceCatalog(
+                    renewableSource);
+                var renewableDescriptor = renewableCatalog.DescribeChunk(
+                    seed, chunk).Single();
+                var renewableAuthority = new AuthoritativeResourceTransactions(
+                    seed, renewableCatalog);
+                renewableAuthority.RestoreCheckpoint(new(
+                    [new ResourceChunkSparseState(
+                        chunk,
+                        1,
+                        [new ResourceNodeSparseState(
+                            renewableDescriptor.Id,
+                            ResourceNodeKind.BerryBush,
+                            chunk,
+                            1,
+                            0,
+                            0,
+                            720,
+                            true)])],
+                    []));
+                CheckAssert.True(
+                    renewableAuthority.HasBlockingResourceInFootprint(
+                        new Vector2(1.75f, 2.5f), 0, new Vector2(1, 1)),
+                    "a depleted renewable must reserve its future regrowth footprint");
+            });
+
         checks.Add("tree misses advance actor revision exactly once", () =>
         {
             (ResourceFixture Fixture,

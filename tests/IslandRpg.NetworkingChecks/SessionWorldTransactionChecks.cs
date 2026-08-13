@@ -1,5 +1,8 @@
+using System.Collections.Immutable;
 using System.Numerics;
 using IslandRpg.Gameplay;
+using IslandRpg.Navigation;
+using IslandRpg.Resources;
 using IslandRpg.Simulation;
 
 namespace IslandRpg.NetworkingChecks;
@@ -23,6 +26,13 @@ internal static class SessionWorldTransactionChecks
             DropAndPlacementRequireChunkRevisions);
         checks.Add("session construction rejects impassable terrain",
             ConstructionRejectsImpassableTerrain);
+        checks.Add(
+            "session construction rejects unsafe footprint boundaries",
+            ConstructionRejectsUnsafeFootprintBoundaries);
+        checks.Add("session furniture rejects water and steep terrain",
+            FurnitureRejectsWaterAndSteepTerrain);
+        checks.Add("session furniture enables only nearby station crafting",
+            FurnitureEnablesNearbyStationCrafting);
         checks.Add("session checkpoint restores exact durable authority state",
             CheckpointRestoresExactState);
         checks.Add("session checkpoint rejects invalid player survival state",
@@ -508,6 +518,189 @@ internal static class SessionWorldTransactionChecks
             "invalid terrain must not mutate its chunk");
     }
 
+    private static void ConstructionRejectsUnsafeFootprintBoundaries()
+    {
+        const string gateId = "gate_8185";
+        var diagonalPlacement = new Vector2(2, 2);
+        CheckAssert.True(PlaceableWorldObjectRules.TryGetCollision(
+                gateId, out var gateDefinition),
+            "the gate fixture must use canonical collision geometry");
+        CheckAssert.Equal(
+            new Vector2(4, 1),
+            PlaceableWorldObjectRules.PlacementFootprint(
+                gateDefinition, 0),
+            "gate rotation zero must reserve four-by-one clearance");
+        CheckAssert.Equal(
+            new Vector2(1, 4),
+            PlaceableWorldObjectRules.PlacementFootprint(
+                gateDefinition, 1),
+            "gate rotation one must reserve one-by-four clearance");
+        CheckAssert.Equal(
+            new Vector2(4, 4),
+            PlaceableWorldObjectRules.PlacementFootprint(
+                gateDefinition, 2),
+            "diagonal gates must reserve the client's complete four-by-four footprint");
+        CheckAssert.Equal(
+            new Vector2(4, 4),
+            PlaceableWorldObjectRules.PlacementFootprint(
+                gateDefinition, 3),
+            "both diagonal gates must reserve four-by-four clearance");
+        var diagonalCollisionBounds =
+            PlaceableWorldObjectRules.CollisionBounds(
+                gateDefinition, diagonalPlacement, 2);
+        var diagonalPlacementBounds =
+            PlaceableWorldObjectRules.PlacementBounds(
+                gateDefinition, diagonalPlacement, 2);
+        CheckAssert.True(
+            diagonalCollisionBounds.Minimum.X >
+            diagonalPlacementBounds.Minimum.X,
+            "the regression hazard must lie outside navigation contact but inside placement clearance");
+
+        var waterSession = new AuthoritativeWorldSession(
+            identitySource: new DeterministicIdentitySource(),
+            sessionId: new SessionId(Guid.Parse(
+                "89100000-0000-0000-0000-000000000001")),
+            navigation: new EdgeWaterNavigationQuery(maximumWaterX: 1f));
+        var waterConnection = ClientConnectionId.New();
+        var waterJoined = Join(
+            waterSession, waterConnection, "Gate Surveyor", Vector2.Zero,
+            [
+                new InitialInventoryItem(Log, 4),
+                new InitialInventoryItem("stone_hammer")
+            ]);
+        var waterResult = Send(
+            waterSession,
+            waterConnection,
+            waterJoined,
+            waterJoined.NextCommandSequence,
+            new PlaceConstructionIntent(
+                Guid.Parse("89200000-0000-0000-0000-000000000001"),
+                waterJoined.Gameplay.Inventory.Revision,
+                waterJoined.Gameplay.ActorRevision,
+                gateId,
+                diagonalPlacement,
+                0,
+                2,
+                0));
+        CheckAssert.Equal(IntentStatus.InvalidPlacement, waterResult.Status,
+            "diagonal gate placement must reject water in its outer authored edge");
+        AssertRejectedConstructionUnchanged(
+            waterSession, waterResult, diagonalPlacement, 4,
+            "diagonal gate water-edge rejection");
+
+        const long resourceSeed = 551_991;
+        var resourceChunk = new WorldChunkKey(0, 0, 0);
+        var resourceSource = new FixedResourceSource(
+            resourceChunk,
+            [
+                new ProceduralResourceSeed(
+                    ProceduralResourceKey.Tree(0, 0),
+                    new Vector2(.5f, .5f),
+                    InitialHealth: 100,
+                    MaximumHealth: 100,
+                    InitialRemaining: 1)
+            ]);
+        var resourceCatalog = new ProceduralResourceCatalog(resourceSource);
+        var resourceSession = new AuthoritativeWorldSession(
+            identitySource: new DeterministicIdentitySource(),
+            sessionId: new SessionId(Guid.Parse(
+                "89100000-0000-0000-0000-000000000002")),
+            resourceTransactions: new AuthoritativeResourceTransactions(
+                resourceSeed, resourceCatalog));
+        var resourceConnection = ClientConnectionId.New();
+        var resourceJoined = Join(
+            resourceSession,
+            resourceConnection,
+            "Gate Forester",
+            Vector2.Zero,
+            [
+                new InitialInventoryItem(Log, 4),
+                new InitialInventoryItem("stone_hammer")
+            ]);
+        var resourceResult = Send(
+            resourceSession,
+            resourceConnection,
+            resourceJoined,
+            resourceJoined.NextCommandSequence,
+            new PlaceConstructionIntent(
+                Guid.Parse("89200000-0000-0000-0000-000000000002"),
+                resourceJoined.Gameplay.Inventory.Revision,
+                resourceJoined.Gameplay.ActorRevision,
+                gateId,
+                diagonalPlacement,
+                0,
+                2,
+                0));
+        CheckAssert.Equal(IntentStatus.InvalidPlacement,
+            resourceResult.Status,
+            "diagonal gate placement must reject a tree in its outer authored edge");
+        AssertRejectedConstructionUnchanged(
+            resourceSession, resourceResult, diagonalPlacement, 4,
+            "diagonal gate resource-edge rejection");
+
+        var obstaclePlacement = new Vector2(1, 1);
+        var gatePieces = PlaceableWorldObjectRules.CollisionObstacles(
+            gateDefinition,
+            obstaclePlacement,
+            0);
+        var edgePiece = gatePieces.MaxBy(value =>
+            Vector2.DistanceSquared(value.Center, obstaclePlacement));
+        var obstacleSession = new AuthoritativeWorldSession(
+            identitySource: new DeterministicIdentitySource(),
+            sessionId: new SessionId(Guid.Parse(
+                "89100000-0000-0000-0000-000000000003")),
+            obstacles: new FixedObstacles(
+            [
+                new NavigationObstacle(edgePiece.Center, .2f, .2f)
+            ]));
+        var obstacleConnection = ClientConnectionId.New();
+        var obstacleJoined = Join(
+            obstacleSession,
+            obstacleConnection,
+            "Gate Surveyor",
+            Vector2.Zero,
+            [
+                new InitialInventoryItem(Log, 4),
+                new InitialInventoryItem("stone_hammer")
+            ]);
+        var obstacleResult = Send(
+            obstacleSession,
+            obstacleConnection,
+            obstacleJoined,
+            obstacleJoined.NextCommandSequence,
+            new PlaceConstructionIntent(
+                Guid.Parse("89200000-0000-0000-0000-000000000003"),
+                obstacleJoined.Gameplay.Inventory.Revision,
+                obstacleJoined.Gameplay.ActorRevision,
+                gateId,
+                obstaclePlacement,
+                0,
+                0,
+                0));
+        CheckAssert.Equal(IntentStatus.InvalidPlacement,
+            obstacleResult.Status,
+            "a clear submitted center must not hide a static gate-edge obstacle");
+        AssertRejectedConstructionUnchanged(
+            obstacleSession, obstacleResult, obstaclePlacement, 4,
+            "obstacle-boundary gate rejection");
+    }
+
+    private static void AssertRejectedConstructionUnchanged(
+        AuthoritativeWorldSession session,
+        IntentResult result,
+        Vector2 placement,
+        int expectedLogs,
+        string message)
+    {
+        CheckAssert.Equal(expectedLogs, Count(result.Gameplay, Log),
+            $"{message} must preserve every construction material");
+        CheckAssert.Equal(0, session.CaptureCheckpoint().World.Objects.Length,
+            $"{message} must not create a world object");
+        CheckAssert.Equal(0U, session.CaptureWorldChunkRevision(
+                WorldChunkKey.At(placement, 0)),
+            $"{message} must not advance the target chunk");
+    }
+
     private static void CheckpointRestoresExactState()
     {
         var session = NewSession();
@@ -700,6 +893,210 @@ internal static class SessionWorldTransactionChecks
             sessionId: new SessionId(Guid.Parse(
                 "89000000-0000-0000-0000-000000000001")),
             worldTransactions: aggregate);
+
+    private static void FurnitureEnablesNearbyStationCrafting()
+    {
+        var session = NewSession();
+        var connection = ClientConnectionId.New();
+        var joined = Join(session, connection, "Builder", Vector2.Zero,
+        [
+            new InitialInventoryItem(ItemIds.Workbench),
+            new InitialInventoryItem(ItemIds.PrimitiveFishingNet),
+            new InitialInventoryItem(ItemIds.Rope, 2),
+            new InitialInventoryItem(ItemIds.StoneKnife)
+        ]);
+        (session, connection, joined) = RestartWithCraftingLevel(
+            session, joined, 6);
+        var before = joined.Gameplay;
+        var sequence = joined.NextCommandSequence;
+        var locked = Send(session, connection, joined, sequence++,
+            new CraftRecipeIntent(
+                Guid.NewGuid(), before.Inventory.Revision,
+                before.ActorRevision, "reinforced-fishing-net"));
+        CheckAssert.Equal(IntentStatus.MissingStation, locked.Status,
+            "station recipes must reject before an authoritative station exists");
+
+        var position = new Vector2(1, 1.5f);
+        var workbenchSlot = before.Inventory.Slots.Single(value =>
+            value.ItemId == ItemIds.Workbench).Slot;
+        var placed = Send(session, connection, joined, sequence++,
+            new PlaceInventoryWorldObjectIntent(
+                Guid.NewGuid(), before.Inventory.Revision,
+                before.ActorRevision, ItemIds.Workbench, workbenchSlot,
+                position, 0, 0,
+                session.CaptureWorldChunkRevision(
+                    WorldChunkKey.At(position, 0))));
+        CheckAssert.True(placed.Accepted,
+            "a carried workbench should place through one world transaction");
+        CheckAssert.Equal(0, Count(placed.Gameplay, ItemIds.Workbench),
+            "placement must consume exactly one workbench");
+        CheckAssert.Equal(ItemIds.Workbench,
+            placed.WorldTransaction!.ObjectDeltas.Single().Object!.DefinitionId,
+            "the public world delta must establish the station definition");
+
+        var placedObjectId = placed.WorldTransaction.ObjectDeltas.Single().ObjectId;
+        var durable = session.CaptureCheckpoint();
+        session = NewSession();
+        session.RestoreCheckpoint(durable);
+        connection = ClientConnectionId.New();
+        var reconnectPending = session.EnqueueReconnectAsync(new(
+            connection, joined.Identity.PlayerId, joined.ReconnectToken));
+        session.Drain();
+        var reconnect = reconnectPending.GetAwaiter().GetResult();
+        CheckAssert.True(reconnect.Accepted,
+            "the station owner must reconnect after a placement checkpoint");
+        joined = joined with
+        {
+            Gameplay = reconnect.Gameplay,
+            NextCommandSequence = reconnect.NextCommandSequence
+        };
+        CheckAssert.Equal(ItemIds.Workbench,
+            session.CaptureWorldObject(placedObjectId).DefinitionId,
+            "the authoritative station must survive checkpoint restore");
+
+        var crafted = Send(
+            session, connection, joined, joined.NextCommandSequence,
+            new CraftRecipeIntent(
+                Guid.NewGuid(), joined.Gameplay.Inventory.Revision,
+                joined.Gameplay.ActorRevision, "reinforced-fishing-net"));
+        CheckAssert.True(crafted.Accepted,
+            "the server must discover and validate a nearby station itself");
+        CheckAssert.Equal(1,
+            Count(crafted.Gameplay, ItemIds.ReinforcedFishingNet),
+            "the station recipe should commit its exact product");
+
+        var farSession = NewSession();
+        farSession.SeedWorldObject(new(
+            Guid.NewGuid(), ItemIds.Workbench, new Vector2(20, 20)));
+        var farConnection = ClientConnectionId.New();
+        var far = Join(farSession, farConnection, "Far Crafter", Vector2.Zero,
+        [
+            new InitialInventoryItem(ItemIds.PrimitiveFishingNet),
+            new InitialInventoryItem(ItemIds.Rope, 2),
+            new InitialInventoryItem(ItemIds.StoneKnife)
+        ]);
+        (farSession, farConnection, far) = RestartWithCraftingLevel(
+            farSession, far, 6);
+        var farResult = Send(
+            farSession, farConnection, far, far.NextCommandSequence,
+            new CraftRecipeIntent(
+                Guid.NewGuid(), far.Gameplay.Inventory.Revision,
+                far.Gameplay.ActorRevision, "reinforced-fishing-net"));
+        CheckAssert.Equal(IntentStatus.MissingStation, farResult.Status,
+            "a replicated station outside interaction range must not authorize crafting");
+    }
+
+    private static void FurnitureRejectsWaterAndSteepTerrain()
+    {
+        foreach (var navigation in new IWorldNavigationQuery[]
+                 {
+                     new HostilePlacementNavigationQuery(wading: true),
+                     new HostilePlacementNavigationQuery(wading: false)
+                 })
+        {
+            var session = new AuthoritativeWorldSession(
+                identitySource: new DeterministicIdentitySource(),
+                sessionId: new SessionId(Guid.NewGuid()),
+                navigation: navigation);
+            var connection = ClientConnectionId.New();
+            var joined = Join(
+                session, connection, "Terrain Builder", Vector2.Zero,
+                [new InitialInventoryItem(ItemIds.Workbench)]);
+            var slot = joined.Gameplay.Inventory.Slots.Single(value =>
+                value.ItemId == ItemIds.Workbench).Slot;
+            var position = new Vector2(1, 1.5f);
+            var result = Send(
+                session, connection, joined, joined.NextCommandSequence,
+                new PlaceInventoryWorldObjectIntent(
+                    Guid.NewGuid(),
+                    joined.Gameplay.Inventory.Revision,
+                    joined.Gameplay.ActorRevision,
+                    ItemIds.Workbench,
+                    slot,
+                    position,
+                    0,
+                    0,
+                    session.CaptureWorldChunkRevision(
+                        WorldChunkKey.At(position, 0))));
+            CheckAssert.Equal(IntentStatus.InvalidPlacement, result.Status,
+                "crafted wire placement must reject water and steep footprints");
+            CheckAssert.Equal(1, Count(result.Gameplay, ItemIds.Workbench),
+                "invalid terrain must not consume carried furniture");
+        }
+
+        var extremeSession = new AuthoritativeWorldSession(
+            identitySource: new DeterministicIdentitySource(),
+            sessionId: new SessionId(Guid.NewGuid()),
+            navigation: new HostilePlacementNavigationQuery(wading: false));
+        var extremeConnection = ClientConnectionId.New();
+        var extremeJoined = Join(
+            extremeSession, extremeConnection, "Bounds Builder", Vector2.Zero,
+            [new InitialInventoryItem(ItemIds.Workbench)]);
+        var extremeSlot = extremeJoined.Gameplay.Inventory.Slots.Single(value =>
+            value.ItemId == ItemIds.Workbench).Slot;
+        var extremeResult = Send(
+            extremeSession,
+            extremeConnection,
+            extremeJoined,
+            extremeJoined.NextCommandSequence,
+            new PlaceInventoryWorldObjectIntent(
+                Guid.NewGuid(),
+                extremeJoined.Gameplay.Inventory.Revision,
+                extremeJoined.Gameplay.ActorRevision,
+                ItemIds.Workbench,
+                extremeSlot,
+                new Vector2(float.MinValue, float.MaxValue),
+                0,
+                0,
+                0));
+        CheckAssert.Equal(IntentStatus.InvalidPlacement, extremeResult.Status,
+            "extreme finite coordinates must reject before terrain iteration");
+        CheckAssert.Equal(1, Count(extremeResult.Gameplay, ItemIds.Workbench),
+            "out-of-world placement must not consume carried furniture");
+    }
+
+    private static (
+        AuthoritativeWorldSession Session,
+        ClientConnectionId Connection,
+        JoinResult Joined) RestartWithCraftingLevel(
+        AuthoritativeWorldSession session,
+        JoinResult joined,
+        int level,
+        Func<AuthoritativeWorldSession>? replacementFactory = null)
+    {
+        var checkpoint = session.CaptureCheckpoint();
+        var actor = checkpoint.Actors.Single(value =>
+            value.Identity.PlayerId == joined.Identity.PlayerId);
+        var restored = replacementFactory?.Invoke() ?? NewSession();
+        restored.RestoreCheckpoint(checkpoint with
+        {
+            Actors = checkpoint.Actors.Select(value =>
+                value.Identity.PlayerId == joined.Identity.PlayerId
+                    ? value with
+                    {
+                        Gameplay = value.Gameplay with
+                        {
+                            CraftingExperience =
+                                SkillService.ExperienceForLevel(level)
+                        }
+                    }
+                    : value).ToImmutableArray()
+        });
+        var restoredConnection = ClientConnectionId.New();
+        var reconnectPending = restored.EnqueueReconnectAsync(new(
+            restoredConnection,
+            actor.Identity.PlayerId,
+            joined.ReconnectToken));
+        restored.Drain();
+        var reconnect = reconnectPending.GetAwaiter().GetResult();
+        CheckAssert.True(reconnect.Accepted,
+            "the levelled crafting fixture must reconnect after restore");
+        return (restored, restoredConnection, joined with
+        {
+            Gameplay = reconnect.Gameplay,
+            NextCommandSequence = reconnect.NextCommandSequence
+        });
+    }
 
     private static void CampfireCookingIsTimedAtomicAndDurable()
     {
@@ -944,5 +1341,57 @@ internal static class SessionWorldTransactionChecks
         public float HeightAt(Vector2 point, int worldLevel) => 0;
 
         public bool IsWading(Vector2 point, int worldLevel) => false;
+    }
+
+    private sealed class HostilePlacementNavigationQuery(bool wading) :
+        IWorldNavigationQuery
+    {
+        public bool SupportsWorldLevel(int worldLevel) => worldLevel == 0;
+
+        public bool CanStandAt(Vector2 point, int worldLevel) =>
+            worldLevel == 0;
+
+        public float HeightAt(Vector2 point, int worldLevel) =>
+            wading || point.X < 2 ? 0 : 4;
+
+        public bool IsWading(Vector2 point, int worldLevel) =>
+            wading && worldLevel == 0;
+    }
+
+    private sealed class EdgeWaterNavigationQuery(
+        float? minimumWaterX = null,
+        float? maximumWaterX = null) :
+        IWorldNavigationQuery
+    {
+        public bool SupportsWorldLevel(int worldLevel) => worldLevel == 0;
+
+        public bool CanStandAt(Vector2 point, int worldLevel) =>
+            worldLevel == 0;
+
+        public float HeightAt(Vector2 point, int worldLevel) => 0;
+
+        public bool IsWading(Vector2 point, int worldLevel) =>
+            worldLevel == 0 &&
+            (minimumWaterX is { } minimum && point.X >= minimum ||
+             maximumWaterX is { } maximum && point.X < maximum);
+    }
+
+    private sealed class FixedObstacles(
+        IReadOnlyList<NavigationObstacle> values) :
+        IWorldNavigationObstacleSource
+    {
+        public IReadOnlyList<NavigationObstacle> GetObstacles(int worldLevel) =>
+            worldLevel == 0 ? values : [];
+    }
+
+    private sealed class FixedResourceSource(
+        WorldChunkKey chunk,
+        IReadOnlyList<ProceduralResourceSeed> values) :
+        IProceduralResourceDescriptorSource
+    {
+        public IReadOnlyList<ProceduralResourceSeed> DescribeChunk(
+            long worldSeed,
+            WorldChunkKey requestedChunk) =>
+            requestedChunk == chunk ? values : [];
     }
 }

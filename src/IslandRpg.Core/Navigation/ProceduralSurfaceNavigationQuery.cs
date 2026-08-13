@@ -29,10 +29,18 @@ public sealed class ProceduralSurfaceNavigationQuery(long seed) :
     {
         if (worldLevel != (int)NavigationWorldLevel.Overworld)
             return 0;
-        return ProceduralSurfaceTerrain.SampleSurfaceHeight(
-            Seed,
-            (int)MathF.Floor(point.X),
-            (int)MathF.Floor(point.Y));
+        var tileX = (int)MathF.Floor(point.X);
+        var tileY = (int)MathF.Floor(point.Y);
+        var epsilon = .0001f;
+        var vertexX = MathF.Abs(point.X - MathF.Round(point.X)) <= epsilon;
+        var vertexY = MathF.Abs(point.Y - MathF.Round(point.Y)) <= epsilon;
+        return vertexX && vertexY
+            ? ProceduralSurfaceTerrain.RawSurfaceHeightAt(
+                Seed,
+                (int)MathF.Round(point.X),
+                (int)MathF.Round(point.Y))
+            : ProceduralSurfaceTerrain.SampleSurfaceHeight(
+                Seed, tileX, tileY);
     }
 
     public bool IsWading(Vector2 point, int worldLevel)

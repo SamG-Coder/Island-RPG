@@ -1,8 +1,13 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
 using System.Numerics;
 using IslandRpg.Client;
+using IslandRpg.Gameplay;
+using IslandRpg.Navigation;
 using IslandRpg.Protocol;
+using IslandRpg.Resources;
 using IslandRpg.Server;
 using IslandRpg.Simulation;
 
@@ -41,8 +46,20 @@ internal static class LoopbackChecks
             "real loopback campfire cooking completes authoritatively",
             CompletesCampfireCookingAuthoritativelyAsync);
         checks.Add(
+            "real loopback furniture placement enables nearby station crafting",
+            PlacesFurnitureAndValidatesNearbyStationCraftingAsync);
+        checks.Add(
             "late join activation closes the public bootstrap revision gap",
             LateJoinActivationClosesPublicRevisionGapAsync);
+        checks.Add(
+            "large blocked late-join bootstrap does not stall healthy clients",
+            LargeBlockedLateJoinDoesNotStallHealthyClientsAsync);
+        checks.Add(
+            "stalled bootstrap writer times out and releases client capacity",
+            StalledBootstrapWriterReleasesClientCapacityAsync);
+        checks.Add(
+            "progressing bootstrap renews its publication deadline",
+            ProgressingBootstrapRenewsPublicationDeadlineAsync);
     }
 
     private static async ValueTask ReplicatesTwoClientsAsync(CancellationToken cancellationToken)
@@ -515,6 +532,164 @@ internal static class LoopbackChecks
             "the server must produce exactly one cooking output");
     }
 
+    private static async ValueTask
+        PlacesFurnitureAndValidatesNearbyStationCraftingAsync(
+            CancellationToken cancellationToken)
+    {
+        var stationPosition = FindClearFurniturePosition(
+            424242, ItemIds.Workbench);
+        await using var fixture = await LoopbackFixture.StartAsync(
+            cancellationToken,
+            extraInventory:
+            [
+                new("workbench"),
+                new("stone_hammer"),
+                new("logs", 6),
+                new("plank", 6),
+                new("sticks", 2),
+                new("rope")
+            ],
+            startingPosition: stationPosition);
+        await using var builder = new NetworkGameClient(TimeSpan.Zero);
+        await using var observer = new NetworkGameClient(TimeSpan.Zero);
+        await fixture.ConnectAsync(builder, "Builder", cancellationToken);
+        await fixture.ConnectAsync(observer, "Observer", cancellationToken);
+        await EventuallyAsync(
+            () => builder.State.Gameplay is not null &&
+                  observer.State.Gameplay is not null,
+            "the furniture clients did not receive their private baselines",
+            cancellationToken);
+
+        // Six legitimate level-one wall crafts cross the level-four threshold
+        // without a privileged test seam. The remaining materials are the
+        // exact canonical storage-chest recipe used to exercise the station.
+        for (var count = 0; count < 6; count++)
+        {
+            var wall = await SendAndAwaitActionAsync(
+                builder,
+                new CraftRecipeAction("wooden-wall"),
+                cancellationToken);
+            CheckAssert.True(wall.Accepted,
+                $"crafting progression wall {count + 1} failed: {wall.Detail}");
+            await EventuallyAsync(
+                () => builder.State.Gameplay?.InventoryRevision ==
+                      wall.InventoryRevision,
+                "a progression craft did not publish its private inventory",
+                cancellationToken);
+        }
+        CheckAssert.True(
+            builder.State.Gameplay!.CraftingExperience >= 525,
+            "the wire-driven builder did not reach crafting level four");
+
+        var missing = await SendAndAwaitActionAsync(
+            builder,
+            new CraftRecipeAction("storage-chest"),
+            cancellationToken);
+        CheckAssert.False(missing.Accepted,
+            "station crafting succeeded before a station existed");
+        CheckAssert.True(
+            missing.Detail.Contains(
+                "crafting station", StringComparison.OrdinalIgnoreCase),
+            $"the missing-station rejection was not explicit: {missing.Detail}");
+
+        var workbenchSlot = builder.State.Gameplay.InventorySlots.Single(
+            value => value.ItemId == "workbench").Slot;
+        var placed = await SendAndAwaitActionAsync(
+            builder,
+            new PlaceInventoryWorldObjectAction(
+                "workbench",
+                workbenchSlot,
+                stationPosition.X,
+                stationPosition.Y,
+                0,
+                0,
+                0),
+            cancellationToken);
+        CheckAssert.True(placed.Accepted,
+            $"the clear authoritative workbench site rejected: {placed.Detail}");
+        await EventuallyAsync(
+            () => builder.State.Gameplay?.InventoryRevision ==
+                  placed.InventoryRevision,
+            "furniture placement did not publish its private inventory",
+            cancellationToken);
+        await EventuallyAsync(
+            () => HasWorkbench(builder, stationPosition) &&
+                  HasWorkbench(observer, stationPosition),
+            "the placed workbench was not replicated to both clients",
+            cancellationToken);
+        CheckAssert.Equal(0,
+            CountItem(builder.State.Gameplay!, "workbench"),
+            "placing furniture must consume only the requester's workbench");
+
+        var crafted = await SendAndAwaitActionAsync(
+            builder,
+            new CraftRecipeAction("storage-chest"),
+            cancellationToken);
+        CheckAssert.True(crafted.Accepted,
+            $"the nearby authoritative workbench was ignored: {crafted.Detail}");
+        await EventuallyAsync(
+            () => builder.State.Gameplay?.InventoryRevision ==
+                  crafted.InventoryRevision,
+            "nearby station crafting did not publish its private inventory",
+            cancellationToken);
+        CheckAssert.Equal(1,
+            CountItem(builder.State.Gameplay!, "storage_chest"),
+            "nearby station crafting must commit exactly one canonical output");
+
+        await using var late = new NetworkGameClient(TimeSpan.Zero);
+        await fixture.ConnectAsync(late, "Late Builder", cancellationToken);
+        await EventuallyAsync(
+            () => late.State.Gameplay is not null &&
+                  HasWorkbench(late, stationPosition),
+            "the late joiner did not receive the placed workbench",
+            cancellationToken);
+        CheckAssert.Equal(NetworkGameClientStatus.Connected, late.State.Status,
+            "the furniture baseline faulted the late-joining client");
+    }
+
+    private static Vector2 FindClearFurniturePosition(
+        long worldSeed,
+        string itemId)
+    {
+        CheckAssert.True(
+            PlaceableWorldObjectRules.TryGet(itemId, out var definition),
+            "the loopback fixture requires a canonical furniture definition");
+        var navigation = new ProceduralWorldNavigationQuery(worldSeed);
+        var catalog = new ProceduralResourceCatalog(
+            new CompositeResourceDescriptorSource(
+                new SurfaceTreeResourceDescriptorSource(),
+                new SurfaceVegetationResourceDescriptorSource()));
+        var resources = new AuthoritativeResourceTransactions(
+            worldSeed, catalog);
+        const int maximumRadius = 160;
+        for (var radius = 0; radius <= maximumRadius; radius++)
+        for (var y = -radius; y <= radius; y++)
+        for (var x = -radius; x <= radius; x++)
+        {
+            if (Math.Max(Math.Abs(x), Math.Abs(y)) != radius) continue;
+            var candidate = new Vector2(x, y + .5f);
+            if (!PlaceableWorldObjectRules.IsSnapped(itemId, candidate) ||
+                !PlaceableWorldObjectRules.IsSupportedTerrain(
+                    definition, candidate, 0, 0, navigation) ||
+                resources.HasBlockingResourceInFootprint(
+                    candidate, 0, definition.Footprint(0)))
+                continue;
+            return candidate;
+        }
+
+        throw new InvalidOperationException(
+            $"No clear {itemId} fixture was found within {maximumRadius} tiles.");
+    }
+
+    private static bool HasWorkbench(
+        NetworkGameClient client,
+        Vector2 position) =>
+        client.State.WorldObjects.Values.Any(value =>
+            value.DefinitionId.Equals(
+                "workbench", StringComparison.OrdinalIgnoreCase) &&
+            MathF.Abs(value.X - position.X) < .001f &&
+            MathF.Abs(value.Y - position.Y) < .001f);
+
     private static async ValueTask LateJoinActivationClosesPublicRevisionGapAsync(
         CancellationToken cancellationToken)
     {
@@ -599,6 +774,277 @@ internal static class LoopbackChecks
             "the late baseline resurrected an object removed during bootstrap");
         CheckAssert.Equal(NetworkGameClientStatus.Connected, late.State.Status,
             "the late client faulted on its revision-consistent baseline");
+    }
+
+    private static async ValueTask
+        LargeBlockedLateJoinDoesNotStallHealthyClientsAsync(
+            CancellationToken cancellationToken)
+    {
+        const int objectCount = 160;
+        var seeds = Enumerable.Range(0, objectCount)
+            .Select(index => new WorldObjectSeed(
+                Guid.Parse(
+                    $"83000000-0000-0000-0000-{index + 1:D12}"),
+                "large_rock",
+                new Vector2(
+                    (index % 8) * 0.1f,
+                    (index / 8) * 0.1f)))
+            .ToArray();
+        var pickupId = seeds[0].ObjectId;
+        await using var fixture = await LoopbackFixture.StartAsync(
+            cancellationToken,
+            seeds);
+        await using var healthy = new NetworkGameClient(TimeSpan.Zero);
+        await fixture.ConnectAsync(healthy, "Healthy", cancellationToken);
+        await EventuallyAsync(
+            () => healthy.State.Gameplay is not null &&
+                  seeds.All(seed =>
+                      healthy.State.WorldObjects.ContainsKey(seed.ObjectId)),
+            "the healthy client did not receive the large world bootstrap",
+            cancellationToken);
+
+        var writeBlocked = new TaskCompletionSource<ClientConnectionId>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseWrite = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var outboundKinds = new ConcurrentDictionary<Guid,
+            ConcurrentQueue<ProtocolMessageKind>>();
+        var blockFirstWorldObject = 1;
+        fixture.Server.BeforeOutboundWriteForTest = async (
+            connection, message, writerCancellation) =>
+        {
+            outboundKinds.GetOrAdd(
+                    connection.Id.Value,
+                    static _ => new ConcurrentQueue<ProtocolMessageKind>())
+                .Enqueue(message.Kind);
+            if (message is not WorldObjectStateMessage ||
+                Interlocked.Exchange(ref blockFirstWorldObject, 0) == 0)
+                return;
+            writeBlocked.TrySetResult(connection.Id);
+            await releaseWrite.Task.WaitAsync(writerCancellation)
+                .ConfigureAwait(false);
+        };
+
+        await using var late = new NetworkGameClient(TimeSpan.Zero);
+        var lateJoin = fixture.ConnectAsync(late, "Blocked Late", cancellationToken);
+        try
+        {
+            var lateConnection = await writeBlocked.Task.WaitAsync(
+                Timeout, cancellationToken);
+            var target = healthy.State.WorldObjects[pickupId];
+            var pickup = await SendAndAwaitActionAsync(
+                healthy,
+                new PickUpWorldObjectAction(new WorldObjectReference(
+                    pickupId,
+                    target.ChunkX,
+                    target.ChunkY,
+                    target.WorldLevel,
+                    target.ObjectRevision,
+                    target.ChunkRevision)),
+                cancellationToken).WaitAsync(Timeout, cancellationToken);
+            CheckAssert.True(pickup.Accepted,
+                $"the healthy-client mutation was rejected: {pickup.Detail}");
+            await EventuallyAsync(
+                () => !healthy.State.WorldObjects.ContainsKey(pickupId),
+                "the blocked join stalled public replication to the healthy client",
+                cancellationToken);
+
+            // The joining writer is still parked on its first object frame.
+            // Releasing it must drain the complete >128-message bootstrap and
+            // then the queued post-high-water removal without a sequence gap.
+            releaseWrite.TrySetResult();
+            await lateJoin.WaitAsync(Timeout, cancellationToken);
+            await EventuallyAsync(
+                () => late.State.Gameplay is not null &&
+                      seeds.Skip(1).All(seed =>
+                          late.State.WorldObjects.ContainsKey(seed.ObjectId)),
+                "the late client did not drain the complete large bootstrap",
+                cancellationToken);
+            CheckAssert.False(late.State.WorldObjects.ContainsKey(pickupId),
+                "the late client missed the mutation queued behind its bootstrap");
+            CheckAssert.Equal(NetworkGameClientStatus.Connected,
+                late.State.Status,
+                "the blocked late client disconnected while draining bootstrap");
+
+            var kinds = outboundKinds[lateConnection.Value].ToArray();
+            var handshakeIndex = Array.IndexOf(
+                kinds, ProtocolMessageKind.HandshakeAccepted);
+            var privateIndex = Array.IndexOf(
+                kinds, ProtocolMessageKind.PlayerState);
+            var publicIndex = Array.FindIndex(kinds, static kind =>
+                kind is ProtocolMessageKind.WorldChunkRevisionBatch or
+                    ProtocolMessageKind.WorldObjectState);
+            CheckAssert.True(
+                handshakeIndex >= 0 &&
+                privateIndex > handshakeIndex &&
+                publicIndex > privateIndex,
+                "join publication must retain handshake/private/public ordering");
+        }
+        finally
+        {
+            releaseWrite.TrySetResult();
+            fixture.Server.BeforeOutboundWriteForTest = null;
+        }
+    }
+
+    private static async ValueTask
+        StalledBootstrapWriterReleasesClientCapacityAsync(
+            CancellationToken cancellationToken)
+    {
+        const int objectCount = 160;
+        var seeds = Enumerable.Range(0, objectCount)
+            .Select(index => new WorldObjectSeed(
+                Guid.Parse(
+                    $"84000000-0000-0000-0000-{index + 1:D12}"),
+                "large_rock",
+                new Vector2(
+                    (index % 8) * 0.1f,
+                    (index / 8) * 0.1f)))
+            .ToArray();
+        await using var fixture = await LoopbackFixture.StartAsync(
+            cancellationToken,
+            seeds,
+            maximumClients: 1);
+        fixture.Server.OutboundPublicationWriteTimeout =
+            TimeSpan.FromMilliseconds(350);
+
+        var writeBlocked = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var deadlineObserved = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var worldObjectWrites = 0;
+        fixture.Server.BeforeOutboundWriteForTest = async (
+            _, message, writerCancellation) =>
+        {
+            if (message is not WorldObjectStateMessage)
+                return;
+            Interlocked.Increment(ref worldObjectWrites);
+            writeBlocked.TrySetResult();
+            try
+            {
+                await Task.Delay(
+                        System.Threading.Timeout.InfiniteTimeSpan,
+                        writerCancellation)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (
+                writerCancellation.IsCancellationRequested)
+            {
+                deadlineObserved.TrySetResult();
+                throw;
+            }
+        };
+
+        await using var stalled = new NetworkGameClient(TimeSpan.Zero);
+        await fixture.ConnectAsync(stalled, "Stalled", cancellationToken)
+            .WaitAsync(Timeout, cancellationToken);
+        try
+        {
+            await writeBlocked.Task.WaitAsync(Timeout, cancellationToken);
+            await deadlineObserved.Task.WaitAsync(Timeout, cancellationToken);
+            await EventuallyAsync(
+                () => stalled.State.Status == NetworkGameClientStatus.Faulted,
+                "the publication deadline did not disconnect the stalled client",
+                cancellationToken);
+            CheckAssert.Equal(1, Volatile.Read(ref worldObjectWrites),
+                "a timed-out bootstrap must stop expanding its captured generation");
+        }
+        finally
+        {
+            fixture.Server.BeforeOutboundWriteForTest = null;
+        }
+
+        // The timed-out connection must release both the authoritative join
+        // and the server's one-client transport slot. A healthy replacement
+        // must therefore be able to consume the same large baseline.
+        fixture.Server.OutboundPublicationWriteTimeout = Timeout;
+        await using var replacement = new NetworkGameClient(TimeSpan.Zero);
+        HandshakeAcceptedMessage? accepted = null;
+        await EventuallyAsync(async () =>
+            {
+                try
+                {
+                    accepted = await fixture.ConnectAsync(
+                        replacement, "Replacement", cancellationToken);
+                    return true;
+                }
+                catch (Exception exception) when (
+                    exception is IOException or SocketException or
+                        ProtocolException or HandshakeRejectedException)
+                {
+                    return false;
+                }
+            },
+            "the stalled client did not release the one-client server capacity",
+            cancellationToken);
+        CheckAssert.True(accepted is not null,
+            "the replacement handshake did not complete");
+        await EventuallyAsync(
+            () => replacement.State.Gameplay is not null &&
+                  seeds.All(seed =>
+                      replacement.State.WorldObjects.ContainsKey(seed.ObjectId)),
+            "the replacement did not drain the complete large bootstrap",
+            cancellationToken);
+        CheckAssert.Equal(NetworkGameClientStatus.Connected,
+            replacement.State.Status,
+            "the healthy replacement disconnected while draining bootstrap");
+    }
+
+    private static async ValueTask
+        ProgressingBootstrapRenewsPublicationDeadlineAsync(
+            CancellationToken cancellationToken)
+    {
+        const int objectCount = 8;
+        var seeds = Enumerable.Range(0, objectCount)
+            .Select(index => new WorldObjectSeed(
+                Guid.Parse(
+                    $"85000000-0000-0000-0000-{index + 1:D12}"),
+                "large_rock",
+                new Vector2(index * 0.1f, 0f)))
+            .ToArray();
+        await using var fixture = await LoopbackFixture.StartAsync(
+            cancellationToken,
+            seeds);
+        var inactivityTimeout = TimeSpan.FromMilliseconds(240);
+        var perFrameDelay = TimeSpan.FromMilliseconds(80);
+        fixture.Server.OutboundPublicationWriteTimeout = inactivityTimeout;
+
+        var worldObjectWrites = 0;
+        fixture.Server.BeforeOutboundWriteForTest = async (
+            _, message, writerCancellation) =>
+        {
+            if (message is not WorldObjectStateMessage)
+                return;
+            Interlocked.Increment(ref worldObjectWrites);
+            await Task.Delay(perFrameDelay, writerCancellation)
+                .ConfigureAwait(false);
+        };
+
+        await using var client = new NetworkGameClient(TimeSpan.Zero);
+        var elapsed = Stopwatch.StartNew();
+        try
+        {
+            await fixture.ConnectAsync(client, "Progressing", cancellationToken)
+                .WaitAsync(Timeout, cancellationToken);
+            await EventuallyAsync(
+                () => client.State.Gameplay is not null &&
+                      seeds.All(seed =>
+                          client.State.WorldObjects.ContainsKey(seed.ObjectId)),
+                "the progressing client did not drain its complete bootstrap",
+                cancellationToken);
+        }
+        finally
+        {
+            fixture.Server.BeforeOutboundWriteForTest = null;
+        }
+
+        CheckAssert.True(elapsed.Elapsed > inactivityTimeout,
+            "the regression bootstrap must outlive one inactivity interval");
+        CheckAssert.Equal(objectCount, Volatile.Read(ref worldObjectWrites),
+            "the progressing bootstrap did not write every object frame");
+        CheckAssert.Equal(NetworkGameClientStatus.Connected,
+            client.State.Status,
+            "frame-by-frame progress must keep the connection alive");
     }
 
     private static async Task<ActionResultMessage> SendAndAwaitActionAsync(
@@ -759,7 +1205,9 @@ internal static class LoopbackChecks
         public static async Task<LoopbackFixture> StartAsync(
             CancellationToken cancellationToken,
             IReadOnlyList<WorldObjectSeed>? startingWorldObjects = null,
-            IReadOnlyList<InitialInventoryItem>? extraInventory = null)
+            IReadOnlyList<InitialInventoryItem>? extraInventory = null,
+            Vector2? startingPosition = null,
+            int maximumClients = 8)
         {
             var worldId = Guid.NewGuid();
             var server = new DedicatedServer(new ServerOptions(
@@ -769,7 +1217,7 @@ internal static class LoopbackChecks
                 424242,
                 BuildVersion,
                 ContentVersion,
-                8)
+                maximumClients)
             {
                 StartingInventory =
                     new InitialInventoryItem[]
@@ -778,7 +1226,7 @@ internal static class LoopbackChecks
                         new("wild_berries", 1)
                     }.Concat(extraInventory ?? []).ToArray(),
                 StartingHunger = 80f,
-                StartingPosition = Vector2.Zero,
+                StartingPosition = startingPosition ?? Vector2.Zero,
                 StartingWorldObjects = startingWorldObjects ??
                     Array.Empty<WorldObjectSeed>()
             });

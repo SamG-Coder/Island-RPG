@@ -17,18 +17,32 @@ internal static class MacroHydrology
     private const int BlendTiles = HaloCells * CellSize / 2;
     private const int MaxCachedRegions = 64;
     private const int MaxAtlasCachedRegionsPerJob = 32;
+    private const int MaxNavigationCachedRegionsPerQuery = 16;
     private static readonly ConcurrentDictionary<
         (long Seed, int X, int Y), Lazy<Region>> GameplayCache = [];
     private static readonly ConcurrentDictionary<long, AtlasSamplingContext>
         ActiveAtlasContexts = [];
     private static readonly AsyncLocal<AtlasSamplingContext?>
         CurrentAtlasContext = new();
+    private static readonly AsyncLocal<NavigationSamplingContext?>
+        CurrentNavigationContext = new();
     private static long _nextAtlasContextId;
+    private static long _navigationRegionGenerationCount;
 
     internal readonly record struct Sample(float River, float Lake, float Flow);
     internal static int GameplayCacheCount => GameplayCache.Count;
     internal static int AtlasCacheCount =>
         ActiveAtlasContexts.Values.Sum(context => context.Cache.Count);
+    internal static long NavigationRegionGenerationCount =>
+        Interlocked.Read(ref _navigationRegionGenerationCount);
+
+    internal static IDisposable BeginNavigationSampling()
+    {
+        var previous = CurrentNavigationContext.Value;
+        var context = new NavigationSamplingContext();
+        CurrentNavigationContext.Value = context;
+        return new NavigationSamplingScope(context, previous);
+    }
 
     public static IDisposable BeginAtlasSampling()
     {
@@ -85,24 +99,61 @@ internal static class MacroHydrology
     private static Region Get(long seed, int x, int y)
     {
         var key = (Seed: seed, X: x, Y: y);
+        var navigationContext = CurrentNavigationContext.Value;
         var atlasContext = CurrentAtlasContext.Value;
-        var cache = atlasContext?.Cache ?? GameplayCache;
-        var maximum = atlasContext is null
-            ? MaxCachedRegions
-            : MaxAtlasCachedRegionsPerJob;
+        var cache = navigationContext?.Cache ??
+                    atlasContext?.Cache ??
+                    GameplayCache;
+        var maximum = navigationContext is not null
+            ? MaxNavigationCachedRegionsPerQuery
+            : atlasContext is not null
+                ? MaxAtlasCachedRegionsPerJob
+                : MaxCachedRegions;
         var region = cache.GetOrAdd(key, value =>
-            new Lazy<Region>(() => Generate(value.Seed, value.X, value.Y),
+            new Lazy<Region>(() =>
+                {
+                    if (navigationContext is not null)
+                        Interlocked.Increment(
+                            ref _navigationRegionGenerationCount);
+                    return Generate(value.Seed, value.X, value.Y);
+                },
                 LazyThreadSafetyMode.ExecutionAndPublication)).Value;
         if (cache.Count > maximum)
         {
+            // Leave room for the rest of the caller's local working set. If a
+            // full cache is trimmed by only one entry, seam sampling can evict
+            // one of its other three regions on every miss and regenerate it
+            // immediately on the next sample.
+            var trimTarget = maximum - Math.Max(4, maximum / 4);
             foreach (var candidate in cache.Keys)
             {
                 if (candidate == key) continue;
                 cache.TryRemove(candidate, out _);
-                if (cache.Count <= maximum) break;
+                if (cache.Count <= trimTarget) break;
             }
         }
         return region;
+    }
+
+    private sealed class NavigationSamplingContext
+    {
+        public ConcurrentDictionary<(long Seed, int X, int Y), Lazy<Region>>
+            Cache { get; } = [];
+    }
+
+    private sealed class NavigationSamplingScope(
+        NavigationSamplingContext context,
+        NavigationSamplingContext? previous) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            CurrentNavigationContext.Value = previous;
+            context.Cache.Clear();
+            _disposed = true;
+        }
     }
 
     private sealed class AtlasSamplingContext(long id)

@@ -29,12 +29,15 @@ public sealed class AuthoritativeWorldSession
     private readonly Dictionary<ActorId, MutableActor> _actors = [];
     private readonly Dictionary<PlayerId, ActorId> _actorsByPlayer = [];
     private readonly Dictionary<ClientConnectionId, PlayerId> _playersByConnection = [];
+    private readonly HashSet<PlayerId> _expiredPlayers = [];
+    private readonly Queue<PlayerId> _expiredPlayerOrder = [];
     private readonly Queue<ChatMessageSnapshot> _chatHistory = [];
     private readonly Dictionary<ActorId, ActiveCookingJob> _cookingJobs = [];
     private SessionSnapshot _latestSnapshot;
     private int? _ownerThreadId;
     private int _executing;
     private long _nextChatMessageId;
+    private long _nextActorRetentionOrdinal;
 
     public AuthoritativeWorldSession(
         SimulationLimits? limits = null,
@@ -50,9 +53,17 @@ public sealed class AuthoritativeWorldSession
         _limits = (limits ?? SimulationLimits.Default).ValidatedCopy();
         _identitySource = identitySource ?? new SecureSessionIdentitySource();
         _navigation = navigation ?? OpenWorldNavigationQuery.Instance;
-        _obstacles = obstacles ?? EmptyWorldNavigationObstacleSource.Instance;
         _worldTransactions = worldTransactions ??
             new AuthoritativeWorldTransactions();
+        var staticObstacles = obstacles ??
+            EmptyWorldNavigationObstacleSource.Instance;
+        _obstacles = ReferenceEquals(staticObstacles, _worldTransactions)
+            ? staticObstacles
+            : ReferenceEquals(
+                staticObstacles, EmptyWorldNavigationObstacleSource.Instance)
+                ? _worldTransactions
+                : new CompositeWorldNavigationObstacleSource(
+                    staticObstacles, _worldTransactions);
         _resourceTransactions = resourceTransactions;
         _boatTransactions = boatTransactions;
         _combatTransactions = combatTransactions;
@@ -514,8 +525,10 @@ public sealed class AuthoritativeWorldSession
             if (checkpoint.SessionId != Id || Clock.Tick != 0 ||
                 Clock.SnapshotSequence != 0 || _actors.Count != 0 ||
                 _actorsByPlayer.Count != 0 || _playersByConnection.Count != 0 ||
+                _expiredPlayers.Count != 0 ||
+                _expiredPlayerOrder.Count != 0 ||
                 _chatHistory.Count != 0 || _nextChatMessageId != 0 ||
-                _cookingJobs.Count != 0)
+                _cookingJobs.Count != 0 || _nextActorRetentionOrdinal != 0)
             {
                 throw new InvalidOperationException(
                     "A checkpoint can only restore a pristine matching session.");
@@ -716,6 +729,12 @@ public sealed class AuthoritativeWorldSession
             foreach (var value in actors) _actors.Add(value.Key, value.Value);
             foreach (var value in actorsByPlayer)
                 _actorsByPlayer.Add(value.Key, value.Value);
+            foreach (var actor in _actors.Values
+                         .OrderBy(static value => value.DisconnectedAtTick)
+                         .ThenBy(static value =>
+                             value.Identity.PlayerId.Value))
+                actor.RetentionOrdinal =
+                    checked(++_nextActorRetentionOrdinal);
             foreach (var value in cooking)
                 _cookingJobs.Add(value.Key, value.Value);
             Volatile.Write(ref _latestSnapshot,
@@ -836,14 +855,14 @@ public sealed class AuthoritativeWorldSession
                 "This connection is already attached to a player.");
         }
 
-        if (_actors.Count >= _limits.MaximumActors)
+        if (_playersByConnection.Count >= _limits.MaximumConnectedActors)
         {
             return new JoinResult(
                 JoinStatus.SessionFull,
                 default,
                 default,
                 0,
-                "The session has reached its actor limit.");
+                "The session has reached its concurrent player limit.");
         }
 
         if (request.ProvisionBoat && _boatTransactions is null)
@@ -854,6 +873,46 @@ public sealed class AuthoritativeWorldSession
                 default,
                 0,
                 "This session cannot provision an island-start boat.");
+        }
+
+        MutableActor? expiringActor = null;
+        if (request.ProvisionBoat &&
+            _boatTransactions!.RequiresPlayerBoatReclamation)
+        {
+            expiringActor = _actors.Values
+                .Where(value => !value.Connected &&
+                    _boatTransactions.HasBoatOwnedBy(
+                        value.Identity.PlayerId))
+                .OrderBy(static value => value.RetentionOrdinal)
+                .ThenBy(static value => value.Identity.PlayerId.Value)
+                .FirstOrDefault();
+            if (expiringActor is null)
+            {
+                return new JoinResult(
+                    JoinStatus.SessionFull,
+                    default,
+                    default,
+                    0,
+                    "The island fleet limit has no disconnected owner available for expiry.");
+            }
+        }
+
+        if (_actors.Count >= _limits.MaximumActors && expiringActor is null)
+        {
+            expiringActor = _actors.Values
+                .Where(static value => !value.Connected)
+                .OrderBy(static value => value.RetentionOrdinal)
+                .ThenBy(static value => value.Identity.PlayerId.Value)
+                .FirstOrDefault();
+            if (expiringActor is null)
+            {
+                return new JoinResult(
+                    JoinStatus.SessionFull,
+                    default,
+                    default,
+                    0,
+                    "The session actor limit is occupied by connected players.");
+            }
         }
 
         var identity = CreateUniqueIdentity();
@@ -892,6 +951,8 @@ public sealed class AuthoritativeWorldSession
         }
 
         AuthoritativeBoatSnapshot? boat = null;
+        ImmutableArray<BoatStateDelta> replacedBoats = [];
+        var replacedExpiredBoats = false;
         if (request.ProvisionBoat)
         {
             try
@@ -900,8 +961,20 @@ public sealed class AuthoritativeWorldSession
                 // aggregate either commits a complete stable entity or
                 // throws without mutation, so a failed island join cannot
                 // leak actor/player/connection mappings.
-                boat = _boatTransactions!.ProvisionPlayerBoat(
-                    identity.PlayerId, actor.Position);
+                if (expiringActor is null)
+                {
+                    boat = _boatTransactions!.ProvisionPlayerBoat(
+                        identity.PlayerId, actor.Position);
+                }
+                else
+                {
+                    boat = _boatTransactions!.ReplacePlayerBoat(
+                        expiringActor.Identity.PlayerId,
+                        identity.PlayerId,
+                        actor.Position,
+                        out replacedBoats);
+                    replacedExpiredBoats = true;
+                }
             }
             catch (Exception error) when (error is ArgumentException or
                                           InvalidOperationException)
@@ -911,9 +984,15 @@ public sealed class AuthoritativeWorldSession
                     default,
                     default,
                     0,
-                    "No valid island-start boat mooring is available.");
+                "No valid island-start boat mooring is available.");
             }
         }
+        if (expiringActor is not null)
+            ExpireActor(
+                expiringActor,
+                replacedBoats,
+                replacedExpiredBoats);
+        actor.RetentionOrdinal = checked(++_nextActorRetentionOrdinal);
         _actors.Add(identity.ActorId, actor);
         _actorsByPlayer.Add(identity.PlayerId, identity.ActorId);
         _playersByConnection.Add(request.ConnectionId, identity.PlayerId);
@@ -933,6 +1012,53 @@ public sealed class AuthoritativeWorldSession
             WorldLevel = actor.WorldLevel,
             Boat = boat
         };
+    }
+
+    private void ExpireActor(
+        MutableActor actor,
+        ImmutableArray<BoatStateDelta> alreadyRemovedBoats,
+        bool boatsAlreadyRemoved)
+    {
+        if (actor.Connected ||
+            _playersByConnection.ContainsValue(actor.Identity.PlayerId))
+            throw new InvalidOperationException(
+                "A connected actor cannot expire from retained history.");
+
+        _cookingJobs.Remove(actor.Identity.ActorId);
+        _worldTransactions.ForgetActor(actor.Identity.ActorId);
+        _resourceTransactions?.ForgetActor(actor.Identity.ActorId);
+        var enemyDeltas = _combatTransactions?.ForgetActor(
+            actor.Identity.ActorId) ?? [];
+        var remainingBoatDeltas = _boatTransactions?.ForgetActor(
+            actor.Identity.PlayerId,
+            actor.Identity.ActorId) ?? [];
+        var boatDeltas = boatsAlreadyRemoved
+            ? alreadyRemovedBoats.AddRange(remainingBoatDeltas)
+            : remainingBoatDeltas;
+
+        if (!_actorsByPlayer.Remove(actor.Identity.PlayerId) ||
+            !_actors.Remove(actor.Identity.ActorId))
+            throw new InvalidOperationException(
+                "The authoritative actor registry is inconsistent.");
+        RememberExpiredPlayer(actor.Identity.PlayerId);
+
+        foreach (var delta in boatDeltas)
+        {
+            BoatStateCommitted?.Invoke(delta);
+            BoatAutonomousStateCommitted?.Invoke(delta);
+        }
+        foreach (var delta in enemyDeltas)
+            EnemyStateCommitted?.Invoke(delta);
+    }
+
+    private void RememberExpiredPlayer(PlayerId playerId)
+    {
+        if (_limits.ExpiredPlayerTombstoneCapacity == 0) return;
+        if (!_expiredPlayers.Add(playerId)) return;
+        _expiredPlayerOrder.Enqueue(playerId);
+        while (_expiredPlayerOrder.Count >
+               _limits.ExpiredPlayerTombstoneCapacity)
+            _expiredPlayers.Remove(_expiredPlayerOrder.Dequeue());
     }
 
     private ReconnectResult ProcessReconnect(ReconnectRequest request)
@@ -958,6 +1084,14 @@ public sealed class AuthoritativeWorldSession
 
         if (!TryGetActor(request.PlayerId, out var actor))
         {
+            if (_expiredPlayers.Contains(request.PlayerId))
+            {
+                return new ReconnectResult(
+                    ReconnectStatus.ExpiredPlayer,
+                    default,
+                    0,
+                    "This disconnected player expired from the bounded session history.");
+            }
             return new ReconnectResult(
                 ReconnectStatus.UnknownPlayer,
                 default,
@@ -981,6 +1115,15 @@ public sealed class AuthoritativeWorldSession
                 default,
                 0,
                 "The reconnect token is invalid.");
+        }
+
+        if (_playersByConnection.Count >= _limits.MaximumConnectedActors)
+        {
+            return new ReconnectResult(
+                ReconnectStatus.SessionFull,
+                actor.Identity,
+                checked(actor.LastProcessedCommandSequence + 1),
+                "The session has reached its concurrent player limit.");
         }
 
         actor.ConnectionId = request.ConnectionId;
@@ -1034,6 +1177,7 @@ public sealed class AuthoritativeWorldSession
             BoatStateCommitted?.Invoke(boatDelta);
         }
         actor.DisconnectedAtTick = Clock.Tick;
+        actor.RetentionOrdinal = checked(++_nextActorRetentionOrdinal);
         _playersByConnection.Remove(request.ConnectionId);
         return new DisconnectResult(DisconnectStatus.Accepted, null)
         {
@@ -1266,7 +1410,10 @@ public sealed class AuthoritativeWorldSession
              !_navigation.CanStandAt(crop.Position, crop.WorldLevel) ||
              _resourceTransactions?.HasBlockingTreeAt(
                  crop.Position, crop.WorldLevel) == true ||
-             _obstacles.GetObstacles(crop.WorldLevel).Any(value =>
+             _obstacles.GetObstacles(
+                 crop.WorldLevel,
+                 crop.Position - new Vector2(.25f),
+                 crop.Position + new Vector2(.25f)).Any(value =>
                  value.Contains(crop.Position))))
         {
             return Rejected(
@@ -1278,12 +1425,52 @@ public sealed class AuthoritativeWorldSession
 
         if (intent is PlaceConstructionIntent placement &&
             (!_navigation.SupportsWorldLevel(placement.WorldLevel) ||
-             !_navigation.CanStandAt(placement.Position, placement.WorldLevel)))
+             (PlaceableWorldObjectRules.TryGetCollision(
+                  placement.DefinitionId, out var constructionDefinition) &&
+              !IsClearConstructionFootprint(
+                  placement, constructionDefinition))))
         {
             return Rejected(
                 IntentStatus.InvalidPlacement,
                 actor,
-                "Construction must be placed on traversable terrain.",
+                "Construction must be placed on clear, level, dry terrain.",
+                intent.CommandId);
+        }
+
+        if (intent is PlaceInventoryWorldObjectIntent furniture &&
+            (!PlaceableWorldObjectRules.TryGet(
+                 furniture.DefinitionId, out var furnitureDefinition) ||
+             !PlaceableWorldObjectRules.IsSupportedTerrain(
+                 furnitureDefinition,
+                 furniture.Position,
+                 furniture.Rotation,
+                 furniture.WorldLevel,
+                 _navigation) ||
+             _resourceTransactions?.HasBlockingResourceInFootprint(
+                 furniture.Position,
+                 furniture.WorldLevel,
+                 PlaceableWorldObjectRules.PlacementFootprint(
+                     furnitureDefinition, furniture.Rotation)) == true ||
+             _obstacles.GetObstacles(
+                 furniture.WorldLevel,
+                 PlaceableWorldObjectRules.CollisionBounds(
+                     furnitureDefinition,
+                     furniture.Position,
+                     furniture.Rotation).Minimum - new Vector2(.18f),
+                 PlaceableWorldObjectRules.CollisionBounds(
+                     furnitureDefinition,
+                     furniture.Position,
+                     furniture.Rotation).Maximum + new Vector2(.18f)).Any(value =>
+                 PlacementOverlapsObstacle(
+                     furnitureDefinition,
+                     furniture.Position,
+                     furniture.Rotation,
+                     value))))
+        {
+            return Rejected(
+                IntentStatus.InvalidPlacement,
+                actor,
+                "Furniture must be placed on clear, level, traversable terrain.",
                 intent.CommandId);
         }
 
@@ -1297,7 +1484,12 @@ public sealed class AuthoritativeWorldSession
              _resourceTransactions?.HasBlockingTreeAt(
                  CaveExcavationRules.Snap(excavation.Position),
                  excavation.WorldLevel) == true ||
-             _obstacles.GetObstacles(excavation.WorldLevel).Any(value =>
+             _obstacles.GetObstacles(
+                 excavation.WorldLevel,
+                 CaveExcavationRules.Snap(excavation.Position) -
+                 new Vector2(.25f),
+                 CaveExcavationRules.Snap(excavation.Position) +
+                 new Vector2(.25f)).Any(value =>
                  value.Contains(CaveExcavationRules.Snap(
                      excavation.Position)))))
         {
@@ -1339,6 +1531,17 @@ public sealed class AuthoritativeWorldSession
                     drop.Position,
                     drop.WorldLevel,
                     drop.ExpectedChunkRevision)),
+            PlaceInventoryWorldObjectIntent placeFurniture =>
+                _worldTransactions.Execute(
+                    input,
+                    new PlaceInventoryWorldObjectTransaction(
+                        context,
+                        placeFurniture.DefinitionId,
+                        placeFurniture.InventorySlot,
+                        placeFurniture.Position,
+                        placeFurniture.WorldLevel,
+                        placeFurniture.Rotation,
+                        placeFurniture.ExpectedChunkRevision)),
             PlantCropIntent plant => _worldTransactions.Execute(
                 input,
                 new PlantCropTransaction(
@@ -1898,6 +2101,12 @@ public sealed class AuthoritativeWorldSession
                 return [new QuestEvent(
                     QuestEventType.BuildObject,
                     placement.DefinitionId)];
+            case PlaceInventoryWorldObjectIntent furniture when
+                PlaceableWorldObjectRules.TryGet(
+                    furniture.DefinitionId, out var furnitureDefinition):
+                return [new QuestEvent(
+                    QuestEventType.BuildObject,
+                    furnitureDefinition.ItemId)];
             case TraverseCaveIntent when
                 transaction.ActorTransition?.WorldLevel ==
                     CaveExcavationRules.UndergroundWorldLevel:
@@ -2088,6 +2297,7 @@ public sealed class AuthoritativeWorldSession
                 "This session has no authoritative combat authority.",
                 intent.CommandId);
         }
+
         if (intent is SetCombatTargetIntent &&
             _boatTransactions?.FindByOccupant(
                 actor.Identity.ActorId) is not null)
@@ -2534,7 +2744,13 @@ public sealed class AuthoritativeWorldSession
             CraftingSkill.LevelForExperience(gameplay.CraftingExperience),
             gameplay.Inventory,
             out var updated,
-            requiredStationAvailable: recipe.RequiredStationItemId is null);
+            requiredStationAvailable:
+                recipe.RequiredStationItemId is null ||
+                _worldTransactions.HasCraftingStationWithin(
+                    actor.Position,
+                    actor.WorldLevel,
+                    recipe.RequiredStationItemId,
+                    PlaceableWorldObjectRules.CraftingStationInteractionRange));
         if (craftResult != CraftingService.CraftResult.Success)
         {
             return Rejected(
@@ -2733,7 +2949,7 @@ public sealed class AuthoritativeWorldSession
             destination,
             _limits.MaximumPathSearchVisited,
             worldLevel: actor.WorldLevel,
-            obstacles: _obstacles.GetObstacles(actor.WorldLevel));
+            obstacleSource: _obstacles);
         if (route.Count == 0 &&
             Vector2.DistanceSquared(actor.Position, destination) >
             _limits.DestinationArrivalDistance *
@@ -2760,6 +2976,60 @@ public sealed class AuthoritativeWorldSession
         CancelCombatForMovement(actor);
         actor.ReplaceRoute(route);
         return Accepted(actor);
+    }
+
+    private static bool PlacementOverlapsObstacle(
+        PlaceableWorldObjectDefinition definition,
+        Vector2 center,
+        int rotation,
+        NavigationObstacle obstacle)
+    {
+        var placementObstacles = PlaceableWorldObjectRules.CollisionObstacles(
+            definition, center, rotation);
+        return placementObstacles.Any(candidate =>
+            PlaceableWorldObjectRules.Overlaps(
+                candidate, obstacle, .18f));
+    }
+
+    private bool IsClearConstructionFootprint(
+        PlaceConstructionIntent placement,
+        PlaceableWorldObjectDefinition definition)
+    {
+        var placementObstacles = PlaceableWorldObjectRules.CollisionObstacles(
+            definition,
+            placement.Position,
+            placement.Rotation);
+        if (placementObstacles.Count == 0) return false;
+
+        var collisionBounds = PlaceableWorldObjectRules.CollisionBounds(
+            placementObstacles);
+        var placementFootprint =
+            PlaceableWorldObjectRules.PlacementFootprint(
+                definition, placement.Rotation);
+        if (!PlaceableWorldObjectRules.IsSupportedTerrain(
+                definition,
+                placement.Position,
+                placement.Rotation,
+                placement.WorldLevel,
+                _navigation) ||
+            !_navigation.CanStandAt(
+                placement.Position, placement.WorldLevel) ||
+            _resourceTransactions?.HasBlockingResourceInFootprint(
+                placement.Position,
+                placement.WorldLevel,
+                placementFootprint) == true)
+        {
+            return false;
+        }
+
+        var existingObstacles = _obstacles.GetObstacles(
+            placement.WorldLevel,
+            collisionBounds.Minimum - new Vector2(.18f),
+            collisionBounds.Maximum + new Vector2(.18f));
+        return !placementObstacles.Any(candidate =>
+            existingObstacles.Any(existing =>
+                PlaceableWorldObjectRules.Overlaps(
+                    candidate, existing, .18f)));
     }
 
     private static IntentResult ProcessStop(MutableActor actor)
@@ -3134,6 +3404,7 @@ public sealed class AuthoritativeWorldSession
             if (identity.PlayerId.Value != Guid.Empty &&
                 identity.ActorId.Value != Guid.Empty &&
                 !_actorsByPlayer.ContainsKey(identity.PlayerId) &&
+                !_expiredPlayers.Contains(identity.PlayerId) &&
                 !_actors.ContainsKey(identity.ActorId))
             {
                 return identity;
@@ -3370,6 +3641,13 @@ public sealed class AuthoritativeWorldSession
         public long LastProcessedCommandSequence { get; set; }
 
         public long? DisconnectedAtTick { get; set; }
+
+        /// <summary>
+        /// Monotonic in-memory recency used only for bounded offline retention.
+        /// Checkpoint restore reconstructs a deterministic order from the
+        /// durable disconnect tick and player identity.
+        /// </summary>
+        public long RetentionOrdinal { get; set; }
 
         public MutablePlayerGameplay Gameplay { get; }
 
@@ -3778,4 +4056,45 @@ public sealed class AuthoritativeWorldSession
         string PayloadFingerprint,
         IntentResult Result,
         bool Restored);
+
+    private sealed class CompositeWorldNavigationObstacleSource(
+        IWorldNavigationObstacleSource first,
+        IWorldNavigationObstacleSource second) :
+        IWorldNavigationObstacleSource
+    {
+        public IReadOnlyList<NavigationObstacle> GetObstacles(int worldLevel)
+        {
+            var firstValues = first.GetObstacles(worldLevel);
+            var secondValues = second.GetObstacles(worldLevel);
+            if (firstValues.Count == 0) return secondValues;
+            if (secondValues.Count == 0) return firstValues;
+            var combined = new NavigationObstacle[
+                firstValues.Count + secondValues.Count];
+            for (var index = 0; index < firstValues.Count; index++)
+                combined[index] = firstValues[index];
+            for (var index = 0; index < secondValues.Count; index++)
+                combined[firstValues.Count + index] = secondValues[index];
+            return combined;
+        }
+
+        public IReadOnlyList<NavigationObstacle> GetObstacles(
+            int worldLevel,
+            Vector2 minimum,
+            Vector2 maximum)
+        {
+            var firstValues = first.GetObstacles(
+                worldLevel, minimum, maximum);
+            var secondValues = second.GetObstacles(
+                worldLevel, minimum, maximum);
+            if (firstValues.Count == 0) return secondValues;
+            if (secondValues.Count == 0) return firstValues;
+            var combined = new NavigationObstacle[
+                firstValues.Count + secondValues.Count];
+            for (var index = 0; index < firstValues.Count; index++)
+                combined[index] = firstValues[index];
+            for (var index = 0; index < secondValues.Count; index++)
+                combined[firstValues.Count + index] = secondValues[index];
+            return combined;
+        }
+    }
 }

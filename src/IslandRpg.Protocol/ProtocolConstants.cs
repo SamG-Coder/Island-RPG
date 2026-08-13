@@ -5,7 +5,7 @@ public static class ProtocolConstants
 {
     public const uint ReliableMagic = 0x49525047; // IRPG
     public const uint SnapshotMagic = 0x49525544; // IRUD
-    public const ushort CurrentVersion = 11;
+    public const ushort CurrentVersion = 12;
     public const int ReliableHeaderSize = 28;
     public const int TcpLengthPrefixSize = sizeof(uint);
     public const int MaxReliableFrameBytes = 64 * 1024;
@@ -121,6 +121,7 @@ public enum HandshakeRejectionCode : byte
     InvalidName = 5,
     DuplicateClient = 6,
     ServerStopping = 7,
+    ReconnectExpired = 8,
 }
 
 public enum PlayerLeaveReason : byte
@@ -174,6 +175,7 @@ public enum ActionCommandKind : byte
     CombatAction = 19,
     PlantCrop = 20,
     HarvestCrop = 21,
+    PlaceInventoryWorldObject = 22,
 }
 
 public enum BoatActionKind : byte

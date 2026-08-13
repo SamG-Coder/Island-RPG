@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
@@ -13,7 +14,7 @@ internal sealed class ClientConnection : IAsyncDisposable
     private readonly TcpClient _client;
     private readonly DedicatedServer _server;
     private readonly CancellationTokenSource _lifetime;
-    private readonly Channel<IProtocolMessage> _outbound;
+    private readonly Channel<OutboundPublication> _outbound;
     private readonly EntitySnapshot[] _snapshotSelection =
         new EntitySnapshot[UdpSnapshotCodec.MaxEntitiesPerDatagram];
     private readonly object _outboundSync = new();
@@ -35,7 +36,7 @@ internal sealed class ClientConnection : IAsyncDisposable
         _client = client;
         _server = server;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(serverCancellation);
-        _outbound = Channel.CreateBounded<IProtocolMessage>(new BoundedChannelOptions(128)
+        _outbound = Channel.CreateBounded<OutboundPublication>(new BoundedChannelOptions(128)
         {
             SingleReader = true,
             SingleWriter = false,
@@ -98,7 +99,8 @@ internal sealed class ClientConnection : IAsyncDisposable
             if (message is PlayerStateMessage)
                 throw new InvalidOperationException(
                     "Private player state must use its monotonic publication path.");
-            if (!_outbound.Writer.TryWrite(message)) return false;
+            if (!_outbound.Writer.TryWrite(OutboundPublication.Single(message)))
+                return false;
             _nextOutboundSequence = checked((long)sequence);
             return true;
         }
@@ -122,7 +124,8 @@ internal sealed class ClientConnection : IAsyncDisposable
             var publication = _privatePlayerState.Project(
                 createMessage(sequence));
             if (publication is null) return true;
-            if (!_outbound.Writer.TryWrite(publication))
+            if (!_outbound.Writer.TryWrite(
+                    OutboundPublication.Single(publication)))
                 return false;
             _nextOutboundSequence = checked((long)sequence);
             _privatePlayerState.Observe(publication);
@@ -163,7 +166,8 @@ internal sealed class ClientConnection : IAsyncDisposable
             var updates = ValidatePublicMessage(message);
             if (updates.IsStale)
                 return true;
-            if (!_outbound.Writer.TryWrite(message)) return false;
+            if (!_outbound.Writer.TryWrite(OutboundPublication.Single(message)))
+                return false;
             _nextOutboundSequence = checked((long)sequence);
             updates.Apply(
                 _publicWorldRevisions,
@@ -210,7 +214,7 @@ internal sealed class ClientConnection : IAsyncDisposable
                 throw new InvalidOperationException(
                     "Private player state must use its monotonic publication path.");
             if (_lifetime.IsCancellationRequested ||
-                !_outbound.Writer.TryWrite(message))
+                !_outbound.Writer.TryWrite(OutboundPublication.Single(message)))
                 return false;
             return true;
         }
@@ -357,31 +361,66 @@ internal sealed class ClientConnection : IAsyncDisposable
     }
 
     /// <summary>
-    /// Transitions this connection into the public replication set. The
-    /// server calls this only while holding its bootstrap/broadcast barrier,
-    /// immediately before it captures and queues the public baselines.
+    /// Queues the complete public bootstrap as one bounded-channel
+    /// publication and atomically enters public replication. The publication
+    /// reserves one contiguous reliable-sequence range, but creates and
+    /// writes its protocol messages lazily. A large bootstrap therefore
+    /// cannot consume every per-connection queue slot while the server holds
+    /// its global bootstrap/broadcast barrier.
     /// </summary>
-    internal void Activate() => Authenticated = true;
-
-    internal void SetPublicBaselineHighWater(
+    internal bool TryQueuePublicBootstrapAndActivate(
         IEnumerable<WorldChunkRevisionState> worldChunks,
         IEnumerable<ResourceChunkSparseState> resourceChunks,
         IEnumerable<AuthoritativeBoatSnapshot> boats,
-        IEnumerable<AuthoritativeEnemySnapshot> enemies)
+        IEnumerable<AuthoritativeEnemySnapshot> enemies,
+        int messageCount,
+        Func<ulong, IEnumerable<IProtocolMessage>> createMessages)
     {
-        _publicWorldRevisions = worldChunks.ToDictionary(
+        ArgumentNullException.ThrowIfNull(worldChunks);
+        ArgumentNullException.ThrowIfNull(resourceChunks);
+        ArgumentNullException.ThrowIfNull(boats);
+        ArgumentNullException.ThrowIfNull(enemies);
+        ArgumentNullException.ThrowIfNull(createMessages);
+        if (messageCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(messageCount));
+
+        var worldRevisions = worldChunks.ToDictionary(
             static value => new WorldChunkKey(
                 value.ChunkX, value.ChunkY, value.WorldLevel),
             static value => value.Revision);
-        _publicResourceRevisions = resourceChunks.ToDictionary(
+        var resourceRevisions = resourceChunks.ToDictionary(
             static value => value.Chunk,
             static value => value.ResourceChunkRevision);
-        _publicBoatRevisions = boats.ToDictionary(
+        var boatRevisions = boats.ToDictionary(
             static value => value.BoatId.Value,
             static value => value.Revision);
-        _publicEnemyRevisions = enemies.ToDictionary(
+        var enemyRevisions = enemies.ToDictionary(
             static value => value.EnemyId.Value,
             static value => value.Revision);
+
+        lock (_outboundSync)
+        {
+            if (_lifetime.IsCancellationRequested) return false;
+            var firstSequence = checked((ulong)_nextOutboundSequence + 1);
+            var lastSequence = checked(
+                firstSequence + checked((ulong)messageCount - 1));
+            if (lastSequence > long.MaxValue)
+                throw new OverflowException(
+                    "The public bootstrap exhausted reliable sequences.");
+            var publication = OutboundPublication.Batch(
+                firstSequence,
+                messageCount,
+                createMessages);
+            if (!_outbound.Writer.TryWrite(publication)) return false;
+
+            _nextOutboundSequence = checked((long)lastSequence);
+            _publicWorldRevisions = worldRevisions;
+            _publicResourceRevisions = resourceRevisions;
+            _publicBoatRevisions = boatRevisions;
+            _publicEnemyRevisions = enemyRevisions;
+            Authenticated = true;
+            return true;
+        }
     }
 
     private PublicRevisionUpdates ValidatePublicMessage(
@@ -509,8 +548,19 @@ internal sealed class ClientConnection : IAsyncDisposable
             if (delta.CurrentRevision <= delta.Reference.ExpectedRevision)
                 throw new InvalidOperationException(
                     "A public boat delta did not advance its revision.");
-            revisions.TryGetValue(delta.Reference.BoatId, out var known);
+            var retained = revisions.TryGetValue(
+                delta.Reference.BoatId, out var known);
             if (delta.CurrentRevision <= known)
+            {
+                stale = true;
+                continue;
+            }
+            // A removal can race after activation captured a baseline in
+            // which the boat was already absent. That baseline is the newer
+            // complete state, so this queued removal is stale for this one
+            // connection and must not consume a reliable sequence. Upserts
+            // still require an exact retained revision chain below.
+            if (!retained && delta.Kind == BoatDeltaKind.Remove)
             {
                 stale = true;
                 continue;
@@ -598,10 +648,145 @@ internal sealed class ClientConnection : IAsyncDisposable
 
     private async Task WriteLoopAsync(NetworkStream stream, CancellationToken cancellationToken)
     {
-        await foreach (var message in _outbound.Reader.ReadAllAsync(cancellationToken))
+        await foreach (var publication in
+                       _outbound.Reader.ReadAllAsync(cancellationToken))
         {
-            await TcpFrameCodec.WriteAsync(stream, message, cancellationToken).ConfigureAwait(false);
+            await WritePublicationAsync(
+                    stream, publication, cancellationToken)
+                .ConfigureAwait(false);
         }
+    }
+
+    private async Task WritePublicationAsync(
+        NetworkStream stream,
+        OutboundPublication publication,
+        CancellationToken cancellationToken)
+    {
+        var timeout = _server.OutboundPublicationWriteTimeout;
+        if (timeout <= TimeSpan.Zero)
+            throw new InvalidOperationException(
+                "The outbound publication write timeout must be positive.");
+        using var inactivityDeadline =
+            CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken);
+
+        try
+        {
+            // Queue residence has its own hard bound: do not expand a lazy
+            // publication that could no longer represent a responsive peer.
+            // Once expansion starts, every completed frame is observable
+            // progress and renews the inactivity deadline below.
+            if (Stopwatch.GetElapsedTime(publication.EnqueuedTimestamp) >=
+                timeout)
+            {
+                inactivityDeadline.Cancel();
+                inactivityDeadline.Token.ThrowIfCancellationRequested();
+            }
+            inactivityDeadline.CancelAfter(timeout);
+            if (publication.SingleMessage is { } single)
+            {
+                await WriteMessageAsync(
+                        stream, single, inactivityDeadline.Token)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            var expectedSequence = publication.FirstSequence;
+            var written = 0;
+            foreach (var message in publication.CreateMessages())
+            {
+                if (written >= publication.MessageCount)
+                    throw new InvalidOperationException(
+                        "An outbound publication produced too many messages.");
+                if (message.Sequence != expectedSequence)
+                    throw new InvalidOperationException(
+                        "An outbound publication broke its reserved sequence range.");
+                inactivityDeadline.Token.ThrowIfCancellationRequested();
+                await WriteMessageAsync(
+                        stream, message, inactivityDeadline.Token)
+                    .ConfigureAwait(false);
+                written++;
+                expectedSequence = checked(expectedSequence + 1);
+                inactivityDeadline.CancelAfter(timeout);
+            }
+            if (written != publication.MessageCount)
+                throw new InvalidOperationException(
+                    "An outbound publication produced too few messages.");
+        }
+        catch (OperationCanceledException) when (
+            inactivityDeadline.IsCancellationRequested &&
+            !cancellationToken.IsCancellationRequested)
+        {
+            // A queued lazy batch retains the captured bootstrap generation.
+            // Cancelling the connection after queue starvation or a full
+            // frame of inactivity unwinds this writer and releases that
+            // closure instead of allowing one stalled peer to pin it forever.
+            Stop();
+            throw;
+        }
+    }
+
+    private async ValueTask WriteMessageAsync(
+        NetworkStream stream,
+        IProtocolMessage message,
+        CancellationToken cancellationToken)
+    {
+        var beforeWrite = _server.BeforeOutboundWriteForTest;
+        if (beforeWrite is not null)
+            await beforeWrite(this, message, cancellationToken)
+                .ConfigureAwait(false);
+        await TcpFrameCodec.WriteAsync(stream, message, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private sealed class OutboundPublication
+    {
+        private readonly Func<ulong, IEnumerable<IProtocolMessage>>?
+            _createMessages;
+
+        private OutboundPublication(IProtocolMessage message)
+        {
+            EnqueuedTimestamp = Stopwatch.GetTimestamp();
+            FirstSequence = message.Sequence;
+            MessageCount = 1;
+            SingleMessage = message;
+        }
+
+        private OutboundPublication(
+            ulong firstSequence,
+            int messageCount,
+            Func<ulong, IEnumerable<IProtocolMessage>> createMessages)
+        {
+            EnqueuedTimestamp = Stopwatch.GetTimestamp();
+            FirstSequence = firstSequence;
+            MessageCount = messageCount;
+            _createMessages = createMessages;
+        }
+
+        public long EnqueuedTimestamp { get; }
+
+        public ulong FirstSequence { get; }
+
+        public int MessageCount { get; }
+
+        public IProtocolMessage? SingleMessage { get; }
+
+        public IEnumerable<IProtocolMessage> CreateMessages() =>
+            (_createMessages ?? throw new InvalidOperationException(
+                "A single-message publication cannot be expanded as a batch."))(
+                FirstSequence);
+
+        public static OutboundPublication Single(IProtocolMessage message)
+        {
+            ArgumentNullException.ThrowIfNull(message);
+            return new OutboundPublication(message);
+        }
+
+        public static OutboundPublication Batch(
+            ulong firstSequence,
+            int messageCount,
+            Func<ulong, IEnumerable<IProtocolMessage>> createMessages) =>
+            new(firstSequence, messageCount, createMessages);
     }
 }
 

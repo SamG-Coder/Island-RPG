@@ -250,9 +250,9 @@ internal static class PlaceableObjectCatalog
         foreach (var gate in GateCatalog.All)
             Definitions[gate.ItemId] = new(
                 gate.ItemId, $"{gate.ItemId}.png",
-                // The fallback matches GTAX's 2.0 x .5 DAT clearance radii.
-                // Runtime placement uses GateGeometryCatalog.Geometry so GTB/C/D
-                // receive their own authored orientation dimensions.
+                // The shared placement rule uses this authored four-by-one
+                // span for axial gates and reserves four-by-four for the two
+                // diagonal orientations.
                 FootprintWidth: 4, FootprintDepth: 1, Height: 3,
                 HotspotX: 96, HotspotY: 150,
                 NavigationWidth: 4, NavigationDepth: 1,
@@ -281,11 +281,15 @@ internal static class PlaceableObjectCatalog
         PlaceableObjectDefinition definition,
         int rotation)
     {
-        if (!GateCatalog.IsGate(definition.ItemId))
-            return definition.Footprint(rotation);
-        var gate = GateCatalog.Get(definition.ItemId);
-        var size = GateGeometryCatalog.Geometry(gate, rotation).PlacementSize;
-        return (size.X, size.Y);
+        if (PlaceableWorldObjectRules.TryGetCollision(
+                definition.ItemId, out var authoritativeDefinition))
+        {
+            var size = PlaceableWorldObjectRules.PlacementFootprint(
+                authoritativeDefinition, rotation);
+            return (size.X, size.Y);
+        }
+
+        return definition.Footprint(rotation);
     }
 
     public static float ProjectedFrontOffsetPixels(string itemId) =>

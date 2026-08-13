@@ -1,4 +1,5 @@
 using System.Numerics;
+using IslandRpg.Boats;
 using IslandRpg.Simulation;
 
 namespace IslandRpg.NetworkingChecks;
@@ -19,6 +20,15 @@ internal static class AuthoritativeSessionChecks
         checks.Add(
             "disconnect and reconnect preserve identity securely",
             ReconnectPreservesIdentity);
+        checks.Add(
+            "disconnected identities do not consume concurrent player slots",
+            DisconnectChurnReleasesConcurrentSlots);
+        checks.Add(
+            "bounded offline retention survives identity churn with explicit expiry",
+            OfflineIdentityRetentionIsBounded);
+        checks.Add(
+            "island identity churn atomically reclaims provisioned boats",
+            IslandIdentityChurnReclaimsBoats);
         checks.Add(
             "inbound work is bounded under pressure",
             InboundQueueIsBounded);
@@ -249,6 +259,286 @@ internal static class AuthoritativeSessionChecks
         CheckAssert.True(
             session.CaptureSnapshot().Actors[0].Connected,
             "successful reconnect must restore authoritative control");
+    }
+
+    private static void DisconnectChurnReleasesConcurrentSlots()
+    {
+        var session = NewSession(SimulationLimits.Default with
+        {
+            MaximumActors = 8,
+            MaximumConnectedActors = 2
+        });
+        var retained = new List<JoinResult>();
+
+        // Create more durable identities than may be connected concurrently.
+        // Each disconnect must release its live slot without deleting the
+        // reconnect credential or actor state.
+        for (var index = 0; index < 4; index++)
+        {
+            var connection = ClientConnectionId.New();
+            var player = Join(
+                session,
+                connection,
+                $"Retained {index}",
+                new Vector2(index, 0));
+            retained.Add(player);
+
+            var pendingDisconnect = session.EnqueueDisconnectAsync(
+                new DisconnectRequest(
+                    connection,
+                    player.Identity.PlayerId));
+            session.Drain();
+            CheckAssert.True(
+                pendingDisconnect.GetAwaiter().GetResult().Accepted,
+                "each sequential disconnect must release its concurrent slot");
+        }
+
+        Join(
+            session,
+            ClientConnectionId.New(),
+            "Live One",
+            new Vector2(10, 0));
+        var secondLiveConnection = ClientConnectionId.New();
+        var secondLive = Join(
+            session,
+            secondLiveConnection,
+            "Live Two",
+            new Vector2(11, 0));
+
+        var overCapacity = session.EnqueueJoinAsync(new JoinRequest(
+            ClientConnectionId.New(),
+            "Live Three",
+            new Vector2(12, 0)));
+        session.Drain();
+        CheckAssert.Equal(
+            JoinStatus.SessionFull,
+            overCapacity.GetAwaiter().GetResult().Status,
+            "a concurrent player beyond the configured live cap must fail");
+        CheckAssert.Equal(
+            2,
+            session.CaptureSnapshot().Actors.Count(static actor =>
+                actor.Connected),
+            "a rejected concurrent join must not create an actor");
+
+        var original = retained[0];
+        var fullReconnect = session.EnqueueReconnectAsync(new ReconnectRequest(
+            ClientConnectionId.New(),
+            original.Identity.PlayerId,
+            original.ReconnectToken));
+        session.Drain();
+        CheckAssert.Equal(
+            ReconnectStatus.SessionFull,
+            fullReconnect.GetAwaiter().GetResult().Status,
+            "a reconnect must obey the same concurrent player cap as a join");
+
+        var release = session.EnqueueDisconnectAsync(new DisconnectRequest(
+            secondLiveConnection,
+            secondLive.Identity.PlayerId));
+        session.Drain();
+        CheckAssert.True(
+            release.GetAwaiter().GetResult().Accepted,
+            "disconnecting a live player must make one slot available");
+
+        var reconnect = session.EnqueueReconnectAsync(new ReconnectRequest(
+            ClientConnectionId.New(),
+            original.Identity.PlayerId,
+            original.ReconnectToken));
+        session.Drain();
+        var reconnected = reconnect.GetAwaiter().GetResult();
+        CheckAssert.True(
+            reconnected.Accepted,
+            "an old retained identity must reconnect after churn releases a slot");
+        CheckAssert.Equal(
+            original.Identity,
+            reconnected.Identity,
+            "slot reuse must not replace the retained player identity");
+        CheckAssert.Equal(
+            2,
+            session.CaptureSnapshot().Actors.Count(static actor =>
+                actor.Connected),
+            "reconnect must consume exactly one available concurrent slot");
+    }
+
+    private static void OfflineIdentityRetentionIsBounded()
+    {
+        var limits = SimulationLimits.Default with
+        {
+            MaximumActors = 3,
+            MaximumConnectedActors = 1,
+            ExpiredPlayerTombstoneCapacity = 16
+        };
+        var session = NewSession(limits);
+        var churned = new List<JoinResult>();
+        for (var index = 0; index < 8; index++)
+        {
+            var connection = ClientConnectionId.New();
+            var joined = Join(
+                session,
+                connection,
+                $"Churn {index}",
+                new Vector2(index, 0));
+            churned.Add(joined);
+            if (index == 7)
+            {
+                CheckAssert.True(session.TryGrantInventoryItem(
+                        joined.Identity.PlayerId, "logs", 2),
+                    "the newest retained identity must accept durable state");
+            }
+            var disconnect = session.EnqueueDisconnectAsync(
+                new DisconnectRequest(
+                    connection,
+                    joined.Identity.PlayerId));
+            session.Drain();
+            CheckAssert.True(
+                disconnect.GetAwaiter().GetResult().Accepted,
+                "sequential churn must release the live player slot");
+            CheckAssert.True(session.ActorCount <= limits.MaximumActors,
+                "offline identity retention must remain hard bounded");
+        }
+
+        CheckAssert.Equal(3, session.ActorCount,
+            "more than one durable-cap of churn must retain only the newest identities");
+        var expired = session.EnqueueReconnectAsync(new ReconnectRequest(
+            ClientConnectionId.New(),
+            churned[0].Identity.PlayerId,
+            churned[0].ReconnectToken));
+        session.Drain();
+        CheckAssert.Equal(
+            ReconnectStatus.ExpiredPlayer,
+            expired.GetAwaiter().GetResult().Status,
+            "a recently evicted credential must report explicit bounded-history expiry");
+
+        var retainedConnection = ClientConnectionId.New();
+        var retained = session.EnqueueReconnectAsync(new ReconnectRequest(
+            retainedConnection,
+            churned[^1].Identity.PlayerId,
+            churned[^1].ReconnectToken));
+        session.Drain();
+        var retainedResult = retained.GetAwaiter().GetResult();
+        CheckAssert.True(retainedResult.Accepted,
+            "a non-evicted reconnect credential must continue working exactly");
+        CheckAssert.Equal(churned[^1].Identity, retainedResult.Identity,
+            "bounded retention must preserve the retained player and actor IDs");
+        CheckAssert.Equal(2, CountItem(
+                retainedResult.Gameplay.Inventory, "logs"),
+            "bounded retention must preserve retained authoritative gameplay state");
+
+        var overConcurrentCap = session.EnqueueJoinAsync(new JoinRequest(
+            ClientConnectionId.New(),
+            "Concurrent overflow",
+            Vector2.Zero));
+        session.Drain();
+        CheckAssert.Equal(
+            JoinStatus.SessionFull,
+            overConcurrentCap.GetAwaiter().GetResult().Status,
+            "offline eviction must never bypass the concurrent player cap");
+        CheckAssert.Equal(3, session.ActorCount,
+            "a concurrent-cap rejection must not evict retained history");
+
+        var disconnectRetained = session.EnqueueDisconnectAsync(
+            new DisconnectRequest(
+                retainedConnection,
+                retainedResult.Identity.PlayerId));
+        session.Drain();
+        CheckAssert.True(
+            disconnectRetained.GetAwaiter().GetResult().Accepted,
+            "the retained player must disconnect before checkpointing");
+        var checkpoint = session.CaptureCheckpoint();
+        var restored = NewSession(limits);
+        restored.RestoreCheckpoint(checkpoint);
+        var forgottenTombstone = restored.EnqueueReconnectAsync(
+            new ReconnectRequest(
+                ClientConnectionId.New(),
+                churned[0].Identity.PlayerId,
+                churned[0].ReconnectToken));
+        restored.Drain();
+        CheckAssert.Equal(
+            ReconnectStatus.UnknownPlayer,
+            forgottenTombstone.GetAwaiter().GetResult().Status,
+            "non-secret expiry tombstones are deliberately transient across restart");
+    }
+
+    private static void IslandIdentityChurnReclaimsBoats()
+    {
+        var limits = SimulationLimits.Default with
+        {
+            MaximumActors = 4,
+            MaximumConnectedActors = 1,
+            ExpiredPlayerTombstoneCapacity = 8
+        };
+        var boats = new AuthoritativeBoatTransactions(
+            new ShorelineBoatNavigation(),
+            new AuthoritativeBoatTransactionOptions
+            {
+                MaximumBoats = 2
+            });
+        var session = new AuthoritativeWorldSession(
+            limits,
+            new DeterministicIdentitySource(),
+            new SessionId(Guid.Parse(
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
+            boatTransactions: boats);
+        var boatDeltas = new List<BoatStateDelta>();
+        session.BoatStateCommitted += boatDeltas.Add;
+        var churned = new List<JoinResult>();
+
+        for (var index = 0; index < 6; index++)
+        {
+            var connection = ClientConnectionId.New();
+            var pending = session.EnqueueJoinAsync(new JoinRequest(
+                connection,
+                $"Island churn {index}",
+                new Vector2(0, 1.5f),
+                ProvisionBoat: true));
+            session.Drain();
+            var joined = pending.GetAwaiter().GetResult();
+            CheckAssert.True(joined.Accepted && joined.Boat is not null,
+                "every sequential island join must provision a replacement raft");
+            churned.Add(joined);
+            CheckAssert.True(session.CaptureBoats().Length <= 2,
+                "provisioned raft retention must remain bounded with actor history");
+            CheckAssert.True(session.ActorCount <= 2,
+                "the smaller fleet cap must trigger owned-identity expiry before the actor cap");
+
+            var disconnect = session.EnqueueDisconnectAsync(
+                new DisconnectRequest(
+                    connection,
+                    joined.Identity.PlayerId));
+            session.Drain();
+            CheckAssert.True(
+                disconnect.GetAwaiter().GetResult().Accepted,
+                "the island churn fixture must release its live slot");
+        }
+
+        var retainedPlayers = churned.TakeLast(2)
+            .Select(static value => value.Identity.PlayerId)
+            .ToHashSet();
+        var retainedBoats = session.CaptureBoats();
+        CheckAssert.Equal(2, retainedBoats.Length,
+            "the reduced boat cap must be fully reusable after identity churn");
+        CheckAssert.True(retainedBoats.All(value =>
+                retainedPlayers.Contains(value.OwnerPlayerId)),
+            "expired player rafts must be removed before replacement provisioning");
+        CheckAssert.Equal(4, boatDeltas.Count(value =>
+                value.Kind == BoatChangeKind.Removed),
+            "each actor evicted beyond the retention cap must publish one raft removal");
+
+        var expired = session.EnqueueReconnectAsync(new ReconnectRequest(
+            ClientConnectionId.New(),
+            churned[0].Identity.PlayerId,
+            churned[0].ReconnectToken));
+        session.Drain();
+        CheckAssert.Equal(ReconnectStatus.ExpiredPlayer,
+            expired.GetAwaiter().GetResult().Status,
+            "a reclaimed island identity must report explicit reconnect expiry");
+
+        var checkpoint = session.CaptureCheckpoint();
+        CheckAssert.Equal(2, checkpoint.Actors.Length,
+            "fleet capacity must constrain island identity retention below its actor cap");
+        CheckAssert.True(checkpoint.Boats is { Boats.Length: 2 } &&
+                         checkpoint.Boats.Boats.All(value =>
+                             retainedPlayers.Contains(value.OwnerPlayerId)),
+            "island checkpoint boats must reference only retained owners");
     }
 
     private static void InboundQueueIsBounded()
@@ -791,5 +1081,18 @@ internal static class AuthoritativeSessionChecks
 
         public ReconnectToken CreateReconnectToken() =>
             new($"deterministic-secret-{_next}");
+    }
+
+    private sealed class ShorelineBoatNavigation : IBoatNavigationQuery
+    {
+        public bool IsNavigable(Vector2 point) =>
+            float.IsFinite(point.X) && float.IsFinite(point.Y) &&
+            point.Y is >= 0 and < 1;
+
+        public bool IsLanding(Vector2 point) =>
+            float.IsFinite(point.X) && float.IsFinite(point.Y) &&
+            point.Y is >= 1 and < 2;
+
+        public bool IsInitialMooring(Vector2 point) => IsNavigable(point);
     }
 }

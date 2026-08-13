@@ -47,10 +47,7 @@ internal static class WorldVegetationRenderCache
             var tileY = (int)MathF.Floor(item.Y);
             if (excavationTiles.Contains((tileX, tileY)))
                 continue;
-            var stableKey = MiningNodeCatalog.TryGet(item, out _)
-                ? WorldMiningIdentity.StableKey(item, index)
-                : FormattableString.Invariant(
-                    $"vegetation:{item.X:0.000}:{item.Y:0.000}");
+            var stableKey = StableKey(item, index);
             if (depletedMiningNodes.Contains(stableKey))
                 continue;
             result.Add(Create(
@@ -87,6 +84,12 @@ internal static class WorldVegetationRenderCache
                 $"shaft-growth:{shaftId}:{frame}"));
         }
     }
+
+    public static string StableKey(WorldVegetation item, int index) =>
+        MiningNodeCatalog.TryGet(item, out _)
+            ? WorldMiningIdentity.StableKey(item, index)
+            : FormattableString.Invariant(
+                $"vegetation:{item.X:0.000}:{item.Y:0.000}");
 
     private static WorldVegetationRenderItem Create(
         WorldChunk chunk,

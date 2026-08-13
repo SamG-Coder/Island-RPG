@@ -31,6 +31,27 @@ public interface IWorldNavigationQuery
 public interface IWorldNavigationObstacleSource
 {
     IReadOnlyList<NavigationObstacle> GetObstacles(int worldLevel);
+
+    IReadOnlyList<NavigationObstacle> GetObstacles(
+        int worldLevel,
+        Vector2 minimum,
+        Vector2 maximum)
+    {
+        if (!float.IsFinite(minimum.X) || !float.IsFinite(minimum.Y) ||
+            !float.IsFinite(maximum.X) || !float.IsFinite(maximum.Y) ||
+            minimum.X > maximum.X || minimum.Y > maximum.Y)
+            return [];
+        return GetObstacles(worldLevel).Where(obstacle =>
+        {
+            var half = obstacle.AxisAlignedHalfExtents(.18f);
+            var obstacleMinimum = obstacle.Center - half;
+            var obstacleMaximum = obstacle.Center + half;
+            return obstacleMinimum.X <= maximum.X &&
+                   obstacleMaximum.X >= minimum.X &&
+                   obstacleMinimum.Y <= maximum.Y &&
+                   obstacleMaximum.Y >= minimum.Y;
+        }).ToArray();
+    }
 }
 
 public sealed class EmptyWorldNavigationObstacleSource :
@@ -43,6 +64,11 @@ public sealed class EmptyWorldNavigationObstacleSource :
     }
 
     public IReadOnlyList<NavigationObstacle> GetObstacles(int worldLevel) => [];
+
+    public IReadOnlyList<NavigationObstacle> GetObstacles(
+        int worldLevel,
+        Vector2 minimum,
+        Vector2 maximum) => [];
 }
 
 /// <summary>

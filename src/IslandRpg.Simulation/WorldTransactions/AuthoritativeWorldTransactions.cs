@@ -4,6 +4,7 @@ using System.Numerics;
 using System.Security.Cryptography;
 using IslandRpg.Gameplay;
 using IslandRpg.Caves;
+using IslandRpg.Navigation;
 using IslandRpg.World;
 
 namespace IslandRpg.Simulation;
@@ -13,7 +14,8 @@ namespace IslandRpg.Simulation;
 /// simulation thread is the only writer; callers receive immutable snapshots
 /// and deltas, never references to mutable inventories or world collections.
 /// </summary>
-public sealed class AuthoritativeWorldTransactions
+public sealed class AuthoritativeWorldTransactions :
+    IWorldNavigationObstacleSource
 {
     public const float InteractionRange = 3f;
     public const double ExcavationCadenceSeconds = .9;
@@ -26,6 +28,8 @@ public sealed class AuthoritativeWorldTransactions
         _objectsByChunk = [];
     private readonly Dictionary<WorldChunkKey, HashSet<Guid>>
         _campfiresByChunk = [];
+    private readonly Dictionary<WorldChunkKey,
+        ImmutableArray<NavigationObstacle>> _navigationObstaclesByChunk = [];
     private readonly Dictionary<(ActorId ActorId, Guid CommandId),
         CommandReceipt> _commandResults = [];
     private readonly Queue<(ActorId ActorId, Guid CommandId)> _commandOrder = [];
@@ -214,6 +218,111 @@ public sealed class AuthoritativeWorldTransactions
         return false;
     }
 
+    public bool HasCraftingStationWithin(
+        Vector2 position,
+        int worldLevel,
+        string stationItemId,
+        float range)
+    {
+        EnsureOwner();
+        if (!IsFinite(position) || string.IsNullOrWhiteSpace(stationItemId) ||
+            !float.IsFinite(range) || range < 0)
+            return false;
+        var rangeSquared = (double)range * range;
+        var offset = new Vector2(range);
+        var minimum = WorldChunkKey.At(position - offset, worldLevel);
+        var maximum = WorldChunkKey.At(position + offset, worldLevel);
+        for (var chunkY = minimum.Y; chunkY <= maximum.Y; chunkY++)
+        for (var chunkX = minimum.X; chunkX <= maximum.X; chunkX++)
+        {
+            var chunk = new WorldChunkKey(chunkX, chunkY, worldLevel);
+            if (!_objectsByChunk.TryGetValue(chunk, out var candidates))
+                continue;
+            foreach (var objectId in candidates)
+                if (_objects.TryGetValue(objectId, out var value) &&
+                    value.Value.ItemId.Equals(
+                        stationItemId, StringComparison.OrdinalIgnoreCase) &&
+                    DistanceSquared(position, value.Value) <= rangeSquared)
+                    return true;
+        }
+        return false;
+    }
+
+    public IReadOnlyList<NavigationObstacle> GetObstacles(int worldLevel)
+    {
+        EnsureOwner();
+        return _objectsByChunk.Keys
+            .Where(chunk => chunk.WorldLevel == worldLevel)
+            .OrderBy(static chunk => chunk.Y)
+            .ThenBy(static chunk => chunk.X)
+            .SelectMany(chunk => ObstaclesForChunk(chunk).AsEnumerable())
+            .ToImmutableArray();
+    }
+
+    public IReadOnlyList<NavigationObstacle> GetObstacles(
+        int worldLevel,
+        Vector2 minimum,
+        Vector2 maximum)
+    {
+        EnsureOwner();
+        if (!IsFinite(minimum) || !IsFinite(maximum) ||
+            minimum.X > maximum.X || minimum.Y > maximum.Y)
+            return [];
+        var extent = new Vector2(
+            PlaceableWorldObjectRules.MaximumCollisionHalfExtent + 2f);
+        var minimumChunk = WorldChunkKey.At(minimum - extent, worldLevel);
+        var maximumChunk = WorldChunkKey.At(maximum + extent, worldLevel);
+        var result = ImmutableArray.CreateBuilder<NavigationObstacle>();
+        for (var chunkY = minimumChunk.Y; chunkY <= maximumChunk.Y; chunkY++)
+        for (var chunkX = minimumChunk.X; chunkX <= maximumChunk.X; chunkX++)
+        {
+            var chunk = new WorldChunkKey(chunkX, chunkY, worldLevel);
+            foreach (var obstacle in ObstaclesForChunk(chunk))
+            {
+                var half = obstacle.AxisAlignedHalfExtents(.18f);
+                var obstacleMinimum = obstacle.Center - half;
+                var obstacleMaximum = obstacle.Center + half;
+                if (obstacleMinimum.X <= maximum.X &&
+                    obstacleMaximum.X >= minimum.X &&
+                    obstacleMinimum.Y <= maximum.Y &&
+                    obstacleMaximum.Y >= minimum.Y)
+                    result.Add(obstacle);
+            }
+        }
+        return result.ToImmutable();
+    }
+
+    private ImmutableArray<NavigationObstacle> ObstaclesForChunk(
+        WorldChunkKey chunk)
+    {
+        if (_navigationObstaclesByChunk.TryGetValue(chunk, out var cached))
+            return cached;
+        if (!_objectsByChunk.TryGetValue(chunk, out var candidates))
+            return [];
+        var obstacles = candidates
+            .OrderBy(static objectId => objectId)
+            .Select(objectId => _objects.GetValueOrDefault(objectId))
+            .Where(static value => value is not null)
+            .SelectMany(value =>
+            {
+                if (!PlaceableWorldObjectRules.TryGetCollision(
+                        value!.Value.ItemId, out var definition))
+                    return [];
+                var rotation = WallCatalog.IsWall(value.Value.ItemId) &&
+                               value.Value.VisualFrame is < 0 or > 4
+                    ? ConstructionService.Angle(value.Value)
+                    : value.Value.VisualFrame;
+                return PlaceableWorldObjectRules.CollisionObstacles(
+                    definition,
+                    new Vector2(value.Value.X, value.Value.Y),
+                    rotation,
+                    GateService.IsOpen(value.Value));
+            })
+            .ToImmutableArray();
+        _navigationObstaclesByChunk.Add(chunk, obstacles);
+        return obstacles;
+    }
+
     private static double DistanceSquared(
         Vector2 position, WorldGroundObject value)
     {
@@ -224,6 +333,7 @@ public sealed class AuthoritativeWorldTransactions
 
     private void IndexObject(ObjectState value)
     {
+        _navigationObstaclesByChunk.Remove(value.Chunk);
         if (!_objectsByChunk.TryGetValue(value.Chunk, out var objects))
         {
             objects = [];
@@ -241,6 +351,7 @@ public sealed class AuthoritativeWorldTransactions
 
     private void UnindexObject(ObjectState value)
     {
+        _navigationObstaclesByChunk.Remove(value.Chunk);
         if (!_objectsByChunk.TryGetValue(value.Chunk, out var objects))
             return;
         objects.Remove(value.Value.Id);
@@ -282,6 +393,33 @@ public sealed class AuthoritativeWorldTransactions
     }
 
     /// <summary>
+    /// Removes actor-keyed transaction metadata when a disconnected identity
+    /// expires. World objects remain part of the shared world, but no durable
+    /// cadence or transient replay entry may retain the expired actor ID.
+    /// </summary>
+    public void ForgetActor(ActorId actorId)
+    {
+        EnsureOwner();
+        if (actorId.Value == Guid.Empty)
+            throw new ArgumentException(
+                "A valid actor identity is required.", nameof(actorId));
+        foreach (var key in _commandResults.Keys
+                     .Where(key => key.ActorId == actorId)
+                     .ToArray())
+            _commandResults.Remove(key);
+        var remembered = _commandOrder.Count;
+        for (var index = 0; index < remembered; index++)
+        {
+            var key = _commandOrder.Dequeue();
+            if (key.ActorId != actorId) _commandOrder.Enqueue(key);
+        }
+        foreach (var key in _excavationCadences.Keys
+                     .Where(key => key.ActorId == actorId)
+                     .ToArray())
+            _excavationCadences.Remove(key);
+    }
+
+    /// <summary>
     /// Replaces an empty aggregate with trusted persisted state. Unlike
     /// AddObject, this path never increments revisions while restoring them.
     /// Validation is completed into temporary collections before committing.
@@ -299,6 +437,7 @@ public sealed class AuthoritativeWorldTransactions
         }
         if (_objects.Count != 0 || _objectsByChunk.Count != 0 ||
             _campfiresByChunk.Count != 0 ||
+            _navigationObstaclesByChunk.Count != 0 ||
             _chunkRevisions.Count != 0 ||
             _commandResults.Count != 0 || _excavationCadences.Count != 0)
         {
@@ -428,6 +567,12 @@ public sealed class AuthoritativeWorldTransactions
         DropInventoryItemTransaction command) =>
         ExecuteCached(actor, command.Context, command,
             state => Drop(state, command));
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        PlaceInventoryWorldObjectTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => PlaceInventoryWorldObject(state, command));
 
     public WorldTransactionResult Execute(
         WorldTransactionActorInput actor,
@@ -785,6 +930,138 @@ public sealed class AuthoritativeWorldTransactions
             [chunkDelta]);
     }
 
+    private WorldTransactionResult PlaceInventoryWorldObject(
+        ActorState actor,
+        PlaceInventoryWorldObjectTransaction command)
+    {
+        if (!PlaceableWorldObjectRules.TryGet(
+                command.DefinitionId, out var definition) ||
+            !IsFinite(command.Position) ||
+            command.Rotation < 0 ||
+            command.Rotation >= definition.RotationCount ||
+            !PlaceableWorldObjectRules.IsSnapped(
+                command.DefinitionId, command.Position))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidPlacement, actor,
+                "That inventory object cannot be placed there.");
+        if (command.WorldLevel != actor.WorldLevel)
+            return Rejected(command.Context,
+                WorldTransactionStatus.WrongWorldLevel, actor);
+        if (!InRange(actor.Position, command.Position))
+            return Rejected(command.Context,
+                WorldTransactionStatus.OutOfRange, actor);
+        var chunk = WorldChunkKey.At(command.Position, command.WorldLevel);
+        if (ChunkRevision(chunk) != command.ExpectedChunkRevision)
+            return Rejected(command.Context,
+                WorldTransactionStatus.StaleChunkRevision, actor);
+        if (actor.ActorRevision == uint.MaxValue ||
+            actor.InventoryRevision == uint.MaxValue ||
+            ChunkRevision(chunk) == uint.MaxValue)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCommand, actor,
+                "A placement revision cannot advance any further.");
+        if ((uint)command.InventorySlot >= (uint)actor.Inventory.Capacity)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidInventorySlot, actor);
+        if (actor.Inventory[command.InventorySlot] is not { } stack ||
+            !stack.ItemId.Equals(
+                command.DefinitionId, StringComparison.OrdinalIgnoreCase))
+            return Rejected(command.Context,
+                WorldTransactionStatus.ItemUnavailable, actor);
+        if (OverlapsWorldObject(
+                definition, command.Position, command.Rotation,
+                command.WorldLevel))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidPlacement, actor,
+                "Another object is blocking that footprint.");
+        var id = _newObjectId();
+        if (id == Guid.Empty || _objects.ContainsKey(id))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCommand, actor,
+                "The object identity source returned a duplicate ID.");
+        var inventory = actor.Inventory.Clone();
+        if (!inventory.TryTake(command.InventorySlot, 1, out _))
+            return Rejected(command.Context,
+                WorldTransactionStatus.ItemUnavailable, actor);
+        var placed = new WorldGroundObject(
+            id,
+            definition.ItemId,
+            command.Position.X,
+            command.Position.Y,
+            OwnerId: actor.ActorId.ToString(),
+            VisualFrame: definition.NormalizeRotation(command.Rotation));
+        var state = new ObjectState(placed, chunk, 1, 1, null);
+        _objects.Add(id, state);
+        IndexObject(state);
+        var chunkDelta = AdvanceChunk(chunk);
+        CommitInventory(actor, inventory);
+        return Accepted(command.Context, actor,
+            [new(WorldObjectChangeKind.Added, id, chunk, 0, 1,
+                Snapshot(state))], [chunkDelta]) with
+        {
+            Detail = "inventory_object_placed"
+        };
+    }
+
+    private bool OverlapsWorldObject(
+        PlaceableWorldObjectDefinition definition,
+        Vector2 position,
+        int rotation,
+        int worldLevel,
+        bool blockUncataloguedPoints = true)
+    {
+        var candidateBounds = PlaceableWorldObjectRules.PlacementBounds(
+            definition, position, rotation);
+        var scanPadding = new Vector2(
+            PlaceableWorldObjectRules.MaximumPlacementHalfExtent + .18f);
+        var minimum = WorldChunkKey.At(
+            candidateBounds.Minimum - scanPadding, worldLevel);
+        var maximum = WorldChunkKey.At(
+            candidateBounds.Maximum + scanPadding, worldLevel);
+        for (var chunkY = minimum.Y; chunkY <= maximum.Y; chunkY++)
+        for (var chunkX = minimum.X; chunkX <= maximum.X; chunkX++)
+        {
+            var chunk = new WorldChunkKey(chunkX, chunkY, worldLevel);
+            if (!_objectsByChunk.TryGetValue(chunk, out var candidates))
+                continue;
+            foreach (var objectId in candidates)
+            {
+                if (!_objects.TryGetValue(objectId, out var existing))
+                    continue;
+                var existingPosition = new Vector2(
+                    existing.Value.X, existing.Value.Y);
+                if (PlaceableWorldObjectRules.TryGetCollision(
+                        existing.Value.ItemId, out var existingDefinition))
+                {
+                    var existingRotation =
+                        WallCatalog.IsWall(existing.Value.ItemId) &&
+                        existing.Value.VisualFrame is < 0 or > 4
+                            ? ConstructionService.Angle(existing.Value)
+                            : existing.Value.VisualFrame;
+                    if (PlaceableWorldObjectRules.PlacementOverlaps(
+                            definition,
+                            position,
+                            rotation,
+                            existingDefinition,
+                            existingPosition,
+                            existingRotation,
+                            PlaceableWorldObjectRules.PlacementPadding(
+                                definition, existingDefinition)))
+                        return true;
+                }
+                else if (blockUncataloguedPoints &&
+                         PlaceableWorldObjectRules.PlacementContains(
+                             definition,
+                             position,
+                             rotation,
+                             existingPosition,
+                             .18f))
+                    return true;
+            }
+        }
+        return false;
+    }
+
     private WorldTransactionResult PlantCrop(
         ActorState actor, PlantCropTransaction command)
     {
@@ -812,6 +1089,12 @@ public sealed class AuthoritativeWorldTransactions
         if (ChunkRevision(chunkKey) != command.ExpectedChunkRevision)
             return Rejected(command.Context,
                 WorldTransactionStatus.StaleChunkRevision, actor);
+        if (actor.ActorRevision == uint.MaxValue ||
+            actor.InventoryRevision == uint.MaxValue ||
+            ChunkRevision(chunkKey) == uint.MaxValue)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCommand, actor,
+                "A crop revision cannot advance any further.");
         if (TileOccupied(command.Position, command.WorldLevel))
             return Rejected(command.Context,
                 WorldTransactionStatus.InvalidPlacement, actor,
@@ -1163,13 +1446,30 @@ public sealed class AuthoritativeWorldTransactions
             return Rejected(command.Context, WorldTransactionStatus.WrongWorldLevel, actor);
         if (!InRange(actor.Position, command.Position))
             return Rejected(command.Context, WorldTransactionStatus.OutOfRange, actor);
-        if (!ConstructionService.IsConstructible(command.DefinitionId))
+        if (!ConstructionService.IsConstructible(command.DefinitionId) ||
+            !PlaceableWorldObjectRules.TryGetCollision(
+                command.DefinitionId, out var collisionDefinition))
             return Rejected(command.Context,
                 WorldTransactionStatus.InvalidConstruction, actor);
         var chunkKey = WorldChunkKey.At(command.Position, command.WorldLevel);
         if (ChunkRevision(chunkKey) != command.ExpectedChunkRevision)
             return Rejected(command.Context,
                 WorldTransactionStatus.StaleChunkRevision, actor);
+        if (actor.ActorRevision == uint.MaxValue ||
+            actor.InventoryRevision == uint.MaxValue ||
+            ChunkRevision(chunkKey) == uint.MaxValue)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCommand, actor,
+                "A construction revision cannot advance any further.");
+        if (OverlapsWorldObject(
+                collisionDefinition,
+                command.Position,
+                command.Rotation,
+                command.WorldLevel,
+                blockUncataloguedPoints: false))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidPlacement, actor,
+                "Another object is blocking that construction footprint.");
         var recipe = CraftingSkill.Recipes.FirstOrDefault(value =>
             value.ResultItemId.Equals(command.DefinitionId,
                 StringComparison.OrdinalIgnoreCase));
