@@ -41,7 +41,26 @@ public static class ServerCheckpointMapper
                     value.Chunk.X,
                     value.Chunk.Y,
                     value.Chunk.WorldLevel,
-                    value.Revision)).ToArray());
+                    value.Revision)).ToArray(),
+            (source.CookingJobs.IsDefault
+                    ? ImmutableArray<AuthoritativeCookingJobCheckpoint>.Empty
+                    : source.CookingJobs)
+                .Select(static value => new ServerCookingJobCheckpoint(
+                    value.CommandId,
+                    value.ActorId.Value,
+                    value.CampfireId,
+                    value.CampfireChunk.X,
+                    value.CampfireChunk.Y,
+                    value.CampfireChunk.WorldLevel,
+                    value.CampfirePosition.X,
+                    value.CampfirePosition.Y,
+                    value.PreferredInventorySlot,
+                    value.RawItemId,
+                    value.ResultItemId,
+                    value.Experience,
+                    value.Burnt,
+                    value.DropObjectId,
+                    value.CompletesAtTick)).ToArray());
     }
 
     public static AuthoritativeSessionCheckpoint ToSimulation(
@@ -81,7 +100,24 @@ public static class ServerCheckpointMapper
                             value.X,
                             value.Y,
                             value.WorldLevel),
-                        value.Revision)).ToImmutableArray()));
+                        value.Revision)).ToImmutableArray()),
+            (source.CookingJobs ?? [])
+                .Select(static value => new AuthoritativeCookingJobCheckpoint(
+                    value.CommandId,
+                    new ActorId(value.ActorId),
+                    value.CampfireId,
+                    new WorldChunkKey(
+                        value.CampfireChunkX,
+                        value.CampfireChunkY,
+                        value.WorldLevel),
+                    new Vector2(value.CampfireX, value.CampfireY),
+                    value.PreferredInventorySlot,
+                    value.RawItemId,
+                    value.ResultItemId,
+                    value.Experience,
+                    value.Burnt,
+                    value.DropObjectId,
+                    value.CompletesAtTick)).ToImmutableArray());
     }
 
     private static ServerActorCheckpoint ToDurable(

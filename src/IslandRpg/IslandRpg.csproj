@@ -104,7 +104,13 @@
     <Compile Remove="Gameplay\WoodcuttingSkill.cs" />
     <Compile Remove="Gameplay\MiningSkill.cs" />
     <Compile Remove="Gameplay\ResourceStrikeService.cs" />
+    <Compile Remove="Gameplay\EntityAction.cs" />
+    <Compile Remove="Gameplay\EntityActionCooldowns.cs" />
+    <Compile Remove="Gameplay\EntityHealthRegenerationService.cs" />
+    <Compile Remove="Gameplay\PlayerDeathService.cs" />
+    <Compile Remove="Gameplay\TimedHealingService.cs" />
     <Compile Remove="Gameplay\MeleeCombatService.cs" />
+    <Compile Remove="Gameplay\CombatResolver.cs" />
     <Compile Remove="Gameplay\HouseCatalog.cs" />
     <Compile Remove="Gameplay\DefenceBuildingCatalog.cs" />
     <Compile Remove="Gameplay\WallCatalog.cs" />

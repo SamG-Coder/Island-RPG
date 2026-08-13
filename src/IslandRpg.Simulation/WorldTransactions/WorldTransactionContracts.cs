@@ -3,23 +3,6 @@ using System.Numerics;
 
 namespace IslandRpg.Simulation;
 
-public readonly record struct WorldChunkKey(int X, int Y, int WorldLevel)
-{
-    public const int Size = 32;
-
-    public static WorldChunkKey At(Vector2 position, int worldLevel) => new(
-        FloorDiv((int)MathF.Floor(position.X), Size),
-        FloorDiv((int)MathF.Floor(position.Y), Size),
-        worldLevel);
-
-    private static int FloorDiv(int value, int divisor)
-    {
-        var quotient = value / divisor;
-        var remainder = value % divisor;
-        return remainder < 0 ? quotient - 1 : quotient;
-    }
-}
-
 public readonly record struct WorldObjectHandle(
     Guid ObjectId,
     WorldChunkKey Chunk,
@@ -68,7 +51,10 @@ public enum WorldTransactionStatus
     ConstructionLocked,
     InvalidPlacement,
     NotConstructionSite,
-    NoDemolitionRefund
+    NoDemolitionRefund,
+    NotCookable,
+    CookingLocked,
+    AlreadyCooking
 }
 
 public enum WorldObjectChangeKind
@@ -245,6 +231,25 @@ public sealed record TakeCampfireFuelTransaction(
 public sealed record LightCampfireTransaction(
     WorldTransactionContext Context,
     WorldObjectHandle Campfire,
+    double GameSeconds);
+
+public sealed record BeginCampfireCookingTransaction(
+    WorldTransactionContext Context,
+    WorldObjectHandle Campfire,
+    int InventorySlot,
+    double GameSeconds);
+
+public sealed record CompleteCampfireCookingTransaction(
+    Guid OperationId,
+    Guid CampfireId,
+    WorldChunkKey CampfireChunk,
+    Vector2 CampfirePosition,
+    int PreferredInventorySlot,
+    string RawItemId,
+    string ResultItemId,
+    int Experience,
+    bool Burnt,
+    Guid DropObjectId,
     double GameSeconds);
 
 public sealed record PlaceConstructionTransaction(

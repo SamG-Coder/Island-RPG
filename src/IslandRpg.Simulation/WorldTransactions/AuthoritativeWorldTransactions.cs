@@ -253,6 +253,88 @@ public sealed class AuthoritativeWorldTransactions
 
     public WorldTransactionResult Execute(
         WorldTransactionActorInput actor,
+        BeginCampfireCookingTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => BeginCooking(state, command));
+
+    /// <summary>
+    /// Completes a previously persisted server-owned cooking job. Completion
+    /// is driven only by the session clock, never by a second client command.
+    /// </summary>
+    public WorldTransactionResult CompleteCooking(
+        WorldTransactionActorInput input,
+        CompleteCampfireCookingTransaction command)
+    {
+        EnsureOwner();
+        var context = new WorldTransactionContext(
+            command.OperationId,
+            input.ActorId,
+            input.Gameplay.ActorRevision,
+            input.Gameplay.Inventory.Revision);
+        var actor = CreateActor(input);
+        if (actor is null)
+            return Rejected(context, WorldTransactionStatus.InvalidCommand);
+        // Completion is cleanup for an item reserved by an earlier accepted
+        // command. A dead actor may not cook or earn XP, but the authority
+        // must still return/drop that reserved item.
+        var fireStillLit =
+            actor.Health > 0 &&
+            _objects.TryGetValue(command.CampfireId, out var fire) &&
+            fire.Chunk == command.CampfireChunk &&
+            CampfireService.IsCampfire(fire.Value) &&
+            CampfireService.State(
+                fire.Value, command.GameSeconds) == CampfireState.Lit;
+        var output = fireStillLit ? command.ResultItemId : command.RawItemId;
+        if (!ItemCatalog.TryGet(output, out _))
+            return Rejected(context, WorldTransactionStatus.InvalidItem, actor);
+
+        var inventory = actor.Inventory.Clone();
+        var objectDeltas = ImmutableArray<WorldObjectTransactionDelta>.Empty;
+        var chunkDeltas = ImmutableArray<WorldChunkRevisionDelta>.Empty;
+        if (!inventory.TryAddAtPreferredSlot(
+                output, command.PreferredInventorySlot))
+        {
+            if (command.DropObjectId == Guid.Empty ||
+                _objects.ContainsKey(command.DropObjectId))
+                return Rejected(context, WorldTransactionStatus.InvalidCommand,
+                    actor, "The cooking drop identity is invalid.");
+            var dropPosition = command.CampfirePosition + new Vector2(.38f, 0);
+            var chunk = WorldChunkKey.At(
+                dropPosition, command.CampfireChunk.WorldLevel);
+            var drop = new ObjectState(new WorldGroundObject(
+                command.DropObjectId,
+                output,
+                dropPosition.X,
+                dropPosition.Y,
+                OwnerId: actor.ActorId.ToString()), chunk, 1, 1);
+            _objects.Add(command.DropObjectId, drop);
+            var chunkDelta = AdvanceChunk(chunk);
+            objectDeltas =
+            [
+                new(WorldObjectChangeKind.Added,
+                    command.DropObjectId, chunk, 0, 1, Snapshot(drop))
+            ];
+            chunkDeltas = [chunkDelta];
+        }
+        else
+            CommitInventory(actor, inventory);
+
+        if (fireStillLit && command.Experience > 0)
+        {
+            actor.CookingExperience = CookingSkill.AwardExperience(
+                actor.CookingExperience, command.Experience).Experience;
+            AdvanceActor(actor);
+        }
+        return Accepted(context, actor, objectDeltas, chunkDeltas) with
+        {
+            Detail = fireStillLit
+                ? "cooking_completed"
+                : "cooking_interrupted"
+        };
+    }
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
         PlaceConstructionTransaction command) =>
         ExecuteCached(actor, command.Context, command,
             state => PlaceConstruction(state, command));
@@ -554,6 +636,46 @@ public sealed class AuthoritativeWorldTransactions
         var chunk = AdvanceChunk(state.Chunk);
         return Accepted(command.Context, actor,
             [UpdatedDelta(state, previous)], [chunk]);
+    }
+
+    private WorldTransactionResult BeginCooking(
+        ActorState actor, BeginCampfireCookingTransaction command)
+    {
+        var rejected = ValidateObject(actor, command.Context,
+            command.Campfire, out var state);
+        if (rejected is not null) return rejected;
+        if (!CanAccess(actor, state!.Value))
+            return Rejected(command.Context,
+                WorldTransactionStatus.AccessDenied, actor);
+        if (!CampfireService.IsCampfire(state.Value))
+            return Rejected(command.Context,
+                WorldTransactionStatus.NotCampfire, actor);
+        if (CampfireService.State(state.Value, command.GameSeconds) !=
+            CampfireState.Lit)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCampfireState, actor,
+                "The campfire must be lit before cooking.");
+        if ((uint)command.InventorySlot >= (uint)actor.Inventory.Capacity)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidInventorySlot, actor);
+        if (actor.Inventory[command.InventorySlot] is not { } raw)
+            return Rejected(command.Context,
+                WorldTransactionStatus.ItemUnavailable, actor);
+        if (!CookingSkill.TryProfile(raw.ItemId, out var profile))
+            return Rejected(command.Context,
+                WorldTransactionStatus.NotCookable, actor);
+        if (CookingSkill.LevelForExperience(actor.CookingExperience) <
+            profile.RequiredLevel)
+            return Rejected(command.Context,
+                WorldTransactionStatus.CookingLocked, actor,
+                $"Cooking level {profile.RequiredLevel} is required.");
+
+        var inventory = actor.Inventory.Clone();
+        if (!inventory.TryTake(command.InventorySlot, 1, out _))
+            return Rejected(command.Context,
+                WorldTransactionStatus.ItemUnavailable, actor);
+        CommitInventory(actor, inventory);
+        return Accepted(command.Context, actor, [], []);
     }
 
     private WorldTransactionResult PlaceConstruction(
@@ -944,6 +1066,7 @@ public sealed class AuthoritativeWorldTransactions
             CraftingLevel = CraftingSkill.LevelForExperience(
                 input.Gameplay.CraftingExperience);
             CraftingExperience = input.Gameplay.CraftingExperience;
+            CookingExperience = input.Gameplay.CookingExperience;
             FiremakingLevel = Math.Clamp(input.FiremakingLevel, 1, 20);
             Energy = Math.Clamp(input.Energy, 0, 100);
             GroupId = input.GroupId;
@@ -958,6 +1081,7 @@ public sealed class AuthoritativeWorldTransactions
         public uint InventoryRevision { get; set; }
         public int CraftingLevel { get; }
         public int CraftingExperience { get; set; }
+        public int CookingExperience { get; set; }
         public int FiremakingLevel { get; }
         public float Energy { get; }
         public string? GroupId { get; }
@@ -976,6 +1100,7 @@ public sealed class AuthoritativeWorldTransactions
             {
                 ActorRevision = ActorRevision,
                 CraftingExperience = CraftingExperience,
+                CookingExperience = CookingExperience,
                 Inventory = new(InventoryRevision, slots.MoveToImmutable())
             };
         }

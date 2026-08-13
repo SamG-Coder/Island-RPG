@@ -13,6 +13,7 @@
     the game client, authoritative simulation and dedicated server.
   -->
   <ItemGroup>
+    <Compile Include="..\IslandRpg.Simulation\WorldTransactions\WorldChunkKey.cs" Link="World\WorldChunkKey.cs" />
     <Compile Include="..\IslandRpg\World\MacroHydrology.cs" Link="World\MacroHydrology.cs" />
     <Compile Include="..\IslandRpg\World\ProceduralSurfaceTerrain.cs" Link="World\ProceduralSurfaceTerrain.cs" />
     <Compile Include="..\IslandRpg\Gameplay\ItemDefinition.cs" Link="Gameplay\ItemDefinition.cs" />
@@ -36,7 +37,13 @@
     <Compile Include="..\IslandRpg\Gameplay\WoodcuttingSkill.cs" Link="Gameplay\WoodcuttingSkill.cs" />
     <Compile Include="..\IslandRpg\Gameplay\MiningSkill.cs" Link="Gameplay\MiningSkill.cs" />
     <Compile Include="..\IslandRpg\Gameplay\ResourceStrikeService.cs" Link="Gameplay\ResourceStrikeService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\EntityAction.cs" Link="Gameplay\EntityAction.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\EntityActionCooldowns.cs" Link="Gameplay\EntityActionCooldowns.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\EntityHealthRegenerationService.cs" Link="Gameplay\EntityHealthRegenerationService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\PlayerDeathService.cs" Link="Gameplay\PlayerDeathService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\TimedHealingService.cs" Link="Gameplay\TimedHealingService.cs" />
     <Compile Include="..\IslandRpg\Gameplay\MeleeCombatService.cs" Link="Gameplay\MeleeCombatService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\CombatResolver.cs" Link="Gameplay\CombatResolver.cs" />
     <Compile Include="..\IslandRpg\Gameplay\HouseCatalog.cs" Link="Gameplay\HouseCatalog.cs" />
     <Compile Include="..\IslandRpg\Gameplay\DefenceBuildingCatalog.cs" Link="Gameplay\DefenceBuildingCatalog.cs" />
     <Compile Include="..\IslandRpg\Gameplay\WallCatalog.cs" Link="Gameplay\WallCatalog.cs" />

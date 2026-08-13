@@ -5,7 +5,7 @@ public static class ProtocolConstants
 {
     public const uint ReliableMagic = 0x49525047; // IRPG
     public const uint SnapshotMagic = 0x49525544; // IRUD
-    public const ushort CurrentVersion = 3;
+    public const ushort CurrentVersion = 4;
     public const int ReliableHeaderSize = 28;
     public const int TcpLengthPrefixSize = sizeof(uint);
     public const int MaxReliableFrameBytes = 64 * 1024;
@@ -58,6 +58,7 @@ public enum ProtocolMessageKind : byte
     WorldObjectDeltaBatch = 37,
     ContainerState = 38,
     WorldChunkRevisionBatch = 39,
+    CookingResult = 40,
 }
 
 [Flags]
@@ -142,6 +143,7 @@ public enum ActionCommandKind : byte
     PlaceConstruction = 12,
     BuildConstruction = 13,
     DemolishWorldObject = 14,
+    CookOnCampfire = 15,
 }
 
 public enum ContainerTransferDirection : byte

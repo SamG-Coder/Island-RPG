@@ -198,9 +198,9 @@ internal static class ProtocolChecks
     private static void ProtocolEnforcesInputBounds()
     {
         CheckAssert.Equal(
-            (ushort)3,
+            (ushort)4,
             ProtocolConstants.CurrentVersion,
-            "public world visual state requires protocol v3");
+            "timed authoritative cooking requires protocol v4");
         var multibyteName = string.Concat(
             Enumerable.Repeat("界", ProtocolLimits.PlayerNameBytes));
         CheckAssert.Throws<ProtocolException>(
@@ -248,6 +248,11 @@ internal static class ProtocolChecks
             new CombineItemsAction(4, 7),
             new CraftRecipeAction("reinforced-fishing-net"),
             new ConsumeItemAction(11),
+            new CookOnCampfireAction(
+                new WorldObjectReference(
+                    Guid.Parse("77777777-0000-0000-0000-000000000001"),
+                    1, -2, 0, 4, 9),
+                6),
         ];
 
         for (var index = 0; index < payloads.Length; index++)
@@ -282,6 +287,9 @@ internal static class ProtocolChecks
             new ActionResultMessage(
                 51, 702, commandId, false, CommandRejectionCode.OutOfOrder,
                 "expected actor revision 13", 13, 32),
+            new CookingResultMessage(
+                52, 703, commandId, "raw_minnows", "cooked_minnows",
+                false, false, 14, 33),
         ];
         foreach (var expected in results)
         {
@@ -488,6 +496,7 @@ internal static class ProtocolChecks
             new AddCampfireFuelAction(objectReference, 9),
             new TakeCampfireFuelAction(objectReference),
             new LightCampfireAction(objectReference),
+            new CookOnCampfireAction(objectReference, 5),
             new PlaceConstructionAction(
                 "wooden_wall", 11, 22.75f, -3.5f, 0, 3, 73),
             new BuildConstructionAction(objectReference),

@@ -101,6 +101,13 @@ public sealed record LightCampfireAction(
     public ActionCommandKind Kind => ActionCommandKind.LightCampfire;
 }
 
+public sealed record CookOnCampfireAction(
+    WorldObjectReference Campfire,
+    int InventorySlot) : IActionCommandPayload
+{
+    public ActionCommandKind Kind => ActionCommandKind.CookOnCampfire;
+}
+
 public sealed record PlaceConstructionAction(
     string DefinitionId,
     int InventorySlot,
@@ -155,6 +162,24 @@ public sealed record ActionResultMessage(
     uint InventoryRevision) : IProtocolMessage
 {
     public ProtocolMessageKind Kind => ProtocolMessageKind.ActionResult;
+}
+
+/// <summary>
+/// Private authoritative completion of a timed campfire cooking operation.
+/// The accepting ActionResult begins presentation; this message ends it.
+/// </summary>
+public sealed record CookingResultMessage(
+    ulong Sequence,
+    ulong Tick,
+    Guid CommandId,
+    string RawItemId,
+    string ResultItemId,
+    bool Burnt,
+    bool Interrupted,
+    uint ActorRevision,
+    uint InventoryRevision) : IProtocolMessage
+{
+    public ProtocolMessageKind Kind => ProtocolMessageKind.CookingResult;
 }
 
 /// <summary>

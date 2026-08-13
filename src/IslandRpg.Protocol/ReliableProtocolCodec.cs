@@ -187,6 +187,9 @@ public static class ReliableProtocolCodec
             case ActionResultMessage value:
                 WriteActionResult(writer, value);
                 break;
+            case CookingResultMessage value:
+                WriteCookingResult(writer, value);
+                break;
             case PlayerStateMessage value:
                 WritePlayerState(writer, value);
                 break;
@@ -264,6 +267,8 @@ public static class ReliableProtocolCodec
                 sequence, tick, ReadSnapshotMetadata(ref reader), ReadEntities(ref reader, ProtocolLimits.MaxSnapshotEntities)),
             ProtocolMessageKind.ActionCommand => ReadActionCommand(sequence, tick, ref reader),
             ProtocolMessageKind.ActionResult => ReadActionResult(sequence, tick, ref reader),
+            ProtocolMessageKind.CookingResult =>
+                ReadCookingResult(sequence, tick, ref reader),
             ProtocolMessageKind.PlayerState => ReadPlayerState(sequence, tick, ref reader),
             ProtocolMessageKind.WorldObjectState => new WorldObjectStateMessage(
                 sequence, tick, ReadWorldObjectState(ref reader)),
@@ -355,6 +360,12 @@ public static class ReliableProtocolCodec
                 writer.WriteByte((byte)ActionCommandKind.LightCampfire);
                 WriteWorldObjectReference(writer, action.Campfire);
                 break;
+            case CookOnCampfireAction action:
+                writer.WriteByte((byte)ActionCommandKind.CookOnCampfire);
+                WriteWorldObjectReference(writer, action.Campfire);
+                WriteInventorySlot(
+                    writer, action.InventorySlot, nameof(action.InventorySlot));
+                break;
             case PlaceConstructionAction action:
                 EnsureIdentifier(action.DefinitionId, nameof(action.DefinitionId));
                 EnsureConstructionRotation(action.Rotation);
@@ -435,6 +446,9 @@ public static class ReliableProtocolCodec
                 ReadWorldObjectReference(ref reader)),
             ActionCommandKind.LightCampfire => new LightCampfireAction(
                 ReadWorldObjectReference(ref reader)),
+            ActionCommandKind.CookOnCampfire => new CookOnCampfireAction(
+                ReadWorldObjectReference(ref reader),
+                ReadInventorySlot(ref reader, "InventorySlot")),
             ActionCommandKind.PlaceConstruction => ReadPlaceConstruction(
                 ref reader),
             ActionCommandKind.BuildConstruction => new BuildConstructionAction(
@@ -945,6 +959,47 @@ public static class ReliableProtocolCodec
             detail,
             actorRevision,
             inventoryRevision);
+    }
+
+    private static void WriteCookingResult(
+        WireWriter writer, CookingResultMessage value)
+    {
+        EnsureCommandId(value.CommandId);
+        EnsureIdentifier(value.RawItemId, nameof(value.RawItemId));
+        EnsureIdentifier(value.ResultItemId, nameof(value.ResultItemId));
+        if (value.Burnt && value.Interrupted)
+            throw new ProtocolException(
+                "Interrupted cooking cannot also be burnt.");
+        writer.WriteGuid(value.CommandId);
+        writer.WriteString(
+            value.RawItemId, ProtocolLimits.ItemIdBytes,
+            nameof(value.RawItemId));
+        writer.WriteString(
+            value.ResultItemId, ProtocolLimits.ItemIdBytes,
+            nameof(value.ResultItemId));
+        writer.WriteBoolean(value.Burnt);
+        writer.WriteBoolean(value.Interrupted);
+        writer.WriteUInt32(value.ActorRevision);
+        writer.WriteUInt32(value.InventoryRevision);
+    }
+
+    private static CookingResultMessage ReadCookingResult(
+        ulong sequence, ulong tick, ref WireReader reader)
+    {
+        var commandId = reader.ReadGuid();
+        EnsureCommandId(commandId);
+        var raw = ReadIdentifier(
+            ref reader, ProtocolLimits.ItemIdBytes, "RawItemId");
+        var result = ReadIdentifier(
+            ref reader, ProtocolLimits.ItemIdBytes, "ResultItemId");
+        var burnt = reader.ReadBoolean();
+        var interrupted = reader.ReadBoolean();
+        if (burnt && interrupted)
+            throw new ProtocolException(
+                "Interrupted cooking cannot also be burnt.");
+        return new CookingResultMessage(
+            sequence, tick, commandId, raw, result, burnt, interrupted,
+            reader.ReadUInt32(), reader.ReadUInt32());
     }
 
     private static void WritePlayerState(WireWriter writer, PlayerStateMessage value)

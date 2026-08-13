@@ -54,6 +54,7 @@ public sealed class DedicatedServer : IAsyncDisposable
             sessionId: new SessionId(options.WorldId),
             navigation: new ProceduralSurfaceNavigationQuery(options.WorldSeed));
         _session.WorldTransactionCommitted += ApplyWorldTransactionToBootstrap;
+        _session.CookingCompleted += BroadcastCookingCompletion;
         if (!string.IsNullOrWhiteSpace(options.SaveRoot))
         {
             _checkpointStore = new ServerCheckpointStore(options.SaveRoot);
@@ -659,6 +660,10 @@ public sealed class DedicatedServer : IAsyncDisposable
             IntentStatus.InventoryFull or
             IntentStatus.CraftingLocked or
             IntentStatus.AlreadyFull => CommandRejectionCode.Impossible,
+        IntentStatus.AlreadyCooking or
+            IntentStatus.NotCookable or
+            IntentStatus.CookingLocked or
+            IntentStatus.InvalidCampfireState => CommandRejectionCode.Impossible,
         IntentStatus.QueueFull => CommandRejectionCode.ServerBusy,
         _ => CommandRejectionCode.Invalid
     };
@@ -720,6 +725,73 @@ public sealed class DedicatedServer : IAsyncDisposable
                 slot.Slot,
                 slot.ItemId ?? string.Empty,
                 slot.Quantity)).ToArray());
+
+    private void BroadcastCookingCompletion(CookingCompletionSnapshot value)
+    {
+        var tick = checked((ulong)CurrentTick);
+        foreach (var connection in _clients.Values)
+        {
+            if (!connection.Authenticated ||
+                connection.PlayerId != value.PlayerId.Value)
+                continue;
+            if (!connection.TryQueueSequenced(sequence =>
+                    ToPlayerStateMessage(
+                        sequence,
+                        tick,
+                        value.PlayerId.Value,
+                        connection.PlayerEntityId,
+                        value.Gameplay,
+                        PlayerStateFlags.Baseline |
+                        PlayerStateFlags.Actor |
+                        PlayerStateFlags.Inventory,
+                        0,
+                        0)) ||
+                !connection.TryQueueSequenced(sequence =>
+                    new CookingResultMessage(
+                        sequence,
+                        tick,
+                        value.CommandId,
+                        value.RawItemId,
+                        value.ResultItemId,
+                        value.Burnt,
+                        value.Interrupted,
+                        value.ActorRevision,
+                        value.InventoryRevision)))
+                connection.Stop();
+        }
+
+        if (WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
+                1, tick, value.Transaction) is not null)
+            Broadcast((_, sequence) =>
+                WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
+                    sequence, tick, value.Transaction)!);
+    }
+
+    private static PlayerStateMessage ToPlayerStateMessage(
+        ulong sequence,
+        ulong tick,
+        Guid playerId,
+        ulong playerEntityId,
+        PlayerGameplaySnapshot gameplay,
+        PlayerStateFlags flags,
+        uint baselineActorRevision,
+        uint baselineInventoryRevision) => new(
+        sequence,
+        tick,
+        playerId,
+        playerEntityId,
+        flags,
+        baselineActorRevision,
+        baselineInventoryRevision,
+        gameplay.ActorRevision,
+        gameplay.Inventory.Revision,
+        gameplay.Health,
+        gameplay.Hunger,
+        gameplay.WellFedSeconds,
+        gameplay.CraftingExperience,
+        gameplay.CookingExperience,
+        gameplay.Inventory.Slots.Select(slot => new InventorySlotState(
+            slot.Slot, slot.ItemId ?? string.Empty, slot.Quantity)).ToArray());
 
     internal Task DisconnectAsync(ClientConnection connection, AuthenticatedPlayer player) =>
         _session.EnqueueDisconnectAsync(new DisconnectRequest(

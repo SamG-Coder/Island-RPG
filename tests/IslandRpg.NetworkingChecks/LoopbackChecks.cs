@@ -33,6 +33,9 @@ internal static class LoopbackChecks
         checks.Add(
             "real loopback world actions split public and private state",
             ReplicatesWorldActionsWithoutPrivateLeaksAsync);
+        checks.Add(
+            "real loopback campfire cooking completes authoritatively",
+            CompletesCampfireCookingAuthoritativelyAsync);
     }
 
     private static async ValueTask ReplicatesTwoClientsAsync(CancellationToken cancellationToken)
@@ -369,6 +372,63 @@ internal static class LoopbackChecks
                 ? slot.Quantity
                 : 0);
 
+    private static async ValueTask CompletesCampfireCookingAuthoritativelyAsync(
+        CancellationToken cancellationToken)
+    {
+        var campfireId = Guid.Parse(
+            "81000000-0000-0000-0000-000000000009");
+        await using var fixture = await LoopbackFixture.StartAsync(
+            cancellationToken,
+            [new WorldObjectSeed(
+                campfireId,
+                "campfire",
+                new(.5f, 0),
+                FuelItemId: "logs",
+                LitUntilGameSeconds: 300)],
+            [new("raw_minnows")]);
+        await using var client = new NetworkGameClient(TimeSpan.Zero);
+        await fixture.ConnectAsync(client, "Cook", cancellationToken);
+        await EventuallyAsync(
+            () => client.State.Gameplay is not null &&
+                  client.State.WorldObjects.ContainsKey(campfireId),
+            "cooking bootstrap state did not arrive",
+            cancellationToken);
+        var slot = client.State.Gameplay!.InventorySlots.Single(
+            value => value.ItemId == "raw_minnows").Slot;
+        var fire = client.State.WorldObjects[campfireId];
+        var completion = new TaskCompletionSource<CookingResultMessage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        client.CookingCompleted += (_, args) =>
+            completion.TrySetResult(args.Result);
+        var accepted = await SendAndAwaitActionAsync(
+            client,
+            new CookOnCampfireAction(
+                new WorldObjectReference(
+                    fire.ObjectId,
+                    fire.ChunkX,
+                    fire.ChunkY,
+                    fire.WorldLevel,
+                    fire.ObjectRevision,
+                    fire.ChunkRevision),
+                slot),
+            cancellationToken);
+        CheckAssert.True(accepted.Accepted,
+            $"authoritative cooking start failed: {accepted.Detail}");
+        var result = await completion.Task.WaitAsync(Timeout, cancellationToken);
+        await EventuallyAsync(
+            () => client.State.Gameplay?.InventoryRevision ==
+                  result.InventoryRevision,
+            "the authoritative cooked inventory did not arrive",
+            cancellationToken);
+        CheckAssert.Equal(0,
+            CountItem(client.State.Gameplay!, "raw_minnows"),
+            "the reserved raw item must not be duplicated");
+        CheckAssert.Equal(1,
+            CountItem(client.State.Gameplay!, "cooked_minnows") +
+            CountItem(client.State.Gameplay!, "burnt_minnows"),
+            "the server must produce exactly one cooking output");
+    }
+
     private static async Task<ActionResultMessage> SendAndAwaitActionAsync(
         NetworkGameClient client,
         IActionCommandPayload payload,
@@ -505,7 +565,8 @@ internal static class LoopbackChecks
 
         public static async Task<LoopbackFixture> StartAsync(
             CancellationToken cancellationToken,
-            IReadOnlyList<WorldObjectSeed>? startingWorldObjects = null)
+            IReadOnlyList<WorldObjectSeed>? startingWorldObjects = null,
+            IReadOnlyList<InitialInventoryItem>? extraInventory = null)
         {
             var worldId = Guid.NewGuid();
             var server = new DedicatedServer(new ServerOptions(
@@ -518,10 +579,11 @@ internal static class LoopbackChecks
                 8)
             {
                 StartingInventory =
-                [
-                    new("plant_fibres", 3),
-                    new("wild_berries", 1)
-                ],
+                    new InitialInventoryItem[]
+                    {
+                        new("plant_fibres", 3),
+                        new("wild_berries", 1)
+                    }.Concat(extraInventory ?? []).ToArray(),
                 StartingHunger = 80f,
                 StartingWorldObjects = startingWorldObjects ??
                     Array.Empty<WorldObjectSeed>()

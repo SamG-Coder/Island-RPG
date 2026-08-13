@@ -25,6 +25,8 @@ internal static class SessionWorldTransactionChecks
             CheckpointRejectsInvalidGameplay);
         checks.Add("session checkpoint preserves command idempotency receipts",
             CheckpointPreservesCommandReceipts);
+        checks.Add("session campfire cooking is timed atomic and durable",
+            CampfireCookingIsTimedAtomicAndDurable);
     }
 
     private static void PickupCommitsOnceAndReplays()
@@ -475,6 +477,74 @@ internal static class SessionWorldTransactionChecks
             sessionId: new SessionId(Guid.Parse(
                 "89000000-0000-0000-0000-000000000001")),
             worldTransactions: aggregate);
+
+    private static void CampfireCookingIsTimedAtomicAndDurable()
+    {
+        var session = NewSession();
+        var campfire = session.SeedWorldObject(new(
+            Guid.Parse("8c000000-0000-0000-0000-000000000001"),
+            "campfire", new Vector2(1, 0),
+            FuelItemId: "logs", LitUntilGameSeconds: 300));
+        var connection = ClientConnectionId.New();
+        var joined = Join(session, connection, "Cook", Vector2.Zero,
+            [new InitialInventoryItem("raw_minnows")]);
+        var rawSlot = joined.Gameplay.Inventory.Slots.Single(
+            value => value.ItemId == "raw_minnows").Slot;
+        var commandId = Guid.Parse(
+            "8d000000-0000-0000-0000-000000000001");
+        var intent = new CookOnCampfireIntent(
+                commandId,
+                joined.Gameplay.Inventory.Revision,
+                joined.Gameplay.ActorRevision,
+                Handle(campfire,
+                    session.CaptureWorldChunkRevision(campfire.Chunk)),
+                rawSlot);
+        var start = Send(session, connection, joined, 1, intent);
+        CheckAssert.True(start.Accepted,
+            "a nearby lit fire must accept a level-one raw fish");
+        CheckAssert.Equal(0, Count(start.Gameplay, "raw_minnows"),
+            "acceptance must atomically reserve the raw item");
+        CheckAssert.Equal(1, session.CaptureCheckpoint().CookingJobs.Length,
+            "the active timed job must be durable");
+        var replay = Send(session, connection, joined, 2, intent);
+        CheckAssert.True(replay.Accepted && replay.Duplicate,
+            "retrying the same cook command must replay without reserving twice");
+        CheckAssert.Equal(1, session.CaptureCheckpoint().CookingJobs.Length,
+            "a duplicate command must not create a second cooking job");
+        var conflict = Send(session, connection, joined, 3,
+            intent with { InventorySlot = rawSlot + 1 });
+        CheckAssert.Equal(IntentStatus.CommandIdConflict, conflict.Status,
+            "reusing a cook command id for another payload must conflict");
+        CheckAssert.Equal(0, Count(conflict.Gameplay, "raw_minnows"),
+            "replay and conflict handling must not restore or consume another item");
+
+        var checkpoint = session.CaptureCheckpoint();
+        var invalidOutcome = NewSession();
+        CheckAssert.Throws<InvalidDataException>(
+            () => invalidOutcome.RestoreCheckpoint(checkpoint with
+            {
+                CookingJobs = [checkpoint.CookingJobs[0] with
+                {
+                    Experience = checkpoint.CookingJobs[0].Experience + 1
+                }]
+            }),
+            "restore must reject cooking outcomes that do not match the deterministic roll");
+        var restored = NewSession();
+        restored.RestoreCheckpoint(checkpoint);
+        for (var tick = checkpoint.Tick;
+             tick < checkpoint.CookingJobs[0].CompletesAtTick;
+             tick++)
+            restored.Tick();
+        var completed = Actor(restored, joined.Identity.PlayerId).Gameplay;
+        CheckAssert.Equal(1,
+            Count(completed, "cooked_minnows") +
+            Count(completed, "burnt_minnows"),
+            "restored authority must complete exactly one deterministic output");
+        CheckAssert.Equal(0, restored.CaptureCheckpoint().CookingJobs.Length,
+            "a completed job must leave durable active state");
+        CheckAssert.True(completed.CookingExperience >= 0,
+            "only the authority may award cooking experience");
+    }
 
     private static JoinResult Join(AuthoritativeWorldSession session,
         ClientConnectionId connection, string name, Vector2 position,

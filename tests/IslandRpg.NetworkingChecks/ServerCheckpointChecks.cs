@@ -1,3 +1,4 @@
+using IslandRpg.Gameplay;
 using IslandRpg.Server.Persistence;
 using IslandRpg.Simulation;
 
@@ -180,7 +181,60 @@ internal static class ServerCheckpointChecks
                 "0.3.0",
                 "base",
                 8);
-            var source = CreateCheckpoint(revision: 7);
+            var original = CreateCheckpoint(revision: 7);
+            var cookingCommandId = Guid.Parse(
+                "70000000-0000-0000-0000-000000000001");
+            var cookingActorId = original.Actors[0].ActorId;
+            var outcome = CookingSkill.Roll(
+                ItemIds.RawMinnows,
+                CookingSkill.LevelForExperience(
+                    original.Actors[0].CookingExperience),
+                AuthoritativeWorldSession.DeterministicCookingRoll(
+                    original.SessionId,
+                    cookingActorId,
+                    cookingCommandId));
+            var campfire = new ServerWorldObjectCheckpoint(
+                Guid.Parse("52000000-0000-0000-0000-000000000001"),
+                ItemIds.Campfire,
+                6,
+                9,
+                0,
+                0,
+                0,
+                1,
+                1,
+                0,
+                0,
+                0,
+                null,
+                null,
+                false,
+                ItemIds.Logs,
+                300,
+                1,
+                WorldGateAccessState.None,
+                false,
+                []);
+            var source = original with
+            {
+                WorldObjects = [.. original.WorldObjects, campfire],
+                CookingJobs = [new ServerCookingJobCheckpoint(
+                    cookingCommandId,
+                    cookingActorId,
+                    campfire.ObjectId,
+                    campfire.ChunkX,
+                    campfire.ChunkY,
+                    campfire.WorldLevel,
+                    campfire.X,
+                    campfire.Y,
+                    0,
+                    ItemIds.RawMinnows,
+                    outcome.ItemId,
+                    outcome.Experience,
+                    outcome.Burnt,
+                    Guid.Parse("71000000-0000-0000-0000-000000000001"),
+                    261)]
+            };
 
             var simulation = ServerCheckpointMapper.ToSimulation(source, options);
             var roundTrip = ServerCheckpointMapper.ToDurable(
@@ -204,6 +258,8 @@ internal static class ServerCheckpointChecks
             CheckAssert.Equal(source.Actors[0].CommandReceipts[0],
                 roundTrip.Actors[0].CommandReceipts[0],
                 "mapping must preserve durable gameplay command receipts");
+            CheckAssert.Equal(source.CookingJobs![0], roundTrip.CookingJobs![0],
+                "mapping must preserve a deterministic active cooking job");
         });
     }
 

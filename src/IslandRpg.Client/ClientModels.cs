@@ -174,6 +174,12 @@ public sealed class NetworkCommandResultEventArgs(CommandResultMessage result) :
     public CommandResultMessage Result { get; } = result;
 }
 
+public sealed class NetworkCookingResultEventArgs(
+    CookingResultMessage result) : EventArgs
+{
+    public CookingResultMessage Result { get; } = result;
+}
+
 public sealed class NetworkPlayerEventArgs(NetworkPlayerPresence player) : EventArgs
 {
     public NetworkPlayerPresence Player { get; } = player;

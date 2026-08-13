@@ -95,6 +95,11 @@ public static class GameplayIntentFingerprint
                 writer.Tag(14);
                 writer.Handle(value.Object);
                 break;
+            case CookOnCampfireIntent value:
+                writer.Tag(15);
+                writer.Handle(value.Campfire);
+                writer.Int32(value.InventorySlot);
+                break;
             default:
                 throw new NotSupportedException(
                     $"Gameplay intent type '{intent.GetType().Name}' has no canonical fingerprint.");

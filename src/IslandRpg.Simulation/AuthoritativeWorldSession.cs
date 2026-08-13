@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Numerics;
 using System.Security.Cryptography;
@@ -25,6 +26,7 @@ public sealed class AuthoritativeWorldSession
     private readonly Dictionary<PlayerId, ActorId> _actorsByPlayer = [];
     private readonly Dictionary<ClientConnectionId, PlayerId> _playersByConnection = [];
     private readonly Queue<ChatMessageSnapshot> _chatHistory = [];
+    private readonly Dictionary<ActorId, ActiveCookingJob> _cookingJobs = [];
     private SessionSnapshot _latestSnapshot;
     private int? _ownerThreadId;
     private int _executing;
@@ -86,6 +88,8 @@ public sealed class AuthoritativeWorldSession
     /// committed. Observers must be fast and must not mutate the session.
     /// </summary>
     public event Action<WorldTransactionResult>? WorldTransactionCommitted;
+
+    public event Action<CookingCompletionSnapshot>? CookingCompleted;
 
     public Task<JoinResult> EnqueueJoinAsync(JoinRequest request)
     {
@@ -193,7 +197,9 @@ public sealed class AuthoritativeWorldSession
         {
             var processed = DrainCore(_limits.MaximumCommandsPerTick);
             AdvanceActors();
-            if (!Clock.AdvanceOneTick())
+            var publish = Clock.AdvanceOneTick();
+            AdvanceCookingJobs();
+            if (!publish)
             {
                 return new SessionTickResult(processed, null);
             }
@@ -297,12 +303,17 @@ public sealed class AuthoritativeWorldSession
                     ImmutableArray.CreateRange(value.ReconnectTokenHash),
                     value.CaptureReceipts()))
                 .ToImmutableArray();
+            var cooking = _cookingJobs.Values
+                .OrderBy(static value => value.ActorId.Value)
+                .Select(static value => value.ToCheckpoint())
+                .ToImmutableArray();
             return new(
                 Id,
                 Clock.Tick,
                 Clock.SnapshotSequence,
                 actors,
-                _worldTransactions.CaptureCheckpoint());
+                _worldTransactions.CaptureCheckpoint(),
+                cooking);
         }
         finally
         {
@@ -323,7 +334,8 @@ public sealed class AuthoritativeWorldSession
             if (checkpoint.SessionId != Id || Clock.Tick != 0 ||
                 Clock.SnapshotSequence != 0 || _actors.Count != 0 ||
                 _actorsByPlayer.Count != 0 || _playersByConnection.Count != 0 ||
-                _chatHistory.Count != 0 || _nextChatMessageId != 0)
+                _chatHistory.Count != 0 || _nextChatMessageId != 0 ||
+                _cookingJobs.Count != 0)
             {
                 throw new InvalidOperationException(
                     "A checkpoint can only restore a pristine matching session.");
@@ -393,12 +405,68 @@ public sealed class AuthoritativeWorldSession
                     value.Identity.ActorId);
             }
 
+            var cooking = new Dictionary<ActorId, ActiveCookingJob>();
+            var persistedCooking = checkpoint.CookingJobs.IsDefault
+                ? ImmutableArray<AuthoritativeCookingJobCheckpoint>.Empty
+                : checkpoint.CookingJobs;
+            foreach (var value in persistedCooking)
+            {
+                actors.TryGetValue(value.ActorId, out var cookingActor);
+                var expected = cookingActor is null ||
+                               !CookingSkill.TryProfile(value.RawItemId, out _)
+                    ? default(CookingResult?)
+                    : ResolveCookingOutcome(
+                        checkpoint.SessionId.Value,
+                        value.ActorId.Value,
+                        value.CommandId,
+                        value.RawItemId,
+                        cookingActor.Gameplay.CookingExperience);
+                if (value.CommandId == Guid.Empty ||
+                    value.ActorId.Value == Guid.Empty ||
+                    value.CampfireId == Guid.Empty ||
+                    value.DropObjectId == Guid.Empty ||
+                    cookingActor is null ||
+                    !float.IsFinite(value.CampfirePosition.X) ||
+                    !float.IsFinite(value.CampfirePosition.Y) ||
+                    value.PreferredInventorySlot is < 0 or >=
+                        PlayerInventory.Capacity ||
+                    expected is null ||
+                    value.ResultItemId != expected.Value.ItemId ||
+                    value.Experience != expected.Value.Experience ||
+                    value.Burnt != expected.Value.Burnt ||
+                    value.CompletesAtTick <= checkpoint.Tick ||
+                    !cooking.TryAdd(value.ActorId,
+                        ActiveCookingJob.FromCheckpoint(value)))
+                {
+                    throw new InvalidDataException(
+                        "The checkpoint contains an invalid cooking job.");
+                }
+            }
+
+            if (checkpoint.World.Objects.IsDefault)
+                throw new InvalidDataException(
+                    "The checkpoint world state is incomplete.");
+            var persistedObjects = checkpoint.World.Objects
+                .ToDictionary(static value => value.Object.ObjectId);
+            foreach (var job in cooking.Values)
+            {
+                if (!persistedObjects.TryGetValue(
+                        job.CampfireId, out var fireEntry) ||
+                    fireEntry.Object.Chunk != job.CampfireChunk ||
+                    fireEntry.Object.Position != job.CampfirePosition ||
+                    fireEntry.Object.DefinitionId != ItemIds.Campfire ||
+                    persistedObjects.ContainsKey(job.DropObjectId))
+                    throw new InvalidDataException(
+                        "A cooking job does not reference its persisted campfire.");
+            }
             // Both restorers validate completely before their first commit.
             _worldTransactions.RestoreCheckpoint(checkpoint.World);
             Clock.Restore(checkpoint.Tick, checkpoint.SnapshotSequence);
             foreach (var value in actors) _actors.Add(value.Key, value.Value);
             foreach (var value in actorsByPlayer)
                 _actorsByPlayer.Add(value.Key, value.Value);
+            foreach (var value in cooking)
+                _cookingJobs.Add(value.Key, value.Value);
             Volatile.Write(ref _latestSnapshot,
                 CaptureSnapshotCore(Clock.SnapshotSequence));
         }
@@ -897,6 +965,8 @@ public sealed class AuthoritativeWorldSession
                     context,
                     light.Campfire,
                     gameSeconds)),
+            CookOnCampfireIntent cook => BeginCooking(
+                actor, input, context, cook, gameSeconds),
             PlaceConstructionIntent place => _worldTransactions.Execute(
                 input,
                 new PlaceConstructionTransaction(
@@ -1006,8 +1076,170 @@ public sealed class AuthoritativeWorldSession
                 IntentStatus.NotConstructionSite,
             WorldTransactionStatus.NoDemolitionRefund =>
                 IntentStatus.NoDemolitionRefund,
+            WorldTransactionStatus.NotCookable => IntentStatus.NotCookable,
+            WorldTransactionStatus.CookingLocked => IntentStatus.CookingLocked,
+            WorldTransactionStatus.AlreadyCooking => IntentStatus.AlreadyCooking,
             _ => throw new ArgumentOutOfRangeException(nameof(status))
         };
+
+    private WorldTransactionResult BeginCooking(
+        MutableActor actor,
+        WorldTransactionActorInput input,
+        WorldTransactionContext context,
+        CookOnCampfireIntent intent,
+        double gameSeconds)
+    {
+        if (_cookingJobs.ContainsKey(actor.Identity.ActorId))
+            return new WorldTransactionResult(
+                context.CommandId,
+                WorldTransactionStatus.AlreadyCooking,
+                actor.Gameplay.ActorRevision,
+                actor.Gameplay.InventoryRevision,
+                [], [], actor.Gameplay.ToSnapshot(), null,
+                "You are already cooking something.");
+
+        var raw = (uint)intent.InventorySlot <
+                  (uint)actor.Gameplay.Inventory.Capacity
+            ? actor.Gameplay.Inventory[intent.InventorySlot]?.ItemId
+            : null;
+        var transaction = _worldTransactions.Execute(
+            input,
+            new BeginCampfireCookingTransaction(
+                context,
+                intent.Campfire,
+                intent.InventorySlot,
+                gameSeconds));
+        if (!transaction.Accepted || raw is null) return transaction;
+
+        var outcome = ResolveCookingOutcome(
+            Id.Value,
+            actor.Identity.ActorId.Value,
+            intent.CommandId,
+            raw,
+            actor.Gameplay.CookingExperience);
+        var fire = _worldTransactions.CaptureObject(
+            intent.Campfire.ObjectId);
+        var duration = CookingSkill.PlacementAnimationSeconds +
+                       CookingSkill.CookingSeconds;
+        var durationTicks = checked((long)Math.Ceiling(
+            duration * SimulationTiming.TicksPerSecond));
+        _cookingJobs.Add(actor.Identity.ActorId, new ActiveCookingJob(
+            intent.CommandId,
+            actor.Identity.ActorId,
+            fire.ObjectId,
+            fire.Chunk,
+            fire.Position,
+            intent.InventorySlot,
+            raw,
+            outcome.ItemId,
+            outcome.Experience,
+            outcome.Burnt,
+            DeterministicCookingDropId(
+                Id.Value, actor.Identity.ActorId.Value, intent.CommandId),
+            checked(Clock.Tick + durationTicks)));
+        return transaction;
+    }
+
+    private void AdvanceCookingJobs()
+    {
+        if (_cookingJobs.Count == 0) return;
+        foreach (var job in _cookingJobs.Values
+                     .Where(job => job.CompletesAtTick <= Clock.Tick)
+                     .OrderBy(static job => job.ActorId.Value)
+                     .ToArray())
+        {
+            if (!_actors.TryGetValue(job.ActorId, out var actor))
+            {
+                throw new InvalidOperationException(
+                    "A durable cooking job has no authoritative actor.");
+            }
+            var input = new WorldTransactionActorInput(
+                actor.Identity.ActorId,
+                actor.Position,
+                actor.WorldLevel,
+                actor.Gameplay.ToSnapshot());
+            var transaction = _worldTransactions.CompleteCooking(
+                input,
+                new CompleteCampfireCookingTransaction(
+                    job.CommandId,
+                    job.CampfireId,
+                    job.CampfireChunk,
+                    job.CampfirePosition,
+                    job.PreferredInventorySlot,
+                    job.RawItemId,
+                    job.ResultItemId,
+                    job.Experience,
+                    job.Burnt,
+                    job.DropObjectId,
+                    Clock.Current.ElapsedSeconds));
+            if (!transaction.Accepted || transaction.Gameplay is not { } gameplay)
+            {
+                throw new InvalidOperationException(
+                    $"A validated cooking job could not complete: {transaction.Status}.");
+            }
+            actor.Gameplay.ReplaceWith(gameplay);
+            _cookingJobs.Remove(job.ActorId);
+            if (!transaction.ObjectDeltas.IsDefaultOrEmpty ||
+                !transaction.ChunkDeltas.IsDefaultOrEmpty)
+                WorldTransactionCommitted?.Invoke(transaction);
+            var interrupted = transaction.Detail == "cooking_interrupted";
+            CookingCompleted?.Invoke(new CookingCompletionSnapshot(
+                job.CommandId,
+                actor.Identity.PlayerId,
+                job.RawItemId,
+                interrupted ? job.RawItemId : job.ResultItemId,
+                !interrupted && job.Burnt,
+                interrupted,
+                gameplay.ActorRevision,
+                gameplay.Inventory.Revision)
+            {
+                Gameplay = gameplay,
+                Transaction = transaction
+            });
+        }
+    }
+
+    private static CookingResult ResolveCookingOutcome(
+        Guid sessionId,
+        Guid actorId,
+        Guid commandId,
+        string rawItemId,
+        int cookingExperience)
+    {
+        var level = CookingSkill.LevelForExperience(cookingExperience);
+        var roll = DeterministicCookingRoll(sessionId, actorId, commandId);
+        return ActorActionService.ResolveCooking(rawItemId, level, roll);
+    }
+
+    internal static float DeterministicCookingRoll(
+        Guid sessionId, Guid actorId, Guid commandId)
+    {
+        Span<byte> input = stackalloc byte[48];
+        sessionId.TryWriteBytes(input[..16], bigEndian: true, out _);
+        actorId.TryWriteBytes(
+            input.Slice(16, 16), bigEndian: true, out _);
+        commandId.TryWriteBytes(
+            input.Slice(32, 16), bigEndian: true, out _);
+        Span<byte> digest = stackalloc byte[32];
+        SHA256.HashData(input, digest);
+        return BinaryPrimitives.ReadUInt32BigEndian(digest) /
+               ((float)uint.MaxValue + 1f);
+    }
+
+    internal static Guid DeterministicCookingDropId(
+        Guid sessionId, Guid actorId, Guid commandId)
+    {
+        Span<byte> input = stackalloc byte[49];
+        sessionId.TryWriteBytes(input[..16], bigEndian: true, out _);
+        actorId.TryWriteBytes(
+            input.Slice(16, 16), bigEndian: true, out _);
+        commandId.TryWriteBytes(
+            input.Slice(32, 16), bigEndian: true, out _);
+        input[48] = 0xC0;
+        Span<byte> digest = stackalloc byte[32];
+        SHA256.HashData(input, digest);
+        return new Guid(digest[..16], bigEndian: true);
+    }
 
     private static IntentResult ProcessSwapInventorySlots(
         MutableActor actor,
@@ -1591,6 +1823,50 @@ public sealed class AuthoritativeWorldSession
     private sealed record IntentOperation(
         ActorCommand Command,
         TaskCompletionSource<IntentResult>? Completion) : QueuedOperation;
+
+    private sealed record ActiveCookingJob(
+        Guid CommandId,
+        ActorId ActorId,
+        Guid CampfireId,
+        WorldChunkKey CampfireChunk,
+        Vector2 CampfirePosition,
+        int PreferredInventorySlot,
+        string RawItemId,
+        string ResultItemId,
+        int Experience,
+        bool Burnt,
+        Guid DropObjectId,
+        long CompletesAtTick)
+    {
+        public AuthoritativeCookingJobCheckpoint ToCheckpoint() => new(
+            CommandId,
+            ActorId,
+            CampfireId,
+            CampfireChunk,
+            CampfirePosition,
+            PreferredInventorySlot,
+            RawItemId,
+            ResultItemId,
+            Experience,
+            Burnt,
+            DropObjectId,
+            CompletesAtTick);
+
+        public static ActiveCookingJob FromCheckpoint(
+            AuthoritativeCookingJobCheckpoint value) => new(
+            value.CommandId,
+            value.ActorId,
+            value.CampfireId,
+            value.CampfireChunk,
+            value.CampfirePosition,
+            value.PreferredInventorySlot,
+            value.RawItemId,
+            value.ResultItemId,
+            value.Experience,
+            value.Burnt,
+            value.DropObjectId,
+            value.CompletesAtTick);
+    }
 
     private sealed class MutableActor
     {

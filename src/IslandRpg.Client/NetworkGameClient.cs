@@ -48,6 +48,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
     public event EventHandler<NetworkSnapshotEventArgs>? SnapshotReceived;
     public event EventHandler<NetworkPlayerStateEventArgs>? PlayerStateChanged;
     public event EventHandler<NetworkActionResultEventArgs>? ActionCompleted;
+    public event EventHandler<NetworkCookingResultEventArgs>? CookingCompleted;
     public event EventHandler<NetworkWorldObjectsChangedEventArgs>? WorldObjectsChanged;
     public event EventHandler<NetworkContainerStateEventArgs>? ContainerStateChanged;
 
@@ -430,6 +431,11 @@ public sealed class NetworkGameClient : IAsyncDisposable
             case ActionResultMessage result:
                 UpdateTick(result.Tick);
                 Raise(ActionCompleted, new NetworkActionResultEventArgs(result));
+                break;
+            case CookingResultMessage result:
+                UpdateTick(result.Tick);
+                Raise(CookingCompleted,
+                    new NetworkCookingResultEventArgs(result));
                 break;
             case PlayerStateMessage playerState:
             {

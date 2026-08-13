@@ -21,21 +21,6 @@ internal static class ActorMovementService
 
 internal enum EntityGender { Male, Female }
 
-internal enum EntityAction
-{
-    Idle,
-    Move,
-    Attack,
-    Work,
-    Build,
-    Gather,
-    Dig,
-    Mine,
-    Fish,
-    Hurt,
-    Die
-}
-
 internal static class EntityActionLifecycle
 {
     public const int DirectionCount = 5;

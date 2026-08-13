@@ -183,6 +183,16 @@ public sealed record LightCampfireIntent(
         ExpectedInventoryRevision,
         ExpectedActorRevision);
 
+public sealed record CookOnCampfireIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Campfire,
+    int InventorySlot) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
 public sealed record PlaceConstructionIntent(
     Guid CommandId,
     uint ExpectedInventoryRevision,
@@ -335,7 +345,25 @@ public enum IntentStatus
     ConstructionLocked,
     InvalidPlacement,
     NotConstructionSite,
-    NoDemolitionRefund
+    NoDemolitionRefund,
+    AlreadyCooking,
+    NotCookable,
+    CookingLocked
+}
+
+public readonly record struct CookingCompletionSnapshot(
+    Guid CommandId,
+    PlayerId PlayerId,
+    string RawItemId,
+    string ResultItemId,
+    bool Burnt,
+    bool Interrupted,
+    uint ActorRevision,
+    uint InventoryRevision)
+{
+    public PlayerGameplaySnapshot Gameplay { get; init; }
+
+    public required WorldTransactionResult Transaction { get; init; }
 }
 
 public readonly record struct IntentResult(

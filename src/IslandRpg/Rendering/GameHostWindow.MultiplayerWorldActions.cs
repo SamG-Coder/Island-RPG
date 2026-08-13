@@ -19,6 +19,7 @@ internal sealed partial class GameHostWindow
         AddCampfireFuel,
         TakeCampfireFuel,
         LightCampfire,
+        CookOnCampfire,
         PlaceConstruction,
         BuildConstruction,
         Demolish
@@ -97,6 +98,9 @@ internal sealed partial class GameHostWindow
     private readonly Queue<PendingNetworkWorldAction>
         _networkConstructionPlacements = [];
     private Guid? _networkPlacementCommandId;
+    private Guid? _networkCookingCommandId;
+    private string? _networkCookingRawItemId;
+    private bool _networkCookingPresentationOwned;
     private ExpectedNetworkConstructionMutation?
         _networkExpectedPlacementMutation;
     private bool _networkPlacementAwaitingDelta;
@@ -178,6 +182,9 @@ internal sealed partial class GameHostWindow
                 Add("Light", NetworkWorldActionKind.LightCampfire);
                 Add("Take log", NetworkWorldActionKind.TakeCampfireFuel);
             }
+            if (state == CampfireState.Lit &&
+                TrySelectedRawCookingItem(out _, out _))
+                Add("Cook", NetworkWorldActionKind.CookOnCampfire);
         }
         else if (!PlaceableObjectCatalog.IsPlaceable(value.ItemId))
             Add("Pick up", NetworkWorldActionKind.PickUp);
@@ -206,7 +213,8 @@ internal sealed partial class GameHostWindow
             else
                 QueueNetworkObjectAction(
                     action, value,
-                    action == NetworkWorldActionKind.AddCampfireFuel
+                    action is NetworkWorldActionKind.AddCampfireFuel or
+                        NetworkWorldActionKind.CookOnCampfire
                         ? _activeInventorySlot
                         : -1);
             return true;
@@ -261,6 +269,7 @@ internal sealed partial class GameHostWindow
     private void QueueNetworkWorldAction(PendingNetworkWorldAction action)
     {
         if (_player is null) return;
+        ReleaseNetworkCookingPresentation();
         _pendingNetworkWorldAction = action;
         if (Vector2.DistanceSquared(_player.Position, action.Target) <=
             NetworkInteractionDispatchRange *
@@ -305,6 +314,14 @@ internal sealed partial class GameHostWindow
         }
         _pendingNetworkWorldAction = null;
         var commandId = Guid.NewGuid();
+        if (pending.Kind == NetworkWorldActionKind.CookOnCampfire)
+        {
+            _networkCookingCommandId = commandId;
+            var inventory = _activePlayer?.Inventory ?? [];
+            _networkCookingRawItemId = inventory.ElementAtOrDefault(
+                pending.InventorySlot);
+            _pendingNetworkCookingTarget = pending.Target;
+        }
         if (pending.Kind == NetworkWorldActionKind.BuildConstruction)
         {
             _networkBuildCommandId = commandId;
@@ -418,6 +435,8 @@ internal sealed partial class GameHostWindow
                 new TakeCampfireFuelAction(reference),
             NetworkWorldActionKind.LightCampfire =>
                 new LightCampfireAction(reference),
+            NetworkWorldActionKind.CookOnCampfire =>
+                new CookOnCampfireAction(reference, action.InventorySlot),
             NetworkWorldActionKind.BuildConstruction =>
                 new BuildConstructionAction(reference),
             NetworkWorldActionKind.Demolish =>
@@ -585,6 +604,22 @@ internal sealed partial class GameHostWindow
 
     private void HandleNetworkWorldActionResult(ActionResultMessage result)
     {
+        if (_networkCookingCommandId == result.CommandId)
+        {
+            if (result.Accepted && _player is not null &&
+                _pendingNetworkCookingTarget is { } target &&
+                _networkCookingRawItemId is { } rawItemId)
+            {
+                _player.GatherAt(target);
+                _networkCookingPresentationOwned = true;
+                _chatUi.AddMessage(
+                    $"You place the {ItemCatalog.Get(rawItemId).Name} " +
+                    "over the fire.",
+                    ChatMessageStyle.Action);
+            }
+            else
+                ClearNetworkCookingPresentation();
+        }
         if (_networkBuildCommandId == result.CommandId)
         {
             if (!result.Accepted ||
@@ -619,8 +654,27 @@ internal sealed partial class GameHostWindow
         _networkContainerTransfers.Clear();
     }
 
+    private Vector2? _pendingNetworkCookingTarget;
+
+    private void ClearNetworkCookingPresentation()
+    {
+        _networkCookingCommandId = null;
+        _networkCookingRawItemId = null;
+        _pendingNetworkCookingTarget = null;
+        ReleaseNetworkCookingPresentation();
+    }
+
+    private void ReleaseNetworkCookingPresentation()
+    {
+        if (_networkCookingPresentationOwned &&
+            _player?.Action == EntityAction.Gather)
+            _player.Stop();
+        _networkCookingPresentationOwned = false;
+    }
+
     private void ResetNetworkContainerInteraction()
     {
+        ClearNetworkCookingPresentation();
         _networkRequestedContainerId = null;
         _networkContainerTransfers.Clear();
         _networkContainerTransferCommandId = null;

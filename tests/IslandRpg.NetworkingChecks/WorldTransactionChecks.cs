@@ -27,6 +27,8 @@ internal static class WorldTransactionChecks
             AccessRangeAndLevelAreValidated);
         checks.Add("world campfire transactions use shared fire rules",
             CampfireTransactionsUseCoreRules);
+        checks.Add("world cooking cleanup refunds dead actors",
+            CookingCleanupRefundsDeadActors);
         checks.Add("world construction place build demolish is authoritative",
             ConstructionLifecycleIsAuthoritative);
     }
@@ -313,6 +315,53 @@ internal static class WorldTransactionChecks
             "failed lighting must not advance the chunk");
     }
 
+    private static void CookingCleanupRefundsDeadActors()
+    {
+        const string raw = "raw_minnows";
+        const string cooked = "cooked_minnows";
+        var actor = Actor(new ActorId(Guid.NewGuid()), [(raw, 1)]);
+        var authority = new AuthoritativeWorldTransactions();
+        var fire = authority.AddObject(new(
+            Guid.NewGuid(), Campfire, new(1, 0),
+            FuelItemId: Log, LitUntilGameSeconds: 300));
+        var begun = authority.Execute(actor,
+            new BeginCampfireCookingTransaction(
+                Context(actor),
+                Handle(fire, authority.CaptureChunkRevision(fire.Chunk)),
+                Slot(actor.Gameplay, raw),
+                GameSeconds: 100));
+        CheckAssert.True(begun.Accepted,
+            "a living actor should reserve one valid raw item");
+
+        var deadGameplay = begun.Gameplay!.Value with { Health = 0 };
+        var dead = actor with { Gameplay = deadGameplay };
+        var completed = authority.CompleteCooking(dead,
+            new CompleteCampfireCookingTransaction(
+                Guid.NewGuid(),
+                fire.ObjectId,
+                fire.Chunk,
+                fire.Position,
+                SlotOrEmpty(deadGameplay),
+                raw,
+                cooked,
+                Experience: 8,
+                Burnt: false,
+                Guid.NewGuid(),
+                GameSeconds: 101));
+
+        CheckAssert.True(completed.Accepted,
+            "death must not prevent cleanup of a reserved cooking item");
+        CheckAssert.Equal("cooking_interrupted", completed.Detail,
+            "death must interrupt rather than complete cooking");
+        CheckAssert.Equal(1, Count(completed.Gameplay!.Value, raw),
+            "the reserved raw item must be returned exactly once");
+        CheckAssert.Equal(0, Count(completed.Gameplay!.Value, cooked),
+            "a dead actor must not receive cooked output");
+        CheckAssert.Equal(deadGameplay.CookingExperience,
+            completed.Gameplay!.Value.CookingExperience,
+            "a dead actor must not gain cooking experience");
+    }
+
     private static void ConstructionLifecycleIsAuthoritative()
     {
         var actor = Actor(new ActorId(Guid.NewGuid()), [(Log, 1), (Hammer, 1)]);
@@ -414,6 +463,9 @@ internal static class WorldTransactionChecks
 
     private static int Slot(PlayerGameplaySnapshot gameplay, string itemId) =>
         gameplay.Inventory.Slots.First(value => value.ItemId == itemId).Slot;
+
+    private static int SlotOrEmpty(PlayerGameplaySnapshot gameplay) =>
+        gameplay.Inventory.Slots.First(value => value.ItemId is null).Slot;
 
     private static int Slot(WorldContainerSnapshot container, string itemId) =>
         container.Slots.First(value => value.ItemId == itemId).Slot;

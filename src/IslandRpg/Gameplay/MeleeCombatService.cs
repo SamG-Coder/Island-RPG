@@ -2,14 +2,14 @@ using System.Numerics;
 
 namespace IslandRpg.Gameplay;
 
-internal enum MeleeCombatStance
+public enum MeleeCombatStance
 {
     Accurate,
     Aggressive,
     Defensive
 }
 
-internal readonly record struct MeleeAttackRoll(
+public readonly record struct MeleeAttackRoll(
     bool Hit,
     int Damage,
     int Experience);

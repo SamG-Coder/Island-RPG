@@ -54,10 +54,18 @@ internal static class ActorActionService
             updated[slot] is not { } raw ||
             !CookingSkill.CanCook(raw, cookingLevel))
             return new(false, updated, Failure: "not_cookable");
-        var cooked = CookingSkill.Roll(raw, cookingLevel, roll);
+        var cooked = ResolveCooking(raw, cookingLevel, roll);
         updated[slot] = cooked.ItemId;
         return new(true, updated, cooked.ItemId);
     }
+
+    /// <summary>
+    /// Canonical cook roll shared by local actors and the headless authority.
+    /// Callers remain responsible for owning the inventory transaction.
+    /// </summary>
+    public static CookingResult ResolveCooking(
+        string rawItemId, int cookingLevel, float roll) =>
+        CookingSkill.Roll(rawItemId, cookingLevel, roll);
 
     public static ActorInventoryResult CookStew(
         string?[]? inventory, int cookingLevel)

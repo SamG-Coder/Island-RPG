@@ -23,6 +23,8 @@ UdpSnapshotTransportChecks.Register(checks);
 NetworkGameClientStateChecks.Register(checks);
 ClientWorldStateChecks.Register(checks);
 ItemContainerChecks.Register(checks);
+CoreCombatChecks.Register(checks);
+ResourceIdentityChecks.Register(checks);
 WorldRuleChecks.Register(checks);
 WorldTransactionChecks.Register(checks);
 SessionWorldTransactionChecks.Register(checks);

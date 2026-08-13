@@ -9,4 +9,9 @@
   <ItemGroup>
     <ProjectReference Include="..\IslandRpg.Core\IslandRpg.Core.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- The canonical chunk key is compiled into Core and shared from there. -->
+    <Compile Remove="WorldTransactions\WorldChunkKey.cs" />
+  </ItemGroup>
 </Project>

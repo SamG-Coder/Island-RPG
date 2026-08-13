@@ -41,4 +41,19 @@ public sealed record AuthoritativeSessionCheckpoint(
     long Tick,
     long SnapshotSequence,
     ImmutableArray<AuthoritativeActorCheckpoint> Actors,
-    AuthoritativeWorldTransactionsCheckpoint World);
+    AuthoritativeWorldTransactionsCheckpoint World,
+    ImmutableArray<AuthoritativeCookingJobCheckpoint> CookingJobs = default);
+
+public sealed record AuthoritativeCookingJobCheckpoint(
+    Guid CommandId,
+    ActorId ActorId,
+    Guid CampfireId,
+    WorldChunkKey CampfireChunk,
+    Vector2 CampfirePosition,
+    int PreferredInventorySlot,
+    string RawItemId,
+    string ResultItemId,
+    int Experience,
+    bool Burnt,
+    Guid DropObjectId,
+    long CompletesAtTick);

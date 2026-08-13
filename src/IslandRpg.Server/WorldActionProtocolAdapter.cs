@@ -75,6 +75,12 @@ public static class WorldActionProtocolAdapter
                 command.InventoryRevision,
                 command.ActorRevision,
                 Handle(value.Campfire)),
+            CookOnCampfireAction value => new CookOnCampfireIntent(
+                command.CommandId,
+                command.InventoryRevision,
+                command.ActorRevision,
+                Handle(value.Campfire),
+                value.InventorySlot),
             PlaceConstructionAction value => new PlaceConstructionIntent(
                 command.CommandId,
                 command.InventoryRevision,

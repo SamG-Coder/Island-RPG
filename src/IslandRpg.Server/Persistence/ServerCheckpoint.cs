@@ -19,7 +19,8 @@ public sealed record ServerCheckpoint(
     long SnapshotSequence,
     IReadOnlyList<ServerActorCheckpoint> Actors,
     IReadOnlyList<ServerWorldObjectCheckpoint> WorldObjects,
-    IReadOnlyList<ServerChunkRevisionCheckpoint> ChunkRevisions)
+    IReadOnlyList<ServerChunkRevisionCheckpoint> ChunkRevisions,
+    IReadOnlyList<ServerCookingJobCheckpoint>? CookingJobs = null)
 {
     public const int CurrentSchemaVersion = 1;
 }
@@ -94,6 +95,23 @@ public sealed record ServerChunkRevisionCheckpoint(
     int Y,
     int WorldLevel,
     uint Revision);
+
+public sealed record ServerCookingJobCheckpoint(
+    Guid CommandId,
+    Guid ActorId,
+    Guid CampfireId,
+    int CampfireChunkX,
+    int CampfireChunkY,
+    int WorldLevel,
+    float CampfireX,
+    float CampfireY,
+    int PreferredInventorySlot,
+    string RawItemId,
+    string ResultItemId,
+    int Experience,
+    bool Burnt,
+    Guid DropObjectId,
+    long CompletesAtTick);
 
 public sealed record ServerCheckpointLoadResult(
     ServerCheckpoint Checkpoint,

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using IslandRpg.Gameplay;
 using IslandRpg.Simulation;
 
 namespace IslandRpg.Server.Persistence;
@@ -246,6 +247,7 @@ public sealed class ServerCheckpointStore
         }
 
         var objects = new HashSet<Guid>();
+        var objectsById = new Dictionary<Guid, ServerWorldObjectCheckpoint>();
         foreach (var item in value.WorldObjects)
         {
             if (item.ObjectId == Guid.Empty || !objects.Add(item.ObjectId) ||
@@ -261,6 +263,7 @@ public sealed class ServerCheckpointStore
                 item.ChunkX != ChunkCoordinate(item.X) ||
                 item.ChunkY != ChunkCoordinate(item.Y))
                 throw new InvalidDataException("A world-object checkpoint is invalid.");
+            objectsById.Add(item.ObjectId, item);
             ValidateText(item.DefinitionId, 128, nameof(item.DefinitionId));
             if (!item.HasContainer && item.Container.Count != 0)
                 throw new InvalidDataException("A non-container object contains slots.");
@@ -271,6 +274,39 @@ public sealed class ServerCheckpointStore
         foreach (var chunk in value.ChunkRevisions)
             if (chunk.Revision == 0 || !chunks.Add((chunk.X, chunk.Y, chunk.WorldLevel)))
                 throw new InvalidDataException("A chunk revision checkpoint is invalid.");
+
+        var cookingActors = new HashSet<Guid>();
+        foreach (var job in value.CookingJobs ?? [])
+        {
+            objectsById.TryGetValue(job.CampfireId, out var campfire);
+            var validOutcome = CookingSkill.TryProfile(
+                job.RawItemId, out var profile) &&
+                (job.Burnt
+                    ? job.ResultItemId == profile.BurntItemId &&
+                      job.Experience == 0
+                    : job.ResultItemId == profile.CookedItemId &&
+                      job.Experience == profile.Experience);
+            if (job.CommandId == Guid.Empty || job.ActorId == Guid.Empty ||
+                job.CampfireId == Guid.Empty || job.DropObjectId == Guid.Empty ||
+                !actors.Contains(job.ActorId) ||
+                objects.Contains(job.DropObjectId) ||
+                campfire is null ||
+                campfire.DefinitionId != ItemIds.Campfire ||
+                campfire.ChunkX != job.CampfireChunkX ||
+                campfire.ChunkY != job.CampfireChunkY ||
+                campfire.WorldLevel != job.WorldLevel ||
+                campfire.X != job.CampfireX ||
+                campfire.Y != job.CampfireY ||
+                !float.IsFinite(job.CampfireX) ||
+                !float.IsFinite(job.CampfireY) ||
+                job.PreferredInventorySlot is < 0 or >= PlayerInventoryCapacity ||
+                !validOutcome || job.CompletesAtTick <= value.Tick ||
+                !cookingActors.Add(job.ActorId))
+                throw new InvalidDataException(
+                    "A cooking-job checkpoint is invalid.");
+            ValidateText(job.RawItemId, 128, nameof(job.RawItemId));
+            ValidateText(job.ResultItemId, 128, nameof(job.ResultItemId));
+        }
     }
 
     private static void ValidateInventory(

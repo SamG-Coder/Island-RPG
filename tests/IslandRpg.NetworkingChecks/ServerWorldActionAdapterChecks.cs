@@ -40,6 +40,7 @@ internal static class ServerWorldActionAdapterChecks
             new AddCampfireFuelAction(ObjectReference, 5),
             new TakeCampfireFuelAction(ObjectReference),
             new LightCampfireAction(ObjectReference),
+            new CookOnCampfireAction(ObjectReference, 5),
             new PlaceConstructionAction(
                 "wooden_wall", 6, 65, -95, 0, 2, 8),
             new BuildConstructionAction(ObjectReference),
@@ -54,6 +55,7 @@ internal static class ServerWorldActionAdapterChecks
             typeof(AddCampfireFuelIntent),
             typeof(TakeCampfireFuelIntent),
             typeof(LightCampfireIntent),
+            typeof(CookOnCampfireIntent),
             typeof(PlaceConstructionIntent),
             typeof(BuildConstructionIntent),
             typeof(DemolishWorldObjectIntent),
