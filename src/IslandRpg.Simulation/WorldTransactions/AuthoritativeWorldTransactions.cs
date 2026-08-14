@@ -901,7 +901,7 @@ public sealed class AuthoritativeWorldTransactions :
         if (_worldSeed == 0 ||
             handle.ObjectId == Guid.Empty ||
             _pickedProceduralGroundObjects.Contains(handle.ObjectId) ||
-            !ProceduralGroundLootCatalog.TryResolve(
+            !GeneratedPortableGroundLoot.TryResolve(
                 _worldSeed, handle.Chunk, handle.ObjectId, out var placement))
             return Rejected(
                 command.Context,
@@ -912,7 +912,8 @@ public sealed class AuthoritativeWorldTransactions :
                 command.Context,
                 WorldTransactionStatus.WrongWorldLevel,
                 actor);
-        if (handle.ExpectedObjectRevision != 1)
+        if (handle.ExpectedObjectRevision !=
+            GeneratedPortableGroundLoot.VirginCommandRevision)
             return Rejected(
                 command.Context,
                 WorldTransactionStatus.StaleObjectRevision,
@@ -938,9 +939,13 @@ public sealed class AuthoritativeWorldTransactions :
         _pickedProceduralGroundObjects.Add(handle.ObjectId);
         var chunk = AdvanceChunk(handle.Chunk);
         CommitInventory(actor, inventory);
+        // Generated loot was never published, so observers know revision 0.
+        // The command still uses VirginCommandRevision as "this spawn is live".
         return Accepted(command.Context, actor,
             [new(WorldObjectChangeKind.Removed, handle.ObjectId, handle.Chunk,
-                1, 2, null)],
+                GeneratedPortableGroundLoot.UnpublishedObjectRevision,
+                GeneratedPortableGroundLoot.VirginCommandRevision,
+                null)],
             [chunk]);
     }
 

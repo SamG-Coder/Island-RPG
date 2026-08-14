@@ -1021,7 +1021,8 @@ internal sealed partial class GameHostWindow : GameWindow
 
         var leftDown = MouseState.IsButtonDown(MouseButton.Left);
         var soundSliderActive = false;
-        if (_frontendPage == FrontendPage.CharacterSelect)
+        if (_frontendPage == FrontendPage.CharacterSelect ||
+            IsMultiplayerCharacterStep)
         {
             var players = _saves.ListPlayers().ToArray();
             LayoutCharacterList(players);
@@ -1035,11 +1036,20 @@ internal sealed partial class GameHostWindow : GameWindow
             _worldList.UpdatePointer(
                 MouseState.Position, leftDown);
         }
-        else if (_frontendPage == FrontendPage.Multiplayer)
+        else if (_frontendPage == FrontendPage.Multiplayer &&
+                 _multiplayerStep == MultiplayerWizardStep.Host)
         {
             RefreshHostedWorldChoices();
             LayoutHostedWorldList();
             _hostedWorldList.UpdatePointer(
+                MouseState.Position, leftDown);
+        }
+        else if (_frontendPage == FrontendPage.Multiplayer &&
+                 _multiplayerStep == MultiplayerWizardStep.Join)
+        {
+            RefreshJoinServerChoices();
+            LayoutJoinServerList();
+            _joinServerList.UpdatePointer(
                 MouseState.Position, leftDown);
         }
         else if (_frontendPage == FrontendPage.Settings)
@@ -1065,6 +1075,7 @@ internal sealed partial class GameHostWindow : GameWindow
         if (_frontendPage != FrontendPage.Main &&
             FrontendCloseButtonBounds().Contains(pointer))
         {
+            StopLanDiscovery();
             _frontendPage = FrontendPage.Main;
             BlurTextBoxes();
             _characterList.ClearDeleteApproval();
@@ -1231,10 +1242,18 @@ internal sealed partial class GameHostWindow : GameWindow
                     _newTeamColor = index;
                     return;
                 }
-            if (_saves.ListPlayers().Count > 0 &&
-                BackButtonBounds().Contains(pointer))
+            if (BackButtonBounds().Contains(pointer) &&
+                (_saves.ListPlayers().Count > 0 ||
+                 _characterCreateReturnPage == FrontendPage.Multiplayer))
             {
-                _frontendPage = FrontendPage.CharacterSelect;
+                var next = _characterCreateReturnPage == FrontendPage.Multiplayer
+                    ? FrontendPage.Multiplayer
+                    : FrontendPage.CharacterSelect;
+                if (_saves.ListPlayers().Count == 0 &&
+                    next == FrontendPage.CharacterSelect)
+                    next = FrontendPage.Main;
+                _characterCreateReturnPage = FrontendPage.Main;
+                _frontendPage = next;
                 BlurTextBoxes();
             }
         }
@@ -1252,7 +1271,11 @@ internal sealed partial class GameHostWindow : GameWindow
             skinTone: 2, teamColor: _newTeamColor);
         _playerNameTextBox.SetText("");
         BlurTextBoxes();
-        _frontendPage = FrontendPage.Main;
+        var next = _characterCreateReturnPage;
+        _characterCreateReturnPage = FrontendPage.Main;
+        if (next == FrontendPage.Multiplayer)
+            _multiplayerStep = MultiplayerWizardStep.Character;
+        _frontendPage = next;
     }
 
     private void UpdateCharacterSelectClick(Vector2 pointer)
@@ -1705,7 +1728,8 @@ internal sealed partial class GameHostWindow : GameWindow
         {
             _worldNameTextBox, _seedTextBox, _playerNameTextBox,
             _aiUrlTextBox, _aiModelTextBox, _aiPasswordTextBox,
-            _multiplayerEndpointTextBox, _multiplayerSeedTextBox
+            _multiplayerEndpointTextBox, _multiplayerSeedTextBox,
+            _serverNameTextBox
         }
             .FirstOrDefault(control => control.Focused) ??
         FocusedAdvancedTextBox();
@@ -1728,6 +1752,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _aiPasswordTextBox.Blur();
         _multiplayerEndpointTextBox.Blur();
         _multiplayerSeedTextBox.Blur();
+        _serverNameTextBox.Blur();
         BlurAdvancedTextBoxes();
     }
 
@@ -2083,11 +2108,12 @@ internal sealed partial class GameHostWindow : GameWindow
             if (IsActiveSimulationChunk(gpu))
                 _activeWorldChunkBuffer.Add(gpu.Chunk);
         }
-        _coastalRespawns.Update(
-            elapsed,
-            _activeWorldChunkBuffer,
-            ObservationFocusPosition(),
-            QueueChunkSave);
+        if (!IsNetworkWorld)
+            _coastalRespawns.Update(
+                elapsed,
+                _activeWorldChunkBuffer,
+                ObservationFocusPosition(),
+                QueueChunkSave);
         UpdateVillagers(elapsed);
         UpdateAutomaticGates();
         UpdateEnemies(elapsed);
@@ -3299,7 +3325,8 @@ internal sealed partial class GameHostWindow : GameWindow
         if (TryZoomClassicPcView(e.OffsetY)) return;
         if (_screen == ScreenState.MainMenu && e.OffsetY != 0)
         {
-            if (_frontendPage == FrontendPage.CharacterSelect)
+            if (_frontendPage == FrontendPage.CharacterSelect ||
+                IsMultiplayerCharacterStep)
             {
                 LayoutCharacterList(
                     _saves.ListPlayers().ToArray());
@@ -3313,11 +3340,20 @@ internal sealed partial class GameHostWindow : GameWindow
                 _worldList.Scroll(
                     MouseState.Position, e.OffsetY);
             }
-            else if (_frontendPage == FrontendPage.Multiplayer)
+            else if (_frontendPage == FrontendPage.Multiplayer &&
+                     _multiplayerStep == MultiplayerWizardStep.Host)
             {
                 RefreshHostedWorldChoices();
                 LayoutHostedWorldList();
                 _hostedWorldList.Scroll(
+                    MouseState.Position, e.OffsetY);
+            }
+            else if (_frontendPage == FrontendPage.Multiplayer &&
+                     _multiplayerStep == MultiplayerWizardStep.Join)
+            {
+                RefreshJoinServerChoices();
+                LayoutJoinServerList();
+                _joinServerList.Scroll(
                     MouseState.Position, e.OffsetY);
             }
             else if (_frontendPage == FrontendPage.Settings)

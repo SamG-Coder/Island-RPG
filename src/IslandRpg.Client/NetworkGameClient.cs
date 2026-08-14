@@ -849,7 +849,8 @@ public sealed class NetworkGameClient : IAsyncDisposable
                         throw new ProtocolException(
                             "One atomic world batch changed the same object more than once.");
                     objectRevisions.TryGetValue(id, out var knownRevision);
-                    if (delta.Reference.ExpectedObjectRevision != knownRevision)
+                    if (delta.Reference.ExpectedObjectRevision != knownRevision &&
+                        !IsFirstSeenGeneratedRemoval(delta, knownRevision))
                         throw new ProtocolException(
                             "A world-object delta does not match the current object revision.");
 
@@ -1544,6 +1545,19 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 "An equal container baseline regressed its world-object reference.");
         }
     }
+
+    /// <summary>
+    /// Generated sticks, rocks, seeds, and coastal loot are never published
+    /// as world objects. A first-seen removal is a tombstone: missing IDs
+    /// are revision 0, and a stale 1 is the pre-fix command convention.
+    /// </summary>
+    private static bool IsFirstSeenGeneratedRemoval(
+        WorldObjectDelta delta,
+        uint knownRevision) =>
+        knownRevision == 0 &&
+        delta.Kind == WorldObjectDeltaKind.Remove &&
+        delta.Reference.ExpectedObjectRevision <=
+            GeneratedPortableGroundLoot.VirginCommandRevision;
 
     private static NetworkWorldChunk Chunk(WorldObjectState value) =>
         new(value.ChunkX, value.ChunkY, value.WorldLevel);

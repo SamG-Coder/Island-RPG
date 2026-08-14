@@ -280,9 +280,22 @@ internal static class InfiniteWorldGenerator
                     placement.Y))
                 .ToList();
             if (rules.IncludeCoastal)
+            {
                 catalogObjects.AddRange(
-                    CoastalCollectibleSpawner.GenerateInitial(
-                        seed, tiles, trees, catalogObjects));
+                    ProceduralCoastalLootCatalog.DescribeChunk(seed, chunk)
+                        .Where(placement =>
+                            !IsExcludedTile(
+                                tiles,
+                                renderable,
+                                reservedTiles,
+                                (int)MathF.Floor(placement.X),
+                                (int)MathF.Floor(placement.Y)))
+                        .Select(static placement => new WorldGroundObject(
+                            placement.Id,
+                            placement.ItemId,
+                            placement.X,
+                            placement.Y)));
+            }
             return catalogObjects;
         }
 

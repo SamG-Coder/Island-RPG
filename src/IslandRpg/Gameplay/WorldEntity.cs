@@ -50,9 +50,9 @@ internal sealed class WorldEntity
 {
     private const float ArrivalDistance = .06f;
     internal const float RemoteWalkIdleHoldSeconds = .12f;
-    internal const float RemoteWalkRewindDistance = .85f;
     private readonly Queue<Vector2> _path = [];
     private float _remoteStillSeconds;
+    private bool _awaitingPath;
 
     public Vector2 Position { get; private set; }
     public Vector2 Target { get; private set; }
@@ -74,6 +74,7 @@ internal sealed class WorldEntity
 
     public void MoveTo(Vector2 target)
     {
+        _awaitingPath = false;
         _path.Clear();
         Target = target;
         SetAction(EntityAction.Move);
@@ -81,6 +82,7 @@ internal sealed class WorldEntity
 
     public void FollowPath(IEnumerable<Vector2> path)
     {
+        _awaitingPath = false;
         _path.Clear();
         foreach (var waypoint in path)
         {
@@ -99,12 +101,14 @@ internal sealed class WorldEntity
 
     public void Stop()
     {
+        _awaitingPath = false;
         Target = Position;
         SetAction(EntityAction.Idle);
     }
 
     public void TeleportTo(Vector2 position)
     {
+        _awaitingPath = false;
         _path.Clear();
         Position = position;
         Target = position;
@@ -155,9 +159,9 @@ internal sealed class WorldEntity
     }
 
     /// <summary>
-    /// Remote click-to-walk presentation. Uses the same FollowPath/Update
-    /// walk cycle as a local click so interpolation cannot reset the
-    /// animation or snap backward when the first moving snapshot arrives.
+    /// Remote locomotion. The sample is the current interpolated pose, not a
+    /// walk destination. Keep the Move cycle running and advance ActionTime
+    /// at display rate so observers see the same walk sheet as a local click.
     /// </summary>
     public void PresentRemoteWalk(
         Vector2 sample, Vector2 velocity, bool moving, float elapsed)
@@ -165,25 +169,20 @@ internal sealed class WorldEntity
         if (!float.IsFinite(sample.X) || !float.IsFinite(sample.Y))
             return;
         elapsed = Math.Max(0, elapsed);
-        if (moving || velocity.LengthSquared > .0001f)
+        var displacement = sample - Position;
+        var hasVelocity = velocity.LengthSquared > .0001f;
+        var displaced = displacement.LengthSquared > .0004f;
+        if (moving || hasVelocity || displaced)
         {
             _remoteStillSeconds = 0;
-            var toSample = sample - Position;
-            if (Action == EntityAction.Move &&
-                toSample.LengthSquared > .0001f &&
-                Facing.LengthSquared > .0001f &&
-                Vector2.Dot(toSample.Normalized(), Facing) < -.25f &&
-                toSample.LengthSquared <
-                RemoteWalkRewindDistance * RemoteWalkRewindDistance)
-            {
-                Update(elapsed);
-                return;
-            }
-
-            if (Action != EntityAction.Move ||
-                (Target - sample).LengthSquared > .14f * .14f)
-                MoveTo(sample);
-            Update(elapsed);
+            if (Action != EntityAction.Move)
+                SetAction(EntityAction.Move);
+            if (hasVelocity)
+                Face(velocity);
+            else if (displaced)
+                Face(displacement);
+            CorrectPosition(sample);
+            AdvanceAction(elapsed);
             return;
         }
 
@@ -191,7 +190,8 @@ internal sealed class WorldEntity
         if (Action == EntityAction.Move &&
             _remoteStillSeconds < RemoteWalkIdleHoldSeconds)
         {
-            Update(elapsed);
+            CorrectPosition(sample);
+            AdvanceAction(elapsed);
             return;
         }
 
@@ -210,10 +210,13 @@ internal sealed class WorldEntity
         // A replacement route is calculated from the current position. Do not
         // continue along the superseded route while that asynchronous request
         // is pending, or the completed path will begin behind the actor.
+        // Stay in Move and keep the walk cycle running so follow/repath does
+        // not drop to idle for a frame.
         _path.Clear();
         Target = Position;
+        _awaitingPath = true;
         if (Action != EntityAction.Move)
-            Stop();
+            SetAction(EntityAction.Move);
     }
 
     public void Attack() => SetAction(EntityAction.Attack);
@@ -347,6 +350,8 @@ internal sealed class WorldEntity
                     Target = _path.Dequeue();
                     continue;
                 }
+                if (_awaitingPath)
+                    break;
                 SetAction(EntityAction.Idle);
                 break;
             }

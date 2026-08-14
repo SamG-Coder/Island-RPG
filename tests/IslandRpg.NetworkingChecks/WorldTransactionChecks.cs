@@ -1,7 +1,10 @@
 using System.Collections.Immutable;
 using System.Numerics;
+using IslandRpg.Client;
 using IslandRpg.Gameplay;
+using IslandRpg.Protocol;
 using IslandRpg.Resources;
+using IslandRpg.Server;
 using IslandRpg.Simulation;
 
 namespace IslandRpg.NetworkingChecks;
@@ -43,8 +46,11 @@ internal static class WorldTransactionChecks
             FurniturePlacementIsAtomicAndCollisionSafe);
         checks.Add("world dynamic obstacles and cross chunk footprints stay canonical",
             DynamicObstaclesAndCrossChunkFootprintsAreCanonical);
-        checks.Add("world transactions pick up procedural ground loot once",
-            ProceduralGroundLootPicksUpOnce);
+        checks.Add("world transactions pick up every generated ground item kind once",
+            ProceduralGroundLootPicksUpEveryKind);
+        checks.Add(
+            "generated ground-loot removals apply on a real network client",
+            AppliesGeneratedGroundLootRemovalsOnClientAsync);
     }
 
     private static void PickupDropAtomicAndRevisioned()
@@ -818,53 +824,174 @@ internal static class WorldTransactionChecks
             "terminal revision rejection must not advance its chunk");
     }
 
-    private static void ProceduralGroundLootPicksUpOnce()
+    private static void ProceduralGroundLootPicksUpEveryKind()
     {
         const long seed = 67;
-        ProceduralGroundLootCatalog.Placement? found = null;
-        var chunk = default(WorldChunkKey);
-        for (var chunkY = -3; chunkY <= 3 && found is null; chunkY++)
-        for (var chunkX = -3; chunkX <= 3 && found is null; chunkX++)
+        var found = CollectGeneratedLoot(seed);
+        foreach (var itemId in ProceduralGroundLootCatalog.PortableItemIds)
         {
-            chunk = new WorldChunkKey(chunkX, chunkY, 0);
-            var placements = ProceduralGroundLootCatalog.DescribeChunk(
-                seed, chunk);
-            if (placements.Count == 0) continue;
-            found = placements[0];
+            CheckAssert.True(found.ContainsKey(itemId),
+                $"the fixture must include generated {itemId}");
         }
+        CheckAssert.True(
+            found.Keys.Any(ProceduralCoastalLootCatalog.IsCoastal),
+            "the fixture must include at least one coastal collectible");
 
-        CheckAssert.True(found is not null,
-            "the fixture must include generated ground loot");
-        var placement = found!.Value;
         var authority = new AuthoritativeWorldTransactions(worldSeed: seed);
         var actor = Actor(
             new ActorId(Guid.Parse("10000000-0000-0000-0000-0000000000aa")),
-            [],
-            new Vector2(placement.X, placement.Y));
-        var handle = new WorldObjectHandle(
-            placement.Id, chunk, 1, 0);
-        var pick = authority.Execute(
-            actor, new PickUpWorldObjectTransaction(Context(actor), handle));
-        CheckAssert.True(pick.Accepted,
-            "the first procedural pickup must succeed");
-        CheckAssert.Equal(1, Count(pick.Gameplay!.Value, placement.ItemId),
-            "procedural pickup must grant the generated item");
-        CheckAssert.Equal(WorldObjectChangeKind.Removed,
-            pick.ObjectDeltas.Single().Kind,
-            "procedural pickup must publish a removal so clients hide the loot");
+            []);
+        foreach (var (itemId, (chunk, placement)) in found.OrderBy(
+                     value => value.Key, StringComparer.Ordinal))
+        {
+            actor = actor with
+            {
+                Position = new Vector2(placement.X, placement.Y)
+            };
+            var handle = new WorldObjectHandle(
+                placement.Id,
+                chunk,
+                GeneratedPortableGroundLoot.VirginCommandRevision,
+                authority.CaptureChunkRevision(chunk));
+            var pick = authority.Execute(
+                actor,
+                new PickUpWorldObjectTransaction(Context(actor), handle));
+            CheckAssert.True(pick.Accepted,
+                $"the first pickup of generated {itemId} must succeed");
+            CheckAssert.Equal(1, Count(pick.Gameplay!.Value, itemId),
+                $"pickup must grant generated {itemId}");
+            var delta = pick.ObjectDeltas.Single();
+            CheckAssert.Equal(WorldObjectChangeKind.Removed, delta.Kind,
+                $"pickup of {itemId} must publish a removal");
+            CheckAssert.Equal(
+                GeneratedPortableGroundLoot.UnpublishedObjectRevision,
+                delta.PreviousObjectRevision,
+                $"generated {itemId} was never on the wire, so previous revision is 0");
+            CheckAssert.Equal(
+                GeneratedPortableGroundLoot.VirginCommandRevision,
+                delta.CurrentObjectRevision,
+                $"generated {itemId} must advance to the virgin command revision");
 
-        actor = actor with { Gameplay = pick.Gameplay!.Value };
-        var replay = authority.Execute(
-            actor,
-            new PickUpWorldObjectTransaction(
-                Context(actor) with { CommandId = Guid.NewGuid() },
-                handle with
-                {
-                    ExpectedChunkRevision = pick.ChunkDeltas.Single()
-                        .CurrentRevision
-                }));
-        CheckAssert.False(replay.Accepted,
-            "a second procedural pickup of the same item must fail");
+            var published = WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
+                10, 20, pick);
+            CheckAssert.True(published is not null,
+                $"pickup of {itemId} must produce a public removal batch");
+            CheckAssert.Equal(
+                GeneratedPortableGroundLoot.UnpublishedObjectRevision,
+                published!.Deltas.Single().Reference.ExpectedObjectRevision,
+                $"observers that never saw {itemId} know revision 0");
+
+            actor = actor with { Gameplay = pick.Gameplay!.Value };
+            var replay = authority.Execute(
+                actor,
+                new PickUpWorldObjectTransaction(
+                    Context(actor) with { CommandId = Guid.NewGuid() },
+                    handle with
+                    {
+                        ExpectedChunkRevision = pick.ChunkDeltas.Single()
+                            .CurrentRevision
+                    }));
+            CheckAssert.False(replay.Accepted,
+                $"a second pickup of generated {itemId} must fail");
+        }
+    }
+
+    private static async ValueTask AppliesGeneratedGroundLootRemovalsOnClientAsync(
+        CancellationToken cancellationToken)
+    {
+        const long seed = 67;
+        var found = CollectGeneratedLoot(seed);
+        CheckAssert.True(
+            found.Count >= ProceduralGroundLootCatalog.PortableItemIds.Count,
+            "the client apply fixture must cover every inland generated item");
+
+        await using var client = new NetworkGameClient(TimeSpan.Zero);
+        await using var peer = await ClientWorldStateChecks.ScriptedWorldPeer
+            .ConnectAsync(client, cancellationToken);
+
+        var sequence = 2ul;
+        var tick = 800ul;
+        var applied = 0;
+        client.WorldObjectsChanged += (_, args) =>
+        {
+            if (args.Changes.All(value =>
+                    value.Kind == WorldObjectDeltaKind.Remove))
+                Interlocked.Add(ref applied, args.Changes.Count);
+        };
+
+        var authority = new AuthoritativeWorldTransactions(worldSeed: seed);
+        var actor = Actor(
+            new ActorId(Guid.Parse("10000000-0000-0000-0000-0000000000bb")),
+            []);
+        foreach (var (itemId, (chunk, placement)) in found.OrderBy(
+                     value => value.Key, StringComparer.Ordinal))
+        {
+            actor = actor with
+            {
+                Position = new Vector2(placement.X, placement.Y)
+            };
+            var pick = authority.Execute(
+                actor,
+                new PickUpWorldObjectTransaction(
+                    Context(actor),
+                    new WorldObjectHandle(
+                        placement.Id,
+                        chunk,
+                        GeneratedPortableGroundLoot.VirginCommandRevision,
+                        authority.CaptureChunkRevision(chunk))));
+            CheckAssert.True(pick.Accepted,
+                $"authority must accept generated {itemId} before the client apply");
+            actor = actor with { Gameplay = pick.Gameplay!.Value };
+            var batch = WorldActionProtocolAdapter.ToPublicWorldDeltaBatch(
+                sequence++, tick++, pick);
+            CheckAssert.True(batch is not null,
+                $"pickup of {itemId} must ship a public batch");
+            await peer.SendAsync(batch!, cancellationToken);
+        }
+
+        await ClientWorldStateChecks.EventuallyAsync(
+            () => Volatile.Read(ref applied) == found.Count &&
+                  client.State.Status == NetworkGameClientStatus.Connected,
+            "a generated-loot removal must apply for every item kind without faulting",
+            cancellationToken);
+        CheckAssert.Equal(NetworkGameClientStatus.Connected, client.State.Status,
+            "generated ground loot must never disconnect the client");
+        CheckAssert.Equal(0, client.State.WorldObjects.Count,
+            "generated loot tombstones must not invent published world objects");
+    }
+
+    private static Dictionary<string, (WorldChunkKey Chunk,
+        ProceduralGroundLootCatalog.Placement Placement)> CollectGeneratedLoot(
+        long seed)
+    {
+        var found = new Dictionary<string, (WorldChunkKey, ProceduralGroundLootCatalog.Placement)>(
+            StringComparer.Ordinal);
+        var inland = ProceduralGroundLootCatalog.PortableItemIds;
+        for (var radius = 0; radius <= 16; radius++)
+        for (var chunkY = -radius; chunkY <= radius; chunkY++)
+        for (var chunkX = -radius; chunkX <= radius; chunkX++)
+        {
+            if (Math.Max(Math.Abs(chunkX), Math.Abs(chunkY)) != radius)
+                continue;
+            var chunk = new WorldChunkKey(chunkX, chunkY, 0);
+            foreach (var placement in ProceduralGroundLootCatalog.DescribeChunk(
+                         seed, chunk))
+                found.TryAdd(placement.ItemId, (chunk, placement));
+            foreach (var coastal in ProceduralCoastalLootCatalog.DescribeChunk(
+                         seed, chunk))
+            {
+                found.TryAdd(
+                    coastal.ItemId,
+                    (chunk, new(
+                        coastal.Id, coastal.ItemId, coastal.X, coastal.Y)));
+            }
+
+            if (inland.All(found.ContainsKey) &&
+                found.Keys.Any(ProceduralCoastalLootCatalog.IsCoastal))
+                return found;
+        }
+
+        return found;
     }
 
     private static WorldTransactionActorInput Actor(

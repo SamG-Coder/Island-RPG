@@ -49,6 +49,34 @@ internal static class ProtocolChecks
         checks.Add(
             "world chunk revision batches reject malformed state",
             WorldChunkRevisionBatchesRejectMalformedState);
+        checks.Add(
+            "LAN discovery beacons round trip without a protocol version change",
+            LanDiscoveryBeaconsRoundTrip);
+    }
+
+    private static void LanDiscoveryBeaconsRoundTrip()
+    {
+        var expected = new LanDiscoveryBeacon(
+            38_740,
+            Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            424242,
+            true,
+            2,
+            16,
+            "Shore world");
+        var encoded = LanDiscovery.Encode(expected);
+        CheckAssert.True(
+            encoded.Length > 0 &&
+            encoded.Length <= LanDiscovery.MaximumDatagramBytes,
+            "a LAN beacon must stay inside the discovery datagram bound");
+        CheckAssert.True(
+            LanDiscovery.TryDecode(encoded, out var actual),
+            "a well-formed LAN beacon must decode");
+        CheckAssert.Equal(
+            expected, actual, "LAN discovery beacons must round trip exactly");
+        CheckAssert.False(
+            LanDiscovery.TryDecode("nope"u8, out _),
+            "malformed LAN beacons must be ignored");
     }
 
     private static void ReliableMessagesRoundTrip()

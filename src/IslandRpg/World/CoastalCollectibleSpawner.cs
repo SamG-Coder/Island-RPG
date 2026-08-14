@@ -1,4 +1,5 @@
 using IslandRpg.Gameplay;
+using IslandRpg.Resources;
 using OpenTK.Mathematics;
 
 namespace IslandRpg.World;
@@ -20,12 +21,8 @@ internal static class CoastalCollectibleSpawner
         (ItemIds.PearlOysterShell, 1)
     ];
 
-    private static readonly HashSet<string> CoastalItemIds =
-        Drops.Select(drop => drop.ItemId)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
     public static bool IsCoastal(string itemId) =>
-        CoastalItemIds.Contains(itemId);
+        ProceduralCoastalLootCatalog.IsCoastal(itemId);
 
     public static List<WorldGroundObject> GenerateInitial(
         long seed,

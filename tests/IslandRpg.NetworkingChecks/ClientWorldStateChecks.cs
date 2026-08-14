@@ -576,7 +576,7 @@ internal static class ClientWorldStateChecks
             isBaseline,
             slots);
 
-    private static async Task EventuallyAsync(
+    internal static async Task EventuallyAsync(
         Func<bool> condition,
         string failure,
         CancellationToken cancellationToken)
@@ -592,7 +592,7 @@ internal static class ClientWorldStateChecks
         throw new TimeoutException(failure);
     }
 
-    private sealed class ScriptedWorldPeer : IAsyncDisposable
+    internal sealed class ScriptedWorldPeer : IAsyncDisposable
     {
         private readonly TcpListener _listener;
         private readonly TcpClient _client;

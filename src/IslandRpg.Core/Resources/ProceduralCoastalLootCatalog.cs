@@ -5,20 +5,39 @@ using IslandRpg.World;
 namespace IslandRpg.Resources;
 
 /// <summary>
-/// Deterministic overworld ground loot (sticks, rocks, crop seeds) shared by
-/// solo chunk generation and the dedicated-server pickup path.
+/// Deterministic beach collectibles (shells, seaweed) shared by solo chunk
+/// generation and the dedicated-server pickup path. IDs match
+/// <c>CoastalCollectibleSpawner</c> so a click on any coastal item can be
+/// resolved without publishing the whole beach set.
 /// </summary>
-public static class ProceduralGroundLootCatalog
+public static class ProceduralCoastalLootCatalog
 {
     public const int MaximumPerChunk = 8;
 
     public static IReadOnlyList<string> PortableItemIds { get; } =
     [
-        ItemIds.Sticks,
-        ItemIds.LargeRock,
-        ItemIds.WildGrainSeeds,
-        ItemIds.BeanSeeds,
-        ItemIds.RootSeeds
+        ItemIds.Seaweed,
+        ItemIds.ClamShell,
+        ItemIds.CockleShell,
+        ItemIds.SpiralShell,
+        ItemIds.ScallopShell,
+        ItemIds.MoonShell,
+        ItemIds.ConchShell,
+        ItemIds.CowrieShell,
+        ItemIds.PearlOysterShell
+    ];
+
+    private static readonly (string ItemId, int Weight)[] Drops =
+    [
+        (ItemIds.Seaweed, 38),
+        (ItemIds.ClamShell, 28),
+        (ItemIds.CockleShell, 22),
+        (ItemIds.SpiralShell, 13),
+        (ItemIds.ScallopShell, 11),
+        (ItemIds.MoonShell, 7),
+        (ItemIds.ConchShell, 4),
+        (ItemIds.CowrieShell, 3),
+        (ItemIds.PearlOysterShell, 1)
     ];
 
     public readonly record struct Placement(
@@ -26,6 +45,9 @@ public static class ProceduralGroundLootCatalog
         string ItemId,
         float X,
         float Y);
+
+    public static bool IsCoastal(string itemId) =>
+        PortableItemIds.Contains(itemId, StringComparer.OrdinalIgnoreCase);
 
     public static IReadOnlyList<Placement> DescribeChunk(
         long worldSeed,
@@ -43,7 +65,7 @@ public static class ProceduralGroundLootCatalog
             if (!TryDescribeAt(worldSeed, tileX, tileY, out var placement))
                 continue;
             candidates.Add((
-                UnitHash(worldSeed, tileX, tileY, 829),
+                UnitHash(worldSeed, tileX, tileY, 3733),
                 placement));
         }
 
@@ -71,11 +93,7 @@ public static class ProceduralGroundLootCatalog
                  worldSeed, tileX, tileY + 1)) / 4f;
         var tile = ProceduralSurfaceTerrain.ClassifyAt(
             worldSeed, tileX, tileY, elevation);
-        if (tile.Material is
-                ProceduralSurfaceTerrain.Material.DeepWater or
-                ProceduralSurfaceTerrain.Material.ShallowWater or
-                ProceduralSurfaceTerrain.Material.RiverWater or
-                ProceduralSurfaceTerrain.Material.MangroveShallows)
+        if (tile.Material != ProceduralSurfaceTerrain.Material.Beach)
             return false;
         var relief =
             Math.Max(
@@ -103,46 +121,18 @@ public static class ProceduralGroundLootCatalog
         if (relief > 2) return false;
         if (SurfaceTreeCatalog.TryDescribeAt(worldSeed, tileX, tileY, out _))
             return false;
+        if (ProceduralGroundLootCatalog.TryDescribeAt(
+                worldSeed, tileX, tileY, out _))
+            return false;
+        if (UnitHash(worldSeed, tileX, tileY, 3701) >= .075f)
+            return false;
 
-        var stickChance = tile.Region switch
-        {
-            ProceduralSurfaceTerrain.Region.TemperateForest or
-                ProceduralSurfaceTerrain.Region.Rainforest => .035f,
-            ProceduralSurfaceTerrain.Region.Taiga or
-                ProceduralSurfaceTerrain.Region.Wetland => .025f,
-            ProceduralSurfaceTerrain.Region.Savanna => .012f,
-            _ => 0
-        };
-        var rockChance = tile.Region switch
-        {
-            ProceduralSurfaceTerrain.Region.Alpine => .055f,
-            ProceduralSurfaceTerrain.Region.Tundra or
-                ProceduralSurfaceTerrain.Region.Coast => .024f,
-            ProceduralSurfaceTerrain.Region.Desert => .018f,
-            ProceduralSurfaceTerrain.Region.TemperateGrassland => .008f,
-            _ => 0
-        };
-        var cropSeedChance = tile.Region switch
-        {
-            ProceduralSurfaceTerrain.Region.TemperateGrassland => .018f,
-            ProceduralSurfaceTerrain.Region.Savanna => .012f,
-            ProceduralSurfaceTerrain.Region.Wetland => .009f,
-            _ => 0
-        };
-        var roll = UnitHash(worldSeed, tileX, tileY, 811);
-        string? itemId = roll < stickChance
-            ? ItemIds.Sticks
-            : roll < stickChance + rockChance
-                ? ItemIds.LargeRock
-                : roll < stickChance + rockChance + cropSeedChance
-                    ? SelectCropSeed(UnitHash(worldSeed, tileX, tileY, 817))
-                    : null;
-        if (itemId is null) return false;
+        var itemId = SelectItem(UnitHash(worldSeed, tileX, tileY, 3719));
         placement = new(
             StableId(worldSeed, tileX, tileY, itemId),
             itemId,
-            tileX + .18f + UnitHash(worldSeed, tileX, tileY, 823) * .64f,
-            tileY + .18f + UnitHash(worldSeed, tileX, tileY, 827) * .64f);
+            tileX + .18f + UnitHash(worldSeed, tileX, tileY, 3761) * .64f,
+            tileY + .18f + UnitHash(worldSeed, tileX, tileY, 3767) * .64f);
         return true;
     }
 
@@ -170,20 +160,28 @@ public static class ProceduralGroundLootCatalog
         string itemId)
     {
         Span<byte> bytes = stackalloc byte[16];
-        BitConverter.TryWriteBytes(bytes, worldSeed);
+        BitConverter.TryWriteBytes(bytes, worldSeed ^ 0x434f415354414cL);
         BitConverter.TryWriteBytes(bytes[8..], tileX);
-        var discriminator = itemId.Equals(
-            ItemIds.Sticks, StringComparison.OrdinalIgnoreCase) ? 0 : 1;
-        BitConverter.TryWriteBytes(bytes[12..], tileY ^ (discriminator << 28));
+        var kind = Array.FindIndex(
+            Drops, drop => drop.ItemId.Equals(
+                itemId, StringComparison.OrdinalIgnoreCase));
+        if (kind < 0) kind = 0;
+        BitConverter.TryWriteBytes(bytes[12..], tileY ^ (kind << 24));
         return new Guid(bytes);
     }
 
-    private static string SelectCropSeed(float roll) => roll switch
+    private static string SelectItem(float roll)
     {
-        < 1f / 3f => ItemIds.WildGrainSeeds,
-        < 2f / 3f => ItemIds.BeanSeeds,
-        _ => ItemIds.RootSeeds
-    };
+        var total = Drops.Sum(drop => drop.Weight);
+        var selected = roll * total;
+        foreach (var drop in Drops)
+        {
+            selected -= drop.Weight;
+            if (selected < 0) return drop.ItemId;
+        }
+
+        return Drops[^1].ItemId;
+    }
 
     private static float UnitHash(long seed, int x, int y, int salt)
     {

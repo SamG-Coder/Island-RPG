@@ -64,6 +64,13 @@ internal sealed record WorldPlayerState(
     float FishingBoatFacingY = 1,
     bool FishingBoatBoarded = false);
 
+internal sealed record SavedGameServer(
+    string Id,
+    string Name,
+    string Host,
+    int Port,
+    DateTime AddedUtc = default);
+
 internal sealed record NetworkSessionRecord(
     string Host,
     int Port,
@@ -374,6 +381,81 @@ internal sealed class GameSaveRepository
 
     public void SaveSettings(GameSettings settings) =>
         WriteJson(SettingsPath, settings);
+
+    public string SavedServersPath =>
+        Path.Combine(Root, "saved-servers.json");
+
+    public const int MaximumSavedServers = 32;
+
+    public IReadOnlyList<SavedGameServer> LoadSavedServers()
+    {
+        var stored = ReadJson<List<SavedGameServer>>(SavedServersPath);
+        if (stored is null || stored.Count == 0)
+            return [];
+        return stored
+            .Where(value =>
+                !string.IsNullOrWhiteSpace(value.Id) &&
+                !string.IsNullOrWhiteSpace(value.Host) &&
+                value.Port is > 0 and <= 65_535)
+            .GroupBy(value =>
+                $"{value.Host.Trim()}:{value.Port}",
+                StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.Last())
+            .Take(MaximumSavedServers)
+            .ToArray();
+    }
+
+    public void SaveSavedServers(IReadOnlyList<SavedGameServer> servers)
+    {
+        ArgumentNullException.ThrowIfNull(servers);
+        WriteJson(
+            SavedServersPath,
+            servers
+                .Where(value =>
+                    !string.IsNullOrWhiteSpace(value.Id) &&
+                    !string.IsNullOrWhiteSpace(value.Host) &&
+                    value.Port is > 0 and <= 65_535)
+                .Take(MaximumSavedServers)
+                .ToArray());
+    }
+
+    public SavedGameServer UpsertSavedServer(
+        string name, string host, int port)
+    {
+        host = host.Trim();
+        name = string.IsNullOrWhiteSpace(name)
+            ? $"{host}:{port}"
+            : name.Trim();
+        if (name.Length > 32) name = name[..32];
+        var servers = LoadSavedServers().ToList();
+        var existing = servers.FindIndex(value =>
+            value.Host.Equals(host, StringComparison.OrdinalIgnoreCase) &&
+            value.Port == port);
+        var record = existing >= 0
+            ? servers[existing] with { Name = name }
+            : new SavedGameServer(
+                Guid.NewGuid().ToString("N"),
+                name,
+                host,
+                port,
+                DateTime.UtcNow);
+        if (existing >= 0)
+            servers[existing] = record;
+        else
+            servers.Insert(0, record);
+        SaveSavedServers(servers);
+        return record;
+    }
+
+    public void RemoveSavedServer(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return;
+        SaveSavedServers(
+            LoadSavedServers()
+                .Where(value =>
+                    !value.Id.Equals(id, StringComparison.OrdinalIgnoreCase))
+                .ToArray());
+    }
 
     public string NetworkSessionsRoot =>
         Path.Combine(Root, "NetworkSessions");

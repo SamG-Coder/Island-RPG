@@ -543,7 +543,8 @@ internal sealed partial class GameHostWindow
             if (isLocal)
             {
                 ApplyLocalNetworkSnapshot(
-                    position, velocity, snapshot.State, (int)snapshot.WorldLevel);
+                    position, velocity, snapshot.State,
+                    (int)snapshot.WorldLevel, elapsed);
                 continue;
             }
             var entity = GetOrCreateNetworkActor(snapshot.EntityId, position);
@@ -945,6 +946,10 @@ internal sealed partial class GameHostWindow
                 {
                     LastMultiplayerEndpoint = endpoint
                 });
+            if (!_saves.LoadSavedServers().Any(value =>
+                    value.Host.Equals(host, StringComparison.OrdinalIgnoreCase) &&
+                    value.Port == launch.Port))
+                _saves.UpsertSavedServer(endpoint, host, launch.Port);
         });
     }
 
@@ -960,6 +965,8 @@ internal sealed partial class GameHostWindow
     private void AdvanceNetworkPredictedMovement(float elapsed)
     {
         if (_player is null || _fishingBoatBoarded) return;
+        if (_networkFollowingLocally)
+            return;
         if (_player.Action == EntityAction.Move || _pendingPathTask is not null)
             _networkPredictingMovement = true;
         else if (_networkPredictingMovement &&
@@ -1000,16 +1007,17 @@ internal sealed partial class GameHostWindow
         Vector2 position,
         Vector2 velocity,
         NetworkEntityState state,
-        int snapshotWorldLevel)
+        int snapshotWorldLevel,
+        float elapsed)
     {
-        if (_networkClient?.State.Entities.TryGetValue(
+        if (!_networkFollowingLocally &&
+            _networkClient?.State.Entities.TryGetValue(
                 _networkClient.State.PlayerEntityId, out var latest) == true)
         {
             snapshotWorldLevel = (int)latest.WorldLevel;
             state = latest.State;
         }
 
-        _ = velocity;
         _networkAuthoritativePosition = position;
         _networkAuthoritativeWorldLevel = snapshotWorldLevel;
         if (_player is null) return;
@@ -1035,75 +1043,43 @@ internal sealed partial class GameHostWindow
         if (!float.IsFinite(position.X) || !float.IsFinite(position.Y))
             return;
 
-        // Follow and click-to-walk both use QueuePredictedWalk + Update.
-        // Do not snap the local villager to a snapshot pose; that jumps to
-        // the end of the server route and skips the walk cycle.
+        // Follow is server-walked. Present it exactly like a remote so the
+        // walk sheet plays through instead of a local MoveTo that restarts.
+        if (_networkFollowingLocally)
+        {
+            var moving = velocity.LengthSquared > .0001f ||
+                         state.HasFlag(NetworkEntityState.Moving);
+            _player.PresentRemoteWalk(position, velocity, moving, elapsed);
+            return;
+        }
+
         var error = Vector2.Distance(_player.Position, position);
         if (float.IsFinite(error) && error > 8f)
             _player.CorrectPosition(position);
     }
 
-    private const float NetworkFollowStandDistance = 1.6f;
-    private const float NetworkFollowRetargetDistance = .6f;
+    private const float NetworkFollowStopDistance = 1.6f;
+    private const float NetworkFollowResumeDistance = 2.4f;
+    private const float NetworkFollowRetargetDistance = 1.2f;
+
+    internal static bool ShouldRetargetNetworkFollow(
+        bool inStopRange,
+        bool inResumeRange,
+        bool pathPending,
+        bool walking,
+        float leaderMovedSquared,
+        float retargetDistanceSquared)
+    {
+        if (pathPending || inStopRange) return false;
+        if (walking)
+            return leaderMovedSquared >= retargetDistanceSquared;
+        return !inResumeRange;
+    }
 
     private void UpdateNetworkFollowWalk()
     {
-        if (!_networkFollowingLocally ||
-            _player is null ||
-            _fishingBoatBoarded ||
-            _networkClient?.IsConnected != true)
-            return;
-        var targetId = _networkClient.State.Social.FollowTargetPlayerId;
-        if (targetId == Guid.Empty)
-            targetId = _networkFollowTargetId;
-        if (targetId == Guid.Empty) return;
-        if (!TryGetNetworkPlayerWorldPosition(targetId, out var lead))
-            return;
-        if (Vector2.DistanceSquared(_player.Position, lead) <=
-            NetworkFollowStandDistance * NetworkFollowStandDistance)
-            return;
-        var stand = NetworkFollowStandNear(_player.Position, lead);
-        if (_pendingPathTask is not null) return;
-        if (_player.Action == EntityAction.Move &&
-            Vector2.DistanceSquared(_networkPredictedDestination, stand) <
-            NetworkFollowRetargetDistance * NetworkFollowRetargetDistance)
-            return;
-        _networkPredictedDestination = stand;
-        _worldActions.QueuePredictedWalk(stand);
-    }
-
-    private bool TryGetNetworkPlayerWorldPosition(
-        Guid playerId, out Vector2 position)
-    {
-        position = default;
-        if (_networkClient is null) return false;
-        if (!_networkClient.State.Players.TryGetValue(playerId, out var player))
-            return false;
-        if (_networkActors.TryGetValue(player.EntityId, out var entity))
-        {
-            position = entity.Position;
-            return true;
-        }
-
-        if (_networkClient.State.Entities.TryGetValue(
-                player.EntityId, out var snapshot))
-        {
-            position = new(snapshot.X, snapshot.Y);
-            return true;
-        }
-
-        return false;
-    }
-
-    private static Vector2 NetworkFollowStandNear(
-        Vector2 follower, Vector2 leader)
-    {
-        var away = follower - leader;
-        if (away.LengthSquared <= .0001f)
-            away = Vector2.UnitX;
-        else
-            away = away.Normalized();
-        return leader + away * NetworkFollowStandDistance;
+        // Follow locomotion is applied in ApplyLocalNetworkSnapshot with
+        // PresentRemoteWalk so this client matches what others already see.
     }
 
     private void PollNetworkPresentation()

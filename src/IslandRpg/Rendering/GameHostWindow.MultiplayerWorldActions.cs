@@ -690,7 +690,7 @@ internal sealed partial class GameHostWindow
         var chunk = WorldChunkKey.At(
             new System.Numerics.Vector2(value.X, value.Y),
             _activeWorldLevel);
-        if (!ProceduralGroundLootCatalog.TryResolve(
+        if (!GeneratedPortableGroundLoot.TryResolve(
                 _worldSeed, chunk, value.Id, out _))
         {
             reference = default;
@@ -701,7 +701,7 @@ internal sealed partial class GameHostWindow
             chunk.X,
             chunk.Y,
             checked((short)chunk.WorldLevel),
-            1,
+            GeneratedPortableGroundLoot.VirginCommandRevision,
             NetworkChunkRevision(new(value.X, value.Y), _activeWorldLevel));
         return true;
     }

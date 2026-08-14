@@ -9,42 +9,65 @@ internal static class ProceduralGroundLootChecks
     {
         CatalogMatchesSoloChunkGenerator();
         Console.WriteLine(
-            "Procedural ground-loot checks passed: catalog IDs match generated rocks and sticks.");
+            "Procedural ground-loot checks passed: catalog IDs match every generated pickup item.");
     }
 
     private static void CatalogMatchesSoloChunkGenerator()
     {
         const long seed = 67;
         var compared = 0;
-        for (var chunkY = -2; chunkY <= 2; chunkY++)
-        for (var chunkX = -2; chunkX <= 2; chunkX++)
+        var seenItems = new HashSet<string>(StringComparer.Ordinal);
+        for (var chunkY = -8; chunkY <= 8; chunkY++)
+        for (var chunkX = -8; chunkX <= 8; chunkX++)
         {
             var coordinate = new ChunkCoordinate(chunkX, chunkY);
             var generated = InfiniteWorldGenerator.Generate(seed, coordinate);
-            var catalog = ProceduralGroundLootCatalog.DescribeChunk(
-                seed, new WorldChunkKey(chunkX, chunkY, 0));
-            var generatedCore = generated.GroundObjects
-                .Where(IsCatalogItem)
+            var chunk = new WorldChunkKey(chunkX, chunkY, 0);
+            var inland = ProceduralGroundLootCatalog.DescribeChunk(seed, chunk);
+            var coastal = ProceduralCoastalLootCatalog.DescribeChunk(seed, chunk);
+            var generatedInland = generated.GroundObjects
+                .Where(IsInlandCatalogItem)
                 .Select(value => value.Id)
                 .OrderBy(value => value)
                 .ToArray();
-            var catalogIds = catalog
+            var inlandIds = inland
                 .Select(value => value.Id)
                 .OrderBy(value => value)
                 .ToArray();
             Assert(
-                generatedCore.SequenceEqual(catalogIds),
-                "procedural ground loot must use the same stable IDs as solo chunk generation");
-            compared += generatedCore.Length;
+                generatedInland.SequenceEqual(inlandIds),
+                "inland ground loot must use the same stable IDs as solo chunk generation");
+            var generatedCoastal = generated.GroundObjects
+                .Where(value => ProceduralCoastalLootCatalog.IsCoastal(value.ItemId))
+                .Select(value => value.Id)
+                .OrderBy(value => value)
+                .ToArray();
+            var coastalIds = coastal
+                .Select(value => value.Id)
+                .OrderBy(value => value)
+                .ToArray();
+            Assert(
+                generatedCoastal.SequenceEqual(coastalIds),
+                "coastal collectibles must use the same stable IDs as solo chunk generation");
+            compared += generatedInland.Length + generatedCoastal.Length;
+            foreach (var value in generated.GroundObjects)
+                seenItems.Add(value.ItemId);
         }
 
         Assert(compared > 0,
-            "the fixture must include generated sticks or rocks");
+            "the fixture must include generated portable ground loot");
+        foreach (var itemId in ProceduralGroundLootCatalog.PortableItemIds)
+        {
+            Assert(seenItems.Contains(itemId),
+                $"the fixture must include generated {itemId}");
+        }
+        Assert(
+            seenItems.Any(ProceduralCoastalLootCatalog.IsCoastal),
+            "the fixture must include generated coastal collectibles");
     }
 
-    private static bool IsCatalogItem(WorldGroundObject value) =>
-        value.ItemId is ItemIds.Sticks or ItemIds.LargeRock or
-            ItemIds.WildGrainSeeds or ItemIds.BeanSeeds or ItemIds.RootSeeds;
+    private static bool IsInlandCatalogItem(WorldGroundObject value) =>
+        ProceduralGroundLootCatalog.PortableItemIds.Contains(value.ItemId);
 
     private static void Assert(bool condition, string message)
     {

@@ -5,6 +5,8 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using FontStashSharp;
 using IslandRpg.Boats;
+using IslandRpg.Client;
+using IslandRpg.Gameplay;
 using IslandRpg.Persistence;
 using IslandRpg.Rendering.Ui;
 using IslandRpg.Server;
@@ -17,21 +19,50 @@ internal sealed partial class GameHostWindow
 {
     private const string NewHostedWorldId = "new";
 
+    private enum MultiplayerWizardStep
+    {
+        Character,
+        Mode,
+        Host,
+        Join
+    }
+
     private readonly TextBoxControlState _multiplayerEndpointTextBox =
         new("127.0.0.1:38740") { MaximumLength = 64 };
     private readonly TextBoxControlState _multiplayerSeedTextBox =
         new(Random.Shared.NextInt64().ToString());
     private readonly ListControlState _hostedWorldList = new();
+    private readonly ListControlState _joinServerList = new();
+    private readonly List<JoinServerChoice> _joinServerChoices = [];
+    private readonly TextBoxControlState _serverNameTextBox =
+        new("") { MaximumLength = 32 };
     private readonly List<HostedWorldChoice> _hostedWorldChoices = [];
+    private bool _joinEditorOpen;
+    private string? _joinEditingId;
+    private LanDiscoveryListener? _lanDiscovery;
     private bool _multiplayerIslandStart;
     private string? _multiplayerStatus;
     private Process? _hostedServerProcess;
     private bool _multiplayerBusy;
+    private MultiplayerWizardStep _multiplayerStep =
+        MultiplayerWizardStep.Character;
+    private FrontendPage _characterCreateReturnPage = FrontendPage.Main;
 
     private bool IsHostingWorld =>
         _hostedServerProcess is { HasExited: false };
 
-    private Vector4 MultiplayerPanel() => FrontendPanel(760, 640);
+    private Vector4 MultiplayerPanel() => _multiplayerStep switch
+    {
+        MultiplayerWizardStep.Character => FrontendPanel(720, 600),
+        MultiplayerWizardStep.Mode => FrontendPanel(720, 540),
+        MultiplayerWizardStep.Host => FrontendPanel(760, 640),
+        MultiplayerWizardStep.Join => FrontendPanel(760, 640),
+        _ => FrontendPanel(720, 600)
+    };
+
+    private bool IsMultiplayerCharacterStep =>
+        _frontendPage == FrontendPage.Multiplayer &&
+        _multiplayerStep == MultiplayerWizardStep.Character;
 
     private bool IsNewHostedWorldSelected =>
         _hostedWorldList.SelectedId is null or NewHostedWorldId;
@@ -48,8 +79,21 @@ internal sealed partial class GameHostWindow
         _hostedWorldList.SelectedId = NewHostedWorldId;
         _multiplayerStatus = null;
         _frontendError = null;
+        _multiplayerStep = MultiplayerWizardStep.Character;
+        _characterCreateReturnPage = FrontendPage.Multiplayer;
+        _joinEditorOpen = false;
+        _joinEditingId = null;
+        StopLanDiscovery();
         _frontendPage = FrontendPage.Multiplayer;
         BlurTextBoxes();
+    }
+
+    private void OpenCharacterCreateFromMultiplayer()
+    {
+        _characterCreateReturnPage = FrontendPage.Multiplayer;
+        _playerNameTextBox.SetText("");
+        _frontendPage = FrontendPage.CharacterCreate;
+        FocusTextBoxAtEnd(_playerNameTextBox);
     }
 
     private void RefreshHostedWorldChoices()
@@ -112,44 +156,253 @@ internal sealed partial class GameHostWindow
 
     private void RenderMultiplayerMenu()
     {
-        RefreshHostedWorldChoices();
-        LayoutHostedWorldList();
         var panel = MultiplayerPanel();
         DrawAoEPanelBorder(panel);
+        switch (_multiplayerStep)
+        {
+            case MultiplayerWizardStep.Character:
+                RenderMultiplayerCharacterStep(panel);
+                break;
+            case MultiplayerWizardStep.Mode:
+                RenderMultiplayerModeStep(panel);
+                break;
+            case MultiplayerWizardStep.Host:
+                RenderMultiplayerHostStep(panel);
+                break;
+            case MultiplayerWizardStep.Join:
+                EnsureLanDiscovery();
+                RenderMultiplayerJoinStep(panel);
+                break;
+        }
+
+        if (_multiplayerStep != MultiplayerWizardStep.Join)
+            StopLanDiscovery();
+    }
+
+    private void RenderMultiplayerChrome(
+        Vector4 panel, string title, string subtitle)
+    {
+        var header = new Vector4(
+            panel.X + 18, panel.Y + 18, panel.Z - 36, 108);
+        DrawUiColor(header, new(.052f, .044f, .027f, 1));
+        DrawPanelOutline(header, 0, new(.34f, .27f, .13f, 1));
+        DrawPanelOutline(header, 1, new(.10f, .085f, .052f, 1));
         DrawCenteredMenuTitle(
-            "MULTIPLAYER",
-            new(panel.X, panel.Y + 16, panel.Z, 38),
+            title,
+            new(header.X, header.Y + 13, header.Z, 44),
             new(241, 222, 162, 255));
         DrawCenteredUiText(
-            "Host a saved world, start a new one, or join a friend",
-            new(panel.X + 40, panel.Y + 54, panel.Z - 80, 22),
+            subtitle,
+            new(header.X + 24, header.Y + 63, header.Z - 48, 22),
             new(180, 158, 107, 255));
+        DrawUiColor(
+            new(header.X + 142, header.Y + 91, header.Z - 284, 1),
+            new(.46f, .34f, .13f, 1));
+        RenderMultiplayerStepTrail(panel);
+    }
 
-        var character = new Vector4(
-            panel.X + 44, panel.Y + 86, panel.Z - 88, 32);
-        DrawUiColor(character, new(.038f, .035f, .026f, 1));
-        DrawPanelOutline(character, 0, new(.23f, .19f, .11f, 1));
+    private void RenderMultiplayerStepTrail(Vector4 panel)
+    {
+        var current = _multiplayerStep switch
+        {
+            MultiplayerWizardStep.Character => 0,
+            MultiplayerWizardStep.Mode => 1,
+            _ => 2
+        };
+        string[] labels = ["1  CHARACTER", "2  PLAY", "3  CONNECT"];
+        var trail = new Vector4(
+            panel.X + 44, panel.Y + 136, panel.Z - 88, 28);
+        var width = trail.Z / labels.Length;
+        for (var index = 0; index < labels.Length; index++)
+        {
+            var cell = new Vector4(
+                trail.X + index * width, trail.Y, width - 8, trail.W);
+            var active = index == current;
+            var done = index < current;
+            DrawUiColor(
+                cell,
+                active
+                    ? new(.155f, .12f, .055f, 1)
+                    : done
+                        ? new(.08f, .068f, .040f, 1)
+                        : new(.038f, .034f, .026f, 1));
+            DrawPanelOutline(
+                cell, 0,
+                active
+                    ? new(.57f, .42f, .14f, 1)
+                    : done
+                        ? new(.36f, .28f, .12f, 1)
+                        : new(.20f, .17f, .10f, 1));
+            DrawCenteredUiText(
+                labels[index],
+                cell,
+                active
+                    ? new(241, 222, 162, 255)
+                    : done
+                        ? new(186, 166, 112, 255)
+                        : new(122, 114, 94, 255));
+        }
+    }
+
+    private void RenderMultiplayerAdventurerChip(Vector4 bounds)
+    {
+        DrawUiColor(bounds, new(.038f, .035f, .026f, 1));
+        DrawPanelOutline(bounds, 0, new(.23f, .19f, .11f, 1));
+        if (_selectedPlayer is null)
+        {
+            DrawCenteredUiText(
+                "NO ADVENTURER SELECTED",
+                bounds,
+                new(220, 104, 82, 255));
+            return;
+        }
+
+        var team = TeamColor(_selectedPlayer.TeamColor);
+        DrawUiColor(
+            new(bounds.X + 2, bounds.Y + 2, 4, bounds.W - 4),
+            new(team.X, team.Y, team.Z, 1));
+        var level = AdventureService.LevelForExperience(
+            _selectedPlayer.AdventureExperience);
         DrawCenteredUiText(
-            _selectedPlayer is null
-                ? "SELECT A CHARACTER FIRST"
-                : $"ADVENTURER   •   {_selectedPlayer.Name.ToUpperInvariant()}",
-            character,
-            _selectedPlayer is null
-                ? new(220, 104, 82, 255)
-                : new(199, 184, 142, 255));
+            $"{_selectedPlayer.Name.ToUpperInvariant()}   •   " +
+            $"{_selectedPlayer.Gender.ToString().ToUpperInvariant()}   •   " +
+            $"ADVENTURE {level}",
+            bounds,
+            new(199, 184, 142, 255));
+    }
 
+    private void RenderMultiplayerCharacterStep(Vector4 panel)
+    {
+        RenderMultiplayerChrome(
+            panel, "MULTIPLAYER", "CHOOSE YOUR ADVENTURER");
+        var players = _saves.ListPlayers().ToArray();
+        LayoutCharacterList(players);
+        DrawUiText(
+            "ADVENTURERS",
+            new(panel.X + 44, panel.Y + 176),
+            new FSColor(199, 184, 142, 255));
+        var count = players.Length == 1
+            ? "1 CHARACTER"
+            : $"{players.Length} CHARACTERS";
+        var size = _chatFont?.MeasureString(count) ??
+                   System.Numerics.Vector2.Zero;
+        DrawUiText(
+            count,
+            new(panel.X + panel.Z - 44 - size.X, panel.Y + 176),
+            new FSColor(130, 124, 106, 255));
+        if (players.Length == 0)
+            RenderEmptyCharacterSelection(panel);
+        else
+            RenderCharacterRows(players);
+        RenderListScrollbar(_characterList);
+        DrawUiColor(
+            new(panel.X + 44, panel.Y + panel.W - 106, panel.Z - 104, 1),
+            new(.25f, .20f, .11f, 1));
+        DrawMainMenuButton(
+            NewCharacterButtonBounds(), "NEW CHARACTER");
+        DrawMainMenuButton(
+            CharacterSelectionBackButtonBounds(), "Back", quiet: true);
+        if (_selectedPlayer is not null)
+            DrawMainMenuButton(
+                ContinueCharacterButtonBounds(),
+                "CONTINUE",
+                primary: true);
+        RenderMultiplayerStatus(panel);
+    }
+
+    private void RenderMultiplayerModeStep(Vector4 panel)
+    {
+        RenderMultiplayerChrome(
+            panel, "MULTIPLAYER", "HOW WILL YOU PLAY");
+        RenderMultiplayerAdventurerChip(MultiplayerChipBounds());
+        RenderMultiplayerModeCard(
+            MultiplayerHostCardBounds(),
+            "HOST A WORLD",
+            "Start a dedicated world on this PC. Friends join with your LAN address.");
+        RenderMultiplayerModeCard(
+            MultiplayerJoinCardBounds(),
+            "JOIN A FRIEND",
+            "Connect to a host:port. Use 127.0.0.1 on this machine.");
+        DrawMainMenuButton(MultiplayerBackBounds(), "Back", quiet: true);
+        RenderMultiplayerStatus(panel);
+    }
+
+    private void RenderMultiplayerModeCard(
+        Vector4 bounds, string title, string detail)
+    {
+        var hovered = bounds.Contains(MouseState.Position);
+        DrawUiColor(
+            bounds,
+            hovered
+                ? new(.12f, .096f, .050f, 1)
+                : new(.047f, .042f, .032f, .96f));
+        DrawPanelOutline(
+            bounds, 0,
+            hovered
+                ? new(.65f, .48f, .17f, 1)
+                : new(.28f, .23f, .14f, 1));
+        DrawPanelOutline(bounds, 1, new(.045f, .040f, .029f, 1));
+        DrawCenteredUiText(
+            title,
+            new(bounds.X + 16, bounds.Y + 22, bounds.Z - 32, 28),
+            new(241, 222, 162, 255));
+        DrawWrappedCenteredUiText(
+            detail,
+            new(bounds.X + 22, bounds.Y + 58, bounds.Z - 44, 88),
+            new(154, 142, 112, 255));
+    }
+
+    private void DrawWrappedCenteredUiText(
+        string text, Vector4 bounds, FSColor color)
+    {
+        var lines = WrapUiText(text, bounds.Z).ToArray();
+        const float lineHeight = 20;
+        var total = lines.Length * lineHeight;
+        var y = bounds.Y + MathF.Max(0, (bounds.W - total) * .5f);
+        foreach (var line in lines)
+        {
+            DrawCenteredUiText(
+                line,
+                new(bounds.X, y, bounds.Z, lineHeight),
+                color);
+            y += lineHeight;
+        }
+    }
+
+    private IEnumerable<string> WrapUiText(string text, float maximumWidth)
+    {
+        var line = "";
+        foreach (var word in text.Split(
+                     ' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = line.Length == 0 ? word : $"{line} {word}";
+            if (line.Length > 0 && MeasureUiText(candidate) > maximumWidth)
+            {
+                yield return line;
+                line = word;
+            }
+            else
+                line = candidate;
+        }
+
+        if (line.Length > 0)
+            yield return line;
+    }
+
+    private void RenderMultiplayerHostStep(Vector4 panel)
+    {
+        RefreshHostedWorldChoices();
+        LayoutHostedWorldList();
+        RenderMultiplayerChrome(
+            panel, "HOST WORLD", "CHOOSE OR CREATE A WORLD");
+        RenderMultiplayerAdventurerChip(MultiplayerChipBounds());
         var hostBox = HostBoxBounds();
         DrawUiColor(hostBox, new(.038f, .036f, .030f, .82f));
         DrawPanelOutline(hostBox, 0, new(.28f, .23f, .14f, 1));
         DrawUiText(
-            "HOST",
+            "SAVED WORLDS",
             new(hostBox.X + 18, hostBox.Y + 12),
             new(218, 202, 158, 255));
-        DrawUiText(
-            "Choose a saved world or create a new one.",
-            new(hostBox.X + 70, hostBox.Y + 14),
-            new(145, 138, 117, 255));
-
         RenderHostedWorldRows();
         RenderListScrollbar(_hostedWorldList);
 
@@ -177,42 +430,129 @@ internal sealed partial class GameHostWindow
                 new(180, 158, 107, 255));
         }
 
+        DrawMainMenuButton(MultiplayerBackBounds(), "Back", quiet: true);
         DrawMainMenuButton(
             HostStartButtonBounds(),
             IsHostingWorld
                 ? "HOSTING…"
                 : IsNewHostedWorldSelected ? "HOST NEW WORLD" : "HOST THIS WORLD",
             primary: true);
+        RenderMultiplayerStatus(panel);
+    }
 
+    private void RenderMultiplayerJoinStep(Vector4 panel)
+    {
+        RefreshJoinServerChoices();
+        LayoutJoinServerList();
+        RenderMultiplayerChrome(
+            panel, "JOIN WORLD", "SAVED SERVERS AND LAN WORLDS");
+        RenderMultiplayerAdventurerChip(MultiplayerChipBounds());
         var joinBox = JoinBoxBounds();
         DrawUiColor(joinBox, new(.038f, .036f, .030f, .82f));
         DrawPanelOutline(joinBox, 0, new(.28f, .23f, .14f, 1));
         DrawUiText(
-            "JOIN",
+            "SERVER LIST",
             new(joinBox.X + 18, joinBox.Y + 12),
             new(218, 202, 158, 255));
-        var endpointBounds = JoinEndpointBounds();
-        _multiplayerEndpointTextBox.Bounds = endpointBounds;
+        if (_joinServerChoices.Count == 0)
+        {
+            var empty = JoinServerListBounds();
+            DrawCenteredUiText(
+                "No saved or LAN servers yet",
+                new(empty.X, empty.Y + 28, empty.Z, 22),
+                new(145, 138, 117, 255));
+        }
+        else
+            RenderJoinServerRows();
+        RenderListScrollbar(_joinServerList);
+
+        if (_joinEditorOpen)
+            RenderJoinServerEditor();
+        else
+        {
+            var endpointBounds = JoinEndpointBounds();
+            _multiplayerEndpointTextBox.Bounds = endpointBounds;
+            DrawUiText(
+                "DIRECT CONNECT",
+                new(endpointBounds.X, endpointBounds.Y - 16),
+                new(204, 190, 150, 255));
+            DrawTextField(_multiplayerEndpointTextBox);
+            DrawMenuButton(JoinAddServerBounds(), "Add server");
+        }
+
+        DrawMainMenuButton(MultiplayerBackBounds(), "Back", quiet: true);
+        DrawMainMenuButton(JoinButtonBounds(), "JOIN WORLD", primary: true);
+        RenderMultiplayerStatus(panel);
+    }
+
+    private void RenderJoinServerEditor()
+    {
+        var name = JoinServerNameBounds();
+        var address = JoinEndpointBounds();
+        _serverNameTextBox.Bounds = name;
+        _multiplayerEndpointTextBox.Bounds = address;
+        DrawUiText(
+            "SERVER NAME",
+            new(name.X, name.Y - 16),
+            new(204, 190, 150, 255));
+        DrawTextField(_serverNameTextBox);
         DrawUiText(
             "HOST:PORT",
-            new(endpointBounds.X, endpointBounds.Y - 16),
+            new(address.X, address.Y - 16),
             new(204, 190, 150, 255));
         DrawTextField(_multiplayerEndpointTextBox);
-        DrawUiText(
-            "127.0.0.1:38740 on this PC  •  LAN IP:port for a friend",
-            new(endpointBounds.X, endpointBounds.Y + 40),
-            new(132, 124, 104, 255));
-        DrawMainMenuButton(JoinButtonBounds(), "JOIN", primary: true);
+        DrawMenuButton(JoinSaveServerBounds(), "Save");
+        DrawMenuButton(JoinCancelEditBounds(), "Cancel");
+    }
 
+    private void RenderJoinServerRows()
+    {
+        foreach (var index in _joinServerList.VisibleIndices)
+        {
+            if ((uint)index >= (uint)_joinServerChoices.Count) continue;
+            var choice = _joinServerChoices[index];
+            var row = _joinServerList.RowBounds(index);
+            var action = _joinServerList.DeleteBounds(index);
+            var selected = _joinServerList.SelectedId == choice.Id;
+            var hovered = row.Contains(MouseState.Position);
+            DrawUiColor(
+                row,
+                selected
+                    ? new(.155f, .12f, .055f, 1)
+                    : hovered
+                        ? new(.10f, .086f, .052f, 1)
+                        : new(.060f, .055f, .041f, 1));
+            DrawPanelOutline(
+                row, 0,
+                selected
+                    ? new(.57f, .42f, .14f, 1)
+                    : new(.23f, .19f, .11f, 1));
+            DrawUiText(
+                choice.Title,
+                new(row.X + 12, row.Y + 6),
+                new FSColor(232, 217, 166, 255));
+            DrawUiText(
+                choice.Details,
+                new(row.X + 12, row.Y + 24),
+                new FSColor(142, 136, 116, 255));
+            var pending = !choice.IsLan &&
+                          _joinServerList.IsDeletePending(choice.Id);
+            DrawMenuButton(
+                action,
+                choice.IsLan ? "SAVE" : pending ? "CONFIRM" : "DELETE");
+        }
+    }
+
+    private void RenderMultiplayerStatus(Vector4 panel)
+    {
         var status = _frontendError ?? _multiplayerStatus;
-        if (!string.IsNullOrWhiteSpace(status))
-            DrawCenteredUiText(
-                status,
-                new(panel.X + 44, panel.Y + panel.W - 86, panel.Z - 88, 22),
-                _frontendError is null
-                    ? new(199, 184, 142, 255)
-                    : new(220, 104, 82, 255));
-        DrawMainMenuButton(HostBackBounds(), "Back", quiet: true);
+        if (string.IsNullOrWhiteSpace(status)) return;
+        DrawCenteredUiText(
+            status,
+            new(panel.X + 160, panel.Y + panel.W - 94, panel.Z - 320, 22),
+            _frontendError is null
+                ? new(199, 184, 142, 255)
+                : new(220, 104, 82, 255));
     }
 
     private void RenderHostedWorldRows()
@@ -254,6 +594,90 @@ internal sealed partial class GameHostWindow
     private void UpdateMultiplayerClick(Vector2 pointer)
     {
         if (_multiplayerBusy) return;
+        switch (_multiplayerStep)
+        {
+            case MultiplayerWizardStep.Character:
+                UpdateMultiplayerCharacterClick(pointer);
+                return;
+            case MultiplayerWizardStep.Mode:
+                UpdateMultiplayerModeClick(pointer);
+                return;
+            case MultiplayerWizardStep.Host:
+                UpdateMultiplayerHostClick(pointer);
+                return;
+            case MultiplayerWizardStep.Join:
+                UpdateMultiplayerJoinClick(pointer);
+                return;
+        }
+    }
+
+    private void UpdateMultiplayerCharacterClick(Vector2 pointer)
+    {
+        var players = _saves.ListPlayers().ToArray();
+        LayoutCharacterList(players);
+        if (_characterList.TryHit(pointer, out var index, out var delete) &&
+            (uint)index < (uint)players.Length)
+        {
+            var player = players[index];
+            if (!delete)
+            {
+                _selectedPlayer = player;
+                _characterList.SelectedId = player.Id;
+                _characterList.ClearDeleteApproval();
+                _frontendError = null;
+                return;
+            }
+            if (!_characterList.ApproveDelete(player.Id))
+                return;
+            var deletingSelected = _selectedPlayer?.Id == player.Id;
+            _saves.DeletePlayer(player.Id);
+            var remaining = _saves.ListPlayers();
+            if (deletingSelected) _selectedPlayer = remaining.FirstOrDefault();
+            if (remaining.Count == 0)
+                OpenCharacterCreateFromMultiplayer();
+            return;
+        }
+
+        if (NewCharacterButtonBounds().Contains(pointer))
+            OpenCharacterCreateFromMultiplayer();
+        else if (_selectedPlayer is not null &&
+                 ContinueCharacterButtonBounds().Contains(pointer))
+        {
+            _multiplayerStep = MultiplayerWizardStep.Mode;
+            _frontendError = null;
+            BlurTextBoxes();
+        }
+        else if (CharacterSelectionBackButtonBounds().Contains(pointer))
+        {
+            _frontendPage = FrontendPage.Main;
+            _characterCreateReturnPage = FrontendPage.Main;
+            BlurTextBoxes();
+        }
+    }
+
+    private void UpdateMultiplayerModeClick(Vector2 pointer)
+    {
+        if (MultiplayerHostCardBounds().Contains(pointer))
+        {
+            _multiplayerStep = MultiplayerWizardStep.Host;
+            _frontendError = null;
+            BlurTextBoxes();
+        }
+        else if (MultiplayerJoinCardBounds().Contains(pointer))
+        {
+            _multiplayerStep = MultiplayerWizardStep.Join;
+            _frontendError = null;
+            BlurTextBoxes();
+        }
+        else if (MultiplayerBackBounds().Contains(pointer))
+        {
+            _multiplayerStep = MultiplayerWizardStep.Character;
+            BlurTextBoxes();
+        }
+    }
+
+    private void UpdateMultiplayerHostClick(Vector2 pointer)
+    {
         RefreshHostedWorldChoices();
         LayoutHostedWorldList();
         if (_hostedWorldList.TryHit(pointer, out var index, out var delete) &&
@@ -277,9 +701,6 @@ internal sealed partial class GameHostWindow
             HostSeedBounds().Contains(pointer))
             FocusTextBox(
                 _multiplayerSeedTextBox, HostSeedBounds(), pointer);
-        else if (JoinEndpointBounds().Contains(pointer))
-            FocusTextBox(
-                _multiplayerEndpointTextBox, JoinEndpointBounds(), pointer);
         else if (IsNewHostedWorldSelected &&
                  HostRandomSeedBounds().Contains(pointer))
         {
@@ -292,23 +713,221 @@ internal sealed partial class GameHostWindow
             _multiplayerIslandStart = !_multiplayerIslandStart;
         else if (HostStartButtonBounds().Contains(pointer))
             _ = HostMultiplayerWorldAsync();
-        else if (JoinButtonBounds().Contains(pointer))
-            JoinMultiplayerWorld();
-        else if (HostBackBounds().Contains(pointer))
+        else if (MultiplayerBackBounds().Contains(pointer))
         {
-            _frontendPage = FrontendPage.Main;
+            _multiplayerStep = MultiplayerWizardStep.Mode;
             BlurTextBoxes();
         }
         else
             BlurTextBoxes();
     }
 
+    private void UpdateMultiplayerJoinClick(Vector2 pointer)
+    {
+        RefreshJoinServerChoices();
+        LayoutJoinServerList();
+        if (_joinServerList.TryHit(pointer, out var index, out var action) &&
+            (uint)index < (uint)_joinServerChoices.Count)
+        {
+            var choice = _joinServerChoices[index];
+            if (action)
+            {
+                if (choice.IsLan)
+                {
+                    _saves.UpsertSavedServer(
+                        choice.Title, choice.Host, choice.Port);
+                    _multiplayerStatus = $"Saved {choice.Title}.";
+                    _frontendError = null;
+                    return;
+                }
+
+                if (_joinServerList.ApproveDelete(choice.Id))
+                {
+                    _saves.RemoveSavedServer(choice.Id);
+                    _joinServerList.SelectedId = null;
+                }
+                return;
+            }
+
+            _joinServerList.SelectedId = choice.Id;
+            _joinServerList.ClearDeleteApproval();
+            _multiplayerEndpointTextBox.SetText($"{choice.Host}:{choice.Port}");
+            _frontendError = null;
+            return;
+        }
+
+        if (_joinEditorOpen)
+        {
+            if (JoinServerNameBounds().Contains(pointer))
+                FocusTextBox(
+                    _serverNameTextBox, JoinServerNameBounds(), pointer);
+            else if (JoinEndpointBounds().Contains(pointer))
+                FocusTextBox(
+                    _multiplayerEndpointTextBox, JoinEndpointBounds(), pointer);
+            else if (JoinSaveServerBounds().Contains(pointer))
+                SaveJoinServerFromEditor();
+            else if (JoinCancelEditBounds().Contains(pointer))
+            {
+                _joinEditorOpen = false;
+                _joinEditingId = null;
+                BlurTextBoxes();
+            }
+            else if (JoinButtonBounds().Contains(pointer))
+                JoinMultiplayerWorld();
+            else if (MultiplayerBackBounds().Contains(pointer))
+                LeaveJoinStep();
+            else
+                BlurTextBoxes();
+            return;
+        }
+
+        if (JoinEndpointBounds().Contains(pointer))
+            FocusTextBox(
+                _multiplayerEndpointTextBox, JoinEndpointBounds(), pointer);
+        else if (JoinAddServerBounds().Contains(pointer))
+            OpenJoinServerEditor(null);
+        else if (JoinButtonBounds().Contains(pointer))
+            JoinMultiplayerWorld();
+        else if (MultiplayerBackBounds().Contains(pointer))
+            LeaveJoinStep();
+        else
+            BlurTextBoxes();
+    }
+
+    private void LeaveJoinStep()
+    {
+        _joinEditorOpen = false;
+        _joinEditingId = null;
+        _multiplayerStep = MultiplayerWizardStep.Mode;
+        StopLanDiscovery();
+        BlurTextBoxes();
+    }
+
+    private void OpenJoinServerEditor(JoinServerChoice? selected)
+    {
+        _joinEditorOpen = true;
+        _joinEditingId = selected?.IsLan == false ? selected.Id : null;
+        _serverNameTextBox.SetText(selected?.Title ?? "");
+        if (selected is not null)
+            _multiplayerEndpointTextBox.SetText(
+                $"{selected.Host}:{selected.Port}");
+        FocusTextBoxAtEnd(_serverNameTextBox);
+        _frontendError = null;
+    }
+
+    private void SaveJoinServerFromEditor()
+    {
+        try
+        {
+            var launch = NetworkLaunchOptions.Parse(
+                _multiplayerEndpointTextBox.Text, "join");
+            var name = _serverNameTextBox.Text.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                name = $"{launch.Host}:{launch.Port}";
+            if (_joinEditingId is { } id)
+            {
+                var servers = _saves.LoadSavedServers()
+                    .Select(value =>
+                        value.Id == id
+                            ? value with
+                            {
+                                Name = name,
+                                Host = launch.Host,
+                                Port = launch.Port
+                            }
+                            : value)
+                    .ToArray();
+                _saves.SaveSavedServers(servers);
+            }
+            else
+                _saves.UpsertSavedServer(name, launch.Host, launch.Port);
+            _multiplayerEndpointTextBox.SetText(
+                $"{launch.Host}:{launch.Port}");
+            _joinEditorOpen = false;
+            _joinEditingId = null;
+            _multiplayerStatus = $"Saved {name}.";
+            _frontendError = null;
+            BlurTextBoxes();
+        }
+        catch (Exception exception)
+        {
+            _frontendError = exception.Message;
+        }
+    }
+
+    private void RefreshJoinServerChoices()
+    {
+        _joinServerChoices.Clear();
+        var saved = _saves.LoadSavedServers();
+        var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var server in saved)
+        {
+            var key = LanDiscoveryListener.Key(server.Host, server.Port);
+            known.Add(key);
+            _joinServerChoices.Add(new(
+                server.Id,
+                server.Name,
+                $"{server.Host}:{server.Port}   •   SAVED",
+                server.Host,
+                server.Port,
+                false));
+        }
+
+        foreach (var found in _lanDiscovery?.Snapshot() ?? [])
+        {
+            var key = LanDiscoveryListener.Key(found.Host, found.Beacon.GamePort);
+            if (!known.Add(key)) continue;
+            var players =
+                $"{found.Beacon.PlayerCount}/{found.Beacon.MaximumClients}";
+            _joinServerChoices.Add(new(
+                $"lan:{key}:{found.Beacon.WorldId:N}",
+                found.Beacon.DisplayName,
+                $"{found.Host}:{found.Beacon.GamePort}   •   LAN   •   {players}",
+                found.Host,
+                found.Beacon.GamePort,
+                true));
+        }
+
+        if (_joinServerList.SelectedId is { } selected &&
+            _joinServerChoices.All(value => value.Id != selected))
+            _joinServerList.SelectedId = null;
+    }
+
+    private void LayoutJoinServerList()
+    {
+        _joinServerList.Layout(
+            JoinServerListBounds(),
+            _joinServerChoices.Select(value => value.Id).ToArray(),
+            rowHeight: 44,
+            rowGap: 6,
+            deleteWidth: 72,
+            actionGap: 6);
+    }
+
+    private void EnsureLanDiscovery() =>
+        _lanDiscovery ??= new LanDiscoveryListener();
+
+    private void StopLanDiscovery()
+    {
+        _lanDiscovery?.Dispose();
+        _lanDiscovery = null;
+    }
+
+    private sealed record JoinServerChoice(
+        string Id,
+        string Title,
+        string Details,
+        string Host,
+        int Port,
+        bool IsLan);
+
     private async Task HostMultiplayerWorldAsync()
     {
         if (_multiplayerBusy) return;
         if (_selectedPlayer is null)
         {
-            _frontendError = "Create or select a character first.";
+            _multiplayerStep = MultiplayerWizardStep.Character;
+            _frontendError = "Choose a character first.";
             return;
         }
 
@@ -386,15 +1005,24 @@ internal sealed partial class GameHostWindow
         if (_multiplayerBusy) return;
         if (_selectedPlayer is null)
         {
-            _frontendError = "Create or select a character first.";
+            _multiplayerStep = MultiplayerWizardStep.Character;
+            _frontendError = "Choose a character first.";
             return;
         }
 
         try
         {
-            var launch = NetworkLaunchOptions.Parse(
-                _multiplayerEndpointTextBox.Text,
-                _selectedPlayer.Name);
+            var selected = _joinServerChoices.FirstOrDefault(value =>
+                value.Id == _joinServerList.SelectedId);
+            var launch = selected is null
+                ? NetworkLaunchOptions.Parse(
+                    _multiplayerEndpointTextBox.Text,
+                    _selectedPlayer.Name)
+                : new NetworkLaunchOptions(
+                    selected.Host,
+                    selected.Port,
+                    _selectedPlayer.Name,
+                    Guid.Empty);
             _multiplayerEndpointTextBox.SetText($"{launch.Host}:{launch.Port}");
             _frontendError = null;
             _multiplayerStatus = $"Connecting to {launch.Host}:{launch.Port}…";
@@ -704,22 +1332,50 @@ internal sealed partial class GameHostWindow
                     spawn.Y)));
     }
 
+    private Vector4 MultiplayerChipBounds()
+    {
+        var panel = MultiplayerPanel();
+        return new(panel.X + 44, panel.Y + 172, panel.Z - 88, 30);
+    }
+
+    private Vector4 MultiplayerHostCardBounds()
+    {
+        var panel = MultiplayerPanel();
+        return new(panel.X + 44, panel.Y + 216, 300, 168);
+    }
+
+    private Vector4 MultiplayerJoinCardBounds()
+    {
+        var panel = MultiplayerPanel();
+        return new(panel.X + panel.Z - 344, panel.Y + 216, 300, 168);
+    }
+
+    private Vector4 MultiplayerBackBounds()
+    {
+        var panel = MultiplayerPanel();
+        return new(panel.X + 44, panel.Y + panel.W - 56, 108, 40);
+    }
+
     private Vector4 HostBoxBounds()
     {
         var panel = MultiplayerPanel();
-        return new(panel.X + 44, panel.Y + 128, panel.Z - 88, 286);
+        return new(
+            panel.X + 44,
+            panel.Y + 212,
+            panel.Z - 88,
+            panel.W - 280);
     }
 
     private Vector4 HostedWorldListBounds()
     {
         var host = HostBoxBounds();
-        return new(host.X + 18, host.Y + 40, host.Z - 36, 140);
+        return new(host.X + 18, host.Y + 40, host.Z - 36, host.W - 148);
     }
 
     private Vector4 HostSeedBounds()
     {
         var host = HostBoxBounds();
-        return new(host.X + 18, host.Y + 202, 280, 32);
+        return new(host.X + 18, host.Y + host.W - 92, 280, 32);
     }
 
     private Vector4 HostRandomSeedBounds()
@@ -731,37 +1387,65 @@ internal sealed partial class GameHostWindow
     private Vector4 HostIslandBounds()
     {
         var seed = HostSeedBounds();
-        return new(seed.X, seed.Y + 40, 220, 32);
+        return new(seed.X + 396, seed.Y, 188, 32);
     }
 
     private Vector4 HostStartButtonBounds()
     {
-        var host = HostBoxBounds();
-        return new(host.X + host.Z - 196, host.Y + host.W - 52, 178, 40);
+        var panel = MultiplayerPanel();
+        return new(panel.X + panel.Z - 232, panel.Y + panel.W - 56, 188, 40);
     }
 
     private Vector4 JoinBoxBounds()
     {
         var panel = MultiplayerPanel();
-        return new(panel.X + 44, panel.Y + 424, panel.Z - 88, 128);
+        return new(
+            panel.X + 44,
+            panel.Y + 212,
+            panel.Z - 88,
+            panel.W - 410);
+    }
+
+    private Vector4 JoinServerListBounds()
+    {
+        var join = JoinBoxBounds();
+        return new(join.X + 18, join.Y + 40, join.Z - 36, join.W - 52);
     }
 
     private Vector4 JoinEndpointBounds()
     {
-        var join = JoinBoxBounds();
-        return new(join.X + 18, join.Y + 56, join.Z - 214, 36);
+        var panel = MultiplayerPanel();
+        return new(panel.X + 44, panel.Y + panel.W - 148, 430, 32);
+    }
+
+    private Vector4 JoinServerNameBounds()
+    {
+        var panel = MultiplayerPanel();
+        return new(panel.X + 44, panel.Y + panel.W - 196, 280, 32);
+    }
+
+    private Vector4 JoinAddServerBounds()
+    {
+        var endpoint = JoinEndpointBounds();
+        return new(endpoint.X + endpoint.Z + 12, endpoint.Y, 132, 32);
+    }
+
+    private Vector4 JoinSaveServerBounds()
+    {
+        var name = JoinServerNameBounds();
+        return new(name.X + 292, name.Y, 88, 32);
+    }
+
+    private Vector4 JoinCancelEditBounds()
+    {
+        var name = JoinServerNameBounds();
+        return new(name.X + 388, name.Y, 88, 32);
     }
 
     private Vector4 JoinButtonBounds()
     {
-        var join = JoinBoxBounds();
-        return new(join.X + join.Z - 178, join.Y + 52, 160, 44);
-    }
-
-    private Vector4 HostBackBounds()
-    {
         var panel = MultiplayerPanel();
-        return new(panel.X + 44, panel.Y + panel.W - 52, 108, 40);
+        return new(panel.X + panel.Z - 216, panel.Y + panel.W - 56, 172, 40);
     }
 
     private static string GuessLanAddress()

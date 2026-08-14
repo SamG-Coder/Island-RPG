@@ -40,7 +40,9 @@ internal sealed partial class GameHostWindow
                     }
                 }
                 window._queuedAction = result.Action;
-                window._player?.FollowPath(result.Path);
+                if (!(window._networkFollowingLocally &&
+                      result.Path.Count == 0))
+                    window._player?.FollowPath(result.Path);
                 if (result.Path.Count > 0)
                     window._moveMarker = new(
                         result.Path[^1], 0,

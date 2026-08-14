@@ -16,6 +16,7 @@ NetworkResourceHotPathChecks.Run();
 Console.WriteLine(
     "Network resource hot-path checks passed: second pass described zero fish or trees.");
 NetworkSessionReuseChecks.Run();
+SavedGameServerChecks.Run();
 ProceduralGroundLootChecks.Run();
 CaveCoreChecks.Run();
 BoatFishingCoreChecks.Run();
@@ -10077,21 +10078,49 @@ var remoteWalked = remoteWalk.Position.X;
 var remoteWalkTime = remoteWalk.ActionTime;
 Require(
     remoteWalk.Action == EntityAction.Move &&
-    remoteWalked > .3f &&
+    MathF.Abs(remoteWalked - (19 * .15f + .15f)) < .001f &&
     remoteWalkTime > 0,
-    "a remote walk must use the same Update cycle as a click-to-walk");
+    "a remote walk must stay in Move and advance ActionTime with each sample");
 remoteWalk.PresentRemoteWalk(
-    new Vector2(remoteWalked - .3f, 0), Vector2.Zero, false, 1f / 60);
+    new Vector2(remoteWalked, 0), Vector2.Zero, false, 1f / 60);
 Require(
     remoteWalk.Action == EntityAction.Move &&
-    remoteWalk.ActionTime > remoteWalkTime &&
-    remoteWalk.Position.X >= remoteWalked - .05f,
-    "a remote walk must keep the cycle through a short idle or rewound snapshot");
+    remoteWalk.ActionTime > remoteWalkTime,
+    "a remote walk must keep the cycle through the first still snapshot");
 remoteWalk.PresentRemoteWalk(
     new Vector2(remoteWalked, 0), Vector2.Zero, false, .2f);
 Require(
     remoteWalk.Action == EntityAction.Idle,
     "a remote walk must idle only after the hold, not on the first still snapshot");
+var pendingWalk = new WorldEntity(Vector2.Zero);
+pendingWalk.PrepareForPathRequest();
+var pendingTime = pendingWalk.ActionTime;
+pendingWalk.Update(1f / 60);
+Require(
+    pendingWalk.Action == EntityAction.Move &&
+    pendingWalk.ActionTime > pendingTime &&
+    pendingWalk.Position == Vector2.Zero,
+    "a pending replacement path must keep the walk cycle instead of idling");
+Require(
+    !GameHostWindow.ShouldRetargetNetworkFollow(
+        inStopRange: true, inResumeRange: true, pathPending: false,
+        walking: false, 4, 1.44f) &&
+    !GameHostWindow.ShouldRetargetNetworkFollow(
+        inStopRange: false, inResumeRange: false, pathPending: true,
+        walking: false, 4, 1.44f) &&
+    !GameHostWindow.ShouldRetargetNetworkFollow(
+        inStopRange: false, inResumeRange: false, pathPending: false,
+        walking: true, .5f, 1.44f) &&
+    GameHostWindow.ShouldRetargetNetworkFollow(
+        inStopRange: false, inResumeRange: false, pathPending: false,
+        walking: true, 2, 1.44f) &&
+    !GameHostWindow.ShouldRetargetNetworkFollow(
+        inStopRange: false, inResumeRange: true, pathPending: false,
+        walking: false, 0, 1.44f) &&
+    GameHostWindow.ShouldRetargetNetworkFollow(
+        inStopRange: false, inResumeRange: false, pathPending: false,
+        walking: false, 0, 1.44f),
+    "local follow must keep one walk cycle until the leader pulls away");
 
 var walkingAnimationTime = entity.ActionTime;
 var replacementPathPosition = entity.Position;

@@ -41,13 +41,22 @@ internal sealed partial class GameHostWindow
             48);
     }
 
+    private Vector4 CharacterListBounds()
+    {
+        var panel = IsMultiplayerCharacterStep
+            ? MultiplayerPanel()
+            : CharacterSelectionPanel();
+        var top = IsMultiplayerCharacterStep ? 200f : 164f;
+        var height = IsMultiplayerCharacterStep ? 248f : 324f;
+        return new(panel.X + 44, panel.Y + top, panel.Z - 88, height);
+    }
+
     private void LayoutCharacterList(
         IReadOnlyList<PlayerProfile> players)
     {
-        var panel = CharacterSelectionPanel();
         _characterList.SelectedId = _selectedPlayer?.Id;
         _characterList.Layout(
-            new(panel.X + 44, panel.Y + 164, panel.Z - 88, 324),
+            CharacterListBounds(),
             players.Select(player => player.Id).ToArray(),
             rowHeight: 58,
             rowGap: 8,
@@ -125,8 +134,10 @@ internal sealed partial class GameHostWindow
 
     private void RenderEmptyCharacterSelection(Vector4 panel)
     {
+        _ = panel;
+        var list = CharacterListBounds();
         var empty = new Vector4(
-            panel.X + 44, panel.Y + 164, panel.Z - 88, 210);
+            list.X, list.Y, list.Z, MathF.Min(210, list.W));
         DrawUiColor(empty, new(.032f, .030f, .025f, .82f));
         DrawPanelOutline(empty, 0, new(.22f, .19f, .12f, 1));
         DrawCenteredUiText(

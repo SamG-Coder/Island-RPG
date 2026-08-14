@@ -65,6 +65,7 @@ public sealed class DedicatedServer : IAsyncDisposable
     private long _checkpointRevision;
     private long _nextAutosaveTick;
     private int _disposed;
+    private LanDiscoveryAdvertiser? _lanDiscovery;
     private readonly List<PendingCombatPublication> _pendingCombatPublications = [];
     private List<EnemyStateDelta>? _collectingEnemyDeltas;
     private List<CombatEventSnapshot>? _collectingCombatEvents;
@@ -249,6 +250,15 @@ public sealed class DedicatedServer : IAsyncDisposable
             var boundEndpoint = (IPEndPoint)_listener.LocalEndpoint;
             BoundEndpoint = boundEndpoint;
             _startedSignal.TrySetResult(boundEndpoint);
+            _lanDiscovery = new LanDiscoveryAdvertiser(() =>
+                new LanDiscoveryBeacon(
+                    checked((ushort)boundEndpoint.Port),
+                    _options.WorldId,
+                    _options.WorldSeed,
+                    _options.IslandStart,
+                    _connectedPlayers.Count,
+                    _options.MaximumClients,
+                    _options.IslandStart ? "Shore world" : "Open world"));
             _simulationThread.Start();
             simulationStarted = true;
             Console.WriteLine(
@@ -298,6 +308,7 @@ public sealed class DedicatedServer : IAsyncDisposable
                 if (!_startedSignal.Task.IsCompleted)
                     _startedSignal.TrySetCanceled(linked.Token);
 
+                await StopLanDiscoveryAsync().ConfigureAwait(false);
                 _listener.Stop();
                 foreach (var connection in _clients.Values)
                     connection.Stop();
@@ -1636,10 +1647,18 @@ public sealed class DedicatedServer : IAsyncDisposable
                 sequence, tick, delta)!);
     }
 
+    private async Task StopLanDiscoveryAsync()
+    {
+        var advertiser = Interlocked.Exchange(ref _lanDiscovery, null);
+        if (advertiser is not null)
+            await advertiser.DisposeAsync().ConfigureAwait(false);
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _lifetime.Cancel();
+        await StopLanDiscoveryAsync().ConfigureAwait(false);
         _listener.Stop();
         if (Volatile.Read(ref _started) != 0)
         {
