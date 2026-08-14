@@ -907,7 +907,7 @@ internal sealed partial class GameHostWindow
     private static ClientHandshakeOptions CreateHandshakeOptions(
         NetworkLaunchOptions launch) =>
         new(
-            "0.3.0",
+            "0.4.0",
             "base",
             launch.ClientId == Guid.Empty ? Guid.NewGuid() : launch.ClientId,
             launch.PlayerName,

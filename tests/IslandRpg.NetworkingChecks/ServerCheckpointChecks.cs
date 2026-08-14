@@ -400,7 +400,7 @@ internal static class ServerCheckpointChecks
                 38_740,
                 Guid.Parse("10000000-0000-0000-0000-000000000001"),
                 55_902,
-                "0.3.0",
+                "0.4.0",
                 "base",
                 8);
             var original = CreateCheckpoint(revision: 7) with
@@ -634,7 +634,7 @@ internal static class ServerCheckpointChecks
             revision,
             worldId,
             55_902,
-            "0.3.0",
+            "0.4.0",
             "base",
             worldId,
             60,

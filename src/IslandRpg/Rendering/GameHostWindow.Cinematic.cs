@@ -245,7 +245,7 @@ internal sealed partial class GameHostWindow
         {
             < 7 => ("ISLAND RPG", "A survival story shaped by its people", 0f, 7f),
             < 16 => ("CREATED & DEVELOPED BY SAMG-CODER",
-                "Island RPG v0.3.0", 7f, 16f),
+                "Island RPG v0.4.0", 7f, 16f),
             < 25 => ("DEVELOPED WITH OPENAI CODEX",
                 "AI-assisted engineering, testing, and asset workflows", 16f, 25f),
             _ => ("BUILT WITH .NET 10 | OPENTK | FONTSTASHSHARP",

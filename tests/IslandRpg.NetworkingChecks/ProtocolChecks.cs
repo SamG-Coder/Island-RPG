@@ -95,7 +95,7 @@ internal static class ProtocolChecks
         IProtocolMessage[] messages =
         [
             new HandshakeRequestMessage(
-                1, 0, ProtocolConstants.CurrentVersion, "0.3.0", "base-1",
+                1, 0, ProtocolConstants.CurrentVersion, "0.4.0", "base-1",
                 Guid.Parse("11111111-1111-1111-1111-111111111111"),
                 Guid.Parse("77777777-7777-7777-7777-777777777777"),
                 "Elara", 984, 27100,
@@ -104,7 +104,7 @@ internal static class ProtocolChecks
                 Guid.Empty,
                 string.Empty),
             new HandshakeAcceptedMessage(
-                2, 6, ProtocolConstants.CurrentVersion, "0.3.0", "base-1",
+                2, 6, ProtocolConstants.CurrentVersion, "0.4.0", "base-1",
                 Guid.Parse("22222222-2222-2222-2222-222222222222"),
                 Guid.Parse("33333333-3333-3333-3333-333333333333"),
                 31337,
@@ -122,7 +122,7 @@ internal static class ProtocolChecks
                 ServerCapabilities.UdpSnapshots |
                 ServerCapabilities.DeltaSnapshots),
             new HandshakeRejectedMessage(
-                3, 0, ProtocolConstants.CurrentVersion, "0.3.0", "base-1",
+                3, 0, ProtocolConstants.CurrentVersion, "0.4.0", "base-1",
                 HandshakeRejectionCode.ContentMismatch, "content differs"),
             new PlayerJoinedMessage(
                 4, 9,

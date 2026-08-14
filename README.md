@@ -5,13 +5,13 @@ C#, .NET and OpenTK. It combines a persistent procedurally generated world with
 classic point-and-click interactions, gathering, crafting, fishing, cooking and
 placeable objects.
 
-The project is currently at **v0.3.0**. It is playable, but it remains an early
+The project is currently at **v0.4.0**. It is playable, but it remains an early
 prototype and its systems, balance and save format may continue to evolve.
 
 Visit the [Island RPG website](https://samg-coder.github.io/Island-RPG/) for a
 visual overview, release history and installation links.
 
-See [the v0.3.0 release notes](release-notes/RELEASE_NOTES_0.3.md) for the complete feature
+See [the v0.4.0 release notes](release-notes/RELEASE_NOTES_0.4.md) for the complete feature
 summary.
 
 The long-term direction for autonomous characters is defined in the
@@ -61,6 +61,9 @@ third-party content.
 - Biome-specific slime enemies with reusable combat AI, local spawners,
   elemental attack effects and persistent loot bags.
 - A skippable storm and shipwreck cinematic for shoreline starts.
+- Dedicated multiplayer: host a world, join a friend, or pick a LAN server.
+- Authoritative pickup, drop, combat, caves, boats, crops, furniture and trade.
+- Player Trade, Follow, Friends, Ignore and Guilds on the dedicated server.
 - Level-based recipes, primitive tools, workbenches and campfires.
 - Reusable skill guides, crafting screens, pause menus and settings.
 - Optional performance metrics and developer world tools.
@@ -201,6 +204,28 @@ Unfinished excavations can be restored. Completed holes can be filled using
 matching dirt or sand, and installed rope can be recovered from the context
 menu. Changes remain synchronized between the overworld and underground.
 
+### v0.4 multiplayer
+
+1. From the main menu open **Multiplayer** and select the character who should
+   join. Name, colour and gender are the identity the server receives.
+2. Choose **Host** to start a dedicated server for a new seed or a previously
+   hosted world, or **Join** to connect by address.
+3. Save named servers for later, or pick a LAN game from the discovered list.
+   The default listen port is `38740`.
+4. Play with the same cursors and walk-to-range actions as single-player.
+   Pickup, drop, containers, cooking, crafting, building and combat commit on
+   the server.
+5. Right-click another player to Trade or Follow. Friends, Ignore and Guilds
+   are stored on the server and restored when you reconnect.
+
+A headless dedicated server can also be started from the command line:
+
+```powershell
+dotnet run --project src/IslandRpg.Server -c Release
+```
+
+The client and server must share build `0.4.0` and content `base`.
+
 Developer mode is intended for testing. Enter `/imahacker` in chat, then open
 **Pause → Settings → Dev** to access XP controls, time advancement and the
 teleportable world map. In that map, `T` toggles tree-density visualization.
@@ -278,10 +303,12 @@ Build the full solution:
 dotnet build IslandRpg.slnx -c Release
 ```
 
-Run the deterministic world and gameplay checks:
+Run the deterministic world and gameplay checks, then the headless
+multiplayer protocol suite:
 
 ```powershell
 dotnet run --project tests/IslandRpg.WorldChecks -c Release
+dotnet run --project tests/IslandRpg.NetworkingChecks -c Release
 ```
 
 Create a self-contained Windows x64 build with the checked-in publish profile:
@@ -298,7 +325,11 @@ HD installation. Do not redistribute Age of Empires assets with a release.
 
 ```text
 src/IslandRpg/                  Game, rendering, gameplay and world generation
+src/IslandRpg.Server/           Headless dedicated server
+src/IslandRpg.Client/           Reliable client and snapshot ingest
+src/IslandRpg.Protocol/         Shared multiplayer protocol
 tests/IslandRpg.WorldChecks/    Deterministic integration and regression checks
+tests/IslandRpg.NetworkingChecks/ Authoritative multiplayer protocol checks
 tools/IslandRpg.SpriteTool/     32×32 inventory sprite-sheet conversion
 tools/IslandRpg.ObjectSpriteTool/ Isometric object conversion and sizing
 tools/IslandRpg.GraphicExport/  Local AoE graphic search and export utility
@@ -366,12 +397,13 @@ Before submitting a change:
 
 ## Status and limitations
 
-This is an early playable prototype. Slimes are the first complete enemy family,
-and autonomous-survivor planning remains experimental and dependent on the
-selected local Ollama model. Farming covers tree planting, crops and berry
-foraging; Cooking supports fish, berries, stew and preserved food; placeable
-furniture and construction remain limited. Multiplayer is not implemented. See
-the [v0.3.0 release notes](release-notes/RELEASE_NOTES_0.3.md) for more detail.
+This is an early playable prototype. Dedicated multiplayer is available on
+Windows with a matching 0.4.0 client and server. Slimes are the first complete
+enemy family, and autonomous-survivor planning remains experimental and
+dependent on the selected local Ollama model. Farming covers tree planting,
+crops and berry foraging; Cooking supports fish, berries, stew and preserved
+food; placeable furniture and construction remain limited. See the
+[v0.4.0 release notes](release-notes/RELEASE_NOTES_0.4.md) for more detail.
 
 ## License and acknowledgements
 

@@ -76,7 +76,7 @@ public sealed record ServerOptions(
         var listenPort = DefaultPort;
         var worldId = Guid.NewGuid();
         var worldSeed = Random.Shared.NextInt64();
-        var buildVersion = "0.3.0";
+        var buildVersion = "0.4.0";
         var contentVersion = "base";
         var maximumClients = 64;
         string? saveRoot = null;
@@ -197,7 +197,7 @@ public sealed record ServerOptions(
         writer.WriteLine("  --listen <address:port>   Listen endpoint (default *:38740)");
         writer.WriteLine("  --world-id <guid>         Persistent world identity (default random)");
         writer.WriteLine("  --world-seed <long>       Deterministic world seed (default random)");
-        writer.WriteLine("  --build-version <value>   Required client build (default 0.3.0)");
+        writer.WriteLine("  --build-version <value>   Required client build (default 0.4.0)");
         writer.WriteLine("  --content-version <value> Required content version (default base)");
         writer.WriteLine("  --max-clients <count>     Concurrent connections, 1-1024 (default 64)");
         writer.WriteLine("  --save-root <directory>   Enable authoritative checkpoint persistence");
