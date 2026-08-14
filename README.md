@@ -311,7 +311,7 @@ dotnet run --project tests/IslandRpg.WorldChecks -c Release
 dotnet run --project tests/IslandRpg.NetworkingChecks -c Release
 ```
 
-Create a self-contained Windows x64 build with the checked-in publish profile:
+Create a framework-dependent Windows x64 build with the checked-in publish profile:
 
 ```powershell
 dotnet publish src/IslandRpg/IslandRpg.csproj `
