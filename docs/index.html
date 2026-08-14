@@ -92,6 +92,7 @@
   }
   </script>
   <script src="script.js" defer></script>
+  <script src="minigame.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -106,6 +107,7 @@
       <span class="sr-only">Open navigation</span>
     </button>
     <nav id="site-nav" class="site-nav" aria-label="Main" data-nav>
+      <a href="#try">Try it</a>
       <a href="#play">Play</a>
       <a href="#world">World</a>
       <a href="#skills">Skills</a>
@@ -128,7 +130,7 @@
         <p class="lede">A free isometric survival RPG for Windows. Chop, mine, cook and dig through a persistent world — then host a dedicated server and play it with friends.</p>
         <div class="hero-actions">
           <a class="button button-primary" href="https://github.com/SamG-Coder/Island-RPG/releases">Get Island RPG v0.4</a>
-          <a class="button button-ghost" href="https://www.youtube.com/@SamGCoder" rel="me noopener" target="_blank">Watch on YouTube</a>
+          <a class="button button-ghost" href="#try">Try a shore trial</a>
         </div>
         <ul class="hero-meta">
           <li>Windows 10+</li>
@@ -141,6 +143,38 @@
         <img src="assets/og-cover.jpg" width="1600" height="900" alt="A dusk forest island with a campfire glowing in a coastal clearing.">
         <figcaption>v0.4 is out — dedicated multiplayer, trade, follow and LAN join.</figcaption>
       </figure>
+    </section>
+
+    <section class="try" id="try">
+      <div class="try-intro">
+        <p class="eyebrow">In the browser</p>
+        <h2>A shore trial.</h2>
+        <p>Not the full Windows game — a small island with the same opening loop. Walk, gather, craft a stone axe, light a campfire, cook a meal and fend off a slime.</p>
+      </div>
+      <div class="try-shell" data-mini-frame>
+        <div class="try-toolbar">
+          <label>Seed <input data-mini-seed type="number" value="2187" aria-label="Island seed"></label>
+          <button class="button button-primary" type="button" data-mini-start>Begin trial</button>
+          <p class="try-hint" data-mini-cursor>Click Begin, then click the island to walk.</p>
+        </div>
+        <canvas data-mini-canvas width="1100" height="620" aria-label="Island RPG shore trial"></canvas>
+        <div class="try-hud">
+          <div class="try-vitals">
+            <div><span>Health</span><i><b data-mini-hp></b></i></div>
+            <div><span>Hunger</span><i class="hunger"><b data-mini-hunger></b></i></div>
+            <div class="try-clock" data-mini-clock>07:00</div>
+          </div>
+          <div class="try-inv" data-mini-inv></div>
+          <div class="try-actions">
+            <p>Keys: WASD walk · 1–0 select · E eat · Q drop. Recipes sit under the pack.</p>
+            <div class="try-log" data-mini-log>
+              <p>Begin the trial to wash up on the south beach.</p>
+            </div>
+          </div>
+          <ul class="try-skills" data-mini-skills></ul>
+        </div>
+        <div class="try-craft" data-mini-craft></div>
+      </div>
     </section>
 
     <section class="strip" id="play">
