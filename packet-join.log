@@ -1,0 +1,295 @@
+FRAME update=80ms net=False chunks=0 ingest=False
+FRAME render=80ms chunks=0
+FRAME update=1173ms net=False chunks=0 ingest=False
+1890 send HandshakeRequest seq=1 tick=0 bytes=117 player=Playtest world=00000000000000000000000000000000
+FRAME render=1173ms chunks=0
+0 recv HandshakeRequest seq=1 tick=0 bytes=117 player=Playtest world=00000000000000000000000000000000
+31 send HandshakeAccepted seq=1 tick=2358 bytes=198 world=f0c1ae76632d40cc9c33c94d136306a4 seed=42 spawn=-55.5,-55.5 level=0
+1937 recv HandshakeAccepted seq=1 tick=2358 bytes=198 world=f0c1ae76632d40cc9c33c94d136306a4 seed=42 spawn=-55.5,-55.5 level=0
+31 send PlayerState seq=2 tick=2358 bytes=471 flags=Baseline, Actor, Inventory slots=28
+47 send BoatBaseline seq=3 tick=2358 bytes=30 boats=0
+47 send EnemyBaseline seq=4 tick=2358 bytes=1326 enemies=16
+47 send PlayerJoined seq=5 tick=2358 bytes=62 
+1953 udp EntitySnapshot seq=0 tick=2361 bytes=656 entities=17 flags=Keyframe
+1953 recv PlayerState seq=2 tick=2358 bytes=471 flags=Baseline, Actor, Inventory slots=28
+1969 recv BoatBaseline seq=3 tick=2358 bytes=30 boats=0
+1969 recv EnemyBaseline seq=4 tick=2358 bytes=1326 enemies=16
+1969 recv PlayerJoined seq=5 tick=2358 bytes=62 
+2000 udp EntitySnapshot seq=0 tick=2364 bytes=656 entities=17 flags=Keyframe
+2062 udp EntitySnapshot seq=0 tick=2367 bytes=656 entities=17 flags=Keyframe
+2109 udp EntitySnapshot seq=0 tick=2370 bytes=656 entities=17 flags=Keyframe
+2156 udp EntitySnapshot seq=0 tick=2373 bytes=656 entities=17 flags=Keyframe
+2203 udp EntitySnapshot seq=0 tick=2376 bytes=656 entities=17 flags=Keyframe
+2250 udp EntitySnapshot seq=0 tick=2379 bytes=656 entities=17 flags=Keyframe
+2312 udp EntitySnapshot seq=0 tick=2382 bytes=656 entities=17 flags=Keyframe
+2359 udp EntitySnapshot seq=0 tick=2385 bytes=656 entities=17 flags=Keyframe
+2406 udp EntitySnapshot seq=0 tick=2388 bytes=656 entities=17 flags=Keyframe
+2453 udp EntitySnapshot seq=0 tick=2391 bytes=656 entities=17 flags=Keyframe
+2500 udp EntitySnapshot seq=0 tick=2394 bytes=656 entities=17 flags=Keyframe
+2562 udp EntitySnapshot seq=0 tick=2397 bytes=656 entities=17 flags=Keyframe
+703 send PlayerState seq=6 tick=2400 bytes=331 flags=Actor slots=0
+2609 recv PlayerState seq=6 tick=2400 bytes=331 flags=Actor slots=0
+703 send EntitySnapshot seq=7 tick=2400 bytes=675 entities=17 flags=Keyframe
+2609 recv EntitySnapshot seq=7 tick=2400 bytes=675 entities=17 flags=Keyframe
+2656 udp EntitySnapshot seq=0 tick=2403 bytes=656 entities=17 flags=Keyframe
+2703 udp EntitySnapshot seq=0 tick=2406 bytes=656 entities=17 flags=Keyframe
+2750 udp EntitySnapshot seq=0 tick=2409 bytes=656 entities=17 flags=Keyframe
+2797 udp EntitySnapshot seq=0 tick=2412 bytes=656 entities=17 flags=Keyframe
+2859 udp EntitySnapshot seq=0 tick=2415 bytes=656 entities=17 flags=Keyframe
+2906 udp EntitySnapshot seq=0 tick=2418 bytes=656 entities=17 flags=Keyframe
+2953 udp EntitySnapshot seq=0 tick=2421 bytes=656 entities=17 flags=Keyframe
+3000 udp EntitySnapshot seq=0 tick=2424 bytes=656 entities=17 flags=Keyframe
+3062 udp EntitySnapshot seq=0 tick=2427 bytes=656 entities=17 flags=Keyframe
+FRAME update=395ms net=True chunks=1 ingest=False
+3109 udp EntitySnapshot seq=0 tick=2430 bytes=656 entities=17 flags=Keyframe
+3140 udp EntitySnapshot seq=0 tick=2433 bytes=656 entities=17 flags=Keyframe
+3203 udp EntitySnapshot seq=0 tick=2436 bytes=656 entities=17 flags=Keyframe
+3234 udp EntitySnapshot seq=0 tick=2439 bytes=656 entities=17 flags=Keyframe
+3297 udp EntitySnapshot seq=0 tick=2442 bytes=656 entities=17 flags=Keyframe
+3359 udp EntitySnapshot seq=0 tick=2445 bytes=656 entities=17 flags=Keyframe
+FRAME render=395ms chunks=1
+3390 udp EntitySnapshot seq=0 tick=2448 bytes=656 entities=17 flags=Keyframe
+3437 udp EntitySnapshot seq=0 tick=2451 bytes=656 entities=17 flags=Keyframe
+3500 udp EntitySnapshot seq=0 tick=2454 bytes=656 entities=17 flags=Keyframe
+3547 udp EntitySnapshot seq=0 tick=2457 bytes=656 entities=17 flags=Keyframe
+1688 send PlayerState seq=8 tick=2460 bytes=331 flags=Actor slots=0
+1703 send EntitySnapshot seq=9 tick=2460 bytes=675 entities=17 flags=Keyframe
+3609 recv PlayerState seq=8 tick=2460 bytes=331 flags=Actor slots=0
+3609 recv EntitySnapshot seq=9 tick=2460 bytes=675 entities=17 flags=Keyframe
+3640 udp EntitySnapshot seq=0 tick=2463 bytes=656 entities=17 flags=Keyframe
+FRAME update=557ms net=True chunks=1 ingest=False
+3687 udp EntitySnapshot seq=0 tick=2466 bytes=656 entities=17 flags=Keyframe
+3750 udp EntitySnapshot seq=0 tick=2469 bytes=656 entities=17 flags=Keyframe
+3797 udp EntitySnapshot seq=0 tick=2472 bytes=656 entities=17 flags=Keyframe
+3844 udp EntitySnapshot seq=0 tick=2475 bytes=656 entities=17 flags=Keyframe
+3890 udp EntitySnapshot seq=0 tick=2478 bytes=656 entities=17 flags=Keyframe
+FRAME render=557ms chunks=2
+3937 udp EntitySnapshot seq=0 tick=2481 bytes=656 entities=17 flags=Keyframe
+3984 udp EntitySnapshot seq=0 tick=2484 bytes=656 entities=17 flags=Keyframe
+4047 udp EntitySnapshot seq=0 tick=2487 bytes=656 entities=17 flags=Keyframe
+4094 udp EntitySnapshot seq=0 tick=2490 bytes=656 entities=17 flags=Keyframe
+4140 udp EntitySnapshot seq=0 tick=2493 bytes=656 entities=17 flags=Keyframe
+FRAME update=544ms net=True chunks=2 ingest=False
+4187 udp EntitySnapshot seq=0 tick=2496 bytes=656 entities=17 flags=Keyframe
+4234 udp EntitySnapshot seq=0 tick=2499 bytes=656 entities=17 flags=Keyframe
+4297 udp EntitySnapshot seq=0 tick=2502 bytes=656 entities=17 flags=Keyframe
+4359 udp EntitySnapshot seq=0 tick=2505 bytes=656 entities=17 flags=Keyframe
+4406 udp EntitySnapshot seq=0 tick=2508 bytes=656 entities=17 flags=Keyframe
+4437 udp EntitySnapshot seq=0 tick=2511 bytes=656 entities=17 flags=Keyframe
+FRAME render=544ms chunks=2
+4500 udp EntitySnapshot seq=0 tick=2514 bytes=656 entities=17 flags=Keyframe
+4547 udp EntitySnapshot seq=0 tick=2517 bytes=656 entities=17 flags=Keyframe
+2688 send PlayerState seq=10 tick=2520 bytes=331 flags=Actor slots=0
+2688 send EntitySnapshot seq=11 tick=2520 bytes=675 entities=17 flags=Keyframe
+4594 recv PlayerState seq=10 tick=2520 bytes=331 flags=Actor slots=0
+4594 recv EntitySnapshot seq=11 tick=2520 bytes=675 entities=17 flags=Keyframe
+4640 udp EntitySnapshot seq=0 tick=2523 bytes=656 entities=17 flags=Keyframe
+4687 udp EntitySnapshot seq=0 tick=2526 bytes=656 entities=17 flags=Keyframe
+4750 udp EntitySnapshot seq=0 tick=2529 bytes=656 entities=17 flags=Keyframe
+FRAME update=564ms net=True chunks=2 ingest=False
+4797 udp EntitySnapshot seq=0 tick=2532 bytes=656 entities=17 flags=Keyframe
+4844 udp EntitySnapshot seq=0 tick=2535 bytes=656 entities=17 flags=Keyframe
+4890 udp EntitySnapshot seq=0 tick=2538 bytes=656 entities=17 flags=Keyframe
+4937 udp EntitySnapshot seq=0 tick=2541 bytes=656 entities=17 flags=Keyframe
+5000 udp EntitySnapshot seq=0 tick=2544 bytes=656 entities=17 flags=Keyframe
+FRAME render=564ms chunks=3
+5047 udp EntitySnapshot seq=0 tick=2547 bytes=656 entities=17 flags=Keyframe
+5094 udp EntitySnapshot seq=0 tick=2550 bytes=656 entities=17 flags=Keyframe
+5140 udp EntitySnapshot seq=0 tick=2553 bytes=656 entities=17 flags=Keyframe
+5203 udp EntitySnapshot seq=0 tick=2556 bytes=656 entities=17 flags=Keyframe
+5250 udp EntitySnapshot seq=0 tick=2559 bytes=656 entities=17 flags=Keyframe
+5297 udp EntitySnapshot seq=0 tick=2562 bytes=656 entities=17 flags=Keyframe
+5344 udp EntitySnapshot seq=0 tick=2565 bytes=656 entities=17 flags=Keyframe
+5390 udp EntitySnapshot seq=0 tick=2568 bytes=656 entities=17 flags=Keyframe
+5437 udp EntitySnapshot seq=0 tick=2571 bytes=656 entities=17 flags=Keyframe
+5484 udp EntitySnapshot seq=0 tick=2574 bytes=656 entities=17 flags=Keyframe
+5562 udp EntitySnapshot seq=0 tick=2577 bytes=656 entities=17 flags=Keyframe
+FRAME update=808ms net=True chunks=3 ingest=False
+3703 send PlayerState seq=12 tick=2580 bytes=331 flags=Actor slots=0
+3703 send EntitySnapshot seq=13 tick=2580 bytes=675 entities=17 flags=Keyframe
+5609 recv PlayerState seq=12 tick=2580 bytes=331 flags=Actor slots=0
+5609 recv EntitySnapshot seq=13 tick=2580 bytes=675 entities=17 flags=Keyframe
+5656 udp EntitySnapshot seq=0 tick=2583 bytes=656 entities=17 flags=Keyframe
+5703 udp EntitySnapshot seq=0 tick=2586 bytes=656 entities=17 flags=Keyframe
+5750 udp EntitySnapshot seq=0 tick=2589 bytes=656 entities=17 flags=Keyframe
+5797 udp EntitySnapshot seq=0 tick=2592 bytes=656 entities=17 flags=Keyframe
+5859 udp EntitySnapshot seq=0 tick=2595 bytes=656 entities=17 flags=Keyframe
+5906 udp EntitySnapshot seq=0 tick=2598 bytes=656 entities=17 flags=Keyframe
+5953 udp EntitySnapshot seq=0 tick=2601 bytes=656 entities=17 flags=Keyframe
+6000 udp EntitySnapshot seq=0 tick=2604 bytes=656 entities=17 flags=Keyframe
+6047 udp EntitySnapshot seq=0 tick=2607 bytes=656 entities=17 flags=Keyframe
+FRAME render=808ms chunks=3
+6109 udp EntitySnapshot seq=0 tick=2610 bytes=656 entities=17 flags=Keyframe
+6156 udp EntitySnapshot seq=0 tick=2613 bytes=656 entities=17 flags=Keyframe
+6203 udp EntitySnapshot seq=0 tick=2616 bytes=656 entities=17 flags=Keyframe
+6250 udp EntitySnapshot seq=0 tick=2619 bytes=656 entities=17 flags=Keyframe
+6312 udp EntitySnapshot seq=0 tick=2622 bytes=656 entities=17 flags=Keyframe
+6359 udp EntitySnapshot seq=0 tick=2625 bytes=656 entities=17 flags=Keyframe
+6406 udp EntitySnapshot seq=0 tick=2628 bytes=656 entities=17 flags=Keyframe
+6453 udp EntitySnapshot seq=0 tick=2631 bytes=656 entities=17 flags=Keyframe
+6500 udp EntitySnapshot seq=0 tick=2634 bytes=656 entities=17 flags=Keyframe
+6562 udp EntitySnapshot seq=0 tick=2637 bytes=656 entities=17 flags=Keyframe
+4703 send PlayerState seq=14 tick=2640 bytes=331 flags=Actor slots=0
+4703 send EntitySnapshot seq=15 tick=2640 bytes=675 entities=17 flags=Keyframe
+6609 recv PlayerState seq=14 tick=2640 bytes=331 flags=Actor slots=0
+6609 recv EntitySnapshot seq=15 tick=2640 bytes=675 entities=17 flags=Keyframe
+FRAME update=1073ms net=True chunks=3 ingest=False
+6656 udp EntitySnapshot seq=0 tick=2643 bytes=656 entities=17 flags=Keyframe
+6687 udp EntitySnapshot seq=0 tick=2646 bytes=656 entities=17 flags=Keyframe
+6734 udp EntitySnapshot seq=0 tick=2649 bytes=656 entities=17 flags=Keyframe
+6797 udp EntitySnapshot seq=0 tick=2652 bytes=656 entities=17 flags=Keyframe
+6859 udp EntitySnapshot seq=0 tick=2655 bytes=656 entities=17 flags=Keyframe
+6906 udp EntitySnapshot seq=0 tick=2658 bytes=656 entities=17 flags=Keyframe
+6953 udp EntitySnapshot seq=0 tick=2661 bytes=656 entities=17 flags=Keyframe
+7000 udp EntitySnapshot seq=0 tick=2664 bytes=656 entities=17 flags=Keyframe
+7062 udp EntitySnapshot seq=0 tick=2667 bytes=656 entities=17 flags=Keyframe
+7109 udp EntitySnapshot seq=0 tick=2670 bytes=656 entities=17 flags=Keyframe
+7156 udp EntitySnapshot seq=0 tick=2673 bytes=656 entities=17 flags=Keyframe
+FRAME render=1073ms chunks=4
+7203 udp EntitySnapshot seq=0 tick=2676 bytes=656 entities=17 flags=Keyframe
+7250 udp EntitySnapshot seq=0 tick=2679 bytes=656 entities=17 flags=Keyframe
+7312 udp EntitySnapshot seq=0 tick=2682 bytes=656 entities=17 flags=Keyframe
+7359 udp EntitySnapshot seq=0 tick=2685 bytes=656 entities=17 flags=Keyframe
+7406 udp EntitySnapshot seq=0 tick=2688 bytes=656 entities=17 flags=Keyframe
+7437 udp EntitySnapshot seq=0 tick=2691 bytes=656 entities=17 flags=Keyframe
+7484 udp EntitySnapshot seq=0 tick=2694 bytes=656 entities=17 flags=Keyframe
+7547 udp EntitySnapshot seq=0 tick=2697 bytes=656 entities=17 flags=Keyframe
+5688 send PlayerState seq=16 tick=2700 bytes=331 flags=Actor slots=0
+5688 send EntitySnapshot seq=17 tick=2700 bytes=675 entities=17 flags=Keyframe
+7594 recv PlayerState seq=16 tick=2700 bytes=331 flags=Actor slots=0
+7609 recv EntitySnapshot seq=17 tick=2700 bytes=675 entities=17 flags=Keyframe
+7656 udp EntitySnapshot seq=0 tick=2703 bytes=656 entities=17 flags=Keyframe
+7703 udp EntitySnapshot seq=0 tick=2706 bytes=656 entities=17 flags=Keyframe
+7750 udp EntitySnapshot seq=0 tick=2709 bytes=656 entities=17 flags=Keyframe
+7812 udp EntitySnapshot seq=0 tick=2712 bytes=656 entities=17 flags=Keyframe
+7844 udp EntitySnapshot seq=0 tick=2715 bytes=656 entities=17 flags=Keyframe
+7890 udp EntitySnapshot seq=0 tick=2718 bytes=656 entities=17 flags=Keyframe
+7937 udp EntitySnapshot seq=0 tick=2721 bytes=656 entities=17 flags=Keyframe
+8000 udp EntitySnapshot seq=0 tick=2724 bytes=656 entities=17 flags=Keyframe
+FRAME update=1410ms net=True chunks=4 ingest=False
+8047 udp EntitySnapshot seq=0 tick=2727 bytes=656 entities=17 flags=Keyframe
+8094 udp EntitySnapshot seq=0 tick=2730 bytes=656 entities=17 flags=Keyframe
+8140 udp EntitySnapshot seq=0 tick=2733 bytes=656 entities=17 flags=Keyframe
+8187 udp EntitySnapshot seq=0 tick=2736 bytes=656 entities=17 flags=Keyframe
+8250 udp EntitySnapshot seq=0 tick=2739 bytes=656 entities=17 flags=Keyframe
+8312 udp EntitySnapshot seq=0 tick=2742 bytes=656 entities=17 flags=Keyframe
+8344 udp EntitySnapshot seq=0 tick=2745 bytes=656 entities=17 flags=Keyframe
+8390 udp EntitySnapshot seq=0 tick=2748 bytes=656 entities=17 flags=Keyframe
+8437 udp EntitySnapshot seq=0 tick=2751 bytes=656 entities=17 flags=Keyframe
+8484 udp EntitySnapshot seq=0 tick=2754 bytes=656 entities=17 flags=Keyframe
+8547 udp EntitySnapshot seq=0 tick=2757 bytes=656 entities=17 flags=Keyframe
+6688 send PlayerState seq=18 tick=2760 bytes=331 flags=Actor slots=0
+6688 send EntitySnapshot seq=19 tick=2760 bytes=675 entities=17 flags=Keyframe
+8594 recv PlayerState seq=18 tick=2760 bytes=331 flags=Actor slots=0
+8609 recv EntitySnapshot seq=19 tick=2760 bytes=675 entities=17 flags=Keyframe
+8640 udp EntitySnapshot seq=0 tick=2763 bytes=656 entities=17 flags=Keyframe
+8687 udp EntitySnapshot seq=0 tick=2766 bytes=656 entities=17 flags=Keyframe
+8750 udp EntitySnapshot seq=0 tick=2769 bytes=656 entities=17 flags=Keyframe
+8797 udp EntitySnapshot seq=0 tick=2772 bytes=656 entities=17 flags=Keyframe
+8859 udp EntitySnapshot seq=0 tick=2775 bytes=656 entities=17 flags=Keyframe
+8906 udp EntitySnapshot seq=0 tick=2778 bytes=656 entities=17 flags=Keyframe
+FRAME render=1410ms chunks=4
+8953 udp EntitySnapshot seq=0 tick=2781 bytes=656 entities=17 flags=Keyframe
+8984 udp EntitySnapshot seq=0 tick=2784 bytes=656 entities=17 flags=Keyframe
+9047 udp EntitySnapshot seq=0 tick=2787 bytes=656 entities=17 flags=Keyframe
+9094 udp EntitySnapshot seq=0 tick=2790 bytes=656 entities=17 flags=Keyframe
+9140 udp EntitySnapshot seq=0 tick=2793 bytes=656 entities=17 flags=Keyframe
+9187 udp EntitySnapshot seq=0 tick=2796 bytes=656 entities=17 flags=Keyframe
+9250 udp EntitySnapshot seq=0 tick=2799 bytes=656 entities=17 flags=Keyframe
+9297 udp EntitySnapshot seq=0 tick=2802 bytes=656 entities=17 flags=Keyframe
+9344 udp EntitySnapshot seq=0 tick=2805 bytes=656 entities=17 flags=Keyframe
+9390 udp EntitySnapshot seq=0 tick=2808 bytes=656 entities=17 flags=Keyframe
+9437 udp EntitySnapshot seq=0 tick=2811 bytes=656 entities=17 flags=Keyframe
+9500 udp EntitySnapshot seq=0 tick=2814 bytes=656 entities=17 flags=Keyframe
+9547 udp EntitySnapshot seq=0 tick=2817 bytes=656 entities=17 flags=Keyframe
+7688 send PlayerState seq=20 tick=2820 bytes=331 flags=Actor slots=0
+7688 send EntitySnapshot seq=21 tick=2820 bytes=675 entities=17 flags=Keyframe
+9594 recv PlayerState seq=20 tick=2820 bytes=331 flags=Actor slots=0
+9594 recv EntitySnapshot seq=21 tick=2820 bytes=675 entities=17 flags=Keyframe
+9640 udp EntitySnapshot seq=0 tick=2823 bytes=656 entities=17 flags=Keyframe
+9687 udp EntitySnapshot seq=0 tick=2826 bytes=656 entities=17 flags=Keyframe
+9750 udp EntitySnapshot seq=0 tick=2829 bytes=656 entities=17 flags=Keyframe
+FRAME update=1725ms net=True chunks=4 ingest=False
+9797 udp EntitySnapshot seq=0 tick=2832 bytes=656 entities=17 flags=Keyframe
+9844 udp EntitySnapshot seq=0 tick=2835 bytes=656 entities=17 flags=Keyframe
+9890 udp EntitySnapshot seq=0 tick=2838 bytes=656 entities=17 flags=Keyframe
+9937 udp EntitySnapshot seq=0 tick=2841 bytes=656 entities=17 flags=Keyframe
+10000 udp EntitySnapshot seq=0 tick=2844 bytes=656 entities=17 flags=Keyframe
+10047 udp EntitySnapshot seq=0 tick=2847 bytes=656 entities=17 flags=Keyframe
+10094 udp EntitySnapshot seq=0 tick=2850 bytes=656 entities=17 flags=Keyframe
+10140 udp EntitySnapshot seq=0 tick=2853 bytes=656 entities=17 flags=Keyframe
+10187 udp EntitySnapshot seq=0 tick=2856 bytes=656 entities=17 flags=Keyframe
+10250 udp EntitySnapshot seq=0 tick=2859 bytes=656 entities=17 flags=Keyframe
+10297 udp EntitySnapshot seq=0 tick=2862 bytes=656 entities=17 flags=Keyframe
+10344 udp EntitySnapshot seq=0 tick=2865 bytes=656 entities=17 flags=Keyframe
+10390 udp EntitySnapshot seq=0 tick=2868 bytes=656 entities=17 flags=Keyframe
+10453 udp EntitySnapshot seq=0 tick=2871 bytes=656 entities=17 flags=Keyframe
+10500 udp EntitySnapshot seq=0 tick=2874 bytes=656 entities=17 flags=Keyframe
+10547 udp EntitySnapshot seq=0 tick=2877 bytes=656 entities=17 flags=Keyframe
+8688 send PlayerState seq=22 tick=2880 bytes=331 flags=Actor slots=0
+8688 send EntitySnapshot seq=23 tick=2880 bytes=675 entities=17 flags=Keyframe
+FRAME render=1725ms chunks=5
+FRAME update=2027ms net=True chunks=5 ingest=False
+FRAME render=2027ms chunks=5
+FRAME update=2362ms net=True chunks=5 ingest=False
+FRAME render=2362ms chunks=6
+FRAME update=2352ms net=True chunks=6 ingest=False
+FRAME render=2352ms chunks=6
+FRAME update=2340ms net=True chunks=6 ingest=False
+FRAME render=2340ms chunks=7
+FRAME update=2346ms net=True chunks=7 ingest=False
+FRAME render=2346ms chunks=7
+FRAME update=2416ms net=True chunks=7 ingest=False
+FRAME render=2416ms chunks=8
+FRAME update=2403ms net=True chunks=8 ingest=False
+FRAME render=2403ms chunks=8
+FRAME update=2370ms net=True chunks=8 ingest=False
+FRAME render=2370ms chunks=9
+FRAME update=2347ms net=True chunks=9 ingest=False
+FRAME render=2347ms chunks=9
+FRAME update=2365ms net=True chunks=9 ingest=False
+FRAME render=2365ms chunks=10
+FRAME update=2365ms net=True chunks=10 ingest=False
+FRAME render=2365ms chunks=10
+FRAME update=2358ms net=True chunks=10 ingest=False
+FRAME render=2358ms chunks=11
+FRAME update=2363ms net=True chunks=11 ingest=False
+FRAME render=2363ms chunks=11
+FRAME update=2376ms net=True chunks=11 ingest=False
+FRAME render=2376ms chunks=12
+FRAME update=2372ms net=True chunks=12 ingest=False
+FRAME render=2372ms chunks=12
+FRAME update=2358ms net=True chunks=12 ingest=False
+FRAME render=2358ms chunks=13
+FRAME update=2358ms net=True chunks=13 ingest=False
+FRAME render=2358ms chunks=13
+FRAME update=2355ms net=True chunks=13 ingest=False
+FRAME render=2355ms chunks=13
+FRAME update=2362ms net=True chunks=13 ingest=False
+FRAME render=2362ms chunks=13
+FRAME update=2370ms net=True chunks=13 ingest=False
+FRAME render=2370ms chunks=13
+FRAME update=2363ms net=True chunks=13 ingest=False
+FRAME render=2363ms chunks=13
+FRAME update=2371ms net=True chunks=13 ingest=False
+FRAME render=2371ms chunks=13
+FRAME update=2367ms net=True chunks=13 ingest=False
+FRAME render=2367ms chunks=13
+FRAME update=2357ms net=True chunks=13 ingest=False
+FRAME render=2357ms chunks=13
+FRAME update=2363ms net=True chunks=13 ingest=False
+FRAME render=2363ms chunks=13
+FRAME update=2357ms net=True chunks=13 ingest=False
+FRAME render=2357ms chunks=13
+FRAME update=2360ms net=True chunks=13 ingest=False
+FRAME render=2360ms chunks=13
+FRAME update=2362ms net=True chunks=13 ingest=False
+FRAME render=2362ms chunks=13
+FRAME update=2367ms net=True chunks=13 ingest=False
+FRAME render=2367ms chunks=13
+FRAME update=2367ms net=True chunks=13 ingest=False
+FRAME render=2367ms chunks=13
+FRAME update=2385ms net=True chunks=13 ingest=False
+FRAME render=2385ms chunks=13
+FRAME update=2423ms net=True chunks=13 ingest=False
+FRAME render=2423ms chunks=13

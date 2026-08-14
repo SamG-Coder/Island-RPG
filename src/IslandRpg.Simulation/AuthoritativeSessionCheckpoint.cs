@@ -16,7 +16,10 @@ public sealed record AuthoritativeActorCheckpoint(
     long? DisconnectedAtTick,
     PlayerGameplaySnapshot Gameplay,
     ImmutableArray<byte> ReconnectTokenHash,
-    ImmutableArray<AuthoritativeCommandReceiptCheckpoint> CommandReceipts)
+    ImmutableArray<AuthoritativeCommandReceiptCheckpoint> CommandReceipts,
+    ImmutableArray<PlayerId> Friends = default,
+    ImmutableArray<PlayerId> Ignored = default,
+    Guid? GuildId = null)
 {
     public override string ToString() =>
         $"{DisplayName} ({Identity.PlayerId}/{Identity.ActorId}) [credential redacted]";
@@ -45,7 +48,8 @@ public sealed record AuthoritativeSessionCheckpoint(
     ImmutableArray<AuthoritativeCookingJobCheckpoint> CookingJobs = default,
     AuthoritativeResourceTransactionsCheckpoint? Resources = null,
     AuthoritativeBoatTransactionsCheckpoint? Boats = null,
-    AuthoritativeCombatCheckpoint? Combat = null);
+    AuthoritativeCombatCheckpoint? Combat = null,
+    ImmutableArray<AuthoritativeGuildCheckpoint> Guilds = default);
 
 public sealed record AuthoritativeCookingJobCheckpoint(
     Guid CommandId,

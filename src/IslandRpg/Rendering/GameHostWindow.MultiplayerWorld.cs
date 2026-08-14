@@ -16,48 +16,61 @@ internal sealed partial class GameHostWindow
         _networkWorldObjectChunks = [];
     private readonly Dictionary<ChunkCoordinate, HashSet<Guid>>
         _networkWorldObjectIdsByChunk = [];
-    private readonly HashSet<Guid> _networkKnownWorldObjectIds = [];
+    private readonly NetworkWorldObjectChangeApply _networkWorldChangeApply =
+        new();
     private readonly List<GroundObjectRenderSource>
         _visibleGroundObjectBuffer = [];
+
+    private HashSet<Guid> _networkKnownWorldObjectIds =>
+        _networkWorldChangeApply.KnownObjectIds;
 
     private void ApplyNetworkWorldObjectChanges(
         IReadOnlyList<NetworkWorldObjectChange> changes)
     {
-        // Network callbacks are marshalled through _networkEvents, so this
-        // projection is owned exclusively by the window update/render thread.
+        // Budgeted poll slices feed the same change records the window used
+        // to receive from WorldObjectsChanged. The dispatcher owns known-id
+        // tracking; the observer keeps cave/construction/container live.
         if (!IsNetworkWorld ||
             _networkClient?.State.Status != NetworkGameClientStatus.Connected)
             return;
-        foreach (var change in changes)
-        {
-            _networkKnownWorldObjectIds.Add(change.ObjectId);
-            if (change.Kind == WorldObjectDeltaKind.Remove)
-            {
-                if (_openWorldStorageId == change.ObjectId ||
-                    _networkRequestedContainerId == change.ObjectId)
-                    CloseItemContainer();
-                RemoveNetworkWorldObject(change.ObjectId);
-                ObserveNetworkCaveWorldChange(change);
-                continue;
-            }
+        _networkWorldChangeApply.Apply(changes, new WorldObjectChangeObserver(this));
+    }
 
-            if (change.State is not { } state) continue;
-            UpsertNetworkWorldObject(state);
-            ContinueNetworkConstruction(change);
-            ObserveNetworkCaveWorldChange(change);
+    private sealed class WorldObjectChangeObserver(GameHostWindow window)
+        : INetworkWorldObjectChangeObserver
+    {
+        public void OnRemoved(NetworkWorldObjectChange change)
+        {
+            if (window._openWorldStorageId == change.ObjectId ||
+                window._networkRequestedContainerId == change.ObjectId)
+                window.CloseItemContainer();
+            window.RemoveNetworkWorldObject(change.ObjectId);
+            window.ObserveNetworkCaveWorldChange(change);
         }
-        if (_craftingWindowOpen)
-            RefreshNearbyCraftingStations();
+
+        public void OnUpserted(
+            NetworkWorldObjectChange change,
+            NetworkWorldObjectState state)
+        {
+            window.UpsertNetworkWorldObject(state);
+            window.ContinueNetworkConstruction(change);
+            window.ObserveNetworkCaveWorldChange(change);
+        }
+
+        public void OnSliceApplied(
+            IReadOnlyList<NetworkWorldObjectChange> changes)
+        {
+            _ = changes;
+            if (window._craftingWindowOpen)
+                window.RefreshNearbyCraftingStations();
+        }
     }
 
     private void SynchronizeNetworkWorldObjects(
         IEnumerable<NetworkWorldObjectState> objects)
     {
         foreach (var state in objects)
-        {
-            _networkKnownWorldObjectIds.Add(state.ObjectId);
             UpsertNetworkWorldObject(state);
-        }
     }
 
     private void UpsertNetworkWorldObject(NetworkWorldObjectState state)
@@ -104,7 +117,7 @@ internal sealed partial class GameHostWindow
         _networkWorldObjects.Clear();
         _networkWorldObjectChunks.Clear();
         _networkWorldObjectIdsByChunk.Clear();
-        _networkKnownWorldObjectIds.Clear();
+        _networkWorldChangeApply.Reset();
         _visibleGroundObjectBuffer.Clear();
     }
 

@@ -60,6 +60,15 @@ internal static class LoopbackChecks
         checks.Add(
             "progressing bootstrap renews its publication deadline",
             ProgressingBootstrapRenewsPublicationDeadlineAsync);
+        checks.Add(
+            "real loopback trade publishes ids and commits both inventories",
+            CompletesAuthoritativeTradeAsync);
+        checks.Add(
+            "real loopback friends ignore guild lists reach the owning client",
+            PublishesSocialListsAndRestoresOnReconnectAsync);
+        checks.Add(
+            "real loopback walk clears follow so follow again works",
+            WalkClearsFollowAndAllowsFollowAgainAsync);
     }
 
     private static async ValueTask ReplicatesTwoClientsAsync(CancellationToken cancellationToken)
@@ -67,8 +76,10 @@ internal static class LoopbackChecks
         await using var fixture = await LoopbackFixture.StartAsync(cancellationToken);
         await using var first = new NetworkGameClient(TimeSpan.Zero);
         await using var second = new NetworkGameClient(TimeSpan.Zero);
-        var firstAccepted = await fixture.ConnectAsync(first, "Elara", cancellationToken);
-        var secondAccepted = await fixture.ConnectAsync(second, "Aveline", cancellationToken);
+        var firstAccepted = await fixture.ConnectAsync(
+            first, "Elara", cancellationToken, gender: 1, teamColor: 3);
+        var secondAccepted = await fixture.ConnectAsync(
+            second, "Aveline", cancellationToken, gender: 0, teamColor: 6);
 
         CheckAssert.Equal(
             firstAccepted.WorldId,
@@ -85,6 +96,10 @@ internal static class LoopbackChecks
             () => first.State.Players.Count == 2 && second.State.Players.Count == 2,
             "both clients did not receive the complete presence set",
             cancellationToken);
+        CheckAssert.True(
+            HasPresence(first, secondAccepted.PlayerId, "Aveline", 0, 6) &&
+            HasPresence(second, firstAccepted.PlayerId, "Elara", 1, 3),
+            "each client must see the other player's name, gender and team color");
         await EventuallyAsync(
             () => HasBothEntities(first, firstAccepted, secondAccepted) &&
                   HasBothEntities(second, firstAccepted, secondAccepted),
@@ -832,6 +847,7 @@ internal static class LoopbackChecks
             var lateConnection = await writeBlocked.Task.WaitAsync(
                 Timeout, cancellationToken);
             var target = healthy.State.WorldObjects[pickupId];
+            var tickBeforeMutation = healthy.State.ServerTick;
             var pickup = await SendAndAwaitActionAsync(
                 healthy,
                 new PickUpWorldObjectAction(new WorldObjectReference(
@@ -844,6 +860,10 @@ internal static class LoopbackChecks
                 cancellationToken).WaitAsync(Timeout, cancellationToken);
             CheckAssert.True(pickup.Accepted,
                 $"the healthy-client mutation was rejected: {pickup.Detail}");
+            await EventuallyAsync(
+                () => healthy.State.ServerTick > tickBeforeMutation,
+                "the blocked join stalled snapshot ticks to the healthy client",
+                cancellationToken);
             await EventuallyAsync(
                 () => !healthy.State.WorldObjects.ContainsKey(pickupId),
                 "the blocked join stalled public replication to the healthy client",
@@ -1047,6 +1067,254 @@ internal static class LoopbackChecks
             "frame-by-frame progress must keep the connection alive");
     }
 
+    private static async ValueTask CompletesAuthoritativeTradeAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var fixture = await LoopbackFixture.StartAsync(
+            cancellationToken,
+            extraInventory:
+            [
+                new InitialInventoryItem("large_rock"),
+                new InitialInventoryItem("sticks")
+            ]);
+        await using var first = new NetworkGameClient(TimeSpan.Zero);
+        await using var second = new NetworkGameClient(TimeSpan.Zero);
+        var firstAccepted = await fixture.ConnectAsync(
+            first, "Elara", cancellationToken);
+        var secondAccepted = await fixture.ConnectAsync(
+            second, "Aveline", cancellationToken);
+        await EventuallyAsync(
+            () => first.State.Gameplay is not null &&
+                  second.State.Gameplay is not null &&
+                  first.State.Social is not null,
+            "trade clients did not receive gameplay and social baselines",
+            cancellationToken);
+
+        var offer = await SendAndAwaitActionAsync(
+            first,
+            new SocialAction(
+                SocialActionKind.OfferTrade, secondAccepted.PlayerId),
+            cancellationToken);
+        CheckAssert.True(offer.Accepted, $"offer trade was rejected: {offer.Detail}");
+        await EventuallyAsync(
+            () => first.State.Social.OpenTradeId != Guid.Empty &&
+                  first.State.Social.OpenTradeId ==
+                  second.State.Social.OpenTradeId &&
+                  first.State.Social.TradePartnerPlayerId ==
+                  secondAccepted.PlayerId &&
+                  second.State.Social.TradeIncoming,
+            "both clients must receive the same OpenTradeId after OfferTrade",
+            cancellationToken);
+
+        var tradeId = first.State.Social.OpenTradeId;
+        var respond = await SendAndAwaitActionAsync(
+            second,
+            new SocialAction(
+                SocialActionKind.RespondTrade,
+                firstAccepted.PlayerId,
+                tradeId,
+                Accept: true),
+            cancellationToken);
+        CheckAssert.True(respond.Accepted, $"respond trade was rejected: {respond.Detail}");
+        await EventuallyAsync(
+            () => first.State.Social.TradeAccepted &&
+                  second.State.Social.TradeAccepted,
+            "accepting the trade must publish TradeAccepted to both clients",
+            cancellationToken);
+
+        var firstSlot = Slot(first, "large_rock");
+        var secondSlot = Slot(second, "sticks");
+        var setFirst = await SendAndAwaitActionAsync(
+            first,
+            new SocialAction(
+                SocialActionKind.SetTradeOffer,
+                secondAccepted.PlayerId,
+                tradeId,
+                OfferSlots: [firstSlot]),
+            cancellationToken);
+        CheckAssert.True(setFirst.Accepted, $"set first offer was rejected: {setFirst.Detail}");
+        var setSecond = await SendAndAwaitActionAsync(
+            second,
+            new SocialAction(
+                SocialActionKind.SetTradeOffer,
+                firstAccepted.PlayerId,
+                tradeId,
+                OfferSlots: [secondSlot]),
+            cancellationToken);
+        CheckAssert.True(setSecond.Accepted, $"set second offer was rejected: {setSecond.Detail}");
+
+        var confirmFirst = await SendAndAwaitActionAsync(
+            first,
+            new SocialAction(
+                SocialActionKind.ConfirmTrade,
+                secondAccepted.PlayerId,
+                tradeId),
+            cancellationToken);
+        CheckAssert.True(confirmFirst.Accepted, $"first confirm was rejected: {confirmFirst.Detail}");
+        var confirmSecond = await SendAndAwaitActionAsync(
+            second,
+            new SocialAction(
+                SocialActionKind.ConfirmTrade,
+                firstAccepted.PlayerId,
+                tradeId),
+            cancellationToken);
+        CheckAssert.True(confirmSecond.Accepted, $"second confirm was rejected: {confirmSecond.Detail}");
+
+        await EventuallyAsync(
+            () => first.State.Social.OpenTradeId == Guid.Empty &&
+                  second.State.Social.OpenTradeId == Guid.Empty &&
+                  Count(first, "large_rock") == 0 &&
+                  Count(first, "sticks") == 2 &&
+                  Count(second, "large_rock") == 2 &&
+                  Count(second, "sticks") == 0,
+            "a mutual confirm must swap the offered items and close the trade",
+            cancellationToken);
+    }
+
+    private static async ValueTask
+        PublishesSocialListsAndRestoresOnReconnectAsync(
+            CancellationToken cancellationToken)
+    {
+        await using var fixture = await LoopbackFixture.StartAsync(cancellationToken);
+        await using var first = new NetworkGameClient(TimeSpan.Zero);
+        await using var second = new NetworkGameClient(TimeSpan.Zero);
+        var firstClientId = Guid.NewGuid();
+        var firstAccepted = await fixture.ConnectAsync(
+            first, "Elara", cancellationToken, firstClientId);
+        var secondAccepted = await fixture.ConnectAsync(
+            second, "Aveline", cancellationToken);
+        await EventuallyAsync(
+            () => first.State.Gameplay is not null &&
+                  second.State.Gameplay is not null,
+            "social-list clients did not receive gameplay baselines",
+            cancellationToken);
+
+        var friend = await SendAndAwaitActionAsync(
+            first,
+            new SocialAction(SocialActionKind.AddFriend, secondAccepted.PlayerId),
+            cancellationToken);
+        CheckAssert.True(friend.Accepted, $"add friend was rejected: {friend.Detail}");
+        var ignore = await SendAndAwaitActionAsync(
+            second,
+            new SocialAction(SocialActionKind.Ignore, firstAccepted.PlayerId),
+            cancellationToken);
+        CheckAssert.True(ignore.Accepted, $"ignore was rejected: {ignore.Detail}");
+        var guild = await SendAndAwaitActionAsync(
+            first,
+            new SocialAction(SocialActionKind.CreateGuild, Text: "Oak Guard"),
+            cancellationToken);
+        CheckAssert.True(guild.Accepted, $"create guild was rejected: {guild.Detail}");
+        await EventuallyAsync(
+            () => first.State.Social.Friends.Contains(secondAccepted.PlayerId) &&
+                  first.State.Social.GuildId != Guid.Empty &&
+                  first.State.Social.GuildName == "Oak Guard" &&
+                  second.State.Social.Ignored.Contains(firstAccepted.PlayerId),
+            "owning clients must receive friends, ignore, and guild lists",
+            cancellationToken);
+
+        var blocked = await SendAndAwaitActionAsync(
+            first,
+            new SocialAction(SocialActionKind.Follow, secondAccepted.PlayerId),
+            cancellationToken);
+        CheckAssert.False(blocked.Accepted, "ignore must block follow from the published list");
+
+        var guildId = first.State.Social.GuildId;
+        var reconnectToken = first.State.ReconnectToken;
+        var playerId = firstAccepted.PlayerId;
+        await first.DisconnectAsync(cancellationToken);
+
+        HandshakeAcceptedMessage? resumedAccepted = null;
+        await using var resumed = new NetworkGameClient(TimeSpan.Zero);
+        await EventuallyAsync(async () =>
+            {
+                try
+                {
+                    resumedAccepted = await resumed.ConnectAsync(
+                        fixture.Endpoint.Address.ToString(),
+                        fixture.Endpoint.Port,
+                        fixture.Options("Elara", firstClientId) with
+                        {
+                            ReconnectPlayerId = playerId,
+                            ReconnectToken = reconnectToken,
+                        },
+                        cancellationToken);
+                    return true;
+                }
+                catch (HandshakeRejectedException)
+                {
+                    return false;
+                }
+            },
+            "the friend owner could not reconnect after disconnect",
+            cancellationToken);
+        CheckAssert.True(resumedAccepted is not null, "reconnect handshake must complete");
+        await EventuallyAsync(
+            () => resumed.State.Social.Friends.Contains(secondAccepted.PlayerId) &&
+                  resumed.State.Social.GuildId == guildId &&
+                  resumed.State.Social.GuildName == "Oak Guard",
+            "reconnect must restore the same friends and guild on the owning client",
+            cancellationToken);
+    }
+
+    private static async ValueTask WalkClearsFollowAndAllowsFollowAgainAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var fixture = await LoopbackFixture.StartAsync(cancellationToken);
+        await using var first = new NetworkGameClient(TimeSpan.Zero);
+        await using var second = new NetworkGameClient(TimeSpan.Zero);
+        var firstAccepted = await fixture.ConnectAsync(
+            first, "Elara", cancellationToken);
+        var secondAccepted = await fixture.ConnectAsync(
+            second, "Aveline", cancellationToken);
+        await EventuallyAsync(
+            () => first.State.Gameplay is not null &&
+                  second.State.Gameplay is not null,
+            "follow clients did not receive gameplay baselines",
+            cancellationToken);
+
+        var follow = await SendAndAwaitActionAsync(
+            first,
+            new SocialAction(SocialActionKind.Follow, secondAccepted.PlayerId),
+            cancellationToken);
+        CheckAssert.True(follow.Accepted, $"follow was rejected: {follow.Detail}");
+        await EventuallyAsync(
+            () => first.State.Social.FollowTargetPlayerId ==
+                  secondAccepted.PlayerId,
+            "the owning client must see the follow target",
+            cancellationToken);
+
+        await first.SendWalkAsync(0f, 3f, 0, cancellationToken);
+        await EventuallyAsync(
+            () => first.State.Social.FollowTargetPlayerId == Guid.Empty,
+            "clicking away must publish that the player is no longer following",
+            cancellationToken);
+
+        var again = await SendAndAwaitActionAsync(
+            first,
+            new SocialAction(SocialActionKind.Follow, secondAccepted.PlayerId),
+            cancellationToken);
+        CheckAssert.True(again.Accepted, $"follow again was rejected: {again.Detail}");
+        await EventuallyAsync(
+            () => first.State.Social.FollowTargetPlayerId ==
+                  secondAccepted.PlayerId,
+            "follow again must republish the target on the owning client",
+            cancellationToken);
+    }
+
+    private static int Slot(NetworkGameClient client, string itemId)
+    {
+        var slot = client.State.Gameplay?.InventorySlots
+            .FirstOrDefault(value => value.ItemId == itemId);
+        CheckAssert.True(
+            slot is { ItemId: { Length: > 0 } },
+            $"missing inventory item {itemId}");
+        return slot!.Value.Slot;
+    }
+
+    private static int Count(NetworkGameClient client, string itemId) =>
+        client.State.Gameplay?.InventorySlots.Count(value =>
+            value.ItemId == itemId) ?? 0;
+
     private static async Task<ActionResultMessage> SendAndAwaitActionAsync(
         NetworkGameClient client,
         IActionCommandPayload payload,
@@ -1101,6 +1369,17 @@ internal static class LoopbackChecks
         client.State.Entities.ContainsKey(first.PlayerEntityId) &&
         client.State.Entities.ContainsKey(second.PlayerEntityId);
 
+    private static bool HasPresence(
+        NetworkGameClient client,
+        Guid playerId,
+        string name,
+        byte gender,
+        byte teamColor) =>
+        client.State.Players.TryGetValue(playerId, out var player) &&
+        player.PlayerName == name &&
+        player.Gender == gender &&
+        player.TeamColor == teamColor;
+
     private static async Task<HandshakeRejectedMessage> CaptureRejectionAsync(
         Func<Task<HandshakeAcceptedMessage>> connect,
         CancellationToken cancellationToken)
@@ -1147,6 +1426,17 @@ internal static class LoopbackChecks
         }
     }
 
+    internal static Task<LoopbackFixture> StartHostAsync(
+        CancellationToken cancellationToken,
+        IReadOnlyList<WorldObjectSeed>? startingWorldObjects = null) =>
+        LoopbackFixture.StartAsync(cancellationToken, startingWorldObjects);
+
+    internal static Task EventuallySharedAsync(
+        Func<bool> condition,
+        string failure,
+        CancellationToken cancellationToken) =>
+        EventuallyAsync(condition, failure, cancellationToken);
+
     private static async Task EventuallyAsync(
         Func<bool> condition,
         string failure,
@@ -1179,7 +1469,7 @@ internal static class LoopbackChecks
         throw new TimeoutException(failure);
     }
 
-    private sealed class LoopbackFixture : IAsyncDisposable
+    internal sealed class LoopbackFixture : IAsyncDisposable
     {
         private readonly CancellationTokenSource _shutdown;
         private readonly Task _serverTask;
@@ -1245,7 +1535,11 @@ internal static class LoopbackChecks
             }
         }
 
-        public ClientHandshakeOptions Options(string name, Guid? clientId = null) => new(
+        public ClientHandshakeOptions Options(
+            string name,
+            Guid? clientId = null,
+            byte gender = 0,
+            byte teamColor = 0) => new(
             BuildVersion,
             ContentVersion,
             clientId ?? Guid.NewGuid(),
@@ -1253,17 +1547,21 @@ internal static class LoopbackChecks
             WorldId,
             Capabilities:
                 ClientCapabilities.UdpSnapshots |
-                ClientCapabilities.DeltaSnapshots);
+                ClientCapabilities.DeltaSnapshots,
+            Gender: gender,
+            TeamColor: teamColor);
 
         public Task<HandshakeAcceptedMessage> ConnectAsync(
             NetworkGameClient client,
             string name,
             CancellationToken cancellationToken,
-            Guid? clientId = null) =>
+            Guid? clientId = null,
+            byte gender = 0,
+            byte teamColor = 0) =>
             client.ConnectAsync(
                 Endpoint.Address.ToString(),
                 Endpoint.Port,
-                Options(name, clientId),
+                Options(name, clientId, gender, teamColor),
                 cancellationToken);
 
         public async ValueTask DisposeAsync()

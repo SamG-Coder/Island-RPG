@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.IO.Compression;
 using IslandRpg.Gameplay;
 using IslandRpg.Resources;
+using IslandRpg.Simulation;
 using OpenTK.Mathematics;
 
 namespace IslandRpg.World;
@@ -259,6 +260,32 @@ internal static class InfiniteWorldGenerator
         IReadOnlySet<(int X, int Y)>? reservedTiles = null)
     {
         var rules = options ?? GroundObjectGenerationOptions.Overworld;
+        if (rules.IncludeSticks &&
+            TryCompleteChunk(tiles, out var chunk))
+        {
+            var catalogObjects = ProceduralGroundLootCatalog.DescribeChunk(
+                    seed, chunk)
+                .Where(placement =>
+                    AllowsCatalogItem(rules, placement.ItemId) &&
+                    !IsExcludedTile(
+                        tiles,
+                        renderable,
+                        reservedTiles,
+                        (int)MathF.Floor(placement.X),
+                        (int)MathF.Floor(placement.Y)))
+                .Select(static placement => new WorldGroundObject(
+                    placement.Id,
+                    placement.ItemId,
+                    placement.X,
+                    placement.Y))
+                .ToList();
+            if (rules.IncludeCoastal)
+                catalogObjects.AddRange(
+                    CoastalCollectibleSpawner.GenerateInitial(
+                        seed, tiles, trees, catalogObjects));
+            return catalogObjects;
+        }
+
         const int maximumPerChunk = 8;
         var occupied = trees.Select(tree => (tree.X, tree.Y)).ToHashSet();
         var candidates = new List<(float Score, WorldGroundObject Object)>();
@@ -332,6 +359,54 @@ internal static class InfiniteWorldGenerator
                 CoastalCollectibleSpawner.GenerateInitial(
                     seed, tiles, trees, objects));
         return objects;
+    }
+
+    private static bool TryCompleteChunk(
+        IReadOnlyList<IslandTile> tiles,
+        out WorldChunkKey chunk)
+    {
+        chunk = default;
+        if (tiles.Count != WorldChunk.Size * WorldChunk.Size)
+            return false;
+        chunk = WorldChunkKey.At(
+            new System.Numerics.Vector2(tiles[0].X, tiles[0].Y), 0);
+        var originX = chunk.X * WorldChunk.Size;
+        var originY = chunk.Y * WorldChunk.Size;
+        for (var index = 0; index < tiles.Count; index++)
+        {
+            var expectedX = originX + index % WorldChunk.Size;
+            var expectedY = originY + index / WorldChunk.Size;
+            if (tiles[index].X != expectedX || tiles[index].Y != expectedY)
+                return false;
+        }
+        return true;
+    }
+
+    private static bool AllowsCatalogItem(
+        GroundObjectGenerationOptions rules,
+        string itemId)
+    {
+        if (itemId == ItemIds.Sticks) return rules.IncludeSticks;
+        if (itemId == ItemIds.LargeRock) return rules.IncludeRocks;
+        return rules.IncludeSticks;
+    }
+
+    private static bool IsExcludedTile(
+        IReadOnlyList<IslandTile> tiles,
+        IReadOnlyList<bool>? renderable,
+        IReadOnlySet<(int X, int Y)>? reservedTiles,
+        int tileX,
+        int tileY)
+    {
+        if (reservedTiles?.Contains((tileX, tileY)) == true)
+            return true;
+        for (var index = 0; index < tiles.Count; index++)
+        {
+            if (tiles[index].X != tileX || tiles[index].Y != tileY)
+                continue;
+            return renderable is not null && !renderable[index];
+        }
+        return true;
     }
 
     private static string SelectCropSeed(float roll) => roll switch

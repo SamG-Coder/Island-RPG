@@ -15,7 +15,7 @@ namespace IslandRpg.Simulation;
 /// enqueue operations; all authoritative mutation occurs in <see cref="Tick"/>
 /// or <see cref="Drain"/> on one owning thread.
 /// </summary>
-public sealed class AuthoritativeWorldSession
+public sealed partial class AuthoritativeWorldSession
 {
     private readonly SimulationLimits _limits;
     private readonly ISessionIdentitySource _identitySource;
@@ -268,6 +268,7 @@ public sealed class AuthoritativeWorldSession
         try
         {
             var processed = DrainCore(_limits.MaximumCommandsPerTick);
+            AdvanceFollowRoutes();
             AdvanceActors();
             if (_boatTransactions is not null)
                 foreach (var delta in _boatTransactions.Advance(
@@ -480,16 +481,23 @@ public sealed class AuthoritativeWorldSession
         {
             var actors = _actors.Values
                 .OrderBy(static value => value.Identity.PlayerId.Value)
-                .Select(static value => new AuthoritativeActorCheckpoint(
-                    value.Identity,
-                    value.DisplayName,
-                    value.Position,
-                    value.WorldLevel,
-                    value.LastProcessedCommandSequence,
-                    value.DisconnectedAtTick,
-                    value.Gameplay.ToSnapshot(),
-                    ImmutableArray.CreateRange(value.ReconnectTokenHash),
-                    value.CaptureReceipts()))
+                .Select(value =>
+                {
+                    var social = _social.Snapshot(value.Identity.PlayerId);
+                    return new AuthoritativeActorCheckpoint(
+                        value.Identity,
+                        value.DisplayName,
+                        value.Position,
+                        value.WorldLevel,
+                        value.LastProcessedCommandSequence,
+                        value.DisconnectedAtTick,
+                        value.Gameplay.ToSnapshot(),
+                        ImmutableArray.CreateRange(value.ReconnectTokenHash),
+                        value.CaptureReceipts(),
+                        social.Friends,
+                        social.Ignored,
+                        social.GuildId);
+                })
                 .ToImmutableArray();
             var cooking = _cookingJobs.Values
                 .OrderBy(static value => value.ActorId.Value)
@@ -504,7 +512,8 @@ public sealed class AuthoritativeWorldSession
                 cooking,
                 _resourceTransactions?.CaptureCheckpoint(),
                 _boatTransactions?.CaptureCheckpoint(),
-                _combatTransactions?.CaptureCheckpoint());
+                _combatTransactions?.CaptureCheckpoint(),
+                _social.CaptureGuilds());
         }
         finally
         {
@@ -729,6 +738,18 @@ public sealed class AuthoritativeWorldSession
             foreach (var value in actors) _actors.Add(value.Key, value.Value);
             foreach (var value in actorsByPlayer)
                 _actorsByPlayer.Add(value.Key, value.Value);
+            if (!checkpoint.Guilds.IsDefault)
+                _social.RestoreGuilds(checkpoint.Guilds);
+            foreach (var saved in checkpoint.Actors)
+                _social.RestorePlayer(
+                    saved.Identity.PlayerId,
+                    saved.Friends.IsDefault
+                        ? []
+                        : saved.Friends,
+                    saved.Ignored.IsDefault
+                        ? []
+                        : saved.Ignored,
+                    saved.GuildId);
             foreach (var actor in _actors.Values
                          .OrderBy(static value => value.DisconnectedAtTick)
                          .ThenBy(static value =>
@@ -1010,6 +1031,7 @@ public sealed class AuthoritativeWorldSession
             Gameplay = actor.Gameplay.ToSnapshot(),
             Position = actor.Position,
             WorldLevel = actor.WorldLevel,
+            Social = _social.Snapshot(identity.PlayerId),
             Boat = boat
         };
     }
@@ -1041,6 +1063,7 @@ public sealed class AuthoritativeWorldSession
             throw new InvalidOperationException(
                 "The authoritative actor registry is inconsistent.");
         RememberExpiredPlayer(actor.Identity.PlayerId);
+        _social.ForgetPlayer(actor.Identity.PlayerId);
 
         foreach (var delta in boatDeltas)
         {
@@ -1099,15 +1122,6 @@ public sealed class AuthoritativeWorldSession
                 "The player does not exist in this session.");
         }
 
-        if (actor.Connected)
-        {
-            return new ReconnectResult(
-                ReconnectStatus.AlreadyConnected,
-                actor.Identity,
-                checked(actor.LastProcessedCommandSequence + 1),
-                "The player is already connected.");
-        }
-
         if (!TokenMatches(actor.ReconnectTokenHash, request.ReconnectToken))
         {
             return new ReconnectResult(
@@ -1117,7 +1131,22 @@ public sealed class AuthoritativeWorldSession
                 "The reconnect token is invalid.");
         }
 
-        if (_playersByConnection.Count >= _limits.MaximumConnectedActors)
+        var evictedConnection = default(ClientConnectionId);
+        if (actor.Connected)
+        {
+            if (actor.ConnectionId == request.ConnectionId)
+            {
+                return new ReconnectResult(
+                    ReconnectStatus.ConnectionAlreadyJoined,
+                    actor.Identity,
+                    checked(actor.LastProcessedCommandSequence + 1),
+                    "This connection is already attached to a player.");
+            }
+
+            evictedConnection = actor.ConnectionId;
+            _playersByConnection.Remove(actor.ConnectionId);
+        }
+        else if (_playersByConnection.Count >= _limits.MaximumConnectedActors)
         {
             return new ReconnectResult(
                 ReconnectStatus.SessionFull,
@@ -1140,6 +1169,8 @@ public sealed class AuthoritativeWorldSession
             Gameplay = actor.Gameplay.ToSnapshot(),
             Position = actor.Position,
             WorldLevel = actor.WorldLevel,
+            Social = _social.Snapshot(actor.Identity.PlayerId),
+            EvictedConnectionId = evictedConnection,
         };
     }
 
@@ -1168,6 +1199,8 @@ public sealed class AuthoritativeWorldSession
 
         actor.Connected = false;
         actor.ConnectionId = default;
+        _social.StopFollow(actor.Identity.PlayerId);
+        var tradePartner = _social.CancelTradeForPlayer(actor.Identity.PlayerId);
         actor.ClearRoute();
         BoatStateDelta? stoppedBoat = null;
         if (_boatTransactions?.StopForOccupant(
@@ -1181,7 +1214,10 @@ public sealed class AuthoritativeWorldSession
         _playersByConnection.Remove(request.ConnectionId);
         return new DisconnectResult(DisconnectStatus.Accepted, null)
         {
-            BoatDelta = stoppedBoat
+            BoatDelta = stoppedBoat,
+            Social = tradePartner is { } partner
+                ? [new PlayerSocialPublication(partner, _social.Snapshot(partner))]
+                : []
         };
     }
 
@@ -1377,6 +1413,7 @@ public sealed class AuthoritativeWorldSession
                 ProcessCombineInventorySlots(actor, combine),
             CraftRecipeIntent craft => ProcessCraftRecipe(actor, craft),
             ConsumeFoodIntent consume => ProcessConsumeFood(actor, consume),
+            SocialIntent social => ProcessSocialIntent(actor, social),
             _ => Rejected(
                 IntentStatus.InvalidIntent,
                 actor,
@@ -2974,8 +3011,9 @@ public sealed class AuthoritativeWorldSession
         // cannot discard the actor's live target. Both mutations occur on
         // this single owner thread before the fixed step can observe either.
         CancelCombatForMovement(actor);
+        var social = StopFollowPublication(actor);
         actor.ReplaceRoute(route);
-        return Accepted(actor);
+        return Accepted(actor) with { Social = social };
     }
 
     private static bool PlacementOverlapsObstacle(
@@ -3032,15 +3070,16 @@ public sealed class AuthoritativeWorldSession
                     candidate, existing, .18f)));
     }
 
-    private static IntentResult ProcessStop(MutableActor actor)
+    private IntentResult ProcessStop(MutableActor actor)
     {
         if (actor.Gameplay.LifeState == ActorLifeState.Dead ||
             actor.Gameplay.Health <= 0)
             return Rejected(IntentStatus.DeadActor, actor,
                 "A dead actor cannot move.");
         CancelCombatForMovement(actor);
+        var social = StopFollowPublication(actor);
         actor.ClearRoute();
-        return Accepted(actor);
+        return Accepted(actor) with { Social = social };
     }
 
     private static void CancelCombatForMovement(MutableActor actor)

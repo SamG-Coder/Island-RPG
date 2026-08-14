@@ -3,6 +3,7 @@ using IslandRpg.Gameplay;
 using IslandRpg.Protocol;
 using IslandRpg.Rendering.Ui;
 using IslandRpg.Resources;
+using IslandRpg.Simulation;
 using IslandRpg.World;
 using OpenTK.Mathematics;
 
@@ -125,13 +126,16 @@ internal sealed partial class GameHostWindow
             !IsPointerOverGameUi(MouseState.Position))
         {
             var target = ScreenToTerrain(SceneMousePosition());
-            if (TryGetEnemyUnderMouse(
+            if (TryGetNetworkPlayerUnderMouse(
+                    SceneMousePosition(), out var contextPlayerId))
+                OpenNetworkPlayerContext(contextPlayerId, target);
+            else if (TryGetEnemyUnderMouse(
                     SceneMousePosition(), out var contextEnemy))
                 OpenEnemyContext(contextEnemy, target);
             else if (TryGetFishUnderMouse(
                     SceneMousePosition(), out var contextFish))
                 OpenFishContext(contextFish, target);
-            else if (TryGetNetworkGroundObjectUnderMouse(
+            else if (TryGetGroundObjectUnderMouse(
                     SceneMousePosition(), out var contextObject, out _))
                 OpenNetworkGroundObjectContext(contextObject, target);
             else if (TryGetGatherableVegetationUnderMouse(
@@ -175,7 +179,7 @@ internal sealed partial class GameHostWindow
         }
         else if (!placingObject && leftDown && !_gameLeftWasDown &&
             !IsPointerOverGameUi(MouseState.Position) &&
-            TryGetNetworkGroundObjectUnderMouse(
+            TryGetGroundObjectUnderMouse(
                 SceneMousePosition(), out var groundObject, out _))
         {
             if (ConstructionService.IsConstructionSite(groundObject))
@@ -193,11 +197,7 @@ internal sealed partial class GameHostWindow
             else if (!PlaceableObjectCatalog.IsPlaceable(
                          groundObject.ItemId) &&
                      !CaveEntranceService.IsExcavation(groundObject))
-                QueueNetworkObjectAction(
-                    CropService.IsCrop(groundObject)
-                        ? NetworkWorldActionKind.HarvestCrop
-                        : NetworkWorldActionKind.PickUp,
-                    groundObject);
+                QueueGroundObjectPickup(groundObject);
         }
         else if (!placingObject && leftDown && !_gameLeftWasDown &&
                  !IsPointerOverGameUi(MouseState.Position) &&
@@ -334,6 +334,8 @@ internal sealed partial class GameHostWindow
             else if (action == NetworkWorldActionKind.FillExcavation)
                 QueueNetworkCaveObjectAction(
                     action, value, FindNetworkCaveFillSlot(value));
+            else if (action == NetworkWorldActionKind.PickUp)
+                QueueGroundObjectPickup(value);
             else
                 QueueNetworkObjectAction(
                     action, value,
@@ -402,7 +404,7 @@ internal sealed partial class GameHostWindow
         if (_player is null) return;
         ReleaseNetworkCookingPresentation();
         _pendingNetworkWorldAction = action;
-        if (Vector2.DistanceSquared(_player.Position, action.Target) <=
+        if (Vector2.DistanceSquared(NetworkActionPosition, action.Target) <=
             NetworkInteractionDispatchRange *
             NetworkInteractionDispatchRange)
         {
@@ -425,7 +427,7 @@ internal sealed partial class GameHostWindow
                 ChatMessageStyle.Warning);
             return;
         }
-        if (Vector2.DistanceSquared(_player.Position, pending.Target) <=
+        if (Vector2.DistanceSquared(NetworkActionPosition, pending.Target) <=
             NetworkInteractionDispatchRange *
             NetworkInteractionDispatchRange)
             DispatchPendingNetworkWorldAction();
@@ -655,6 +657,55 @@ internal sealed partial class GameHostWindow
         };
     }
 
+    private void SendNetworkGroundPickup(WorldGroundObject value)
+    {
+        if (!TryNetworkWorldObjectReference(value.Id, out var reference) &&
+            !TryProceduralGroundLootReference(value, out reference))
+        {
+            _chatUi.AddMessage(
+                "The authoritative state changed before that action could begin.",
+                ChatMessageStyle.Warning);
+            return;
+        }
+        SendNetworkAction(new PickUpWorldObjectAction(reference), Guid.NewGuid());
+    }
+
+    private void SendNetworkGroundDrop(int inventorySlot, Vector2 target)
+    {
+        SendNetworkAction(
+            new DropInventoryItemAction(
+                inventorySlot,
+                1,
+                target.X,
+                target.Y,
+                checked((short)_activeWorldLevel),
+                NetworkChunkRevision(target, _activeWorldLevel)),
+            Guid.NewGuid());
+    }
+
+    private bool TryProceduralGroundLootReference(
+        WorldGroundObject value,
+        out WorldObjectReference reference)
+    {
+        var chunk = WorldChunkKey.At(
+            new System.Numerics.Vector2(value.X, value.Y),
+            _activeWorldLevel);
+        if (!ProceduralGroundLootCatalog.TryResolve(
+                _worldSeed, chunk, value.Id, out _))
+        {
+            reference = default;
+            return false;
+        }
+        reference = new(
+            value.Id,
+            chunk.X,
+            chunk.Y,
+            checked((short)chunk.WorldLevel),
+            1,
+            NetworkChunkRevision(new(value.X, value.Y), _activeWorldLevel));
+        return true;
+    }
+
     private bool TryNetworkWorldObjectReference(
         Guid objectId, out WorldObjectReference reference)
     {
@@ -704,30 +755,38 @@ internal sealed partial class GameHostWindow
         groundObject = null!;
         chunk = null!;
         var selectedDepth = float.NegativeInfinity;
-        foreach (var candidate in _networkWorldObjects.Values)
+        foreach (var gpu in _worldChunks.Values)
         {
-            if (!_networkWorldObjectChunks.TryGetValue(
-                    candidate.Id, out var coordinate) ||
-                coordinate.Level != _activeWorldLevel ||
-                !TryGroundObjectVisual(
-                    candidate, out var frame, out _, out _, out _))
+            if (!IsChunkVisible(gpu) ||
+                !_networkWorldObjectIdsByChunk.TryGetValue(
+                    gpu.Chunk.Coordinate, out var ids))
                 continue;
-            var world = GroundObjectWorld(candidate);
-            var bounds = SpriteBounds(frame, world);
-            const float minimumHitSize = 24;
-            var centerX = (bounds.Left + bounds.Right) * .5f;
-            var centerY = (bounds.Top + bounds.Bottom) * .5f;
-            var hit = (
-                Left: Math.Min(bounds.Left, centerX - minimumHitSize * .5f),
-                Top: Math.Min(bounds.Top, centerY - minimumHitSize * .5f),
-                Right: Math.Max(bounds.Right, centerX + minimumHitSize * .5f),
-                Bottom: Math.Max(bounds.Bottom, centerY + minimumHitSize * .5f));
-            if (mouse.X < hit.Left || mouse.X >= hit.Right ||
-                mouse.Y < hit.Top || mouse.Y >= hit.Bottom ||
-                !WorldHoverSelection.Prefer(world.Y, ref selectedDepth))
-                continue;
-            groundObject = candidate;
-            _worldChunks.TryGetValue(coordinate, out chunk!);
+            foreach (var objectId in ids)
+            {
+                if (!_networkWorldObjects.TryGetValue(
+                        objectId, out var candidate) ||
+                    !TryGroundObjectVisual(
+                        candidate, out var frame, out _, out _, out _))
+                    continue;
+                var world = GroundObjectWorld(candidate);
+                var bounds = SpriteBounds(frame, world);
+                const float minimumHitSize = 24;
+                var centerX = (bounds.Left + bounds.Right) * .5f;
+                var centerY = (bounds.Top + bounds.Bottom) * .5f;
+                var hit = (
+                    Left: Math.Min(bounds.Left, centerX - minimumHitSize * .5f),
+                    Top: Math.Min(bounds.Top, centerY - minimumHitSize * .5f),
+                    Right: Math.Max(
+                        bounds.Right, centerX + minimumHitSize * .5f),
+                    Bottom: Math.Max(
+                        bounds.Bottom, centerY + minimumHitSize * .5f));
+                if (mouse.X < hit.Left || mouse.X >= hit.Right ||
+                    mouse.Y < hit.Top || mouse.Y >= hit.Bottom ||
+                    !WorldHoverSelection.Prefer(world.Y, ref selectedDepth))
+                    continue;
+                groundObject = candidate;
+                chunk = gpu;
+            }
         }
         return groundObject is not null;
     }

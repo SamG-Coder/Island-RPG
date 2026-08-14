@@ -99,7 +99,10 @@ internal static class ProtocolChecks
             new PlayerJoinedMessage(
                 4, 9,
                 Guid.Parse("44444444-4444-4444-4444-444444444444"),
-                "Aveline"),
+                "Aveline",
+                99_001,
+                1,
+                4),
             new PlayerLeftMessage(
                 5, 12,
                 Guid.Parse("44444444-4444-4444-4444-444444444444"),
@@ -120,6 +123,22 @@ internal static class ProtocolChecks
             new CommandResultMessage(
                 10, 19, 6, false, CommandRejectionCode.Impossible,
                 "blocked"),
+            new SocialStateMessage(
+                12, 23,
+                Guid.Parse("44444444-4444-4444-4444-444444444444"),
+                [Guid.Parse("55555555-5555-5555-5555-555555555555")],
+                [Guid.Parse("66666666-6666-6666-6666-666666666666")],
+                Guid.Parse("77777777-7777-7777-7777-777777777777"),
+                "Oak Guard",
+                Guid.Empty,
+                Guid.Parse("88888888-8888-8888-8888-888888888888"),
+                Guid.Parse("55555555-5555-5555-5555-555555555555"),
+                true,
+                false,
+                [2, 5],
+                [1],
+                false,
+                true),
             new EntitySnapshotMessage(
                 11,
                 22,
@@ -210,9 +229,9 @@ internal static class ProtocolChecks
     private static void ProtocolEnforcesInputBounds()
     {
         CheckAssert.Equal(
-            (ushort)12,
+            (ushort)15,
             ProtocolConstants.CurrentVersion,
-            "authoritative furniture placement requires protocol v12");
+            "player social state is a private reliable message on protocol v15");
         var multibyteName = string.Concat(
             Enumerable.Repeat("界", ProtocolLimits.PlayerNameBytes));
         CheckAssert.Throws<ProtocolException>(
@@ -545,6 +564,10 @@ internal static class ProtocolChecks
         IActionCommandPayload[] payloads =
         [
             new PickUpWorldObjectAction(objectReference),
+            new SocialAction(
+                SocialActionKind.OfferTrade,
+                Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd"),
+                OfferSlots: [2, 5]),
             new DropInventoryItemAction(4, 3, 12.5f, -9.25f, 0, 72),
             new PlaceInventoryWorldObjectAction(
                 "cooking_pot", 4, 12.5f, -9.25f, 0, 0, 72),

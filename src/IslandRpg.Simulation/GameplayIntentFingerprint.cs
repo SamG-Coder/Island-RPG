@@ -215,6 +215,18 @@ public static class GameplayIntentFingerprint
                 writer.Int32(value.Rotation);
                 writer.UInt32(value.ExpectedChunkRevision);
                 break;
+            case SocialIntent value:
+                writer.Tag(40);
+                writer.Int32((int)value.Kind);
+                writer.Guid(value.TargetPlayerId.Value);
+                writer.Guid(value.TradeId);
+                writer.Guid(value.GuildId);
+                writer.Text(value.Text);
+                writer.Int32(value.Accept ? 1 : 0);
+                if (!value.OfferSlots.IsDefault)
+                    foreach (var slot in value.OfferSlots)
+                        writer.Int32(slot);
+                break;
             default:
                 throw new NotSupportedException(
                     $"Gameplay intent type '{intent.GetType().Name}' has no canonical fingerprint.");

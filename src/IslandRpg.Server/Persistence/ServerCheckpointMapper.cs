@@ -78,7 +78,19 @@ public static class ServerCheckpointMapper
             ToDurable(source.Boats ??
                 AuthoritativeBoatTransactionsCheckpoint.Empty),
             ToDurable(source.Combat ??
-                AuthoritativeCombatCheckpoint.Empty(options.WorldSeed)));
+                AuthoritativeCombatCheckpoint.Empty(options.WorldSeed)),
+            source.World.PickedProceduralGroundObjects.IsDefault
+                ? []
+                : source.World.PickedProceduralGroundObjects.ToArray(),
+            source.Guilds.IsDefault
+                ? []
+                : source.Guilds.Select(static guild =>
+                    new ServerGuildCheckpoint(
+                        guild.GuildId,
+                        guild.Name,
+                        guild.Leader.Value,
+                        guild.Members.Select(static member => member.Value)
+                            .ToArray())).ToArray());
     }
 
     public static AuthoritativeSessionCheckpoint ToSimulation(
@@ -131,6 +143,8 @@ public static class ServerCheckpointMapper
                             new ActorId(value.ActorId),
                             value.ExcavationId,
                             value.NextAllowedGameSeconds))
+                    .ToImmutableArray(),
+                (source.PickedProceduralGroundObjects ?? [])
                     .ToImmutableArray()),
             (source.CookingJobs ?? [])
                 .Select(static value => new AuthoritativeCookingJobCheckpoint(
@@ -154,7 +168,16 @@ public static class ServerCheckpointMapper
                 source.SchemaVersion,
                 source.Tick),
             ToSimulation(source.Boats),
-            ToSimulation(source.Combat, source.WorldSeed));
+            ToSimulation(source.Combat, source.WorldSeed),
+            (source.Guilds ?? [])
+                .Select(static guild => new AuthoritativeGuildCheckpoint(
+                    guild.GuildId,
+                    guild.Name,
+                    new PlayerId(guild.LeaderPlayerId),
+                    (guild.MemberPlayerIds ?? [])
+                        .Select(static id => new PlayerId(id))
+                        .ToImmutableArray()))
+                .ToImmutableArray());
     }
 
     private static ServerActorCheckpoint ToDurable(
@@ -212,7 +235,14 @@ public static class ServerCheckpointMapper
         value.Gameplay.Quests.IsDefault ? null : value.Gameplay.Quests.ToArray(),
         value.Gameplay.TimedHealingRemainingHealth,
         value.Gameplay.TimedHealingRemainingSeconds,
-        value.Gameplay.TimedHealingFractionalHealth);
+        value.Gameplay.TimedHealingFractionalHealth,
+        value.Friends.IsDefault
+            ? null
+            : value.Friends.Select(static id => id.Value).ToArray(),
+        value.Ignored.IsDefault
+            ? null
+            : value.Ignored.Select(static id => id.Value).ToArray(),
+        value.GuildId);
 
     private static AuthoritativeActorCheckpoint ToSimulation(
         ServerActorCheckpoint value,
@@ -302,7 +332,14 @@ public static class ServerCheckpointMapper
                 receipt.CommandId,
                 receipt.PayloadFingerprint,
                 receipt.Status,
-                receipt.Error)).ToImmutableArray());
+                receipt.Error)).ToImmutableArray(),
+        (value.FriendIds ?? [])
+            .Select(static id => new PlayerId(id))
+            .ToImmutableArray(),
+        (value.IgnoredIds ?? [])
+            .Select(static id => new PlayerId(id))
+            .ToImmutableArray(),
+        value.GuildId);
     }
 
     private static IReadOnlyList<ServerBoatCheckpoint> ToDurable(

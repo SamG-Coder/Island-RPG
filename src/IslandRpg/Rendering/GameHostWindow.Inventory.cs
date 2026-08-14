@@ -233,6 +233,8 @@ internal sealed partial class GameHostWindow
 
     private void ActivateInventorySlot(int slot)
     {
+        if (IsNetworkWorld && TryToggleNetworkTradeOffer(slot))
+            return;
         var inventory = _activePlayer?.Inventory ?? [];
         if ((uint)slot >= (uint)inventory.Length ||
             inventory[slot] is not { } itemId)

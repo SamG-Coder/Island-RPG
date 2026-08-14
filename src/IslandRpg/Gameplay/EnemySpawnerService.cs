@@ -198,7 +198,7 @@ internal static class EnemySpawnerService
     public const float SpawnRadius = 3.5f;
     public const float RoamRadius = 4f;
     public const float LeashRadius = 8f;
-    public const float CaveAggroRadius = 5f;
+    public const float CaveAggroRadius = SlimeCombatRules.CaveAggroRadius;
     public const float AttackRange = 1.25f;
     public const double WorldTransitionGraceSeconds = 5;
     public const double RecoveryRealSeconds = 45;

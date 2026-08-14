@@ -29,10 +29,15 @@ internal sealed partial class GameHostWindow
             {
                 if (result.Path.Count == 0)
                 {
-                    window.CancelMeleeCombat();
-                    window.ReportBlockedAction(
-                        "path-unreachable",
-                        "You cannot reach that target from here.");
+                    if (window.IsNetworkWorld)
+                        window.ClearNetworkMovementPrediction();
+                    else
+                    {
+                        window.CancelMeleeCombat();
+                        window.ReportBlockedAction(
+                            "path-unreachable",
+                            "You cannot reach that target from here.");
+                    }
                 }
                 window._queuedAction = result.Action;
                 window._player?.FollowPath(result.Path);
@@ -200,6 +205,19 @@ internal sealed partial class GameHostWindow
         window._queuedAction = null;
         window._activeTreeId = null;
         window._activeTreeStickGatherId = null;
+        StartWalkPath(target);
+    }
+
+    public void QueuePredictedWalk(Vector2 target)
+    {
+        if (window._player is null) return;
+        window._queuedAction = null;
+        StartWalkPath(target);
+    }
+
+    private void StartWalkPath(Vector2 target)
+    {
+        if (window._player is null) return;
         window._player.PrepareForPathRequest();
         CancelPath();
         window._pathCancellation = new CancellationTokenSource();

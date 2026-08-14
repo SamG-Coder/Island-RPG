@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using IslandRpg.Gameplay;
 using IslandRpg.Caves;
 using IslandRpg.Navigation;
+using IslandRpg.Resources;
 using IslandRpg.World;
 
 namespace IslandRpg.Simulation;
@@ -35,15 +36,19 @@ public sealed class AuthoritativeWorldTransactions :
     private readonly Queue<(ActorId ActorId, Guid CommandId)> _commandOrder = [];
     private readonly Func<Guid> _newObjectId;
     private readonly ICaveExcavationEnvironment? _caves;
+    private readonly long _worldSeed;
+    private readonly HashSet<Guid> _pickedProceduralGroundObjects = [];
     private readonly Dictionary<(ActorId ActorId, Guid ExcavationId), double>
         _excavationCadences = [];
 
     public AuthoritativeWorldTransactions(
         Func<Guid>? newObjectId = null,
-        ICaveExcavationEnvironment? caves = null)
+        ICaveExcavationEnvironment? caves = null,
+        long worldSeed = 0)
     {
         _newObjectId = newObjectId ?? Guid.NewGuid;
         _caves = caves;
+        _worldSeed = worldSeed;
     }
 
     public static Guid DeriveCropObjectId(
@@ -389,7 +394,10 @@ public sealed class AuthoritativeWorldTransactions :
             .Select(static value => new AuthoritativeExcavationCadenceCheckpoint(
                 value.Key.ActorId, value.Key.ExcavationId, value.Value))
             .ToImmutableArray();
-        return new(objects, chunks, cadences);
+        var picked = _pickedProceduralGroundObjects
+            .OrderBy(static value => value)
+            .ToImmutableArray();
+        return new(objects, chunks, cadences, picked);
     }
 
     /// <summary>
@@ -554,6 +562,15 @@ public sealed class AuthoritativeWorldTransactions :
         }
         foreach (var value in restoredCadences)
             _excavationCadences.Add(value.Key, value.Value);
+        if (!checkpoint.PickedProceduralGroundObjects.IsDefault)
+        {
+            foreach (var id in checkpoint.PickedProceduralGroundObjects)
+            {
+                if (id == Guid.Empty || !_pickedProceduralGroundObjects.Add(id))
+                    throw new InvalidDataException(
+                        "The world checkpoint contains an invalid picked ground item.");
+            }
+        }
     }
 
     public WorldTransactionResult Execute(
@@ -851,6 +868,8 @@ public sealed class AuthoritativeWorldTransactions :
     private WorldTransactionResult PickUp(
         ActorState actor, PickUpWorldObjectTransaction command)
     {
+        if (!_objects.ContainsKey(command.Object.ObjectId))
+            return PickUpProcedural(actor, command);
         var rejected = ValidateObject(actor, command.Context,
             command.Object, out var state);
         if (rejected is not null) return rejected;
@@ -872,6 +891,56 @@ public sealed class AuthoritativeWorldTransactions :
         return Accepted(command.Context, actor,
             [new(WorldObjectChangeKind.Removed, state.Value.Id, state.Chunk,
                 oldObjectRevision, checked(oldObjectRevision + 1), null)],
+            [chunk]);
+    }
+
+    private WorldTransactionResult PickUpProcedural(
+        ActorState actor, PickUpWorldObjectTransaction command)
+    {
+        var handle = command.Object;
+        if (_worldSeed == 0 ||
+            handle.ObjectId == Guid.Empty ||
+            _pickedProceduralGroundObjects.Contains(handle.ObjectId) ||
+            !ProceduralGroundLootCatalog.TryResolve(
+                _worldSeed, handle.Chunk, handle.ObjectId, out var placement))
+            return Rejected(
+                command.Context,
+                WorldTransactionStatus.ObjectNotFound,
+                actor);
+        if (handle.Chunk.WorldLevel != actor.WorldLevel)
+            return Rejected(
+                command.Context,
+                WorldTransactionStatus.WrongWorldLevel,
+                actor);
+        if (handle.ExpectedObjectRevision != 1)
+            return Rejected(
+                command.Context,
+                WorldTransactionStatus.StaleObjectRevision,
+                actor);
+        if (ChunkRevision(handle.Chunk) != handle.ExpectedChunkRevision)
+            return Rejected(
+                command.Context,
+                WorldTransactionStatus.StaleChunkRevision,
+                actor);
+        if (!InRange(actor.Position, new(placement.X, placement.Y)))
+            return Rejected(
+                command.Context, WorldTransactionStatus.OutOfRange, actor);
+        if (!ItemCatalog.TryGet(placement.ItemId, out _))
+            return Rejected(
+                command.Context, WorldTransactionStatus.InvalidItem, actor);
+        var inventory = actor.Inventory.Clone();
+        if (!inventory.TryAdd(placement.ItemId))
+            return Rejected(
+                command.Context,
+                WorldTransactionStatus.InventoryFull,
+                actor);
+
+        _pickedProceduralGroundObjects.Add(handle.ObjectId);
+        var chunk = AdvanceChunk(handle.Chunk);
+        CommitInventory(actor, inventory);
+        return Accepted(command.Context, actor,
+            [new(WorldObjectChangeKind.Removed, handle.ObjectId, handle.Chunk,
+                1, 2, null)],
             [chunk]);
     }
 

@@ -72,7 +72,7 @@ public sealed record ServerOptions(
     public static ServerOptions Parse(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
-        var listenAddress = IPAddress.Loopback;
+        var listenAddress = IPAddress.Any;
         var listenPort = DefaultPort;
         var worldId = Guid.NewGuid();
         var worldSeed = Random.Shared.NextInt64();
@@ -194,7 +194,7 @@ public sealed record ServerOptions(
         writer.WriteLine("  IslandRpg.Server [options]");
         writer.WriteLine();
         writer.WriteLine("Options:");
-        writer.WriteLine("  --listen <address:port>   Listen endpoint (default 127.0.0.1:38740)");
+        writer.WriteLine("  --listen <address:port>   Listen endpoint (default *:38740)");
         writer.WriteLine("  --world-id <guid>         Persistent world identity (default random)");
         writer.WriteLine("  --world-seed <long>       Deterministic world seed (default random)");
         writer.WriteLine("  --build-version <value>   Required client build (default 0.3.0)");

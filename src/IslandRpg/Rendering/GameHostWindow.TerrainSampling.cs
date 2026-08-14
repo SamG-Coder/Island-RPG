@@ -8,6 +8,7 @@ internal sealed partial class GameHostWindow
     private CaveHydrologyField.SamplingContext?
         _fallbackCaveSampling;
     private long _fallbackCaveSamplingSeed;
+    private (float Height, Biome Biome)? _lastLoadedTerrainSample;
 
     private bool TrySampleLoadedTerrain(
         float x,
@@ -72,7 +73,15 @@ internal sealed partial class GameHostWindow
     {
         if (TrySampleLoadedTerrain(
                 x, y, out var height, out var biome))
+        {
+            _lastLoadedTerrainSample = (height, biome);
             return (height, biome);
+        }
+        // After a network join the GPU chunks are retired. Falling back to
+        // SampleRenderedHeight for the player, every slime, and every remote
+        // actor is the hitch that feeds the next hitch.
+        if (IsNetworkWorld)
+            return _lastLoadedTerrainSample ?? (0f, default);
         return SampleProceduralLevelTerrain(x, y, caveContext);
     }
 

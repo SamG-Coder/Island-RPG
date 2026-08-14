@@ -49,6 +49,8 @@ internal sealed partial class GameHostWindow
     private int _networkResourceAdventureCurrentLevel;
     private readonly Dictionary<long, NetworkTreeTarget>
         _networkTreeTargets = [];
+    private readonly HashSet<long> _networkTreeDescribeMisses = [];
+    private readonly NetworkResourceHotPath _networkResourceHotPath = new();
 
     private void QueueNetworkTreeAction(
         IslandTree tree,
@@ -80,7 +82,7 @@ internal sealed partial class GameHostWindow
         CancelNetworkResourceInteraction(stopPlayer: false);
         var pending = new NetworkTreeAction(action, target, toolSlot);
         _pendingNetworkTreeAction = pending;
-        if (Vector2.DistanceSquared(_player.Position, target.Position) <=
+        if (Vector2.DistanceSquared(NetworkActionPosition, target.Position) <=
             NetworkResourceDispatchRange * NetworkResourceDispatchRange)
         {
             BeginNetworkTreeAction(pending);
@@ -102,7 +104,7 @@ internal sealed partial class GameHostWindow
                 return;
             }
             if (Vector2.DistanceSquared(
-                    _player.Position, pending.Target.Position) <=
+                    NetworkActionPosition, pending.Target.Position) <=
                 NetworkResourceDispatchRange *
                 NetworkResourceDispatchRange)
                 BeginNetworkTreeAction(pending);
@@ -230,13 +232,18 @@ internal sealed partial class GameHostWindow
             return target.Tree.GraphicName.Equals(
                        tree.GraphicName, StringComparison.OrdinalIgnoreCase) &&
                    target.Tree.FrameIndex == tree.FrameIndex;
+        if (_networkTreeDescribeMisses.Contains(tileKey))
+            return false;
         if (
             !SurfaceTreeCatalog.TryDescribeAt(
                 _worldSeed, tree.X, tree.Y, out var visual) ||
             visual.FrameIndex != tree.FrameIndex ||
             !visual.GraphicName.Equals(
                 tree.GraphicName, StringComparison.OrdinalIgnoreCase))
+        {
+            _networkTreeDescribeMisses.Add(tileKey);
             return false;
+        }
         var chunk = WorldChunkKey.At(
             new System.Numerics.Vector2(tree.X + .5f, tree.Y + .5f),
             _activeWorldLevel);
@@ -253,6 +260,7 @@ internal sealed partial class GameHostWindow
             chunk,
             new Vector2(tree.X + .5f, tree.Y + .5f));
         _networkTreeTargets[tileKey] = target;
+        _networkResourceHotPath.RememberTree(tileKey, nodeId, chunk);
         return true;
     }
 
@@ -270,20 +278,20 @@ internal sealed partial class GameHostWindow
         TryGetNetworkTreeState(target, out var state) &&
         (state.Depleted || state.Health <= 0);
 
-    private bool IsNetworkTreeDepleted(IslandTree tree) =>
-        TryDescribeNetworkTree(tree, out var target) &&
-        NetworkTreeIsDepleted(target);
+    private bool IsNetworkTreeDepleted(IslandTree tree)
+    {
+        var tileKey = WorldHoverSelection.TileKey(tree.X, tree.Y);
+        return _networkResourceHotPath.IsTreeDepleted(
+            tileKey,
+            _networkClient?.State.ResourceChunks);
+    }
 
     private bool NetworkTreeBlocksWorld(IslandTree tree)
     {
-        if (!TryDescribeNetworkTree(tree, out var target)) return true;
-        var state = TryGetNetworkTreeState(target, out var current)
-            ? current
-            : null;
-        return NetworkResourceObstacleRules.BlocksWorld(
-            ResourceNodeKind.Tree,
-            regrowthGameSeconds: 0,
-            state);
+        var tileKey = WorldHoverSelection.TileKey(tree.X, tree.Y);
+        return _networkResourceHotPath.TreeBlocks(
+            tileKey,
+            _networkClient?.State.ResourceChunks);
     }
 
     private bool NetworkTreeActionStillValid(NetworkTreeAction action)
@@ -643,6 +651,9 @@ internal sealed partial class GameHostWindow
     {
         CancelNetworkResourceInteraction();
         _networkTreeTargets.Clear();
+        _networkTreeDescribeMisses.Clear();
+        _networkFishDescriptors.Clear();
+        _networkResourceHotPath.Clear();
         ClearNetworkVegetationProjection();
         ClearNetworkMiningProjection();
     }
@@ -650,6 +661,14 @@ internal sealed partial class GameHostWindow
     private void ForgetNetworkResourceChunk(ChunkCoordinate coordinate)
     {
         if (!IsNetworkWorld) return;
+        var forgotten = new WorldChunkKey(
+            coordinate.X, coordinate.Y, coordinate.Level);
+        _networkResourceHotPath.ForgetChunk(forgotten);
+        foreach (var key in _networkFishDescriptors
+                     .Where(pair => pair.Value.Chunk == forgotten)
+                     .Select(static pair => pair.Key)
+                     .ToArray())
+            _networkFishDescriptors.Remove(key);
         ForgetNetworkVegetationChunk(coordinate);
         ForgetNetworkMiningChunk(coordinate);
         foreach (var key in _networkTreeTargets
@@ -660,6 +679,22 @@ internal sealed partial class GameHostWindow
                      .Select(static pair => pair.Key)
                      .ToArray())
             _networkTreeTargets.Remove(key);
+    }
+
+    private void RememberNetworkChunkResources(GpuWorldChunk gpu)
+    {
+        var level = gpu.Chunk.Coordinate.Level;
+        foreach (var item in gpu.FishRenderItems)
+        {
+            var fish = item.Fish;
+            _networkResourceHotPath.RememberFishFromWorld(
+                _worldSeed,
+                level,
+                fish.X,
+                fish.Y,
+                (int)fish.Species,
+                fish.StableKey);
+        }
     }
 
     private void ResetNetworkResourceExperienceObservation()
@@ -680,36 +715,25 @@ internal sealed partial class GameHostWindow
 
     private void RenderNetworkTreeHealthBars(Vector4 scene)
     {
-        foreach (var gpu in _worldChunks.Values.Where(IsChunkVisible))
-        foreach (var tree in gpu.Chunk.Trees)
-        {
-            if (!TryDescribeNetworkTree(tree, out var target) ||
-                NetworkTreeIsDepleted(target))
-                continue;
-            var hasState = TryGetNetworkTreeState(target, out var state);
-            var health = hasState
-                ? state.Health
-                : target.Visual.MaximumHealth;
-            var feedbackKey = TreeFeedbackKey(target.NodeId.Value);
-            var active = _activeNetworkTreeAction?.Target.NodeId ==
-                         target.NodeId;
-            if (health >= target.Visual.MaximumHealth && !active &&
-                !_entityFeedback.HealthVisible(feedbackKey, _clock))
-                continue;
-            if (!_treeAtlas.TryGetValue(
-                    WorldTreeCatalog.AtlasKey(tree), out var entry))
-                continue;
-            var elevation = InfiniteWorldGenerator.SampleRenderedHeight(
-                _worldSeed, tree.X + .5f, tree.Y + .5f);
-            var world = new Vector2(
-                (tree.X - tree.Y) * 48,
-                (tree.X + tree.Y + 1) * 24 - elevation * 20);
-            DrawEntityFeedback(
-                scene,
-                SpriteBounds(entry.Frame, world),
-                health / (float)Math.Max(1, target.Visual.MaximumHealth),
-                feedbackKey,
-                forceHealth: active);
-        }
+        if (_activeNetworkTreeAction is not { } active)
+            return;
+        var tree = active.Target.Tree;
+        if (!_treeAtlas.TryGetValue(
+                WorldTreeCatalog.AtlasKey(tree), out var entry))
+            return;
+        var hasState = TryGetNetworkTreeState(active.Target, out var state);
+        var health = hasState
+            ? state.Health
+            : active.Target.Visual.MaximumHealth;
+        var terrain = SamplePlayerTerrain(tree.X + .5f, tree.Y + .5f);
+        var world = new Vector2(
+            (tree.X - tree.Y) * 48,
+            (tree.X + tree.Y + 1) * 24 - terrain.Height * 20);
+        DrawEntityFeedback(
+            scene,
+            SpriteBounds(entry.Frame, world),
+            health / (float)Math.Max(1, active.Target.Visual.MaximumHealth),
+            TreeFeedbackKey(active.Target.NodeId.Value),
+            forceHealth: true);
     }
 }

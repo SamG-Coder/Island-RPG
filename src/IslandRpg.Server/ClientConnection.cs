@@ -275,6 +275,11 @@ internal sealed class ClientConnection : IAsyncDisposable
             {
                 return;
             }
+            if (!TryQueueSequenced(sequence =>
+                    _server.CreateSocialStateBaseline(sequence, player.Value)))
+            {
+                return;
+            }
             PlayerId = player.Value.Identity.PlayerId.Value;
             if (!_server.ActivateAndQueuePublicBaselines(this))
             {
@@ -283,7 +288,9 @@ internal sealed class ClientConnection : IAsyncDisposable
             _server.AnnouncePlayerJoined(
                 this,
                 player.Value.Identity.PlayerId.Value,
-                handshake.PlayerName);
+                handshake.PlayerName,
+                handshake.Gender,
+                handshake.TeamColor);
             Console.WriteLine(
                 $"Player {handshake.PlayerName} ({player.Value.Identity.PlayerId}) " +
                 (player.Value.Reconnected ? "reconnected." : "joined."));
@@ -294,6 +301,12 @@ internal sealed class ClientConnection : IAsyncDisposable
                 if (message is null)
                 {
                     break;
+                }
+
+                if (message is WalkCommandMessage or StopCommandMessage)
+                {
+                    _ = ProcessMovementCommandAsync(player.Value, message);
+                    continue;
                 }
 
                 IntentResult result;
@@ -357,6 +370,50 @@ internal sealed class ClientConnection : IAsyncDisposable
             catch (Exception exception) when (exception is IOException or SocketException or OperationCanceledException)
             {
             }
+        }
+    }
+
+    private async Task ProcessMovementCommandAsync(
+        AuthenticatedPlayer player,
+        IProtocolMessage message)
+    {
+        try
+        {
+            var result = await _server.ProcessCommandAsync(this, player, message)
+                .ConfigureAwait(false);
+            _server.PublishSocialFromIntent(result);
+            var rejection = DedicatedServer.MapRejection(result.Status);
+            var accepted = rejection == CommandRejectionCode.None;
+            if (!TryQueueSequenced(sequence => new CommandResultMessage(
+                    sequence,
+                    checked((ulong)_server.CurrentTick),
+                    message.Sequence,
+                    accepted,
+                    rejection,
+                    result.Error ?? string.Empty)))
+            {
+                Stop();
+            }
+        }
+        catch (CommandFailure failure)
+        {
+            if (!TryQueueSequenced(sequence => new CommandResultMessage(
+                    sequence,
+                    checked((ulong)_server.CurrentTick),
+                    message.Sequence,
+                    false,
+                    failure.Code,
+                    failure.Message)))
+            {
+                Stop();
+            }
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
+        catch
+        {
+            Stop();
         }
     }
 

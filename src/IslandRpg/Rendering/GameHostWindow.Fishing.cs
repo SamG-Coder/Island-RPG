@@ -123,8 +123,9 @@ internal sealed partial class GameHostWindow
     private bool IsFishDepleted(WorldFish fish)
     {
         if (IsNetworkWorld)
-            return TryDescribeNetworkFish(fish, out var descriptor) &&
-                   NetworkFishIsDepleted(descriptor);
+            return _networkResourceHotPath.IsFishDepleted(
+                fish.StableKey,
+                _networkClient?.State.ResourceChunks);
         var chunk = FindFishChunk(fish.StableKey);
         return chunk is not null &&
                chunk.Chunk.FishRemaining.TryGetValue(

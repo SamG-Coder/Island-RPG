@@ -5,7 +5,7 @@ public static class ProtocolConstants
 {
     public const uint ReliableMagic = 0x49525047; // IRPG
     public const uint SnapshotMagic = 0x49525544; // IRUD
-    public const ushort CurrentVersion = 12;
+    public const ushort CurrentVersion = 15;
     public const int ReliableHeaderSize = 28;
     public const int TcpLengthPrefixSize = sizeof(uint);
     public const int MaxReliableFrameBytes = 64 * 1024;
@@ -43,6 +43,7 @@ public static class ProtocolLimits
     public const int MaxEnemiesPerBatch =
         IslandRpg.Gameplay.NetworkPopulationLimits.MaximumEnemies;
     public const int MaxCombatEventsPerBatch = 256;
+    public const int MaxSocialListEntries = 64;
     public const int GroupOwnerIdBytes = 64;
     public const int MinConstructionRotation = 0;
     public const int MaxConstructionRotation = 3;
@@ -83,6 +84,7 @@ public enum ProtocolMessageKind : byte
     EnemyDeltaBatch = 49,
     CombatEventBatch = 50,
     CombatActionResult = 51,
+    SocialState = 52,
 }
 
 [Flags]
@@ -176,6 +178,7 @@ public enum ActionCommandKind : byte
     PlantCrop = 20,
     HarvestCrop = 21,
     PlaceInventoryWorldObject = 22,
+    Social = 23,
 }
 
 public enum BoatActionKind : byte

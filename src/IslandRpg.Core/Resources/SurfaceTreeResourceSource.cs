@@ -42,12 +42,15 @@ public static class SurfaceTreeCatalog
     /// intentionally stateless, making chunk edges and negative coordinates
     /// independent of generation order.
     /// </summary>
+    public static int TryDescribeAtInvocations { get; set; }
+
     public static bool TryDescribeAt(
         long worldSeed,
         int tileX,
         int tileY,
         out SurfaceTreeVisual visual)
     {
+        TryDescribeAtInvocations++;
         var elevation =
             (ProceduralSurfaceTerrain.RawHeightAt(
                  worldSeed, tileX, tileY) +

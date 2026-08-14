@@ -7,6 +7,7 @@ using IslandRpg.Rendering.Ui;
 using IslandRpg.Simulation;
 using IslandRpg.World;
 using OpenTK.Mathematics;
+using BoatReference = IslandRpg.Protocol.BoatReference;
 
 namespace IslandRpg.Rendering;
 
@@ -50,6 +51,8 @@ internal sealed partial class GameHostWindow
     private float _networkPendingBoardDistance;
     private Vector2? _networkPendingDisembarkTarget;
     private bool _networkDisembarkMoveAccepted;
+    private readonly Dictionary<string, FishSchoolDescriptor>
+        _networkFishDescriptors = new(StringComparer.Ordinal);
     private NetworkFishingTarget? _networkPendingFishing;
     private NetworkFishingTarget? _networkActiveFishing;
     private Guid? _networkFishingCommandId;
@@ -99,6 +102,19 @@ internal sealed partial class GameHostWindow
         _fishingBoatDisembarkTargeting = false;
         _fishingBoatRiderOffset = Vector2.Zero;
         _fishingBoatRiderTargetOffset = Vector2.Zero;
+    }
+
+    private void SynchronizeNetworkBoats(IEnumerable<BoatState> boats)
+    {
+        var seen = new HashSet<Guid>();
+        foreach (var boat in boats)
+        {
+            seen.Add(boat.BoatId);
+            UpsertNetworkBoat(boat);
+        }
+        foreach (var id in _networkBoats.Keys.Where(id => !seen.Contains(id)).ToArray())
+            RemoveNetworkBoat(id);
+        RefreshLocalNetworkBoatState();
     }
 
     private void HandleNetworkBoatsChanged(NetworkBoatsChangedEventArgs value)
@@ -455,7 +471,7 @@ internal sealed partial class GameHostWindow
             _networkBoats.TryGetValue(boardId, out var boardingBoat))
         {
             if (Vector2.DistanceSquared(
-                    _player.Position, boardingBoat.Position) <=
+                    NetworkActionPosition, boardingBoat.Position) <=
                 NetworkBoatBoardingRange * NetworkBoatBoardingRange)
             {
                 _networkPendingBoardBoatId = null;
@@ -693,6 +709,9 @@ internal sealed partial class GameHostWindow
         WorldFish fish,
         out FishSchoolDescriptor descriptor)
     {
+        if (_networkFishDescriptors.TryGetValue(
+                fish.StableKey, out descriptor!))
+            return true;
         var chunk = WorldChunkKey.At(
             new System.Numerics.Vector2(fish.X, fish.Y),
             _activeWorldLevel);
@@ -702,7 +721,11 @@ internal sealed partial class GameHostWindow
                 value.StableKey.Equals(
                     fish.StableKey, StringComparison.Ordinal) &&
                 value.Species == (FishSpecies)fish.Species)!;
-        return descriptor is not null;
+        if (descriptor is null) return false;
+        _networkFishDescriptors[fish.StableKey] = descriptor;
+        _networkResourceHotPath.RememberFish(
+            fish.StableKey, descriptor.Id, descriptor.Chunk);
+        return true;
     }
 
     private bool NetworkFishIsDepleted(FishSchoolDescriptor? descriptor)

@@ -21,6 +21,9 @@ internal static class AuthoritativeSessionChecks
             "disconnect and reconnect preserve identity securely",
             ReconnectPreservesIdentity);
         checks.Add(
+            "a valid reconnect token takes over a live connection",
+            ReconnectTakesOverLiveConnection);
+        checks.Add(
             "disconnected identities do not consume concurrent player slots",
             DisconnectChurnReleasesConcurrentSlots);
         checks.Add(
@@ -259,6 +262,45 @@ internal static class AuthoritativeSessionChecks
         CheckAssert.True(
             session.CaptureSnapshot().Actors[0].Connected,
             "successful reconnect must restore authoritative control");
+    }
+
+    private static void ReconnectTakesOverLiveConnection()
+    {
+        var session = NewSession();
+        var firstConnection = ClientConnectionId.New();
+        var joined = Join(session, firstConnection, "Serena", Vector2.One);
+        var secondConnection = ClientConnectionId.New();
+        var takeover = session.EnqueueReconnectAsync(new ReconnectRequest(
+            secondConnection,
+            joined.Identity.PlayerId,
+            joined.ReconnectToken));
+        session.Drain();
+        var result = takeover.GetAwaiter().GetResult();
+        CheckAssert.True(
+            result.Accepted,
+            "a valid token must reclaim a still-connected actor");
+        CheckAssert.Equal(
+            firstConnection,
+            result.EvictedConnectionId,
+            "takeover must report the evicted live connection");
+        CheckAssert.Equal(
+            joined.Identity,
+            result.Identity,
+            "takeover must keep the original player identity");
+        CheckAssert.True(
+            session.CaptureSnapshot().Actors[0].Connected,
+            "the actor must remain connected after takeover");
+
+        var stale = session.EnqueueIntentAsync(new ActorCommand(
+            firstConnection,
+            joined.Identity.PlayerId,
+            1,
+            new WalkIntent(new Vector2(4, 0))));
+        session.Drain();
+        CheckAssert.Equal(
+            IntentStatus.InvalidConnection,
+            stale.GetAwaiter().GetResult().Status,
+            "the evicted connection must no longer control the actor");
     }
 
     private static void DisconnectChurnReleasesConcurrentSlots()

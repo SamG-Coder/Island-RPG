@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Numerics;
 using IslandRpg.Resources;
 using IslandRpg.Gameplay;
@@ -98,6 +99,43 @@ public sealed record ConsumeFoodIntent(
     uint ExpectedInventoryRevision,
     uint ExpectedActorRevision,
     int Slot) : GameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public enum SocialCommandKind : byte
+{
+    OfferTrade = 1,
+    RespondTrade = 2,
+    SetTradeOffer = 3,
+    ConfirmTrade = 4,
+    CancelTrade = 5,
+    Follow = 6,
+    StopFollow = 7,
+    AddFriend = 8,
+    RemoveFriend = 9,
+    Ignore = 10,
+    Unignore = 11,
+    CreateGuild = 12,
+    JoinGuild = 13,
+    LeaveGuild = 14
+}
+
+/// <summary>
+/// Server-owned social, trade, and follow commands. The render client only
+/// names the other player; the session validates range, ignore, and inventory.
+/// </summary>
+public sealed record SocialIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    SocialCommandKind Kind,
+    PlayerId TargetPlayerId = default,
+    Guid TradeId = default,
+    Guid GuildId = default,
+    string Text = "",
+    bool Accept = false,
+    ImmutableArray<int> OfferSlots = default) : GameplayIntent(
         CommandId,
         ExpectedInventoryRevision,
         ExpectedActorRevision);
@@ -491,6 +529,8 @@ public readonly record struct JoinResult(
 
     public int WorldLevel { get; init; }
 
+    public PlayerSocialSnapshot Social { get; init; }
+
     /// <summary>
     /// Trusted server-provisioned island-start boat. It is created in the
     /// same owner-thread transaction as the actor so a failed provision
@@ -525,6 +565,14 @@ public readonly record struct ReconnectResult(
     public Vector2 Position { get; init; }
 
     public int WorldLevel { get; init; }
+
+    public PlayerSocialSnapshot Social { get; init; }
+
+    /// <summary>
+    /// Previous live connection evicted by a valid reconnect takeover.
+    /// Empty when the actor was already disconnected.
+    /// </summary>
+    public ClientConnectionId EvictedConnectionId { get; init; }
 }
 
 public enum DisconnectStatus
@@ -548,7 +596,17 @@ public readonly record struct DisconnectResult(
     /// disconnect handling, preserving reliable message ordering.
     /// </summary>
     public BoatStateDelta? BoatDelta { get; init; }
+
+    /// <summary>
+    /// Remaining players whose private social view changed because this
+    /// actor left (open trade cancelled, follow cleared).
+    /// </summary>
+    public ImmutableArray<PlayerSocialPublication> Social { get; init; }
 }
+
+public readonly record struct PlayerSocialPublication(
+    PlayerId PlayerId,
+    PlayerSocialSnapshot Social);
 
 public enum IntentStatus
 {
@@ -639,7 +697,21 @@ public enum IntentStatus
     StaleEnemyRevision,
     InvalidCombatStance,
     RespawnLocked,
-    ActorAlreadyAlive
+    ActorAlreadyAlive,
+    Ignored,
+    AlreadyFriends,
+    NotFriends,
+    AlreadyIgnored,
+    NotIgnored,
+    GuildNotFound,
+    AlreadyInGuild,
+    NotInGuild,
+    GuildFull,
+    InvalidGuildName,
+    TradeNotFound,
+    TradeNotReady,
+    AlreadyTrading,
+    NotFollowing
 }
 
 public readonly record struct CookingCompletionSnapshot(
@@ -699,4 +771,10 @@ public readonly record struct IntentResult(
     /// publishes this only after the requester's private command outcome.
     /// </summary>
     public BoatStateDelta? BoatDelta { get; init; }
+
+    /// <summary>
+    /// Private social views for every player whose lists or open trade
+    /// changed. The server publishes each to that player's connection only.
+    /// </summary>
+    public ImmutableArray<PlayerSocialPublication> Social { get; init; }
 }

@@ -113,6 +113,8 @@ public static class ReliableProtocolCodec
                 writer.WriteUInt32((uint)value.Capabilities);
                 writer.WriteGuid(value.ReconnectPlayerId);
                 writer.WriteString(value.ReconnectToken, ProtocolLimits.ReconnectTokenBytes, nameof(value.ReconnectToken));
+                writer.WriteByte(value.Gender);
+                writer.WriteByte(value.TeamColor);
                 break;
             case HandshakeAcceptedMessage value:
                 writer.WriteUInt16(value.ProtocolVersion);
@@ -147,6 +149,9 @@ public static class ReliableProtocolCodec
             case PlayerJoinedMessage value:
                 writer.WriteGuid(value.PlayerId);
                 writer.WriteString(value.PlayerName, ProtocolLimits.PlayerNameBytes, nameof(value.PlayerName));
+                writer.WriteUInt64(value.EntityId);
+                writer.WriteByte(value.Gender);
+                writer.WriteByte(value.TeamColor);
                 break;
             case PlayerLeftMessage value:
                 writer.WriteGuid(value.PlayerId);
@@ -241,6 +246,9 @@ public static class ReliableProtocolCodec
             case CombatActionResultMessage value:
                 WriteCombatActionResult(writer, value);
                 break;
+            case SocialStateMessage value:
+                WriteSocialState(writer, value);
+                break;
             default:
                 throw new ProtocolException($"Unsupported message type {message.GetType().FullName}.");
         }
@@ -261,7 +269,8 @@ public static class ReliableProtocolCodec
                 reader.ReadString(ProtocolLimits.PlayerNameBytes, "PlayerName"),
                 reader.ReadUInt64(), reader.ReadUInt16(),
                 ReadEnum<ClientCapabilities>(reader.ReadUInt32(), "ClientCapabilities"),
-                reader.ReadGuid(), reader.ReadString(ProtocolLimits.ReconnectTokenBytes, "ReconnectToken")),
+                reader.ReadGuid(), reader.ReadString(ProtocolLimits.ReconnectTokenBytes, "ReconnectToken"),
+                reader.ReadByte(), reader.ReadByte()),
             ProtocolMessageKind.HandshakeAccepted => new HandshakeAcceptedMessage(
                 sequence, tick, reader.ReadUInt16(),
                 reader.ReadString(ProtocolLimits.BuildVersionBytes, "BuildVersion"),
@@ -281,7 +290,8 @@ public static class ReliableProtocolCodec
                 reader.ReadString(ProtocolLimits.DetailBytes, "Detail")),
             ProtocolMessageKind.PlayerJoined => new PlayerJoinedMessage(
                 sequence, tick, reader.ReadGuid(),
-                reader.ReadString(ProtocolLimits.PlayerNameBytes, "PlayerName")),
+                reader.ReadString(ProtocolLimits.PlayerNameBytes, "PlayerName"),
+                reader.ReadUInt64(), reader.ReadByte(), reader.ReadByte()),
             ProtocolMessageKind.PlayerLeft => new PlayerLeftMessage(
                 sequence, tick, reader.ReadGuid(),
                 ReadEnum<PlayerLeaveReason>(reader.ReadByte(), "PlayerLeaveReason"),
@@ -337,6 +347,8 @@ public static class ReliableProtocolCodec
                 ReadCombatEventBatch(sequence, tick, ref reader),
             ProtocolMessageKind.CombatActionResult =>
                 ReadCombatActionResult(sequence, tick, ref reader),
+            ProtocolMessageKind.SocialState =>
+                ReadSocialState(sequence, tick, ref reader),
             _ => throw new ProtocolException($"Unsupported reliable message kind {header.Kind}."),
         };
     }
@@ -372,6 +384,24 @@ public static class ReliableProtocolCodec
             case ConsumeItemAction action:
                 writer.WriteByte((byte)ActionCommandKind.ConsumeItem);
                 WriteInventorySlot(writer, action.Slot, nameof(action.Slot));
+                break;
+            case SocialAction action:
+                writer.WriteByte((byte)ActionCommandKind.Social);
+                writer.WriteByte((byte)action.Command);
+                writer.WriteGuid(action.TargetPlayerId);
+                writer.WriteGuid(action.TradeId);
+                writer.WriteGuid(action.GuildId);
+                writer.WriteString(
+                    action.Text ?? "",
+                    ProtocolLimits.PlayerNameBytes,
+                    nameof(action.Text));
+                writer.WriteBoolean(action.Accept);
+                var slots = action.OfferSlots ?? [];
+                if (slots.Count > ProtocolLimits.PlayerInventorySlots)
+                    throw new ProtocolException("Social offer exceeds inventory.");
+                writer.WriteByte(checked((byte)slots.Count));
+                foreach (var slot in slots)
+                    WriteInventorySlot(writer, slot, nameof(action.OfferSlots));
                 break;
             case PlantCropAction action:
                 writer.WriteByte((byte)ActionCommandKind.PlantCrop);
@@ -529,6 +559,7 @@ public static class ReliableProtocolCodec
                 ReadIdentifier(ref reader, ProtocolLimits.RecipeIdBytes, "RecipeId")),
             ActionCommandKind.ConsumeItem => new ConsumeItemAction(
                 ReadInventorySlot(ref reader, "Slot")),
+            ActionCommandKind.Social => ReadSocialAction(ref reader),
             ActionCommandKind.PlantCrop => new PlantCropAction(
                 ReadInventorySlot(ref reader, "SeedInventorySlot"),
                 ReadFinite(ref reader, "X"), ReadFinite(ref reader, "Y"),
@@ -936,6 +967,26 @@ public static class ReliableProtocolCodec
         writer.WriteInt16(value.WorldLevel);
         writer.WriteUInt32(value.ExpectedObjectRevision);
         writer.WriteUInt32(value.ExpectedChunkRevision);
+    }
+
+    private static SocialAction ReadSocialAction(ref WireReader reader)
+    {
+        var command = ReadEnum<SocialActionKind>(
+            reader.ReadByte(), "SocialActionKind");
+        var target = reader.ReadGuid();
+        var tradeId = reader.ReadGuid();
+        var guildId = reader.ReadGuid();
+        var text = reader.ReadString(
+            ProtocolLimits.PlayerNameBytes, "SocialText");
+        var accept = reader.ReadBoolean();
+        var count = reader.ReadByte();
+        if (count > ProtocolLimits.PlayerInventorySlots)
+            throw new ProtocolException("Social offer exceeds inventory.");
+        var slots = new int[count];
+        for (var index = 0; index < count; index++)
+            slots[index] = ReadInventorySlot(ref reader, "OfferSlot");
+        return new SocialAction(
+            command, target, tradeId, guildId, text, accept, slots);
     }
 
     private static WorldObjectReference ReadWorldObjectReference(
@@ -2329,6 +2380,116 @@ public static class ReliableProtocolCodec
         var discard = new WireWriter();
         WriteCaveActionResult(discard, result);
         return result;
+    }
+
+    private static void WriteSocialState(WireWriter writer, SocialStateMessage value)
+    {
+        writer.WriteGuid(value.PlayerId);
+        WriteGuidList(writer, value.Friends, "Friends");
+        WriteGuidList(writer, value.Ignored, "Ignored");
+        writer.WriteGuid(value.GuildId);
+        writer.WriteString(
+            value.GuildName ?? "",
+            ProtocolLimits.PlayerNameBytes,
+            nameof(value.GuildName));
+        writer.WriteGuid(value.FollowTargetPlayerId);
+        writer.WriteGuid(value.OpenTradeId);
+        writer.WriteGuid(value.TradePartnerPlayerId);
+        writer.WriteBoolean(value.TradeAccepted);
+        writer.WriteBoolean(value.TradeIncoming);
+        WriteSlotList(writer, value.OwnOfferSlots, "OwnOfferSlots");
+        WriteSlotList(writer, value.PartnerOfferSlots, "PartnerOfferSlots");
+        writer.WriteBoolean(value.OwnConfirmed);
+        writer.WriteBoolean(value.PartnerConfirmed);
+    }
+
+    private static SocialStateMessage ReadSocialState(
+        ulong sequence,
+        ulong tick,
+        ref WireReader reader)
+    {
+        var playerId = reader.ReadGuid();
+        var friends = ReadGuidList(ref reader, "Friends");
+        var ignored = ReadGuidList(ref reader, "Ignored");
+        var guildId = reader.ReadGuid();
+        var guildName = reader.ReadString(
+            ProtocolLimits.PlayerNameBytes, "GuildName");
+        var follow = reader.ReadGuid();
+        var tradeId = reader.ReadGuid();
+        var partner = reader.ReadGuid();
+        var accepted = reader.ReadBoolean();
+        var incoming = reader.ReadBoolean();
+        var ownSlots = ReadSlotList(ref reader, "OwnOfferSlots");
+        var partnerSlots = ReadSlotList(ref reader, "PartnerOfferSlots");
+        var ownConfirmed = reader.ReadBoolean();
+        var partnerConfirmed = reader.ReadBoolean();
+        return new SocialStateMessage(
+            sequence,
+            tick,
+            playerId,
+            friends,
+            ignored,
+            guildId,
+            guildName,
+            follow,
+            tradeId,
+            partner,
+            accepted,
+            incoming,
+            ownSlots,
+            partnerSlots,
+            ownConfirmed,
+            partnerConfirmed);
+    }
+
+    private static void WriteGuidList(
+        WireWriter writer,
+        IReadOnlyList<Guid>? values,
+        string name)
+    {
+        var count = values?.Count ?? 0;
+        if (count > ProtocolLimits.MaxSocialListEntries)
+            throw new ProtocolException($"{name} exceeds the social list limit.");
+        writer.WriteByte(checked((byte)count));
+        if (values is null) return;
+        for (var index = 0; index < count; index++)
+            writer.WriteGuid(values[index]);
+    }
+
+    private static Guid[] ReadGuidList(ref WireReader reader, string name)
+    {
+        var count = reader.ReadByte();
+        if (count > ProtocolLimits.MaxSocialListEntries)
+            throw new ProtocolException($"{name} exceeds the social list limit.");
+        var values = new Guid[count];
+        for (var index = 0; index < count; index++)
+            values[index] = reader.ReadGuid();
+        return values;
+    }
+
+    private static void WriteSlotList(
+        WireWriter writer,
+        IReadOnlyList<int>? values,
+        string name)
+    {
+        var count = values?.Count ?? 0;
+        if (count > ProtocolLimits.PlayerInventorySlots)
+            throw new ProtocolException($"{name} exceeds inventory.");
+        writer.WriteByte(checked((byte)count));
+        if (values is null) return;
+        for (var index = 0; index < count; index++)
+            WriteInventorySlot(writer, values[index], name);
+    }
+
+    private static int[] ReadSlotList(ref WireReader reader, string name)
+    {
+        var count = reader.ReadByte();
+        if (count > ProtocolLimits.PlayerInventorySlots)
+            throw new ProtocolException($"{name} exceeds inventory.");
+        var values = new int[count];
+        for (var index = 0; index < count; index++)
+            values[index] = ReadInventorySlot(ref reader, name);
+        return values;
     }
 
     private static void WritePlayerState(WireWriter writer, PlayerStateMessage value)

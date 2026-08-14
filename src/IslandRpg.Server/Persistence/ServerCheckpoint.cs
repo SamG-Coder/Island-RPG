@@ -26,11 +26,19 @@ public sealed record ServerCheckpoint(
         ExcavationCadences = null,
     bool IslandStart = false,
     IReadOnlyList<ServerBoatCheckpoint>? Boats = null,
-    ServerCombatCheckpoint? Combat = null)
+    ServerCombatCheckpoint? Combat = null,
+    IReadOnlyList<Guid>? PickedProceduralGroundObjects = null,
+    IReadOnlyList<ServerGuildCheckpoint>? Guilds = null)
 {
     public const int LegacyElapsedDeadlineSchemaVersion = 3;
     public const int CurrentSchemaVersion = 4;
 }
+
+public sealed record ServerGuildCheckpoint(
+    Guid GuildId,
+    string Name,
+    Guid LeaderPlayerId,
+    IReadOnlyList<Guid> MemberPlayerIds);
 
 public sealed record ServerActorCheckpoint(
     Guid PlayerId,
@@ -79,7 +87,10 @@ public sealed record ServerActorCheckpoint(
     IReadOnlyList<IslandRpg.Gameplay.QuestProgress>? Quests = null,
     float TimedHealingRemainingHealth = 0,
     float TimedHealingRemainingSeconds = 0,
-    float TimedHealingFractionalHealth = 0)
+    float TimedHealingFractionalHealth = 0,
+    IReadOnlyList<Guid>? FriendIds = null,
+    IReadOnlyList<Guid>? IgnoredIds = null,
+    Guid? GuildId = null)
 {
     // Keep credentials out of accidental structured-log interpolation.
     public override string ToString() =>

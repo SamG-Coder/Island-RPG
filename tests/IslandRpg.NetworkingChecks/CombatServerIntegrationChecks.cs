@@ -252,7 +252,7 @@ internal static class CombatServerIntegrationChecks
         client.CombatEventsReceived += (_, args) =>
         {
             foreach (var combatEvent in args.Events)
-                if (combatEvent.TargetEntityId != 0)
+                if (combatEvent.TargetEntityId == expected)
                     targetedActor.TrySetResult(combatEvent);
         };
 
@@ -276,8 +276,12 @@ internal static class CombatServerIntegrationChecks
                 new Vector2(accepted.SpawnX, accepted.SpawnY),
                 new Vector2(enemy.X, enemy.Y)))
             .First();
-        await client.SendWalkAsync(
-            target.X, target.Y, target.WorldLevel, cancellationToken);
+        var provoked = await SendCombat(
+            client,
+            new SetCombatTargetAction(client.GetEnemyReference(target.EnemyId)),
+            cancellationToken);
+        CheckAssert.True(provoked.Accepted,
+            $"the identity fixture must provoke its slime: {provoked.Detail}");
         var attack = await targetedActor.Task.WaitAsync(
             TimeSpan.FromSeconds(12), cancellationToken);
         Equal(expected, attack.TargetEntityId,
@@ -460,8 +464,12 @@ internal static class CombatServerIntegrationChecks
                 new Vector2(accepted.SpawnX, accepted.SpawnY),
                 new Vector2(enemy.X, enemy.Y)))
             .First();
-        await victim.SendWalkAsync(
-            target.X, target.Y, target.WorldLevel, cancellationToken);
+        var provoked = await SendCombat(
+            victim,
+            new SetCombatTargetAction(victim.GetEnemyReference(target.EnemyId)),
+            cancellationToken);
+        CheckAssert.True(provoked.Accepted,
+            $"the death-flag fixture must provoke its slime: {provoked.Detail}");
         await Eventually(
             () => victim.State.Gameplay?.LifeState == CombatLifeState.Dead,
             "the authoritative combat fixture did not defeat its victim",

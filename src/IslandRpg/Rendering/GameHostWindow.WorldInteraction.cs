@@ -145,9 +145,10 @@ internal sealed partial class GameHostWindow
         out WorldGroundObject groundObject,
         out GpuWorldChunk chunk)
     {
-        if (IsNetworkWorld)
-            return TryGetNetworkGroundObjectUnderMouse(
-                mouse, out groundObject, out chunk);
+        if (IsNetworkWorld &&
+            TryGetNetworkGroundObjectUnderMouse(
+                mouse, out groundObject, out chunk))
+            return true;
         groundObject = null!;
         chunk = null!;
         var selectedDepth = float.NegativeInfinity;
@@ -156,6 +157,9 @@ internal sealed partial class GameHostWindow
             if (!IsChunkVisible(gpu)) continue;
         foreach (var candidate in gpu.Chunk.GroundObjects)
         {
+            if (IsNetworkWorld &&
+                _networkKnownWorldObjectIds.Contains(candidate.Id))
+                continue;
             if (ConstructionService.IsConstructible(candidate.ItemId) &&
                 !ConstructionService.IsConstructionSite(candidate))
                 continue;
@@ -299,19 +303,34 @@ internal sealed partial class GameHostWindow
 
     private void QueueGroundObjectPickup(WorldGroundObject groundObject)
     {
-        if (IsNetworkWorld)
+        if (IsNetworkWorld && CropService.IsCrop(groundObject))
+        {
             QueueNetworkObjectAction(
-                CropService.IsCrop(groundObject)
-                    ? NetworkWorldActionKind.HarvestCrop
-                    : NetworkWorldActionKind.PickUp,
-                groundObject);
-        else
-            _worldActions.QueueGroundObjectPickup(groundObject);
+                NetworkWorldActionKind.HarvestCrop, groundObject);
+            return;
+        }
+        _worldActions.QueueGroundObjectPickup(groundObject);
+        if (IsNetworkWorld)
+            SendNetworkWalkCommand(
+                new Vector2(groundObject.X, groundObject.Y));
     }
 
     private void TryPickUpGroundObject(Guid groundObjectId)
     {
         if (_player is null || _activePlayer is null) return;
+        if (IsNetworkWorld)
+        {
+            var target = FindGroundObject(groundObjectId);
+            if (target is null)
+            {
+                ReportBlockedAction(
+                    "network-pickup-missing",
+                    "That object is no longer there.");
+                return;
+            }
+            SendNetworkGroundPickup(target);
+            return;
+        }
         var chunk = _worldChunks.Values.FirstOrDefault(gpu =>
             IsActiveWorldChunk(gpu) &&
             gpu.Chunk.GroundObjects.Any(
@@ -390,10 +409,7 @@ internal sealed partial class GameHostWindow
     internal void BeginGroundObjectPickup(Guid groundObjectId, Vector2 target)
     {
         if (_player is null || _activePlayer is null) return;
-        var groundObject = _worldChunks.Values
-            .Where(IsActiveWorldChunk)
-            .SelectMany(gpu => gpu.Chunk.GroundObjects)
-            .FirstOrDefault(item => item.Id == groundObjectId);
+        var groundObject = FindGroundObject(groundObjectId);
         if (groundObject is null ||
             PlaceableObjectCatalog.IsPlaceable(groundObject.ItemId))
             return;
@@ -692,24 +708,25 @@ internal sealed partial class GameHostWindow
                         targetObject, preview.InventorySlot);
                     return;
                 }
-                if (!CampfireService.IsCampfire(targetObject))
-                    goto DropToGround;
-                QueueNetworkObjectAction(
-                    NetworkWorldActionKind.AddCampfireFuel,
-                    targetObject,
-                    preview.InventorySlot);
+                if (CampfireService.IsCampfire(targetObject))
+                {
+                    QueueNetworkObjectAction(
+                        NetworkWorldActionKind.AddCampfireFuel,
+                        targetObject,
+                        preview.InventorySlot);
+                    return;
+                }
+            }
+            if (PlaceableObjectCatalog.IsPlaceable(preview.ItemId))
+            {
+                QueueNetworkPointAction(
+                    NetworkWorldActionKind.PlaceInventoryWorldObject,
+                    preview.Target,
+                    preview.InventorySlot,
+                    definitionId: preview.ItemId,
+                    rotation: preview.Rotation);
                 return;
             }
-        DropToGround:
-            QueueNetworkPointAction(
-                PlaceableObjectCatalog.IsPlaceable(preview.ItemId)
-                    ? NetworkWorldActionKind.PlaceInventoryWorldObject
-                    : NetworkWorldActionKind.Drop,
-                preview.Target,
-                preview.InventorySlot,
-                definitionId: preview.ItemId,
-                rotation: preview.Rotation);
-            return;
         }
         if (preview.TargetObjectId is { } cookingFireId &&
             CookingSkill.TryProfile(preview.ItemId, out _) &&
@@ -753,6 +770,8 @@ internal sealed partial class GameHostWindow
             inventorySlot: preview.InventorySlot,
             itemId: preview.ItemId,
             groundObjectId: preview.TargetObjectId);
+        if (IsNetworkWorld)
+            SendNetworkWalkCommand(preview.Target);
     }
 
     internal void BeginGroundObjectDrop(
@@ -858,6 +877,12 @@ internal sealed partial class GameHostWindow
             _player.Stop();
             return;
         }
+        if (IsNetworkWorld)
+        {
+            SendNetworkGroundDrop(drop.InventorySlot, drop.Target);
+            _player.Stop();
+            return;
+        }
         var inventory = ActivePlayerInventory();
         WorldGroundObject placed;
         if (PlaceableObjectCatalog.IsPlaceable(drop.ItemId))
@@ -915,11 +940,16 @@ internal sealed partial class GameHostWindow
         _player.Stop();
     }
 
-    private WorldGroundObject? FindGroundObject(Guid id) =>
-        _worldChunks.Values
+    private WorldGroundObject? FindGroundObject(Guid id)
+    {
+        if (IsNetworkWorld &&
+            _networkWorldObjects.TryGetValue(id, out var network))
+            return network;
+        return _worldChunks.Values
             .Where(IsActiveWorldChunk)
             .SelectMany(gpu => gpu.Chunk.GroundObjects)
             .FirstOrDefault(item => item.Id == id);
+    }
 
     private bool InventoryContainsAt(int slot, string itemId)
     {
@@ -1561,18 +1591,33 @@ internal sealed partial class GameHostWindow
                 return false;
         }
 
-        if (IsNetworkWorld && _networkWorldObjects.Values.Any(item =>
-                PlaceableObjectCatalog.TryGet(
-                    item.ItemId, out var definition)
-                    ? PlaceableObjectCatalog.ContainsPoint(
-                        definition,
-                        new Vector2(item.X, item.Y),
-                        candidate,
-                        itemClearance)
-                    : (candidate - new Vector2(
-                          item.X, item.Y)).LengthSquared <
-                      itemClearance * itemClearance))
-            return false;
+        if (IsNetworkWorld)
+        {
+            foreach (var gpu in _worldChunks.Values)
+            {
+                if (!IsActiveWorldChunk(gpu) ||
+                    !_networkWorldObjectIdsByChunk.TryGetValue(
+                        gpu.Chunk.Coordinate, out var ids))
+                    continue;
+                foreach (var objectId in ids)
+                {
+                    if (!_networkWorldObjects.TryGetValue(
+                            objectId, out var item))
+                        continue;
+                    if (PlaceableObjectCatalog.TryGet(
+                            item.ItemId, out var definition)
+                            ? PlaceableObjectCatalog.ContainsPoint(
+                                definition,
+                                new Vector2(item.X, item.Y),
+                                candidate,
+                                itemClearance)
+                            : (candidate - new Vector2(
+                                  item.X, item.Y)).LengthSquared <
+                              itemClearance * itemClearance)
+                        return false;
+                }
+            }
+        }
 
         return true;
     }

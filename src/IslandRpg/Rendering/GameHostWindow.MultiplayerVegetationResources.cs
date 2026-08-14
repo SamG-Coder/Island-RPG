@@ -58,7 +58,7 @@ internal sealed partial class GameHostWindow
         var pending = new NetworkVegetationAction(
             action, target, toolSlot, sickle);
         _pendingNetworkVegetationAction = pending;
-        if (Vector2.DistanceSquared(_player.Position, target.Position) <=
+        if (Vector2.DistanceSquared(NetworkActionPosition, target.Position) <=
             NetworkResourceDispatchRange * NetworkResourceDispatchRange)
         {
             BeginNetworkVegetationAction(pending);
@@ -78,7 +78,7 @@ internal sealed partial class GameHostWindow
                 return true;
             }
             if (Vector2.DistanceSquared(
-                    _player.Position, pending.Target.Position) <=
+                    NetworkActionPosition, pending.Target.Position) <=
                 NetworkResourceDispatchRange * NetworkResourceDispatchRange)
                 BeginNetworkVegetationAction(pending);
         }
@@ -247,7 +247,7 @@ internal sealed partial class GameHostWindow
 
     private bool NetworkVegetationBlocksWorld(string stableKey)
     {
-        if (!TryDescribeNetworkVegetation(stableKey, out var target) ||
+        if (!_networkVegetationTargets.TryGetValue(stableKey, out var target) ||
             target.Visual.ResourceKind is not { } kind)
             return true;
         var state = TryGetNetworkVegetationState(target, out var current)

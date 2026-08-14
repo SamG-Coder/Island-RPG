@@ -206,7 +206,8 @@ public sealed record AuthoritativeWorldTransactionsCheckpoint(
     ImmutableArray<AuthoritativeWorldObjectCheckpoint> Objects,
     ImmutableArray<AuthoritativeChunkRevisionSnapshot> ChunkRevisions,
     ImmutableArray<AuthoritativeExcavationCadenceCheckpoint>
-        ExcavationCadences = default);
+        ExcavationCadences = default,
+    ImmutableArray<Guid> PickedProceduralGroundObjects = default);
 
 public readonly record struct AuthoritativeExcavationCadenceCheckpoint(
     ActorId ActorId,

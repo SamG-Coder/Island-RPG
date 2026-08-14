@@ -32,10 +32,13 @@ public sealed class ProceduralFishSchoolSource :
                 RegrowthGameSeconds: value.RegrowthGameSeconds))
             .ToArray();
 
+    public static int DescribeSchoolsInvocations { get; set; }
+
     public IReadOnlyList<FishSchoolDescriptor> DescribeSchools(
         long worldSeed,
         WorldChunkKey chunk)
     {
+        DescribeSchoolsInvocations++;
         var originLongX = (long)chunk.X * WorldChunkKey.Size;
         var originLongY = (long)chunk.Y * WorldChunkKey.Size;
         if (chunk.WorldLevel != 0 ||

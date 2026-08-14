@@ -116,9 +116,8 @@ internal sealed class SlimeEnemyController : EnemyController
 
     protected override bool CanTarget(
         EnemyState enemy, EnemyActorPresence actor) =>
-        actor.Id == enemy.ProvokedById ||
-        enemy.Kind == EnemyKind.CaveSlime &&
-        Vector2.DistanceSquared(actor.Position, enemy.Position) <=
-        EnemySpawnerService.CaveAggroRadius *
-        EnemySpawnerService.CaveAggroRadius;
+        SlimeCombatRules.CanAcquireTarget(
+            enemy.Kind,
+            actor.Id == enemy.ProvokedById,
+            Vector2.DistanceSquared(actor.Position, enemy.Position));
 }

@@ -49,6 +49,7 @@ internal sealed partial class GameHostWindow
     private void SubscribeNetworkCombat(NetworkGameClient client)
     {
         client.EnemiesChanged += OnNetworkEnemiesChanged;
+        client.BoatsChanged += OnNetworkBoatsChanged;
         client.CombatEventsReceived += OnNetworkCombatEventsReceived;
         client.CombatActionCompleted += OnNetworkCombatActionCompleted;
     }
@@ -56,9 +57,14 @@ internal sealed partial class GameHostWindow
     private void UnsubscribeNetworkCombat(NetworkGameClient client)
     {
         client.EnemiesChanged -= OnNetworkEnemiesChanged;
+        client.BoatsChanged -= OnNetworkBoatsChanged;
         client.CombatEventsReceived -= OnNetworkCombatEventsReceived;
         client.CombatActionCompleted -= OnNetworkCombatActionCompleted;
     }
+
+    private void OnNetworkBoatsChanged(
+        object? sender, NetworkBoatsChangedEventArgs value) =>
+        _networkEvents.Enqueue(() => HandleNetworkBoatsChanged(value));
 
     private void OnNetworkEnemiesChanged(
         object? sender, NetworkEnemiesChangedEventArgs value) =>
@@ -260,15 +266,30 @@ internal sealed partial class GameHostWindow
     private void ApplyNetworkEnemySnapshot(
         EntitySnapshot snapshot, float elapsed)
     {
+        _ = elapsed;
         if (!_networkEnemyIdsByEntity.TryGetValue(
                 snapshot.EntityId, out var enemyId) ||
             !_networkEnemies.TryGetValue(enemyId, out var presentation))
             return;
-        presentation.Position = new(snapshot.X, snapshot.Y);
+        var position = new Vector2(snapshot.X, snapshot.Y);
+        presentation.Position = position;
         presentation.Velocity = new(
             snapshot.VelocityX, snapshot.VelocityY);
         presentation.HasSnapshot = true;
-        ProjectNetworkEnemy(presentation);
+        var index = _enemies.FindIndex(value => value.Id == enemyId);
+        if (index < 0)
+        {
+            ProjectNetworkEnemy(presentation);
+            return;
+        }
+        var previous = _enemies[index];
+        _enemies[index] = previous with
+        {
+            Position = position,
+            Destination = presentation.Velocity.LengthSquared > .0001f
+                ? position + presentation.Velocity
+                : previous.Destination
+        };
     }
 
     private void UpdateNetworkCombatPresentation(float elapsed)

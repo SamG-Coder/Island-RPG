@@ -198,55 +198,49 @@ internal sealed partial class GameHostWindow
                 if (IsNetworkWorld &&
                     _networkKnownWorldObjectIds.Contains(groundObject.Id))
                     continue;
-                if (!PlaceableObjectCatalog.TryGet(
-                        groundObject.ItemId, out var definition))
-                    continue;
-                if (GateCatalog.IsGate(groundObject.ItemId))
-                {
-                    var actorCanOpen = actorId is not null &&
-                        !ConstructionService.IsConstructionSite(groundObject) &&
-                        groundObject.GateState != GateAccessState.Locked &&
-                        BuildingOwnershipService.HasOwner(groundObject) &&
-                        BuildingOwnershipService.CanManage(
-                            groundObject, actorId, _settlementGroup);
-                    obstacles.AddRange(
-                        PlaceableObjectCatalog.NavigationObstacles(
-                            groundObject,
-                            includeGateMiddle:
-                                !GateService.IsOpen(groundObject) &&
-                                !actorCanOpen));
-                }
-                else
-                    obstacles.AddRange(
-                        PlaceableObjectCatalog.NavigationObstacles(
-                            groundObject));
+                AddGroundObjectObstacle(groundObject, actorId);
             }
-        }
-        if (IsNetworkWorld)
-        {
-            foreach (var (objectId, groundObject) in _networkWorldObjects)
+
+            if (IsNetworkWorld &&
+                _networkWorldObjectIdsByChunk.TryGetValue(
+                    gpu.Chunk.Coordinate, out var networkIds))
             {
-                if (!_networkWorldObjectChunks.TryGetValue(
-                        objectId, out var chunk) ||
-                    chunk.Level != _activeWorldLevel)
-                    continue;
-                if (GateCatalog.IsGate(groundObject.ItemId))
+                foreach (var objectId in networkIds)
                 {
-                    obstacles.AddRange(
-                        PlaceableObjectCatalog.NavigationObstacles(
-                            groundObject,
-                            includeGateMiddle:
-                                !GateService.IsOpen(groundObject)));
-                }
-                else
-                {
-                    obstacles.AddRange(
-                        PlaceableObjectCatalog.NavigationObstacles(
-                            groundObject));
+                    if (!_networkWorldObjects.TryGetValue(
+                            objectId, out var groundObject))
+                        continue;
+                    AddGroundObjectObstacle(groundObject, actorId: null);
                 }
             }
         }
         return obstacles.ToArray();
+
+        void AddGroundObjectObstacle(
+            WorldGroundObject groundObject, string? actorId)
+        {
+            if (!PlaceableObjectCatalog.TryGet(groundObject.ItemId, out _))
+                return;
+            if (GateCatalog.IsGate(groundObject.ItemId))
+            {
+                var actorCanOpen = actorId is not null &&
+                    !ConstructionService.IsConstructionSite(groundObject) &&
+                    groundObject.GateState != GateAccessState.Locked &&
+                    BuildingOwnershipService.HasOwner(groundObject) &&
+                    BuildingOwnershipService.CanManage(
+                        groundObject, actorId, _settlementGroup);
+                obstacles.AddRange(
+                    PlaceableObjectCatalog.NavigationObstacles(
+                        groundObject,
+                        includeGateMiddle:
+                            !GateService.IsOpen(groundObject) &&
+                            !actorCanOpen));
+                return;
+            }
+
+            obstacles.AddRange(
+                PlaceableObjectCatalog.NavigationObstacles(groundObject));
+        }
 
         bool TryGroundContact(
             string atlasKey,
@@ -496,16 +490,22 @@ internal sealed partial class GameHostWindow
 
         if (IsNetworkWorld)
         {
-            foreach (var (objectId, existing) in _networkWorldObjects)
+            foreach (var loaded in _worldChunks.Values)
             {
-                if (!_networkWorldObjectChunks.TryGetValue(
-                        objectId, out var objectChunk) ||
-                    objectChunk.Level != _activeWorldLevel)
+                if (!IsActiveWorldChunk(loaded) ||
+                    !_networkWorldObjectIdsByChunk.TryGetValue(
+                        loaded.Chunk.Coordinate, out var ids))
                     continue;
-                if (BlocksPlacement(existing, out var collisionReason))
+                foreach (var objectId in ids)
                 {
-                    reason = collisionReason;
-                    return false;
+                    if (!_networkWorldObjects.TryGetValue(
+                            objectId, out var existing))
+                        continue;
+                    if (BlocksPlacement(existing, out var collisionReason))
+                    {
+                        reason = collisionReason;
+                        return false;
+                    }
                 }
             }
         }

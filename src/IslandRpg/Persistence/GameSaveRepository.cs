@@ -64,6 +64,18 @@ internal sealed record WorldPlayerState(
     float FishingBoatFacingY = 1,
     bool FishingBoatBoarded = false);
 
+internal sealed record NetworkSessionRecord(
+    string Host,
+    int Port,
+    Guid WorldId,
+    Guid PlayerId,
+    string ReconnectToken,
+    string PlayerName,
+    EntityGender Gender,
+    int TeamColor,
+    DateTime SavedUtc = default,
+    string LocalPlayerId = "");
+
 internal sealed record PlayerDeathMarker(
     float PositionX,
     float PositionY,
@@ -109,7 +121,8 @@ internal sealed record GameSettings(
     bool AutoRetaliate = true,
     bool CrtMode = false,
     bool ClassicPcMode = false,
-    NpcAiSettings? Ai = null)
+    NpcAiSettings? Ai = null,
+    string LastMultiplayerEndpoint = "127.0.0.1:38740")
 {
     public NpcAiSettings EffectiveAi
     {
@@ -242,6 +255,7 @@ internal sealed class GameSaveRepository
             throw new InvalidOperationException("Invalid player save path.");
         if (Directory.Exists(playerDirectory))
             Directory.Delete(playerDirectory, recursive: true);
+        ClearNetworkSession(playerId);
 
         foreach (var worldDirectory in
                  Directory.EnumerateDirectories(WorldsRoot))
@@ -360,6 +374,100 @@ internal sealed class GameSaveRepository
 
     public void SaveSettings(GameSettings settings) =>
         WriteJson(SettingsPath, settings);
+
+    public string NetworkSessionsRoot =>
+        Path.Combine(Root, "NetworkSessions");
+
+    public string NetworkSessionPath =>
+        Path.Combine(Root, "network-session.json");
+
+    public NetworkSessionRecord? LoadNetworkSession(string? localPlayerId = null)
+    {
+        if (!string.IsNullOrWhiteSpace(localPlayerId))
+        {
+            var stored = ReadJson<NetworkSessionRecord>(
+                PerPlayerNetworkSessionPath(localPlayerId));
+            if (stored is not null)
+                return stored with { LocalPlayerId = localPlayerId };
+
+            var legacy = ReadJson<NetworkSessionRecord>(NetworkSessionPath);
+            if (legacy is null ||
+                !CanClaimLegacyNetworkSession(legacy, localPlayerId))
+                return null;
+            var claimed = legacy with { LocalPlayerId = localPlayerId };
+            SaveNetworkSession(claimed);
+            TryDeleteFile(NetworkSessionPath);
+            return claimed;
+        }
+
+        return ReadJson<NetworkSessionRecord>(NetworkSessionPath);
+    }
+
+    public void SaveNetworkSession(NetworkSessionRecord session)
+    {
+        var saved = session with { SavedUtc = DateTime.UtcNow };
+        if (!string.IsNullOrWhiteSpace(saved.LocalPlayerId))
+            WriteJson(PerPlayerNetworkSessionPath(saved.LocalPlayerId), saved);
+        else
+            WriteJson(NetworkSessionPath, saved);
+    }
+
+    public void ClearNetworkSession(string? localPlayerId = null)
+    {
+        if (!string.IsNullOrWhiteSpace(localPlayerId))
+        {
+            TryDeleteFile(PerPlayerNetworkSessionPath(localPlayerId));
+            var legacy = ReadJson<NetworkSessionRecord>(NetworkSessionPath);
+            if (legacy is not null &&
+                (string.Equals(
+                     legacy.LocalPlayerId, localPlayerId,
+                     StringComparison.Ordinal) ||
+                 string.IsNullOrWhiteSpace(legacy.LocalPlayerId)))
+                TryDeleteFile(NetworkSessionPath);
+            return;
+        }
+
+        TryDeleteFile(NetworkSessionPath);
+    }
+
+    private string PerPlayerNetworkSessionPath(string localPlayerId) =>
+        Path.Combine(
+            NetworkSessionsRoot,
+            SanitizeNetworkSessionFileName(localPlayerId) + ".json");
+
+    private bool CanClaimLegacyNetworkSession(
+        NetworkSessionRecord legacy,
+        string localPlayerId)
+    {
+        if (!string.IsNullOrWhiteSpace(legacy.LocalPlayerId) &&
+            !string.Equals(
+                legacy.LocalPlayerId, localPlayerId, StringComparison.Ordinal))
+            return false;
+        var player = ListPlayers().FirstOrDefault(value =>
+            value.Id == localPlayerId);
+        return player is not null &&
+               (string.IsNullOrWhiteSpace(legacy.PlayerName) ||
+                string.Equals(
+                    legacy.PlayerName,
+                    player.Name,
+                    StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string SanitizeNetworkSessionFileName(string localPlayerId)
+    {
+        var clean = new string(localPlayerId
+            .Where(character =>
+                char.IsAsciiLetterOrDigit(character) ||
+                character is '-' or '_')
+            .ToArray());
+        return clean.Length == 0 ? "player" : clean;
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        if (File.Exists(path))
+            File.Delete(path);
+    }
 
     private void ImportLegacyWorlds()
     {

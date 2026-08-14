@@ -679,7 +679,14 @@ public sealed class AuthoritativeCombatTransactions
         if (resolution.Attack.Hit)
             enemy.Health = EnemyCombatRules.ApplyDamage(
                 enemy.Health, resolution.Attack.Damage);
-        enemy.TargetActorId ??= actor.Input.ActorId;
+        if (enemy.TargetActorId is null)
+        {
+            enemy.TargetActorId = actor.Input.ActorId;
+            enemy.ReactionReadyTick = checked(tick +
+                ReactionTicks(enemy.Kind));
+            if (SlimeCombatRules.UsesAggroBurrow(enemy.Kind))
+                enemy.BurrowEmergeTick = enemy.ReactionReadyTick;
+        }
         if (enemy.Health <= 0)
             KillEnemy(enemy, actor, tick, deltas, events, spawned, lootDrops,
                 previous);
@@ -863,13 +870,13 @@ public sealed class AuthoritativeCombatTransactions
     {
         if (enemy.TargetActorId is { } existing &&
             actors.TryGetValue(existing, out var acquired) &&
-            CanTarget(enemy, acquired, _options.LeashRange))
+            CanKeepTarget(enemy, acquired))
         {
             target = acquired;
             return true;
         }
         target = actors.Values
-            .Where(value => CanTarget(enemy, value, _options.AggroRange))
+            .Where(value => CanAcquireTarget(enemy, value))
             .OrderBy(value => Vector2.DistanceSquared(
                 value.Input.Position, enemy.Position))
             .ThenBy(static value => value.Input.ActorId.Value)
@@ -877,14 +884,22 @@ public sealed class AuthoritativeCombatTransactions
         return target is not null;
     }
 
-    private static bool CanTarget(
-        MutableEnemy enemy,
-        PendingActor actor,
-        float range) =>
-        actor.Input.Connected && actor.Gameplay.LifeState == ActorLifeState.Alive &&
-        actor.Gameplay.Health > 0 && actor.Input.WorldLevel == enemy.WorldLevel &&
+    private bool CanKeepTarget(MutableEnemy enemy, PendingActor actor) =>
+        IsEligibleTarget(enemy, actor) &&
         Vector2.DistanceSquared(actor.Input.Position, enemy.SpawnPosition) <=
-            range * range;
+            _options.LeashRange * _options.LeashRange;
+
+    private bool CanAcquireTarget(MutableEnemy enemy, PendingActor actor) =>
+        CanKeepTarget(enemy, actor) &&
+        SlimeCombatRules.CanAcquireTarget(
+            enemy.Kind,
+            provoked: false,
+            Vector2.DistanceSquared(actor.Input.Position, enemy.Position));
+
+    private static bool IsEligibleTarget(
+        MutableEnemy enemy, PendingActor actor) =>
+        actor.Input.Connected && actor.Gameplay.LifeState == ActorLifeState.Alive &&
+        actor.Gameplay.Health > 0 && actor.Input.WorldLevel == enemy.WorldLevel;
 
     private static int ReactionTicks(EnemyKind kind) =>
         Math.Max(1, (int)Math.Ceiling(

@@ -12,6 +12,11 @@ WorldCheckProcess.DisableWindowsCrashDialogs();
 SurfaceTreeResourceChecks.Run();
 SurfaceVegetationResourceChecks.Run();
 UndergroundMiningResourceChecks.Run();
+NetworkResourceHotPathChecks.Run();
+Console.WriteLine(
+    "Network resource hot-path checks passed: second pass described zero fish or trees.");
+NetworkSessionReuseChecks.Run();
+ProceduralGroundLootChecks.Run();
 CaveCoreChecks.Run();
 BoatFishingCoreChecks.Run();
 
@@ -10064,6 +10069,30 @@ entity.MoveTo(new Vector2(3, 0));
 entity.Update(.5f);
 Require(entity.Action == EntityAction.Move && entity.Position.X > 1,
     "moving entity should advance toward its target");
+var remoteWalk = new WorldEntity(Vector2.Zero);
+for (var step = 0; step < 20; step++)
+    remoteWalk.PresentRemoteWalk(
+        new Vector2(step * .15f + .15f, 0), new Vector2(3, 0), true, 1f / 60);
+var remoteWalked = remoteWalk.Position.X;
+var remoteWalkTime = remoteWalk.ActionTime;
+Require(
+    remoteWalk.Action == EntityAction.Move &&
+    remoteWalked > .3f &&
+    remoteWalkTime > 0,
+    "a remote walk must use the same Update cycle as a click-to-walk");
+remoteWalk.PresentRemoteWalk(
+    new Vector2(remoteWalked - .3f, 0), Vector2.Zero, false, 1f / 60);
+Require(
+    remoteWalk.Action == EntityAction.Move &&
+    remoteWalk.ActionTime > remoteWalkTime &&
+    remoteWalk.Position.X >= remoteWalked - .05f,
+    "a remote walk must keep the cycle through a short idle or rewound snapshot");
+remoteWalk.PresentRemoteWalk(
+    new Vector2(remoteWalked, 0), Vector2.Zero, false, .2f);
+Require(
+    remoteWalk.Action == EntityAction.Idle,
+    "a remote walk must idle only after the hold, not on the first still snapshot");
+
 var walkingAnimationTime = entity.ActionTime;
 var replacementPathPosition = entity.Position;
 entity.PrepareForPathRequest();
@@ -10075,6 +10104,14 @@ entity.Update(.1f);
 Require(
     entity.Position == replacementPathPosition,
     "an actor must not continue away from the captured start while a replacement path is pending");
+var nanEntity = new WorldEntity(Vector2.Zero);
+nanEntity.MoveTo(new Vector2(float.NaN, 0));
+nanEntity.Update(.5f);
+Require(
+    nanEntity.Action == EntityAction.Idle &&
+    float.IsFinite(nanEntity.Position.X) &&
+    float.IsFinite(nanEntity.Position.Y),
+    "a non-finite walk target must stop instead of spinning the movement loop");
 var densePathEntity = new WorldEntity(Vector2.Zero);
 densePathEntity.FollowPath(
     [new(.1f, 0), new(.2f, 0), new(.3f, 0)]);

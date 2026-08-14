@@ -15,6 +15,15 @@ internal static class ChatCommandRegistry
     public static readonly IReadOnlyList<ChatCommandDefinition> All =
     [
         new("/help", "/help", "List available commands."),
+        new("/friend", "/friend <name>", "Add a connected player as a friend."),
+        new("/unfriend", "/unfriend <name>", "Remove a friend."),
+        new("/ignore", "/ignore <name>", "Ignore a connected player."),
+        new("/unignore", "/unignore <name>", "Stop ignoring a player."),
+        new("/friends", "/friends", "Show friends, ignore, and guild lists."),
+        new("/guild", "/guild [create <name>|join <id>|leave]",
+            "Create, join, leave, or show your guild."),
+        new("/trade", "/trade <accept|decline|confirm|cancel>",
+            "Advance or cancel the open trade."),
         new("/die", "/die", "Enter the normal death flow."),
         new("/stuck", "/stuck", "Move to the nearest safe spawn."),
         new("/where", "/where", "Show position and world layer."),

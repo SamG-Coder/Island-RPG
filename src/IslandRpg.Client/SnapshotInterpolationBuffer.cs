@@ -87,6 +87,9 @@ public sealed class SnapshotInterpolationBuffer
     public bool TrySample(out InterpolatedSnapshot? snapshot, long nowTimestamp = 0)
     {
         nowTimestamp = nowTimestamp == 0 ? Stopwatch.GetTimestamp() : nowTimestamp;
+        BufferedFrame older;
+        BufferedFrame newer;
+        float blend;
         lock (_sync)
         {
             if (_frames.Count == 0)
@@ -99,23 +102,26 @@ public sealed class SnapshotInterpolationBuffer
             var newerIndex = _frames.FindIndex(frame => frame.ReceivedTimestamp >= target);
             if (newerIndex <= 0)
             {
-                var frame = newerIndex == 0 ? _frames[0] : _frames[^1];
-                snapshot = Copy(frame);
+                snapshot = Copy(newerIndex == 0 ? _frames[0] : _frames[^1]);
                 return true;
             }
 
-            var older = _frames[newerIndex - 1];
-            var newer = _frames[newerIndex];
+            older = _frames[newerIndex - 1];
+            newer = _frames[newerIndex];
             var duration = Math.Max(1, newer.ReceivedTimestamp - older.ReceivedTimestamp);
-            var blend = Math.Clamp((float)(target - older.ReceivedTimestamp) / duration, 0, 1);
-            snapshot = Interpolate(older, newer, blend);
+            blend = Math.Clamp((float)(target - older.ReceivedTimestamp) / duration, 0, 1);
             if (newerIndex > 1) _frames.RemoveRange(0, newerIndex - 1);
-            return true;
         }
+
+        // Interpolate outside the lock so the UDP receive thread can still
+        // publish the next frame. Holding the lock across ToDictionary here
+        // is the render-thread stall the live window hits after join.
+        snapshot = blend <= 0 ? Copy(older) : Interpolate(older, newer, blend);
+        return true;
     }
 
     private static InterpolatedSnapshot Copy(BufferedFrame frame) =>
-        new(frame.ServerTick, frame.ServerTick, 0, Array.AsReadOnly(frame.Entities.ToArray()));
+        new(frame.ServerTick, frame.ServerTick, 0, frame.Entities);
 
     private static InterpolatedSnapshot Interpolate(BufferedFrame older, BufferedFrame newer, float blend)
     {

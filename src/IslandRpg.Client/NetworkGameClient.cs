@@ -218,7 +218,9 @@ public sealed class NetworkGameClient : IAsyncDisposable
                     snapshotPort,
                     requestedCapabilities,
                     options.ReconnectPlayerId,
-                    options.ReconnectToken);
+                    options.ReconnectToken,
+                    options.Gender,
+                    options.TeamColor);
                 await TcpFrameCodec.WriteAsync(stream, request, cancellationToken).ConfigureAwait(false);
                 var response = await TcpFrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false);
                 if (response is HandshakeRejectedMessage rejected) throw new HandshakeRejectedException(rejected);
@@ -247,6 +249,17 @@ public sealed class NetworkGameClient : IAsyncDisposable
                     try
                     {
                         snapshotSocket.Connect(snapshotEndpoint);
+                    // Open the client's NAT mapping so the server's first UDP
+                    // snapshot is not dropped as unsolicited inbound traffic.
+                    try
+                    {
+                        snapshotSocket.Send(
+                            [0x49, 0x52, 0x55, 0x44],
+                            SocketFlags.None);
+                    }
+                    catch (SocketException)
+                    {
+                    }
                     }
                     catch (SocketException exception)
                     {
@@ -268,7 +281,12 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 }
                 _outbound = CreateOutboundChannel();
                 _connectionCancellation = new CancellationTokenSource();
-                var localPlayer = new NetworkPlayerPresence(accepted.PlayerId, options.PlayerName);
+                var localPlayer = new NetworkPlayerPresence(
+                    accepted.PlayerId,
+                    options.PlayerName,
+                    accepted.PlayerEntityId,
+                    options.Gender,
+                    options.TeamColor);
                 var players = ReadOnly(new Dictionary<Guid, NetworkPlayerPresence> { [accepted.PlayerId] = localPlayer });
                 SetState(new NetworkGameClientState(
                     NetworkGameClientStatus.Connected,
@@ -508,6 +526,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
                     continue;
                 }
 
+                ProtocolPacketLog.WriteUdp("udp", snapshot!, received);
                 ConsumeSnapshot(snapshot!);
             }
         }
@@ -574,9 +593,27 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 Raise(PlayerStateChanged, new NetworkPlayerStateEventArgs(merged));
                 break;
             }
+            case SocialStateMessage social:
+            {
+                if (State.PlayerId != Guid.Empty &&
+                    social.PlayerId != State.PlayerId)
+                    throw new ProtocolException(
+                        "The server sent social state for a different player.");
+                UpdateState(current => current with
+                {
+                    ServerTick = Math.Max(current.ServerTick, social.Tick),
+                    Social = NetworkSocialState.FromMessage(social),
+                });
+                break;
+            }
             case PlayerJoinedMessage joined:
             {
-                var player = new NetworkPlayerPresence(joined.PlayerId, joined.PlayerName);
+                var player = new NetworkPlayerPresence(
+                    joined.PlayerId,
+                    joined.PlayerName,
+                    joined.EntityId,
+                    joined.Gender,
+                    joined.TeamColor);
                 UpdateState(current => current with { ServerTick = joined.Tick, Players = With(current.Players, player) });
                 Raise(PlayerJoined, new NetworkPlayerEventArgs(player));
                 break;
@@ -1518,6 +1555,7 @@ public sealed class NetworkGameClient : IAsyncDisposable
     {
         EntitySnapshotMessage complete;
         NetworkGameClientState next;
+        bool buffered;
         lock (_snapshotSync)
         {
             if (!_snapshotReconstructor.TryReconstruct(
@@ -1532,30 +1570,32 @@ public sealed class NetworkGameClient : IAsyncDisposable
             // publication here. Event callbacks run after the lock and may
             // arrive later than a subsequent state update, which is acceptable
             // because each callback carries its own immutable complete frame.
-            var buffered = reconstructed.ReplacesLatestFrame
+            buffered = reconstructed.ReplacesLatestFrame
                 ? SnapshotBuffer.ReplaceLatest(complete)
                 : SnapshotBuffer.Add(complete);
-            if (!buffered) return;
+        }
+        if (!buffered) return;
 
-            var entities = ReadOnly(complete.Entities.ToDictionary(
-                static entity => entity.EntityId));
-            lock (_stateSync)
+        var entities = ReadOnly(complete.Entities.ToDictionary(
+            static entity => entity.EntityId));
+        lock (_stateSync)
+        {
+            next = _state with
             {
-                next = _state with
-                {
-                    ServerTick = Math.Max(
-                        _state.ServerTick,
-                        complete.Metadata.ServerTick),
-                    Entities = entities,
-                };
-                Volatile.Write(ref _state, next);
-            }
+                ServerTick = Math.Max(
+                    _state.ServerTick,
+                    complete.Metadata.ServerTick),
+                Entities = entities,
+            };
+            Volatile.Write(ref _state, next);
         }
 
         // Never invoke external subscribers under the TCP/UDP ordering lock.
         // Production rendering consumes the serialized interpolation buffer;
         // this event is an observation hook for complete frames only.
-        Raise(StateChanged, new NetworkClientStateChangedEventArgs(next));
+        // Snapshots update the interpolation buffer. Do not raise StateChanged
+        // here: the game already samples that buffer, and a 20 Hz copy of the
+        // full client state onto the UI queue stalls the join/render thread.
         Raise(SnapshotReceived, new NetworkSnapshotEventArgs(complete));
     }
 
@@ -1700,7 +1740,14 @@ public sealed class NetworkGameClient : IAsyncDisposable
             quests);
     }
 
-    private void UpdateTick(ulong tick) => UpdateState(current => current with { ServerTick = Math.Max(current.ServerTick, tick) });
+    private void UpdateTick(ulong tick)
+    {
+        lock (_stateSync)
+        {
+            if (tick <= _state.ServerTick) return;
+            Volatile.Write(ref _state, _state with { ServerTick = tick });
+        }
+    }
 
     private void SetStatus(NetworkGameClientStatus status) => UpdateState(current => current with { Status = status });
 

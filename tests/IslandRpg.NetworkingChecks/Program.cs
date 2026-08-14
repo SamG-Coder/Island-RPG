@@ -49,6 +49,8 @@ SessionWorldTransactionChecks.Register(checks);
 ServerWorldActionAdapterChecks.Register(checks);
 ServerCheckpointChecks.Register(checks);
 LoopbackChecks.Register(checks);
+SocialAuthorityChecks.Register(checks);
+MmoAuthorityPerformanceChecks.Register(checks);
 ServerRestartLoopbackChecks.Register(checks);
 ServerResourceIntegrationChecks.Register(checks);
 

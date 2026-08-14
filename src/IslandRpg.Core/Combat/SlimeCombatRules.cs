@@ -17,6 +17,11 @@ public static class SlimeCombatRules
     public const float RoamSpeed = .68f;
     public const float ReturnSpeed = 1.05f;
     public const float ChaseSpeed = 1.35f;
+    /// <summary>
+    /// Cave slimes auto-aggro inside this radius of their live position.
+    /// Surface slimes only fight after a player hits them.
+    /// </summary>
+    public const float CaveAggroRadius = 5f;
 
     public static SlimeAttackAbility AttackFor(EnemyKind kind) => kind switch
     {
@@ -39,6 +44,20 @@ public static class SlimeCombatRules
 
     public static bool UsesAggroBurrow(EnemyKind kind) =>
         kind == EnemyKind.SandSlime;
+
+    /// <summary>
+    /// Shared solo/multiplayer acquire rule. Surface slimes stay idle until
+    /// provoked; cave slimes notice anyone inside <see cref="CaveAggroRadius"/>.
+    /// </summary>
+    public static bool CanAcquireTarget(
+        EnemyKind kind,
+        bool provoked,
+        float distanceToEnemySquared)
+    {
+        if (provoked) return true;
+        return kind == EnemyKind.CaveSlime &&
+               distanceToEnemySquared <= CaveAggroRadius * CaveAggroRadius;
+    }
 
     public static float MovementSpeed(EnemyBehavior behavior) => behavior switch
     {

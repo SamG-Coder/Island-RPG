@@ -49,7 +49,10 @@ internal readonly record struct DirectionalFrame(int Index, bool Mirror);
 internal sealed class WorldEntity
 {
     private const float ArrivalDistance = .06f;
+    internal const float RemoteWalkIdleHoldSeconds = .12f;
+    internal const float RemoteWalkRewindDistance = .85f;
     private readonly Queue<Vector2> _path = [];
+    private float _remoteStillSeconds;
 
     public Vector2 Position { get; private set; }
     public Vector2 Target { get; private set; }
@@ -79,7 +82,12 @@ internal sealed class WorldEntity
     public void FollowPath(IEnumerable<Vector2> path)
     {
         _path.Clear();
-        foreach (var waypoint in path) _path.Enqueue(waypoint);
+        foreach (var waypoint in path)
+        {
+            if (!float.IsFinite(waypoint.X) || !float.IsFinite(waypoint.Y))
+                continue;
+            _path.Enqueue(waypoint);
+        }
         if (_path.Count == 0)
         {
             Stop();
@@ -105,8 +113,93 @@ internal sealed class WorldEntity
 
     public void SyncPosition(Vector2 position)
     {
+        if (!float.IsFinite(position.X) || !float.IsFinite(position.Y))
+            return;
         Position = position;
         Target = position;
+    }
+
+    public void CorrectPosition(Vector2 position)
+    {
+        if (!float.IsFinite(position.X) || !float.IsFinite(position.Y))
+            return;
+        Position = position;
+    }
+
+    /// <summary>
+    /// Applies a network-sampled pose without restarting the walk cycle.
+    /// Snapshots arrive at 20 Hz; ActionTime must keep advancing at display rate.
+    /// </summary>
+    public void PresentNetworkLocomotion(
+        Vector2 position, Vector2 velocity, bool moving)
+    {
+        if (!float.IsFinite(position.X) || !float.IsFinite(position.Y))
+            return;
+        Position = position;
+        if (moving)
+        {
+            Face(velocity);
+            if (Action != EntityAction.Move)
+                SetAction(EntityAction.Move);
+            Target = velocity.LengthSquared > .0001f &&
+                     float.IsFinite(velocity.X) &&
+                     float.IsFinite(velocity.Y)
+                ? position + velocity
+                : position;
+            return;
+        }
+
+        Target = position;
+        if (Action == EntityAction.Move)
+            SetAction(EntityAction.Idle);
+    }
+
+    /// <summary>
+    /// Remote click-to-walk presentation. Uses the same FollowPath/Update
+    /// walk cycle as a local click so interpolation cannot reset the
+    /// animation or snap backward when the first moving snapshot arrives.
+    /// </summary>
+    public void PresentRemoteWalk(
+        Vector2 sample, Vector2 velocity, bool moving, float elapsed)
+    {
+        if (!float.IsFinite(sample.X) || !float.IsFinite(sample.Y))
+            return;
+        elapsed = Math.Max(0, elapsed);
+        if (moving || velocity.LengthSquared > .0001f)
+        {
+            _remoteStillSeconds = 0;
+            var toSample = sample - Position;
+            if (Action == EntityAction.Move &&
+                toSample.LengthSquared > .0001f &&
+                Facing.LengthSquared > .0001f &&
+                Vector2.Dot(toSample.Normalized(), Facing) < -.25f &&
+                toSample.LengthSquared <
+                RemoteWalkRewindDistance * RemoteWalkRewindDistance)
+            {
+                Update(elapsed);
+                return;
+            }
+
+            if (Action != EntityAction.Move ||
+                (Target - sample).LengthSquared > .14f * .14f)
+                MoveTo(sample);
+            Update(elapsed);
+            return;
+        }
+
+        _remoteStillSeconds += elapsed;
+        if (Action == EntityAction.Move &&
+            _remoteStillSeconds < RemoteWalkIdleHoldSeconds)
+        {
+            Update(elapsed);
+            return;
+        }
+
+        CorrectPosition(sample);
+        if (Action == EntityAction.Move)
+            Stop();
+        else
+            AdvanceAction(elapsed);
     }
 
     public void AdvanceAction(float elapsed) =>
@@ -219,13 +312,33 @@ internal sealed class WorldEntity
     {
         ActionTime += elapsed;
         if (Action != EntityAction.Move) return;
+        if (!float.IsFinite(Position.X) || !float.IsFinite(Position.Y) ||
+            !float.IsFinite(Target.X) || !float.IsFinite(Target.Y))
+        {
+            Stop();
+            return;
+        }
         var remainingMovement = MoveSpeed *
-            Math.Clamp(TerrainSpeedMultiplier, .35f, 1f) *
-            Math.Clamp(StatusSpeedMultiplier, 0, 1f) * elapsed;
-        while (Action == EntityAction.Move)
+            Math.Clamp(
+                float.IsFinite(TerrainSpeedMultiplier)
+                    ? TerrainSpeedMultiplier : 1f,
+                .35f, 1f) *
+            Math.Clamp(
+                float.IsFinite(StatusSpeedMultiplier)
+                    ? StatusSpeedMultiplier : 1f,
+                0, 1f) *
+            Math.Max(0, elapsed);
+        // Dense waypoint paths must not be able to hang the game thread.
+        var remainingWaypoints = _path.Count + 8;
+        while (Action == EntityAction.Move && remainingWaypoints-- > 0)
         {
             var displacement = Target - Position;
             var distance = displacement.Length;
+            if (!float.IsFinite(distance) || !float.IsFinite(remainingMovement))
+            {
+                Stop();
+                break;
+            }
             if (distance <= ArrivalDistance)
             {
                 Position = Target;

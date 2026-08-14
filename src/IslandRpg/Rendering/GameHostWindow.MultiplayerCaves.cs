@@ -35,8 +35,11 @@ internal sealed partial class GameHostWindow
                 change.ChunkRevision != CurrentChunkRevision)
                 return false;
             if (DeltaKind == WorldObjectDeltaKind.Remove)
-                return change.State is null &&
-                       change.ObjectRevision == PreviousObjectRevision;
+                return NetworkPresentationApply.MatchesExpectedRemove(
+                    change,
+                    ObjectId,
+                    PreviousObjectRevision,
+                    CurrentChunkRevision);
             if (change.State is not { } state)
                 return false;
             var definitionMatches = Action == CaveActionKind.WorkExcavation
@@ -475,12 +478,10 @@ internal sealed partial class GameHostWindow
     {
         if (_player is null) return;
         if (destinationLevel == _activeWorldLevel)
-        {
-            _player.SyncPosition(authoritativePosition);
             return;
-        }
+        // Never GetResult a pending generate here. That is a render-thread
+        // lock on procedural chunk build and is what made join unplayable.
         CancelWorldLevelWork(clearMinimap: true);
-        FinishPendingMenuChunk();
         _networkClient?.SnapshotBuffer.Clear();
         foreach (var coordinate in _worldChunks.Keys.ToArray())
             UnloadWorldChunk(coordinate, save: false);
@@ -494,6 +495,5 @@ internal sealed partial class GameHostWindow
             EnemySpawnerService.WorldTransitionGraceSeconds;
         _camera = Vector2.Zero;
         FollowPlayer();
-        StreamWorld();
     }
 }

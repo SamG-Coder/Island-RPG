@@ -35,6 +35,77 @@ public sealed record ConsumeItemAction(
     public ActionCommandKind Kind => ActionCommandKind.ConsumeItem;
 }
 
+public enum SocialActionKind : byte
+{
+    OfferTrade = 1,
+    RespondTrade = 2,
+    SetTradeOffer = 3,
+    ConfirmTrade = 4,
+    CancelTrade = 5,
+    Follow = 6,
+    StopFollow = 7,
+    AddFriend = 8,
+    RemoveFriend = 9,
+    Ignore = 10,
+    Unignore = 11,
+    CreateGuild = 12,
+    JoinGuild = 13,
+    LeaveGuild = 14
+}
+
+public sealed record SocialAction(
+    SocialActionKind Command,
+    Guid TargetPlayerId = default,
+    Guid TradeId = default,
+    Guid GuildId = default,
+    string Text = "",
+    bool Accept = false,
+    IReadOnlyList<int>? OfferSlots = null) : IActionCommandPayload
+{
+    public ActionCommandKind Kind => ActionCommandKind.Social;
+
+    public bool Equals(SocialAction? other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other)) return true;
+        return Command == other.Command &&
+               TargetPlayerId == other.TargetPlayerId &&
+               TradeId == other.TradeId &&
+               GuildId == other.GuildId &&
+               Text == other.Text &&
+               Accept == other.Accept &&
+               SameSlots(OfferSlots, other.OfferSlots);
+    }
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Command);
+        hash.Add(TargetPlayerId);
+        hash.Add(TradeId);
+        hash.Add(GuildId);
+        hash.Add(Text);
+        hash.Add(Accept);
+        if (OfferSlots is { Count: > 0 } slots)
+            for (var index = 0; index < slots.Count; index++)
+                hash.Add(slots[index]);
+        return hash.ToHashCode();
+    }
+
+    private static bool SameSlots(
+        IReadOnlyList<int>? left, IReadOnlyList<int>? right)
+    {
+        if (ReferenceEquals(left, right)) return true;
+        var leftCount = left?.Count ?? 0;
+        var rightCount = right?.Count ?? 0;
+        if (leftCount != rightCount) return false;
+        for (var index = 0; index < leftCount; index++)
+            if (left![index] != right![index])
+                return false;
+        return true;
+    }
+}
+
 public sealed record PlantCropAction(
     int SeedInventorySlot,
     float X,

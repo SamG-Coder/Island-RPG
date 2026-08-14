@@ -15,10 +15,23 @@
     <Authors>SamG-Coder</Authors>
     <RepositoryUrl>https://github.com/SamG-Coder/Island-RPG</RepositoryUrl>
   </PropertyGroup>
+  <Target Name="CopyDedicatedServerHost" AfterTargets="Build">
+    <PropertyGroup>
+      <_DedicatedServerOut>$(MSBuildThisFileDirectory)..\IslandRpg.Server\bin\$(Configuration)\$(TargetFramework)\</_DedicatedServerOut>
+    </PropertyGroup>
+    <ItemGroup>
+      <_DedicatedServerHost Include="$(_DedicatedServerOut)IslandRpg.Server.exe" Condition="Exists('$(_DedicatedServerOut)IslandRpg.Server.exe')" />
+      <_DedicatedServerHost Include="$(_DedicatedServerOut)IslandRpg.Server.dll" Condition="Exists('$(_DedicatedServerOut)IslandRpg.Server.dll')" />
+      <_DedicatedServerHost Include="$(_DedicatedServerOut)IslandRpg.Server.runtimeconfig.json" Condition="Exists('$(_DedicatedServerOut)IslandRpg.Server.runtimeconfig.json')" />
+      <_DedicatedServerHost Include="$(_DedicatedServerOut)IslandRpg.Server.deps.json" Condition="Exists('$(_DedicatedServerOut)IslandRpg.Server.deps.json')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_DedicatedServerHost)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
   <ItemGroup>
     <ProjectReference Include="..\IslandRpg.Client\IslandRpg.Client.csproj" />
     <ProjectReference Include="..\IslandRpg.Core\IslandRpg.Core.csproj" />
     <ProjectReference Include="..\IslandRpg.Protocol\IslandRpg.Protocol.csproj" />
+    <ProjectReference Include="..\IslandRpg.Server\IslandRpg.Server.csproj" />
     <PackageReference Include="FontStashSharp.PlatformAgnostic" Version="1.5.6" />
     <PackageReference Include="NAudio" Version="2.3.0" />
     <PackageReference Include="OpenTK" Version="4.9.4" />

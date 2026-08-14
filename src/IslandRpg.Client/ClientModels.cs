@@ -25,15 +25,69 @@ public sealed record ClientHandshakeOptions(
     ushort ClientSnapshotPort = 0,
     ClientCapabilities Capabilities =
         ClientCapabilities.UdpSnapshots |
-        ClientCapabilities.DeltaSnapshots);
+        ClientCapabilities.DeltaSnapshots,
+    byte Gender = 0,
+    byte TeamColor = 0);
 
-public sealed record NetworkPlayerPresence(Guid PlayerId, string PlayerName);
+public sealed record NetworkPlayerPresence(
+    Guid PlayerId,
+    string PlayerName,
+    ulong EntityId = 0,
+    byte Gender = 0,
+    byte TeamColor = 0);
 
 /// <summary>
 /// The latest private, server-authored gameplay state for the controlled
 /// player. Inventory indexes remain stable so the existing game UI can render
 /// them without inventing client-side mutations.
 /// </summary>
+public sealed record NetworkSocialState(
+    IReadOnlyList<Guid> Friends,
+    IReadOnlyList<Guid> Ignored,
+    Guid GuildId,
+    string GuildName,
+    Guid FollowTargetPlayerId,
+    Guid OpenTradeId,
+    Guid TradePartnerPlayerId,
+    bool TradeAccepted,
+    bool TradeIncoming,
+    IReadOnlyList<int> OwnOfferSlots,
+    IReadOnlyList<int> PartnerOfferSlots,
+    bool OwnConfirmed,
+    bool PartnerConfirmed)
+{
+    public static NetworkSocialState Empty { get; } = new(
+        [],
+        [],
+        Guid.Empty,
+        "",
+        Guid.Empty,
+        Guid.Empty,
+        Guid.Empty,
+        false,
+        false,
+        [],
+        [],
+        false,
+        false);
+
+    public static NetworkSocialState FromMessage(SocialStateMessage message) =>
+        new(
+            message.Friends ?? [],
+            message.Ignored ?? [],
+            message.GuildId,
+            message.GuildName ?? "",
+            message.FollowTargetPlayerId,
+            message.OpenTradeId,
+            message.TradePartnerPlayerId,
+            message.TradeAccepted,
+            message.TradeIncoming,
+            message.OwnOfferSlots ?? [],
+            message.PartnerOfferSlots ?? [],
+            message.OwnConfirmed,
+            message.PartnerConfirmed);
+}
+
 public sealed record NetworkPlayerGameplayState(
     uint ActorRevision,
     uint InventoryRevision,
@@ -193,6 +247,12 @@ public sealed record NetworkGameClientState(
 
     /// <summary>Latest reliable semantic enemy descriptors and combat state.</summary>
     public IReadOnlyDictionary<Guid, EnemyState> Enemies { get; init; } = EmptyEnemies;
+
+    /// <summary>
+    /// Server-authored friends, ignore, guild, follow, and open trade for
+    /// the owning player. Empty until the social baseline arrives.
+    /// </summary>
+    public NetworkSocialState Social { get; init; } = NetworkSocialState.Empty;
 
     public static NetworkGameClientState Disconnected { get; } = new(
         NetworkGameClientStatus.Disconnected,

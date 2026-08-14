@@ -416,13 +416,33 @@ internal static class CombatAuthorityChecks
             Enemy(20), EnemyKind.GrassSlime, Vector2.Zero));
         CheckAssert.True((grass.StatusFlags & CombatStatusFlags.Hidden) != 0,
             "an idle grass slime must be authoritatively hidden");
+        var grassIdle = grassAuthority.Advance(
+            SimulationTiming.FixedDeltaSeconds, 1, [actor]);
+        CheckAssert.Equal(0, grassIdle.EnemyDeltas.Length,
+            "surface slimes must not auto-aggro a nearby player");
+        CheckAssert.True(
+            (grassAuthority.CaptureEnemy(grass.EnemyId).StatusFlags &
+             CombatStatusFlags.Hidden) != 0,
+            "an unprovoked grass slime must stay camouflaged beside a player");
 
         var sandAuthority = new AuthoritativeCombatTransactions(
             45, options: options);
         var sand = sandAuthority.Seed(new(
             Enemy(21), EnemyKind.SandSlime, Vector2.Zero));
-        var acquire = sandAuthority.Advance(
+        var unprovokedSand = sandAuthority.Advance(
             SimulationTiming.FixedDeltaSeconds, 1, [actor]);
+        CheckAssert.Equal(0, unprovokedSand.EnemyDeltas.Length,
+            "sand slimes must stay idle until a player strikes them");
+        var provoked = actor with
+        {
+            Position = new(.4f, 0),
+            Gameplay = actor.Gameplay with
+            {
+                CombatTargetEnemyId = sand.EnemyId
+            }
+        };
+        var acquire = sandAuthority.Advance(
+            SimulationTiming.FixedDeltaSeconds, 2, [provoked]);
         var buried = acquire.EnemyDeltas.Single().Current!;
         CheckAssert.True((buried.StatusFlags & CombatStatusFlags.Burrowed) != 0,
             "sand slime acquisition must publish the burrow state");
@@ -434,7 +454,7 @@ internal static class CombatAuthorityChecks
         restored.RestoreCheckpoint(checkpoint);
         var emergeTick = checkpoint.Enemies.Single().BurrowEmergeTick;
         AuthoritativeEnemySnapshot emerged = buried;
-        for (var tick = 2L; tick <= emergeTick; tick++)
+        for (var tick = 3L; tick <= emergeTick; tick++)
         {
             restored.Advance(SimulationTiming.FixedDeltaSeconds, tick, [actor]);
             emerged = restored.CaptureEnemy(sand.EnemyId,

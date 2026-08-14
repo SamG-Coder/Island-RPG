@@ -54,7 +54,8 @@ internal sealed partial class GameHostWindow : GameWindow
         NewWorldAdvanced,
         LoadWorld,
         Settings,
-        Credits
+        Credits,
+        Multiplayer
     }
     private const long MenuPreviewSeed = 137;
     private sealed class GpuWorldChunk(
@@ -86,6 +87,13 @@ internal sealed partial class GameHostWindow : GameWindow
         float V0,
         float U1,
         float V1);
+    private sealed record PreparedWorldChunk(
+        WorldChunk Chunk,
+        float[] Vertices,
+        float[] RenderedHeights,
+        WorldVegetationRenderItem[] Vegetation,
+        WorldFishRenderItem[] Fish);
+
     private sealed record EntityAnimation(
         LoadedGraphic Graphic, int[] Textures, float SecondsPerFrame);
     private sealed record ActorVisual(
@@ -212,9 +220,10 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly ListControlState _worldList = new();
     private WorldChunkStore? _worldStore;
     private readonly Dictionary<ChunkCoordinate, GpuWorldChunk> _worldChunks = [];
+    private readonly List<GpuWorldChunk> _networkGpuTeardown = [];
     private readonly List<GpuWorldChunk> _visibleWorldChunkBuffer = [];
     private readonly List<WorldChunk> _activeWorldChunkBuffer = [];
-    private Task<WorldChunk>? _pendingChunkTask;
+    private Task<PreparedWorldChunk>? _pendingChunkTask;
     private CancellationTokenSource? _pendingChunkCancellation;
     private ChunkCoordinate _pendingChunkCoordinate;
     private int _activeWorldLevel = (int)WorldLevel.Overworld;
@@ -471,6 +480,8 @@ internal sealed partial class GameHostWindow : GameWindow
     private readonly ContextMenuControlState _groundObjectContext = new();
     private readonly ContextMenuControlState _villagerContext = new();
     private readonly ContextMenuControlState _enemyContext = new();
+    private readonly ContextMenuControlState _networkPlayerContext = new();
+    private Guid _networkPlayerContextId;
     private IReadOnlyList<VillagerInteractionOption> _villagerContextOptions = [];
     private string? _villagerContextTargetId;
     private Vector2 _villagerContextWalkTarget;
@@ -539,6 +550,7 @@ internal sealed partial class GameHostWindow : GameWindow
             HandleGroundObjectContextSelection;
         _villagerContext.Selected += HandleVillagerContextSelection;
         _enemyContext.Selected += HandleEnemyContextSelection;
+        _networkPlayerContext.Selected += HandleNetworkPlayerContextSelection;
         _chatUi.Submitted += HandleChatSubmission;
         _chatUi.MessageAdded += ObserveChatMessage;
         _gameUi.CraftingButton.Clicked += () =>
@@ -668,8 +680,15 @@ internal sealed partial class GameHostWindow : GameWindow
     protected override void OnUpdateFrame(FrameEventArgs e)
     {
         base.OnUpdateFrame(e);
+        if (e.Time >= .05)
+            IslandRpg.Protocol.ProtocolPacketLog.WriteRaw(
+                $"FRAME update={e.Time * 1000:0}ms " +
+                $"net={IsNetworkWorld} chunks={_worldChunks.Count} " +
+                $"ingest={_networkWorldIngest.HasPendingWorldObjects}");
         ProcessNetworkEvents();
-        UpdateNpcAi();
+        ReleaseRetiredNetworkChunks();
+        if (!IsNetworkWorld)
+            UpdateNpcAi();
         ProcessGameControlPipe();
         if (!IsNetworkWorld)
             NormalizeActivePlayerInventory();
@@ -1016,6 +1035,13 @@ internal sealed partial class GameHostWindow : GameWindow
             _worldList.UpdatePointer(
                 MouseState.Position, leftDown);
         }
+        else if (_frontendPage == FrontendPage.Multiplayer)
+        {
+            RefreshHostedWorldChoices();
+            LayoutHostedWorldList();
+            _hostedWorldList.UpdatePointer(
+                MouseState.Position, leftDown);
+        }
         else if (_frontendPage == FrontendPage.Settings)
         {
             _settingsMenu.LayoutContent(SettingsPanel());
@@ -1053,15 +1079,17 @@ internal sealed partial class GameHostWindow : GameWindow
                 else if (MenuButton(1).Contains(pointer))
                     _frontendPage = FrontendPage.LoadWorld;
                 else if (MenuButton(2).Contains(pointer))
-                    _frontendPage = FrontendPage.CharacterSelect;
+                    OpenMultiplayerPage();
                 else if (MenuButton(3).Contains(pointer))
+                    _frontendPage = FrontendPage.CharacterSelect;
+                else if (MenuButton(4).Contains(pointer))
                 {
                     _frontendPage = FrontendPage.Settings;
                     _settingsMenu.EnsureVisible();
                 }
-                else if (MenuButton(4).Contains(pointer))
-                    _frontendPage = FrontendPage.Credits;
                 else if (MenuButton(5).Contains(pointer))
+                    _frontendPage = FrontendPage.Credits;
+                else if (MenuButton(6).Contains(pointer))
                     Close();
                 break;
             case FrontendPage.CharacterSelect:
@@ -1108,6 +1136,9 @@ internal sealed partial class GameHostWindow : GameWindow
             case FrontendPage.Credits:
                 if (BackButtonBounds().Contains(pointer))
                     _frontendPage = FrontendPage.Main;
+                break;
+            case FrontendPage.Multiplayer:
+                UpdateMultiplayerClick(pointer);
                 break;
         }
     }
@@ -1673,7 +1704,8 @@ internal sealed partial class GameHostWindow : GameWindow
         new[]
         {
             _worldNameTextBox, _seedTextBox, _playerNameTextBox,
-            _aiUrlTextBox, _aiModelTextBox, _aiPasswordTextBox
+            _aiUrlTextBox, _aiModelTextBox, _aiPasswordTextBox,
+            _multiplayerEndpointTextBox, _multiplayerSeedTextBox
         }
             .FirstOrDefault(control => control.Focused) ??
         FocusedAdvancedTextBox();
@@ -1694,6 +1726,8 @@ internal sealed partial class GameHostWindow : GameWindow
         _aiUrlTextBox.Blur();
         _aiModelTextBox.Blur();
         _aiPasswordTextBox.Blur();
+        _multiplayerEndpointTextBox.Blur();
+        _multiplayerSeedTextBox.Blur();
         BlurAdvancedTextBoxes();
     }
 
@@ -2105,6 +2139,9 @@ internal sealed partial class GameHostWindow : GameWindow
         _enemyContext.UpdatePointer(
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
+        _networkPlayerContext.UpdatePointer(
+            MouseState.Position,
+            MouseState.IsButtonDown(MouseButton.Left));
         _fishContext.UpdatePointer(
             MouseState.Position,
             MouseState.IsButtonDown(MouseButton.Left));
@@ -2152,6 +2189,7 @@ internal sealed partial class GameHostWindow : GameWindow
         _groundObjectContext.HitTest(mouse) ||
         _villagerContext.HitTest(mouse) ||
         _enemyContext.HitTest(mouse) ||
+        _networkPlayerContext.HitTest(mouse) ||
         _fishContext.HitTest(mouse) ||
         _vegetationContext.HitTest(mouse) ||
         _miningContext.HitTest(mouse) ||
@@ -3275,6 +3313,13 @@ internal sealed partial class GameHostWindow : GameWindow
                 _worldList.Scroll(
                     MouseState.Position, e.OffsetY);
             }
+            else if (_frontendPage == FrontendPage.Multiplayer)
+            {
+                RefreshHostedWorldChoices();
+                LayoutHostedWorldList();
+                _hostedWorldList.Scroll(
+                    MouseState.Position, e.OffsetY);
+            }
             else if (_frontendPage == FrontendPage.Settings)
             {
                 if (ScrollResolutionDropdown(
@@ -3662,6 +3707,9 @@ internal sealed partial class GameHostWindow : GameWindow
     protected override void OnRenderFrame(FrameEventArgs e)
     {
         base.OnRenderFrame(e);
+        if (e.Time >= .05)
+            IslandRpg.Protocol.ProtocolPacketLog.WriteRaw(
+                $"FRAME render={e.Time * 1000:0}ms chunks={_worldChunks.Count}");
         UpdateSmoothZoom(e.Time);
         UpdateClassicPcViewZoom(e.Time);
         _fontRenderer?.BeginFrame(ClientSize.X, ClientSize.Y);
@@ -3774,6 +3822,9 @@ internal sealed partial class GameHostWindow : GameWindow
             case FrontendPage.Credits:
                 RenderCreditsMenu();
                 break;
+            case FrontendPage.Multiplayer:
+                RenderMultiplayerMenu();
+                break;
         }
         if (_frontendPage != FrontendPage.Main)
             DrawMenuButton(FrontendCloseButtonBounds(), "X");
@@ -3820,15 +3871,15 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         var captions = new[]
         {
-            "BEGIN NEW ADVENTURE", "Load World", "Change Character",
-            "Settings", "Credits", "Exit Game"
+            "BEGIN NEW ADVENTURE", "Load World", "Multiplayer",
+            "Change Character", "Settings", "Credits", "Exit Game"
         };
         for (var index = 0; index < captions.Length; index++)
             DrawMainMenuButton(
                 MenuButton(index),
                 captions[index],
                 primary: index == 0,
-                quiet: index == 5);
+                quiet: index == 6);
         DrawCenteredUiText(
             $"{ReleaseVersion}   •   EARLY ACCESS",
             new(panel.X + 20, panel.Y + panel.W - 29, panel.Z - 40, 18),
@@ -4370,6 +4421,7 @@ internal sealed partial class GameHostWindow : GameWindow
             FrontendPage.LoadWorld => WorldSelectionPanel(),
             FrontendPage.Settings => SettingsPanel(),
             FrontendPage.Credits => FrontendPanel(600, 560),
+            FrontendPage.Multiplayer => MultiplayerPanel(),
             _ => FrontendPanel(480, 480)
         };
         return new(panel.X + panel.Z - 40, panel.Y + 10, 28, 28);
@@ -4398,9 +4450,12 @@ internal sealed partial class GameHostWindow : GameWindow
             4 => new(
                 panel.X + left + pairWidth + gap, panel.Y + 310,
                 pairWidth, 42),
+            5 => new(
+                panel.X + left, panel.Y + 368,
+                pairWidth, 36),
             _ => new(
-                panel.X + 140, panel.Y + 368,
-                panel.Z - 280, 36)
+                panel.X + left + pairWidth + gap, panel.Y + 368,
+                pairWidth, 36)
         };
     }
 
@@ -4644,6 +4699,7 @@ internal sealed partial class GameHostWindow : GameWindow
         RenderCombatTargetHealthBar(scene);
         RenderFishingFeedback(scene);
         RenderOverheadSpeech(scene);
+        RenderNetworkNameplates(scene);
         RenderVillagerOverheadSpeech(scene);
         RenderMinimap();
         RenderPlayerStatus();
@@ -4812,6 +4868,7 @@ internal sealed partial class GameHostWindow : GameWindow
         RenderContextMenu(_fishContext);
         RenderContextMenu(_vegetationContext);
         RenderContextMenu(_miningContext);
+        RenderContextMenu(_networkPlayerContext);
     }
 
     private void RenderContextMenu(
@@ -5557,6 +5614,11 @@ internal sealed partial class GameHostWindow : GameWindow
     private void RenderMinimap()
     {
         if (_player is null || _minimapFrame is null || _minimapTexture == 0) return;
+        if (IsNetworkWorld)
+        {
+            DrawUiSprite(_minimapFrame, _minimapTexture, _minimapUi.Bounds);
+            return;
+        }
         var minimapFocus = IsObserveWorld
             ? ObservationFocusPosition()
             : _player.Position;
@@ -7034,14 +7096,15 @@ internal sealed partial class GameHostWindow : GameWindow
                           new InvalidOperationException(
                               "Chunk loading failed.");
                 var loaded = _pendingChunkTask.Result;
-                if (loaded.Coordinate.Level == _activeWorldLevel &&
-                    !_worldChunks.ContainsKey(loaded.Coordinate))
+                if (loaded.Chunk.Coordinate.Level == _activeWorldLevel &&
+                    !_worldChunks.ContainsKey(loaded.Chunk.Coordinate))
                 {
                     _worldChunks.Add(
-                        loaded.Coordinate, UploadWorldChunk(loaded));
-                    CacheCaveEntranceLight(loaded);
+                        loaded.Chunk.Coordinate,
+                        UploadPreparedWorldChunk(loaded));
+                    CacheCaveEntranceLight(loaded.Chunk);
                 }
-                if (loaded.Coordinate.Level == _activeWorldLevel)
+                if (loaded.Chunk.Coordinate.Level == _activeWorldLevel)
                     ClearFallbackCaveSampling();
                 _pendingChunkTask = null;
                 _pendingChunkCancellation?.Dispose();
@@ -7093,9 +7156,11 @@ internal sealed partial class GameHostWindow : GameWindow
             _pendingChunkCancellation = new();
             var cancellationToken =
                 _pendingChunkCancellation.Token;
+            var worldSeed = _worldSeed;
             _pendingChunkTask = Task.Run(
-                () => store.LoadOrGenerate(
-                    coordinate, cancellationToken),
+                () => PrepareWorldChunk(
+                    store.LoadOrGenerate(coordinate, cancellationToken),
+                    worldSeed),
                 cancellationToken);
         }
 
@@ -8232,7 +8297,11 @@ internal sealed partial class GameHostWindow : GameWindow
             ? $"PLACEABLE_OBJECT_SHADOW#{itemId}"
             : $"PLACEABLE_OBJECT#{itemId}";
 
-    private GpuWorldChunk UploadWorldChunk(WorldChunk chunk)
+    private GpuWorldChunk UploadWorldChunk(WorldChunk chunk) =>
+        UploadPreparedWorldChunk(PrepareWorldChunk(chunk, _worldSeed));
+
+    private static PreparedWorldChunk PrepareWorldChunk(
+        WorldChunk chunk, long worldSeed)
     {
         Vector2 Project(float x, float y, float z) =>
             IsometricTerrainProjection.Project(x, y, z);
@@ -8291,16 +8360,6 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         }
         preparedVertices ??= vertices.ToArray();
-        var vbo = GL.GenBuffer();
-        GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
-        GL.BufferData(
-            BufferTarget.ArrayBuffer,
-            preparedVertices.Length * sizeof(float),
-            preparedVertices,
-            BufferUsageHint.StaticDraw);
-        if (chunk.Coordinate.Level == (int)WorldLevel.Underground)
-            chunk.UndergroundMeshVertices = [];
-        var weights = UploadChunkBiomeWeights(chunk);
         var renderedHeights = new float[
             (WorldChunk.Size + 1) * (WorldChunk.Size + 1)];
         for (var vertexY = 0; vertexY <= WorldChunk.Size; vertexY++)
@@ -8318,19 +8377,14 @@ internal sealed partial class GameHostWindow : GameWindow
                     : SmoothedHeightAt(
                         chunk.Coordinate.X * WorldChunk.Size + vertexX,
                         chunk.Coordinate.Y * WorldChunk.Size + vertexY);
-        var gpu = new GpuWorldChunk(
-            chunk, vbo, preparedVertices.Length / 12,
-            weights.A, weights.B, weights.C, weights.D, weights.Shore,
-            chunk.Coordinate.Level == (int)WorldLevel.Underground
-                ? chunk.UndergroundProjectedBounds
-                : WorldChunkProjection.TerrainBounds(
-                    preparedVertices, 12),
-            renderedHeights);
-        gpu.VegetationRenderItems = WorldVegetationRenderCache.Build(
-            chunk, renderedHeights);
-        gpu.FishRenderItems = WorldFishRenderCache.Build(
-            _worldSeed, chunk.Fish);
-        return gpu;
+        if (chunk.Coordinate.Level == (int)WorldLevel.Underground)
+            chunk.UndergroundMeshVertices = [];
+        return new PreparedWorldChunk(
+            chunk,
+            preparedVertices,
+            renderedHeights,
+            WorldVegetationRenderCache.Build(chunk, renderedHeights),
+            WorldFishRenderCache.Build(worldSeed, chunk.Fish));
 
         float LayerAt(int x, int y, Biome fallback) =>
             layers[x < 0 || y < 0 || x >= WorldChunk.Size || y >= WorldChunk.Size
@@ -8365,9 +8419,9 @@ internal sealed partial class GameHostWindow : GameWindow
                     rawHeight = chunk.Coordinate.Level ==
                                 (int)WorldLevel.Underground
                         ? (byte)UndergroundWorldGenerator.SampleHeight(
-                            _worldSeed, sample.X, sample.Y)
+                            worldSeed, sample.X, sample.Y)
                         : InfiniteWorldGenerator.SampleSurfaceHeight(
-                            _worldSeed, sample.X, sample.Y);
+                            worldSeed, sample.X, sample.Y);
                     rawHeightCache[sample] = rawHeight;
                 }
                 weightedHeight += rawHeight * weight;
@@ -8377,6 +8431,33 @@ internal sealed partial class GameHostWindow : GameWindow
             heightCache[(x, y)] = height;
             return height;
         }
+    }
+
+    private GpuWorldChunk UploadPreparedWorldChunk(PreparedWorldChunk prepared)
+    {
+        var chunk = prepared.Chunk;
+        var preparedVertices = prepared.Vertices;
+        var vbo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
+        GL.BufferData(
+            BufferTarget.ArrayBuffer,
+            preparedVertices.Length * sizeof(float),
+            preparedVertices,
+            BufferUsageHint.StaticDraw);
+        var weights = UploadChunkBiomeWeights(chunk);
+        var gpu = new GpuWorldChunk(
+            chunk, vbo, preparedVertices.Length / 12,
+            weights.A, weights.B, weights.C, weights.D, weights.Shore,
+            chunk.Coordinate.Level == (int)WorldLevel.Underground
+                ? chunk.UndergroundProjectedBounds
+                : WorldChunkProjection.TerrainBounds(
+                    preparedVertices, 12),
+            prepared.RenderedHeights);
+        gpu.VegetationRenderItems = prepared.Vegetation;
+        gpu.FishRenderItems = prepared.Fish;
+        if (IsNetworkWorld)
+            RememberNetworkChunkResources(gpu);
+        return gpu;
     }
 
     private static (int A, int B, int C, int D, int Shore) UploadChunkBiomeWeights(WorldChunk chunk)
@@ -8526,6 +8607,11 @@ internal sealed partial class GameHostWindow : GameWindow
         if (!_worldChunks.Remove(coordinate, out var gpu)) return;
         ForgetNetworkResourceChunk(coordinate);
         if (save) QueueChunkSave(gpu.Chunk);
+        DeleteGpuWorldChunk(gpu);
+    }
+
+    private static void DeleteGpuWorldChunk(GpuWorldChunk gpu)
+    {
         GL.DeleteBuffer(gpu.Vbo);
         GL.DeleteTexture(gpu.WeightsA);
         GL.DeleteTexture(gpu.WeightsB);
@@ -9082,6 +9168,7 @@ internal sealed partial class GameHostWindow : GameWindow
     protected override void OnUnload()
     {
         DisposeNetworkClient();
+        StopHostedServerAsync().GetAwaiter().GetResult();
         _newWorldPreviewCancellation?.Cancel();
         _gameControlPipe?.Dispose();
         _gameControlPipe = null;

@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Numerics;
 using IslandRpg.Gameplay;
+using IslandRpg.Resources;
 using IslandRpg.Simulation;
 
 namespace IslandRpg.NetworkingChecks;
@@ -42,6 +43,8 @@ internal static class WorldTransactionChecks
             FurniturePlacementIsAtomicAndCollisionSafe);
         checks.Add("world dynamic obstacles and cross chunk footprints stay canonical",
             DynamicObstaclesAndCrossChunkFootprintsAreCanonical);
+        checks.Add("world transactions pick up procedural ground loot once",
+            ProceduralGroundLootPicksUpOnce);
     }
 
     private static void PickupDropAtomicAndRevisioned()
@@ -813,6 +816,55 @@ internal static class WorldTransactionChecks
         CheckAssert.Equal(uint.MaxValue,
             terminalAuthority.CaptureChunkRevision(terminalChunk),
             "terminal revision rejection must not advance its chunk");
+    }
+
+    private static void ProceduralGroundLootPicksUpOnce()
+    {
+        const long seed = 67;
+        ProceduralGroundLootCatalog.Placement? found = null;
+        var chunk = default(WorldChunkKey);
+        for (var chunkY = -3; chunkY <= 3 && found is null; chunkY++)
+        for (var chunkX = -3; chunkX <= 3 && found is null; chunkX++)
+        {
+            chunk = new WorldChunkKey(chunkX, chunkY, 0);
+            var placements = ProceduralGroundLootCatalog.DescribeChunk(
+                seed, chunk);
+            if (placements.Count == 0) continue;
+            found = placements[0];
+        }
+
+        CheckAssert.True(found is not null,
+            "the fixture must include generated ground loot");
+        var placement = found!.Value;
+        var authority = new AuthoritativeWorldTransactions(worldSeed: seed);
+        var actor = Actor(
+            new ActorId(Guid.Parse("10000000-0000-0000-0000-0000000000aa")),
+            [],
+            new Vector2(placement.X, placement.Y));
+        var handle = new WorldObjectHandle(
+            placement.Id, chunk, 1, 0);
+        var pick = authority.Execute(
+            actor, new PickUpWorldObjectTransaction(Context(actor), handle));
+        CheckAssert.True(pick.Accepted,
+            "the first procedural pickup must succeed");
+        CheckAssert.Equal(1, Count(pick.Gameplay!.Value, placement.ItemId),
+            "procedural pickup must grant the generated item");
+        CheckAssert.Equal(WorldObjectChangeKind.Removed,
+            pick.ObjectDeltas.Single().Kind,
+            "procedural pickup must publish a removal so clients hide the loot");
+
+        actor = actor with { Gameplay = pick.Gameplay!.Value };
+        var replay = authority.Execute(
+            actor,
+            new PickUpWorldObjectTransaction(
+                Context(actor) with { CommandId = Guid.NewGuid() },
+                handle with
+                {
+                    ExpectedChunkRevision = pick.ChunkDeltas.Single()
+                        .CurrentRevision
+                }));
+        CheckAssert.False(replay.Accepted,
+            "a second procedural pickup of the same item must fail");
     }
 
     private static WorldTransactionActorInput Actor(

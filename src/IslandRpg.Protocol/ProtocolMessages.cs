@@ -24,7 +24,9 @@ public sealed record HandshakeRequestMessage(
     ushort ClientSnapshotPort,
     ClientCapabilities Capabilities,
     Guid ReconnectPlayerId,
-    string ReconnectToken) : IProtocolMessage
+    string ReconnectToken,
+    byte Gender = 0,
+    byte TeamColor = 0) : IProtocolMessage
 {
     public ProtocolMessageKind Kind => ProtocolMessageKind.HandshakeRequest;
 }
@@ -71,7 +73,10 @@ public sealed record PlayerJoinedMessage(
     ulong Sequence,
     ulong Tick,
     Guid PlayerId,
-    string PlayerName) : IProtocolMessage
+    string PlayerName,
+    ulong EntityId = 0,
+    byte Gender = 0,
+    byte TeamColor = 0) : IProtocolMessage
 {
     public ProtocolMessageKind Kind => ProtocolMessageKind.PlayerJoined;
 }
@@ -124,6 +129,111 @@ public sealed record ChatBroadcastMessage(
     string Text) : IProtocolMessage
 {
     public ProtocolMessageKind Kind => ProtocolMessageKind.ChatBroadcast;
+}
+
+/// <summary>
+/// Private social, trade, and guild lists for the owning player. Friends,
+/// ignore, guild, follow, and the open trade (if any) are server-authored.
+/// </summary>
+public sealed record SocialStateMessage(
+    ulong Sequence,
+    ulong Tick,
+    Guid PlayerId,
+    IReadOnlyList<Guid> Friends,
+    IReadOnlyList<Guid> Ignored,
+    Guid GuildId,
+    string GuildName,
+    Guid FollowTargetPlayerId,
+    Guid OpenTradeId,
+    Guid TradePartnerPlayerId,
+    bool TradeAccepted,
+    bool TradeIncoming,
+    IReadOnlyList<int> OwnOfferSlots,
+    IReadOnlyList<int> PartnerOfferSlots,
+    bool OwnConfirmed,
+    bool PartnerConfirmed) : IProtocolMessage
+{
+    public ProtocolMessageKind Kind => ProtocolMessageKind.SocialState;
+
+    public bool Equals(SocialStateMessage? other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other)) return true;
+        return Sequence == other.Sequence &&
+               Tick == other.Tick &&
+               PlayerId == other.PlayerId &&
+               SameGuids(Friends, other.Friends) &&
+               SameGuids(Ignored, other.Ignored) &&
+               GuildId == other.GuildId &&
+               GuildName == other.GuildName &&
+               FollowTargetPlayerId == other.FollowTargetPlayerId &&
+               OpenTradeId == other.OpenTradeId &&
+               TradePartnerPlayerId == other.TradePartnerPlayerId &&
+               TradeAccepted == other.TradeAccepted &&
+               TradeIncoming == other.TradeIncoming &&
+               SameInts(OwnOfferSlots, other.OwnOfferSlots) &&
+               SameInts(PartnerOfferSlots, other.PartnerOfferSlots) &&
+               OwnConfirmed == other.OwnConfirmed &&
+               PartnerConfirmed == other.PartnerConfirmed;
+    }
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Sequence);
+        hash.Add(Tick);
+        hash.Add(PlayerId);
+        AddGuids(ref hash, Friends);
+        AddGuids(ref hash, Ignored);
+        hash.Add(GuildId);
+        hash.Add(GuildName);
+        hash.Add(FollowTargetPlayerId);
+        hash.Add(OpenTradeId);
+        hash.Add(TradePartnerPlayerId);
+        hash.Add(TradeAccepted);
+        hash.Add(TradeIncoming);
+        AddInts(ref hash, OwnOfferSlots);
+        AddInts(ref hash, PartnerOfferSlots);
+        hash.Add(OwnConfirmed);
+        hash.Add(PartnerConfirmed);
+        return hash.ToHashCode();
+    }
+
+    private static bool SameGuids(IReadOnlyList<Guid>? left, IReadOnlyList<Guid>? right)
+    {
+        var leftCount = left?.Count ?? 0;
+        var rightCount = right?.Count ?? 0;
+        if (leftCount != rightCount) return false;
+        for (var index = 0; index < leftCount; index++)
+            if (left![index] != right![index])
+                return false;
+        return true;
+    }
+
+    private static bool SameInts(IReadOnlyList<int>? left, IReadOnlyList<int>? right)
+    {
+        var leftCount = left?.Count ?? 0;
+        var rightCount = right?.Count ?? 0;
+        if (leftCount != rightCount) return false;
+        for (var index = 0; index < leftCount; index++)
+            if (left![index] != right![index])
+                return false;
+        return true;
+    }
+
+    private static void AddGuids(ref HashCode hash, IReadOnlyList<Guid>? values)
+    {
+        if (values is null) return;
+        for (var index = 0; index < values.Count; index++)
+            hash.Add(values[index]);
+    }
+
+    private static void AddInts(ref HashCode hash, IReadOnlyList<int>? values)
+    {
+        if (values is null) return;
+        for (var index = 0; index < values.Count; index++)
+            hash.Add(values[index]);
+    }
 }
 
 public sealed record CommandResultMessage(

@@ -236,6 +236,18 @@ internal static class CoreCombatChecks
         status = SlimeCombatRules.Apply(
             status, EnemyKind.CaveSlime, 10);
 
+        CheckAssert.False(
+            SlimeCombatRules.CanAcquireTarget(EnemyKind.GrassSlime, false, 0),
+            "unprovoked surface slimes must not acquire a target");
+        CheckAssert.True(
+            SlimeCombatRules.CanAcquireTarget(EnemyKind.GrassSlime, true, 25),
+            "a provoked surface slime must acquire its attacker");
+        CheckAssert.True(
+            SlimeCombatRules.CanAcquireTarget(EnemyKind.CaveSlime, false, 16),
+            "cave slimes must auto-aggro inside the cave radius");
+        CheckAssert.False(
+            SlimeCombatRules.CanAcquireTarget(EnemyKind.CaveSlime, false, 36),
+            "cave slimes must not auto-aggro outside the cave radius");
         CheckAssert.Equal(0f, status.MovementMultiplier(10.5),
             "a grass slime root must take precedence over water slow");
         CheckAssert.Equal(.58f, status.MovementMultiplier(12),

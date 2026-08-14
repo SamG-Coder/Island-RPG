@@ -54,7 +54,7 @@ internal sealed partial class GameHostWindow
         CancelNetworkResourceInteraction(stopPlayer: false);
         var pending = new NetworkMiningAction(target, toolSlot);
         _pendingNetworkMiningAction = pending;
-        if (Vector2.DistanceSquared(_player.Position, target.Position) <=
+        if (Vector2.DistanceSquared(NetworkActionPosition, target.Position) <=
             NetworkResourceDispatchRange * NetworkResourceDispatchRange)
         {
             BeginNetworkMiningAction(pending);
@@ -74,7 +74,7 @@ internal sealed partial class GameHostWindow
                 return true;
             }
             if (Vector2.DistanceSquared(
-                    _player.Position, pending.Target.Position) <=
+                    NetworkActionPosition, pending.Target.Position) <=
                 NetworkResourceDispatchRange * NetworkResourceDispatchRange)
                 BeginNetworkMiningAction(pending);
         }
@@ -244,12 +244,13 @@ internal sealed partial class GameHostWindow
         (state.Depleted || state.Health <= 0);
 
     private bool IsNetworkMiningDepleted(string stableKey) =>
-        TryDescribeNetworkMining(stableKey, out var target) &&
+        _networkMiningTargets.TryGetValue(stableKey, out var target) &&
         NetworkMiningIsDepleted(target);
 
     private bool NetworkMiningBlocksWorld(string stableKey)
     {
-        if (!TryDescribeNetworkMining(stableKey, out var target)) return true;
+        if (!_networkMiningTargets.TryGetValue(stableKey, out var target))
+            return true;
         var state = TryGetNetworkMiningState(target, out var current)
             ? current
             : null;
@@ -353,7 +354,7 @@ internal sealed partial class GameHostWindow
                     !MiningNodeCatalog.TryGet(
                         gpu.Chunk.Vegetation[cached.VegetationIndex], out _))
                     continue;
-                if (!TryDescribeNetworkMining(
+                if (!_networkMiningTargets.TryGetValue(
                         cached.StableKey, out var target) ||
                     NetworkMiningIsDepleted(target))
                     continue;

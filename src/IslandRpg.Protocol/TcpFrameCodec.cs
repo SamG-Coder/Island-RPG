@@ -13,7 +13,9 @@ public static class TcpFrameCodec
     public static async ValueTask WriteAsync(Stream stream, IProtocolMessage message, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        await WriteFrameAsync(stream, ReliableProtocolCodec.Encode(message), cancellationToken).ConfigureAwait(false);
+        var frame = ReliableProtocolCodec.Encode(message);
+        ProtocolPacketLog.Write("send", message, frame.Length);
+        await WriteFrameAsync(stream, frame, cancellationToken).ConfigureAwait(false);
     }
 
     public static async ValueTask WriteFrameAsync(Stream stream, ReadOnlyMemory<byte> frame, CancellationToken cancellationToken = default)
@@ -53,7 +55,9 @@ public static class TcpFrameCodec
         {
             var frame = buffer.AsMemory(0, (int)frameLength);
             await ReadExactlyAsync(stream, frame, cancellationToken).ConfigureAwait(false);
-            return ReliableProtocolCodec.Decode(frame.Span);
+            var message = ReliableProtocolCodec.Decode(frame.Span);
+            ProtocolPacketLog.Write("recv", message, frame.Length);
+            return message;
         }
         finally
         {
