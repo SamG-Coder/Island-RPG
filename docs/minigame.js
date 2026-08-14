@@ -1,7 +1,7 @@
 (() => {
   const canvas = document.querySelector("[data-mini-canvas]");
   if (!canvas) return;
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { alpha: false });
   const hud = {
     hp: document.querySelector("[data-mini-hp]"),
     hunger: document.querySelector("[data-mini-hunger]"),
@@ -13,15 +13,31 @@
     cursor: document.querySelector("[data-mini-cursor]"),
     seed: document.querySelector("[data-mini-seed]"),
     start: document.querySelector("[data-mini-start]"),
-    frame: document.querySelector("[data-mini-frame]")
+    ctxMenu: document.querySelector("[data-ctx]"),
+    examine: document.querySelector("[data-examine]")
   };
 
-  const W = 30;
-  const H = 30;
-  const TW = 56;
-  const TH = 28;
+  const W = 32;
+  const H = 32;
+  const TW = 72;
+  const TH = 36;
   const INV = 10;
   const RANGE = 1.55;
+  const EXAMINE = {
+    sticks: "Dry kindling. Good for a fire, an axe haft, or nothing much else.",
+    large_rock: "A heavy stone. Break it, sharpen it, or leave it on the beach.",
+    small_rocks: "A handful of chips. Three of these make a fire ring.",
+    sharpened_rock: "One edge will cut. Lash it to sticks for a real tool.",
+    stone_axe: "A bound stone axe. Trees fall faster with this in the pack.",
+    stone_pickaxe: "A crude pick. Outcrops give up their rock if you keep swinging.",
+    logs: "Fresh timber from a felled tree.",
+    berries: "Tart wild berries. Roast them on a lit fire.",
+    cooked_berries: "Warm and sweet. Right-click and Eat.",
+    raw_fish: "Still wet. Cook it beside a fire before you starve.",
+    cooked_fish: "A proper meal. Right-click and Eat.",
+    campfire: "A stone ring. Right-click and Place it on clear ground.",
+    slime_gel: "Wobbly and faintly green. Edible, if you must."
+  };
 
   const ITEMS = {
     sticks: { name: "Sticks", color: "#8a6230" },
@@ -35,7 +51,7 @@
     cooked_berries: { name: "Roasted berries", color: "#c45a3a", food: 28 },
     raw_fish: { name: "Raw fish", color: "#6f8ea3" },
     cooked_fish: { name: "Cooked fish", color: "#d09a55", food: 42 },
-    campfire: { name: "Campfire", color: "#c47a3a" },
+    campfire: { name: "Campfire", color: "#c47a3a", place: true },
     slime_gel: { name: "Slime gel", color: "#6db36a", food: 8 }
   };
 
@@ -56,15 +72,147 @@
   let state = null;
   let hover = null;
   let keys = {};
-  let sprites = {};
+  let art = { tiles: {}, objects: {}, actors: [], slime: null, items: {}, campfire: null };
+  let dragSlot = -1;
 
   const hash = (x, y, s) => {
     let n = (x * 374761393 + y * 668265263 + s * 1274126177) | 0;
     n = (n ^ (n >>> 13)) * 1274126177;
     return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
   };
-
   const walkable = (tile) => tile === "beach" || tile === "grass" || tile === "forest";
+  const view = () => ({ w: canvas.clientWidth || canvas.width, h: canvas.clientHeight || canvas.height });
+
+  function loadImage(src) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = src;
+    });
+  }
+
+  function chroma(img, cropBottom = .09) {
+    if (!img) return null;
+    const c = document.createElement("canvas");
+    c.width = img.width;
+    c.height = Math.floor(img.height * (1 - cropBottom));
+    const g = c.getContext("2d");
+    g.drawImage(img, 0, 0);
+    const data = g.getImageData(0, 0, c.width, c.height);
+    const d = data.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], gr = d[i + 1], b = d[i + 2];
+      if (gr > 130 && gr > r + 35 && gr > b + 35) d[i + 3] = 0;
+    }
+    g.putImageData(data, 0, 0);
+    return c;
+  }
+
+  function crop(src, x, y, w, h) {
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, w);
+    c.height = Math.max(1, h);
+    c.getContext("2d").drawImage(src, x, y, w, h, 0, 0, w, h);
+    return c;
+  }
+
+  function blobs(sheet, min = 280) {
+    if (!sheet) return [];
+    const g = sheet.getContext("2d");
+    const { width, height } = sheet;
+    const data = g.getImageData(0, 0, width, height).data;
+    const seen = new Uint8Array(width * height);
+    const out = [];
+    const idx = (x, y) => y * width + x;
+    for (let y = 0; y < height; y++)
+      for (let x = 0; x < width; x++) {
+        const i = idx(x, y);
+        if (seen[i] || data[i * 4 + 3] < 20) continue;
+        const q = [[x, y]];
+        seen[i] = 1;
+        let minX = x, minY = y, maxX = x, maxY = y, area = 0, r = 0, gr = 0, b = 0;
+        while (q.length) {
+          const [cx, cy] = q.pop();
+          area++;
+          const p = idx(cx, cy) * 4;
+          r += data[p]; gr += data[p + 1]; b += data[p + 2];
+          minX = Math.min(minX, cx); minY = Math.min(minY, cy);
+          maxX = Math.max(maxX, cx); maxY = Math.max(maxY, cy);
+          for (const [ox, oy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+            const nx = cx + ox, ny = cy + oy;
+            if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+            const ni = idx(nx, ny);
+            if (seen[ni] || data[ni * 4 + 3] < 20) continue;
+            seen[ni] = 1;
+            q.push([nx, ny]);
+          }
+        }
+        if (area < min) continue;
+        out.push({
+          canvas: crop(sheet, minX, minY, maxX - minX + 1, maxY - minY + 1),
+          x: minX, y: minY, area,
+          r: r / area, g: gr / area, b: b / area
+        });
+      }
+    return out.sort((a, b) => a.x - b.x || a.y - b.y);
+  }
+
+  function sliceGrid(sheet, cols, rows) {
+    if (!sheet) return [];
+    const cw = Math.floor(sheet.width / cols);
+    const ch = Math.floor(sheet.height / rows);
+    const cells = [];
+    for (let y = 0; y < rows; y++)
+      for (let x = 0; x < cols; x++)
+        cells.push(crop(sheet, x * cw, y * ch, cw, ch));
+    return cells;
+  }
+
+  async function loadArt() {
+    const [tiles, objects, actors, items, food, campfire] = await Promise.all([
+      loadImage("assets/mini/tiles.jpg"),
+      loadImage("assets/mini/objects.jpg"),
+      loadImage("assets/mini/actors.jpg"),
+      loadImage("assets/mini/items.jpg"),
+      loadImage("assets/mini/food.jpg"),
+      loadImage("assets/campfire.png")
+    ]);
+    const tileBlobs = blobs(chroma(tiles));
+    for (const blob of tileBlobs) {
+      const { r, g, b } = blob;
+      if (b > r + 15 && b > g - 10 && r < 90) art.tiles.deep = blob.canvas;
+      else if (g > 140 && b > 140 && r < 140) art.tiles.shallow = blob.canvas;
+      else if (r > 160 && g > 120 && b < 110) art.tiles.beach = blob.canvas;
+      else if (g > r + 20 && g > b + 20 && g > 90 && r < 140) {
+        if (!art.tiles.grass || blob.g > 120) art.tiles.grass = blob.canvas;
+        else art.tiles.forest = blob.canvas;
+      } else if (Math.abs(r - g) < 25 && r > 90) art.tiles.rock = blob.canvas;
+      else if (g > 70 && r < 120) art.tiles.forest = art.tiles.forest || blob.canvas;
+    }
+    if (!art.tiles.forest) art.tiles.forest = art.tiles.grass;
+    const objBlobs = blobs(chroma(objects), 500);
+    for (const blob of objBlobs) {
+      if (blob.r > blob.b + 20 && blob.g > 80 && blob.r > 70 && blob.area > 4000)
+        art.objects.tree = blob.canvas;
+      else if (blob.r > 90 && blob.g > 70) art.objects.bush = blob.canvas;
+      else art.objects.rock = blob.canvas;
+    }
+    const actorBlobs = blobs(chroma(actors), 400);
+    art.actors = actorBlobs.filter((b) => !(b.g > b.r + 40 && b.g > b.b + 20 && b.area < 3500))
+      .slice(0, 4).map((b) => b.canvas);
+    art.slime = actorBlobs.find((b) => b.g > b.r + 30 && b.g > b.b + 15)?.canvas || null;
+    const itemCells = sliceGrid(chroma(items, .08), 4, 2);
+    const itemIds = ["sticks", "large_rock", "small_rocks", "sharpened_rock", "stone_axe", "stone_pickaxe", "logs", "berries"];
+    itemIds.forEach((id, i) => { if (itemCells[i]) art.items[id] = itemCells[i]; });
+    const foodCells = sliceGrid(chroma(food, .08), 2, 2);
+    if (foodCells[0]) art.items.raw_fish = foodCells[0];
+    if (foodCells[1]) art.items.cooked_fish = foodCells[1];
+    if (foodCells[2]) art.items.cooked_berries = foodCells[2];
+    if (foodCells[3]) art.items.slime_gel = foodCells[3];
+    art.campfire = campfire;
+    art.items.campfire = campfire;
+  }
 
   function generate(seed) {
     const tiles = [];
@@ -73,43 +221,40 @@
     const rocks = [];
     const items = [];
     const objects = [];
-    let spawn = { x: 15, y: 24 };
+    let spawn = { x: 16, y: 25 };
     for (let y = 0; y < H; y++) {
       tiles[y] = [];
       for (let x = 0; x < W; x++) {
-        const dx = x - 14.5;
-        const dy = y - 14.5;
-        const d = Math.hypot(dx, dy) + (hash(x, y, seed) - .5) * 1.6;
+        const d = Math.hypot(x - 15.2, y - 14.8) + (hash(x, y, seed) - .5) * 1.5;
         let tile = "deep";
-        if (d < 13.4) tile = "shallow";
-        if (d < 11.6) tile = "beach";
-        if (d < 10.1) tile = hash(x, y, seed + 3) > .78 ? "rock" : "grass";
-        if (d < 8.2 && hash(x, y, seed + 7) > .42) tile = "forest";
+        if (d < 14.2) tile = "shallow";
+        if (d < 12.3) tile = "beach";
+        if (d < 10.8) tile = hash(x, y, seed + 3) > .8 ? "rock" : "grass";
+        if (d < 8.6 && hash(x, y, seed + 7) > .4) tile = "forest";
         tiles[y][x] = tile;
-        if (tile === "beach" && y > 18) spawn = { x, y };
-        if (tile === "forest" && hash(x, y, seed + 11) > .55)
-          trees.push({ x, y, hp: 8, kind: "tree" });
-        if (tile === "grass" && hash(x, y, seed + 17) > .86)
-          bushes.push({ x, y, hp: 3, kind: "bush" });
-        if ((tile === "rock" || tile === "grass") && hash(x, y, seed + 23) > .9)
-          rocks.push({ x, y, hp: 10, kind: "node" });
-        if (tile === "beach" && hash(x, y, seed + 29) > .82)
-          items.push({ x: x + .3, y: y + .2, id: "sticks", qty: 1 });
-        if (tile === "grass" && hash(x, y, seed + 31) > .93)
+        if (tile === "beach" && y > 20) spawn = { x, y };
+        if (tile === "forest" && hash(x, y, seed + 11) > .52)
+          trees.push({ x, y, hp: 8 });
+        if (tile === "grass" && hash(x, y, seed + 17) > .87)
+          bushes.push({ x, y, hp: 3 });
+        if ((tile === "rock" || tile === "grass") && hash(x, y, seed + 23) > .91)
+          rocks.push({ x, y, hp: 10 });
+        if (tile === "beach" && hash(x, y, seed + 29) > .84)
+          items.push({ x: x + .35, y: y + .25, id: "sticks", qty: 1 });
+        if (tile === "grass" && hash(x, y, seed + 31) > .94)
           items.push({ x: x + .4, y: y + .35, id: "large_rock", qty: 1 });
       }
     }
-    const slimeTile = firstOpen(tiles, 12, 12, 8);
+    const slimeAt = firstOpen(tiles, 13, 12, 7);
     return {
       seed, tiles, trees, bushes, rocks, items, objects,
-      player: { x: spawn.x + .5, y: spawn.y + .5, facing: 1, hp: 100, hunger: 100, busy: 0, path: [], act: null },
-      slime: slimeTile ? { x: slimeTile.x + .5, y: slimeTile.y + .5, hp: 36, cd: 0, alive: true } : null,
+      player: { x: spawn.x + .5, y: spawn.y + .5, facing: 0, hp: 100, hunger: 100, path: [], act: null, moving: false },
+      slime: slimeAt ? { x: slimeAt.x + .5, y: slimeAt.y + .5, hp: 36, cd: 0, alive: true } : null,
       inv: Array(INV).fill(null),
       selected: 0,
       skills: Object.fromEntries(SKILL_NAMES.map((n) => [n, 0])),
-      day: .28,
-      log: [],
-      quest: { fire: false, meal: false, slime: false }
+      day: .3,
+      log: []
     };
   }
 
@@ -123,8 +268,7 @@
   function blocked(x, y) {
     const tx = Math.floor(x), ty = Math.floor(y);
     if (!walkable(state.tiles[ty]?.[tx])) return true;
-    const occ = [...state.trees, ...state.rocks, ...state.objects];
-    return occ.some((o) => o.x === tx && o.y === ty);
+    return [...state.trees, ...state.rocks, ...state.objects].some((o) => o.x === tx && o.y === ty);
   }
 
   function pathTo(sx, sy, gx, gy) {
@@ -138,22 +282,19 @@
       const [x, y] = q.shift();
       if (`${x},${y}` === goal) break;
       for (const [dx, dy] of dirs) {
-        const nx = x + dx, ny = y + dy;
-        const key = `${nx},${ny}`;
+        const nx = x + dx, ny = y + dy, key = `${nx},${ny}`;
         if (seen.has(key) || nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
         const dest = key === goal;
         if (!dest && blocked(nx + .5, ny + .5)) continue;
-        if (dest && !walkable(state.tiles[ny]?.[nx]) && !nearWater(nx, ny)) {
-          if (!entityAt(nx, ny) && !itemAt(nx, ny)) continue;
-        }
+        if (dest && !walkable(state.tiles[ny]?.[nx]) && !nearWater(nx, ny) && !entityAt(nx, ny) && !itemAt(nx, ny))
+          continue;
         seen.set(key, [x, y]);
         q.push([nx, ny]);
       }
     }
     if (!seen.has(goal)) return [];
     const path = [];
-    let cur = goal;
-    while (cur && cur !== start) {
+    for (let cur = goal; cur && cur !== start; ) {
       const [x, y] = cur.split(",").map(Number);
       path.push({ x: x + .5, y: y + .5 });
       const p = seen.get(cur);
@@ -170,7 +311,6 @@
       }
     return false;
   }
-
   function entityAt(x, y) {
     return state.trees.find((t) => t.x === x && t.y === y)
       || state.bushes.find((b) => b.x === x && b.y === y)
@@ -178,25 +318,20 @@
       || state.objects.find((o) => o.x === x && o.y === y)
       || null;
   }
-
   function itemAt(x, y) {
     return state.items.find((i) => Math.floor(i.x) === x && Math.floor(i.y) === y) || null;
   }
-
-  function dist(a, b) {
-    return Math.hypot(a.x - b.x, a.y - b.y);
-  }
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
   function log(text) {
     state.log.unshift(text);
     state.log = state.log.slice(0, 4);
-    paintLog();
+    if (hud.log) hud.log.innerHTML = state.log.map((line) => `<p>${line}</p>`).join("");
   }
 
   function countItem(id) {
     return state.inv.reduce((n, s) => s?.id === id ? n + s.qty : n, 0);
   }
-
   function takeItem(id, qty) {
     let left = qty;
     for (const slot of state.inv) {
@@ -208,7 +343,6 @@
     state.inv = state.inv.map((s) => s && s.qty > 0 ? s : null);
     return left === 0;
   }
-
   function giveItem(id, qty) {
     for (const slot of state.inv) {
       if (slot?.id === id) { slot.qty += qty; return true; }
@@ -219,31 +353,17 @@
     return true;
   }
 
-  function dropSelected() {
-    const slot = state.inv[state.selected];
-    if (!slot) return;
-    state.items.push({ x: state.player.x, y: state.player.y, id: slot.id, qty: 1 });
-    slot.qty -= 1;
-    if (slot.qty <= 0) state.inv[state.selected] = null;
-    log(`You drop ${ITEMS[slot.id].name.toLowerCase()}.`);
-    paintInv();
-  }
-
   function litFireNear() {
     return state.objects.some((o) => o.kind === "campfire" && o.lit
       && dist(o, { x: Math.floor(state.player.x), y: Math.floor(state.player.y) }) < 2.2);
   }
-
   function canCraft(recipe) {
     if (recipe.fire && !litFireNear()) return false;
     return Object.entries(recipe.need).every(([id, n]) => countItem(id) >= n);
   }
-
   function craft(recipe) {
     if (!canCraft(recipe)) {
-      log(recipe.fire && !litFireNear()
-        ? "Cook that beside a lit campfire."
-        : "You are missing ingredients.");
+      log(recipe.fire && !litFireNear() ? "Cook that beside a lit campfire." : "You are missing ingredients.");
       return;
     }
     for (const [id, n] of Object.entries(recipe.need)) takeItem(id, n);
@@ -252,56 +372,107 @@
       log("Your pack is full.");
       return;
     }
-    gain(recipe.skill, recipe.xp);
-    if (recipe.fire) state.quest.meal = true;
+    state.skills[recipe.skill] += recipe.xp;
     log(`You make ${ITEMS[recipe.out].name.toLowerCase()}.`);
     paintInv();
-    paintCraft();
     paintSkills();
   }
 
-  function gain(skill, xp) {
-    state.skills[skill] += xp;
-  }
-
   function inspect(tx, ty) {
+    const actions = [];
     if (state.slime?.alive && Math.floor(state.slime.x) === tx && Math.floor(state.slime.y) === ty)
-      return { kind: "attack", label: "Attack slime", x: tx, y: ty };
+      actions.push({ kind: "attack", label: "Attack slime", x: tx, y: ty });
     const obj = state.objects.find((o) => o.x === tx && o.y === ty);
-    if (obj?.kind === "campfire")
-      return { kind: obj.lit ? "fuel" : "light", label: obj.lit ? "Add sticks" : "Light fire", x: tx, y: ty, obj };
-    if (state.trees.some((t) => t.x === tx && t.y === ty))
-      return { kind: "chop", label: "Chop tree", x: tx, y: ty };
-    if (state.rocks.some((r) => r.x === tx && r.y === ty))
-      return { kind: "mine", label: "Mine rock", x: tx, y: ty };
+    if (obj?.kind === "campfire") {
+      actions.push({ kind: obj.lit ? "fuel" : "light", label: obj.lit ? "Add sticks" : "Light fire", x: tx, y: ty });
+      actions.push({ kind: "look", label: "Examine fire", x: tx, y: ty, text: obj.lit ? "The ring is burning." : "A cold stone ring." });
+    }
+    if (state.trees.some((t) => t.x === tx && t.y === ty)) {
+      actions.push({ kind: "chop", label: "Chop tree", x: tx, y: ty });
+      actions.push({ kind: "look", label: "Examine tree", x: tx, y: ty, text: "A shoreline oak. An axe would help." });
+    }
+    if (state.rocks.some((r) => r.x === tx && r.y === ty)) {
+      actions.push({ kind: "mine", label: "Mine rock", x: tx, y: ty });
+      actions.push({ kind: "look", label: "Examine rock", x: tx, y: ty, text: "A stubborn outcrop." });
+    }
     if (state.bushes.some((b) => b.x === tx && b.y === ty))
-      return { kind: "pick", label: "Pick berries", x: tx, y: ty };
+      actions.push({ kind: "pick", label: "Pick berries", x: tx, y: ty });
     const ground = itemAt(tx, ty);
-    if (ground) return { kind: "loot", label: `Take ${ITEMS[ground.id].name.toLowerCase()}`, x: tx, y: ty };
+    if (ground) actions.push({ kind: "loot", label: `Take ${ITEMS[ground.id].name.toLowerCase()}`, x: tx, y: ty });
     const tile = state.tiles[ty]?.[tx];
     if ((tile === "shallow" || tile === "beach") && nearWater(tx, ty))
-      return { kind: "fish", label: "Fish here", x: tx, y: ty };
+      actions.push({ kind: "fish", label: "Fish here", x: tx, y: ty });
     const held = state.inv[state.selected];
     if (held?.id === "campfire" && walkable(tile) && !entityAt(tx, ty))
-      return { kind: "place", label: "Place campfire", x: tx, y: ty };
-    if (walkable(tile)) return { kind: "walk", label: "Walk here", x: tx, y: ty };
-    return { kind: "look", label: "Nothing to do", x: tx, y: ty };
+      actions.push({ kind: "place", label: "Place campfire", x: tx, y: ty });
+    if (walkable(tile)) actions.push({ kind: "walk", label: "Walk here", x: tx, y: ty });
+    if (!actions.length) actions.push({ kind: "look", label: "Examine", x: tx, y: ty, text: "Empty ground." });
+    return actions;
   }
 
-  function order(action) {
-    if (!action || action.kind === "look") return;
-    const stand = adjacentStand(action.x, action.y, action.kind === "walk" || action.kind === "place" || action.kind === "fish");
-    if (!stand) { log("You cannot reach that."); return; }
-    state.player.path = pathTo(state.player.x, state.player.y, stand.x, stand.y);
-    state.player.act = action;
-    if (!state.player.path.length) {
-      if (dist(state.player, { x: action.x + .5, y: action.y + .5 }) <= RANGE + .35)
-        tryAct();
-      else {
-        state.player.act = null;
-        log("You cannot reach that.");
-      }
+  function worldMenu(tx, ty, clientX, clientY) {
+    const actions = inspect(tx, ty);
+    openMenu(actions.map((a) => ({ label: a.label, run: () => order(a) })), clientX, clientY);
+  }
+
+  function bagMenu(slot, clientX, clientY) {
+    const item = state.inv[slot];
+    if (!item) return;
+    const def = ITEMS[item.id];
+    const actions = [];
+    if (def.food) actions.push({ label: "Eat", run: () => useSlot(slot, "eat") });
+    if (def.place) actions.push({ label: "Place", run: () => { state.selected = slot; paintInv(); log("Left-click clear ground, or right-click and Place campfire."); } });
+    actions.push({ label: "Drop", run: () => useSlot(slot, "drop") });
+    actions.push({ label: "Examine", run: () => showExamine(def.name, EXAMINE[item.id] || "An island thing.") });
+    openMenu(actions, clientX, clientY);
+  }
+
+  function openMenu(actions, x, y) {
+    if (!hud.ctxMenu) return;
+    hud.ctxMenu.hidden = false;
+    hud.ctxMenu.innerHTML = actions.map((a, i) => `<button type="button" data-i="${i}">${a.label}</button>`).join("");
+    hud.ctxMenu.style.left = `${Math.min(x, innerWidth - 180)}px`;
+    hud.ctxMenu.style.top = `${Math.min(y, innerHeight - 40 * actions.length)}px`;
+    hud.ctxMenu.onclick = (event) => {
+      const btn = event.target.closest("[data-i]");
+      if (!btn) return;
+      actions[Number(btn.dataset.i)].run();
+      closeMenus();
+    };
+  }
+
+  function showExamine(title, text) {
+    if (!hud.examine) return;
+    hud.examine.hidden = false;
+    hud.examine.innerHTML = `<strong>${title}</strong><p>${text}</p>`;
+    const box = hud.ctxMenu?.getBoundingClientRect();
+    hud.examine.style.left = `${(box?.right || 80) + 8}px`;
+    hud.examine.style.top = `${box?.top || 80}px`;
+  }
+
+  function closeMenus() {
+    if (hud.ctxMenu) hud.ctxMenu.hidden = true;
+    if (hud.examine) hud.examine.hidden = true;
+  }
+
+  function useSlot(slot, mode) {
+    state.selected = slot;
+    const item = state.inv[slot];
+    if (!item) return;
+    if (mode === "eat") {
+      const food = ITEMS[item.id].food;
+      if (!food) { log("That is not food."); return; }
+      takeItem(item.id, 1);
+      state.player.hunger = Math.min(100, state.player.hunger + food);
+      state.player.hp = Math.min(100, state.player.hp + food * .25);
+      log(`You eat ${ITEMS[item.id].name.toLowerCase()}.`);
     }
+    if (mode === "drop") {
+      state.items.push({ x: state.player.x, y: state.player.y, id: item.id, qty: 1 });
+      takeItem(item.id, 1);
+      log(`You drop ${ITEMS[item.id].name.toLowerCase()}.`);
+    }
+    paintInv();
   }
 
   function adjacentStand(x, y, onto) {
@@ -318,11 +489,26 @@
     return opts[0] ? { x: opts[0].x, y: opts[0].y } : null;
   }
 
+  function order(action) {
+    if (!action || action.kind === "look") {
+      if (action?.text) showExamine(action.label, action.text);
+      return;
+    }
+    const onto = action.kind === "walk" || action.kind === "place" || action.kind === "fish";
+    const stand = adjacentStand(action.x, action.y, onto);
+    if (!stand) { log("You cannot reach that."); return; }
+    state.player.path = pathTo(state.player.x, state.player.y, stand.x, stand.y);
+    state.player.act = action;
+    if (!state.player.path.length) {
+      if (dist(state.player, { x: action.x + .5, y: action.y + .5 }) <= RANGE + .35) tryAct();
+      else { state.player.act = null; log("You cannot reach that."); }
+    }
+  }
+
   function tryAct() {
     const act = state.player.act;
     if (!act) return;
-    const target = { x: act.x + .5, y: act.y + .5 };
-    if (dist(state.player, target) > RANGE + .35) return;
+    if (dist(state.player, { x: act.x + .5, y: act.y + .5 }) > RANGE + .35) return;
     state.player.act = null;
     if (act.kind === "walk") return;
     if (act.kind === "loot") {
@@ -337,13 +523,12 @@
     if (act.kind === "chop") {
       const tree = state.trees.find((t) => t.x === act.x && t.y === act.y);
       if (!tree) return;
-      const power = countItem("stone_axe") ? 3 : 1;
-      tree.hp -= power;
-      gain("woodcutting", 6);
+      tree.hp -= countItem("stone_axe") ? 3 : 1;
+      state.skills.woodcutting += 6;
       if (tree.hp <= 0) {
         state.trees = state.trees.filter((t) => t !== tree);
         state.items.push({ x: act.x + .3, y: act.y + .2, id: "logs", qty: 1 });
-        state.items.push({ x: act.x + .6, y: act.y + .45, id: "sticks", qty: 2 });
+        state.items.push({ x: act.x + .6, y: act.y + .5, id: "sticks", qty: 2 });
         log("The tree falls. Logs and sticks drop.");
       } else log(countItem("stone_axe") ? "You hew the trunk." : "You break branches by hand.");
       paintSkills();
@@ -352,9 +537,8 @@
     if (act.kind === "mine") {
       const node = state.rocks.find((r) => r.x === act.x && r.y === act.y);
       if (!node) return;
-      const power = countItem("stone_pickaxe") ? 4 : 1;
-      node.hp -= power;
-      gain("mining", 7);
+      node.hp -= countItem("stone_pickaxe") ? 4 : 1;
+      state.skills.mining += 7;
       if (node.hp <= 0) {
         state.rocks = state.rocks.filter((r) => r !== node);
         state.items.push({ x: act.x + .4, y: act.y + .35, id: "large_rock", qty: 2 });
@@ -368,28 +552,23 @@
       if (!bush) return;
       bush.hp -= 1;
       if (!giveItem("berries", 1)) { log("Your pack is full."); return; }
-      gain("farming", 4);
+      state.skills.farming += 4;
       log("You pick wild berries.");
       if (bush.hp <= 0) state.bushes = state.bushes.filter((b) => b !== bush);
       paintInv();
       return;
     }
     if (act.kind === "fish") {
-      if (!nearWater(act.x, act.y)) return;
-      if (hash(act.x, act.y, (state.day * 1000) | 0) < .35) {
-        log("The line comes up empty.");
-        return;
-      }
+      if (hash(act.x, act.y, (state.day * 1000) | 0) < .35) { log("The line comes up empty."); return; }
       if (!giveItem("raw_fish", 1)) { log("Your pack is full."); return; }
-      gain("fishing", 9);
+      state.skills.fishing += 9;
       log("You land a raw fish.");
       paintInv();
       paintSkills();
       return;
     }
     if (act.kind === "place") {
-      const slot = state.inv[state.selected];
-      if (slot?.id !== "campfire") return;
+      if (state.inv[state.selected]?.id !== "campfire") return;
       takeItem("campfire", 1);
       state.objects.push({ x: act.x, y: act.y, kind: "campfire", fuel: 0, lit: false });
       log("You set a stone fire ring.");
@@ -399,59 +578,29 @@
     if (act.kind === "light" || act.kind === "fuel") {
       const fire = state.objects.find((o) => o.x === act.x && o.y === act.y);
       if (!fire) return;
-      if (act.kind === "fuel" || (!fire.lit && countItem("sticks"))) {
-        if (!takeItem("sticks", 1)) { log("You need sticks for fuel."); return; }
-        fire.fuel += 18;
-        log("You add sticks to the ring.");
-        paintInv();
-      }
+      if (!takeItem("sticks", 1)) { log("You need sticks for fuel."); return; }
+      fire.fuel += 18;
+      log("You add sticks to the ring.");
       if (!fire.lit && fire.fuel > 0) {
         fire.lit = true;
-        state.quest.fire = true;
-        gain("firemaking", 15);
+        state.skills.firemaking += 15;
         log("The campfire catches.");
         paintSkills();
       }
+      paintInv();
       return;
     }
     if (act.kind === "attack" && state.slime?.alive) {
-      state.player.busy = .55;
       state.slime.hp -= 7 + (countItem("stone_axe") ? 5 : 0);
-      gain("attack", 8);
+      state.skills.attack += 8;
       log("You strike the slime.");
       if (state.slime.hp <= 0) {
         state.slime.alive = false;
-        state.quest.slime = true;
         state.items.push({ x: state.slime.x, y: state.slime.y, id: "slime_gel", qty: 1 });
         log("The slime collapses. Gel drops.");
       }
       paintSkills();
     }
-  }
-
-  function eatSelected() {
-    const slot = state.inv[state.selected];
-    const food = slot && ITEMS[slot.id].food;
-    if (!food) { log("That is not food."); return; }
-    takeItem(slot.id, 1);
-    state.player.hunger = Math.min(100, state.player.hunger + food);
-    state.player.hp = Math.min(100, state.player.hp + food * .25);
-    if (slot.id === "cooked_berries" || slot.id === "cooked_fish") state.quest.meal = true;
-    log(`You eat ${ITEMS[slot.id].name.toLowerCase()}.`);
-    paintInv();
-    paintVitals();
-  }
-
-  function worldFromEvent(event) {
-    const rect = canvas.getBoundingClientRect();
-    const sx = (event.clientX - rect.left) * (canvas.width / rect.width);
-    const sy = (event.clientY - rect.top) * (canvas.height / rect.height);
-    const cam = camera();
-    const ix = sx - canvas.width / 2 + cam.x;
-    const iy = sy - canvas.height / 2 + cam.y;
-    const wx = (ix / (TW / 2) + iy / (TH / 2)) / 2;
-    const wy = (iy / (TH / 2) - ix / (TW / 2)) / 2;
-    return { x: Math.floor(wx), y: Math.floor(wy) };
   }
 
   function camera() {
@@ -460,63 +609,75 @@
       y: (state.player.x + state.player.y) * (TH / 2)
     };
   }
-
   function project(x, y) {
+    const { w, h } = view();
     const cam = camera();
     return {
-      x: (x - y) * (TW / 2) - cam.x + canvas.width / 2,
-      y: (x + y) * (TH / 2) - cam.y + canvas.height / 2
+      x: (x - y) * (TW / 2) - cam.x + w / 2,
+      y: (x + y) * (TH / 2) - cam.y + h * .52
+    };
+  }
+  function worldFromEvent(event) {
+    const rect = canvas.getBoundingClientRect();
+    const { w, h } = view();
+    const sx = (event.clientX - rect.left) * (w / rect.width);
+    const sy = (event.clientY - rect.top) * (h / rect.height);
+    const cam = camera();
+    const ix = sx - w / 2 + cam.x;
+    const iy = sy - h * .52 + cam.y;
+    return {
+      x: Math.floor((ix / (TW / 2) + iy / (TH / 2)) / 2),
+      y: Math.floor((iy / (TH / 2) - ix / (TW / 2)) / 2)
     };
   }
 
   function update(dt) {
     const p = state.player;
-    p.busy = Math.max(0, p.busy - dt);
-    state.day = (state.day + dt / 90) % 1;
-    p.hunger = Math.max(0, p.hunger - dt * 1.15);
+    state.day = (state.day + dt / 110) % 1;
+    p.hunger = Math.max(0, p.hunger - dt * 1.05);
     if (p.hunger <= 0) p.hp = Math.max(0, p.hp - dt * 4);
-    else if (p.hp < 100) p.hp = Math.min(100, p.hp + dt * 1.4);
-
+    else if (p.hp < 100) p.hp = Math.min(100, p.hp + dt * 1.3);
     let mx = 0, my = 0;
     if (keys.KeyW || keys.ArrowUp) { mx -= 1; my -= 1; }
     if (keys.KeyS || keys.ArrowDown) { mx += 1; my += 1; }
     if (keys.KeyA || keys.ArrowLeft) { mx -= 1; my += 1; }
     if (keys.KeyD || keys.ArrowRight) { mx += 1; my -= 1; }
+    p.moving = false;
     if (mx || my) {
       p.path = [];
       p.act = null;
       const len = Math.hypot(mx, my) || 1;
-      const nx = p.x + (mx / len) * dt * 3.1;
-      const ny = p.y + (my / len) * dt * 3.1;
+      const nx = p.x + (mx / len) * dt * 3.15;
+      const ny = p.y + (my / len) * dt * 3.15;
       if (!blocked(nx, p.y)) p.x = nx;
       if (!blocked(p.x, ny)) p.y = ny;
-      p.facing = mx >= 0 ? 1 : -1;
+      p.facing = facingFrom(mx, my);
+      p.moving = true;
     } else if (p.path.length) {
       const step = p.path[0];
       const dx = step.x - p.x, dy = step.y - p.y;
       const d = Math.hypot(dx, dy);
       if (d < .06) p.path.shift();
       else {
-        p.x += (dx / d) * dt * 3.2;
-        p.y += (dy / d) * dt * 3.2;
-        p.facing = dx >= 0 ? 1 : -1;
+        p.x += (dx / d) * dt * 3.25;
+        p.y += (dy / d) * dt * 3.25;
+        p.facing = facingFrom(dx, dy);
+        p.moving = true;
       }
       if (!p.path.length) tryAct();
     }
-
     for (const fire of state.objects) {
       if (!fire.lit) continue;
       fire.fuel -= dt;
       if (fire.fuel <= 0) { fire.fuel = 0; fire.lit = false; }
     }
-
     if (state.slime?.alive) {
       const s = state.slime;
       const d = dist(s, p);
-      if (d < 6) {
+      if (d < 6.5) {
         const ang = Math.atan2(p.y - s.y, p.x - s.x);
-        const nx = s.x + Math.cos(ang) * dt * 1.35;
-        const ny = s.y + Math.sin(ang) * dt * 1.35;
+        const nx = s.x + Math.cos(ang) * dt * 1.3;
+        const ny = s.y + Math.sin(ang) * dt * 1.3;
         if (!blocked(nx, s.y)) s.x = nx;
         if (!blocked(s.x, ny)) s.y = ny;
       }
@@ -527,203 +688,180 @@
         log("The slime lashes you.");
       }
     }
-
     if (p.hp <= 0) {
       log("You fall. The shore takes you back.");
       p.hp = 70;
       p.hunger = 55;
-      const open = firstOpen(state.tiles, 15, 24, 6);
+      const open = firstOpen(state.tiles, 16, 25, 6);
       if (open) { p.x = open.x + .5; p.y = open.y + .5; }
     }
     paintVitals();
   }
 
-  function diamond(x, y, w, h, fill, stroke) {
-    ctx.beginPath();
-    ctx.moveTo(x, y - h / 2);
-    ctx.lineTo(x + w / 2, y);
-    ctx.lineTo(x, y + h / 2);
-    ctx.lineTo(x - w / 2, y);
-    ctx.closePath();
-    ctx.fillStyle = fill;
-    ctx.fill();
-    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
+  function facingFrom(dx, dy) {
+    if (Math.abs(dx) > Math.abs(dy)) return dx >= 0 ? 0 : 1;
+    return dy >= 0 ? 0 : 2;
+  }
+
+  function drawSprite(img, x, y, w, h) {
+    if (!img) return false;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, x - w / 2, y - h, w, h);
+    return true;
   }
 
   function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const { w, h } = view();
     const dusk = Math.sin(state.day * Math.PI * 2);
-    const sky = dusk > 0
-      ? `rgb(${70 + dusk * 40},${110 + dusk * 40},${140 + dusk * 20})`
-      : `rgb(${18},${22 + (-dusk) * 8},${36})`;
-    ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = dusk > 0
+      ? `rgb(${86 + dusk * 50},${138 + dusk * 30},${168})`
+      : `rgb(${12},${16},${28})`;
+    ctx.fillRect(0, 0, w, h);
 
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
         const p = project(x, y);
-        if (p.x < -TW || p.x > canvas.width + TW || p.y < -TH || p.y > canvas.height + TH) continue;
+        if (p.x < -TW || p.x > w + TW || p.y < -80 || p.y > h + 40) continue;
         const tile = state.tiles[y][x];
-        const fills = {
-          deep: "#1a3a48",
-          shallow: "#2b6a74",
-          beach: "#c2a56a",
-          grass: "#4f7a45",
-          forest: "#355834",
-          rock: "#6d7178"
-        };
-        diamond(p.x, p.y, TW, TH, fills[tile], "rgba(0,0,0,.18)");
-        if (hover && hover.x === x && hover.y === y)
-          diamond(p.x, p.y, TW, TH, "rgba(240,220,150,.22)");
+        const sprite = art.tiles[tile];
+        if (sprite) {
+          const bob = (tile === "shallow" || tile === "deep")
+            ? Math.sin(performance.now() / 420 + x * .4 + y * .3) * 1.5
+            : 0;
+          drawSprite(sprite, p.x, p.y + 10 + bob, TW + 8, TH * 1.55);
+        } else {
+          const fills = { deep: "#18424e", shallow: "#2b7a82", beach: "#c4a66a", grass: "#4e7c43", forest: "#355833", rock: "#6d7178" };
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y - TH / 2);
+          ctx.lineTo(p.x + TW / 2, p.y);
+          ctx.lineTo(p.x, p.y + TH / 2);
+          ctx.lineTo(p.x - TW / 2, p.y);
+          ctx.closePath();
+          ctx.fillStyle = fills[tile];
+          ctx.fill();
+        }
+        if (hover && hover.x === x && hover.y === y) {
+          ctx.globalAlpha = .28;
+          ctx.fillStyle = "#f0dc96";
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y - TH / 2);
+          ctx.lineTo(p.x + TW / 2, p.y);
+          ctx.lineTo(p.x, p.y + TH / 2);
+          ctx.lineTo(p.x - TW / 2, p.y);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
       }
 
-    const spritesList = [];
-    for (const t of state.trees) spritesList.push({ ...t, sort: t.x + t.y, draw: drawTree });
-    for (const b of state.bushes) spritesList.push({ ...b, sort: b.x + b.y, draw: drawBush });
-    for (const r of state.rocks) spritesList.push({ ...r, sort: r.x + r.y, draw: drawNode });
-    for (const o of state.objects) spritesList.push({ ...o, sort: o.x + o.y, draw: drawObject });
-    for (const i of state.items) spritesList.push({ ...i, sort: i.x + i.y, draw: drawItem });
-    spritesList.push({ ...state.player, sort: state.player.x + state.player.y, draw: drawPlayer });
-    if (state.slime?.alive)
-      spritesList.push({ ...state.slime, sort: state.slime.x + state.slime.y, draw: drawSlime });
-    spritesList.sort((a, b) => a.sort - b.sort);
-    for (const s of spritesList) s.draw(s);
+    const list = [];
+    for (const t of state.trees) list.push({ sort: t.x + t.y, draw: () => drawProp(t, art.objects.tree, 92, 110) });
+    for (const b of state.bushes) list.push({ sort: b.x + b.y, draw: () => drawProp(b, art.objects.bush, 64, 56) });
+    for (const r of state.rocks) list.push({ sort: r.x + r.y, draw: () => drawProp(r, art.objects.rock, 70, 62) });
+    for (const o of state.objects) list.push({ sort: o.x + o.y, draw: () => drawFire(o) });
+    for (const i of state.items) list.push({ sort: i.x + i.y, draw: () => drawLoot(i) });
+    list.push({ sort: state.player.x + state.player.y, draw: drawPlayer });
+    if (state.slime?.alive) list.push({ sort: state.slime.x + state.slime.y, draw: drawSlime });
+    list.sort((a, b) => a.sort - b.sort);
+    for (const s of list) s.draw();
 
-    const night = dusk < 0 ? -dusk * .38 : 0;
+    const night = dusk < 0 ? -dusk * .42 : 0;
     if (night > 0) {
-      ctx.fillStyle = `rgba(6,8,16,${night})`;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = `rgba(5,8,16,${night})`;
+      ctx.fillRect(0, 0, w, h);
       for (const o of state.objects) {
         if (!o.lit) continue;
-        const p = project(o.x + .15, o.y + .15);
-        const g = ctx.createRadialGradient(p.x, p.y, 4, p.x, p.y, 90);
-        g.addColorStop(0, "rgba(255,170,70,.28)");
+        const p = project(o.x + .2, o.y + .2);
+        const g = ctx.createRadialGradient(p.x, p.y - 10, 6, p.x, p.y - 10, 110);
+        g.addColorStop(0, "rgba(255,170,60,.32)");
         g.addColorStop(1, "transparent");
         ctx.fillStyle = g;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 90, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y - 10, 110, 0, Math.PI * 2);
         ctx.fill();
       }
     }
-    if (hud.cursor && hover) hud.cursor.textContent = inspect(hover.x, hover.y).label;
+    if (hud.cursor && hover) {
+      const first = inspect(hover.x, hover.y)[0];
+      hud.cursor.textContent = first ? `${first.label} · right-click for more` : "Right-click the bag or the world";
+    }
   }
 
-  function drawTree(t) {
-    const p = project(t.x + .15, t.y + .15);
-    ctx.fillStyle = "#5a3a22";
-    ctx.fillRect(p.x - 4, p.y - 6, 8, 16);
-    ctx.beginPath();
-    ctx.fillStyle = "#2f5a32";
-    ctx.ellipse(p.x, p.y - 18, 16, 14, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.fillStyle = "#3f7240";
-    ctx.ellipse(p.x + 2, p.y - 26, 11, 10, 0, 0, Math.PI * 2);
-    ctx.fill();
+  function drawProp(o, img, w, h) {
+    const p = project(o.x + .15, o.y + .2);
+    if (!drawSprite(img, p.x, p.y + 6, w, h)) {
+      ctx.fillStyle = "#355833";
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y - 16, 14, 18, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
-  function drawBush(b) {
-    const p = project(b.x + .2, b.y + .2);
-    ctx.beginPath();
-    ctx.fillStyle = "#3d6a38";
-    ctx.ellipse(p.x, p.y, 12, 8, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#a33a55";
-    ctx.fillRect(p.x - 4, p.y - 2, 3, 3);
-    ctx.fillRect(p.x + 3, p.y + 1, 3, 3);
-  }
-
-  function drawNode(r) {
-    const p = project(r.x + .2, r.y + .2);
-    ctx.fillStyle = "#8b9098";
-    ctx.beginPath();
-    ctx.moveTo(p.x - 12, p.y + 4);
-    ctx.lineTo(p.x - 4, p.y - 10);
-    ctx.lineTo(p.x + 10, p.y - 6);
-    ctx.lineTo(p.x + 12, p.y + 6);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  function drawObject(o) {
+  function drawFire(o) {
     const p = project(o.x + .15, o.y + .15);
-    const img = sprites.campfire;
-    if (img) {
-      ctx.drawImage(img, p.x - 18, p.y - 22, 36, 28);
-    } else {
-      ctx.fillStyle = "#6b6f76";
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    drawSprite(art.campfire || art.items.campfire, p.x, p.y + 4, 42, 34);
     if (o.lit) {
-      ctx.fillStyle = `rgba(255,140,40,${.55 + Math.sin(performance.now() / 120) * .2})`;
+      ctx.fillStyle = `rgba(255,140,40,${.5 + Math.sin(performance.now() / 110) * .2})`;
       ctx.beginPath();
-      ctx.moveTo(p.x, p.y - 22);
-      ctx.lineTo(p.x - 7, p.y - 6);
-      ctx.lineTo(p.x + 7, p.y - 6);
+      ctx.moveTo(p.x, p.y - 26);
+      ctx.lineTo(p.x - 8, p.y - 6);
+      ctx.lineTo(p.x + 8, p.y - 6);
       ctx.fill();
     }
   }
 
-  function drawItem(i) {
+  function drawLoot(i) {
     const p = project(i.x, i.y);
-    ctx.fillStyle = ITEMS[i.id]?.color || "#ddd";
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,.4)";
-    ctx.stroke();
+    if (!drawSprite(art.items[i.id], p.x, p.y + 4, 28, 28)) {
+      ctx.fillStyle = ITEMS[i.id].color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
-  function drawPlayer(pl) {
-    const p = project(pl.x, pl.y);
-    ctx.fillStyle = "#2a241c";
-    ctx.beginPath();
-    ctx.ellipse(p.x, p.y + 8, 8, 4, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#3f6d8a";
-    ctx.fillRect(p.x - 6 * pl.facing, p.y - 16, 12, 18);
-    ctx.fillStyle = "#e6c7a0";
-    ctx.beginPath();
-    ctx.arc(p.x, p.y - 20, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#1d1a16";
-    ctx.fillRect(p.x - 6, p.y - 26, 12, 4);
+  function drawPlayer() {
+    const p = project(state.player.x, state.player.y);
+    const frame = art.actors[state.player.facing] || art.actors[0];
+    const bob = state.player.moving ? Math.sin(performance.now() / 90) * 2 : 0;
+    if (!drawSprite(frame, p.x, p.y + 8 + bob, 44, 58)) {
+      ctx.fillStyle = "#3f6d8a";
+      ctx.fillRect(p.x - 7, p.y - 18, 14, 20);
+    }
   }
 
-  function drawSlime(s) {
-    const p = project(s.x, s.y);
-    const bob = Math.sin(performance.now() / 180) * 2;
-    ctx.fillStyle = "#67b85c";
-    ctx.beginPath();
-    ctx.ellipse(p.x, p.y + bob, 12, 9, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#163016";
-    ctx.beginPath();
-    ctx.arc(p.x - 4, p.y - 1 + bob, 2, 0, Math.PI * 2);
-    ctx.arc(p.x + 4, p.y - 1 + bob, 2, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  function paintLog() {
-    if (!hud.log) return;
-    hud.log.innerHTML = state.log.map((line) => `<p>${line}</p>`).join("")
-      || "<p>Click the island to walk. Click trees, rocks, bushes, water and the slime.</p>";
+  function drawSlime() {
+    const p = project(state.slime.x, state.slime.y);
+    const bob = Math.sin(performance.now() / 170) * 3;
+    if (!drawSprite(art.slime, p.x, p.y + 6 + bob, 48, 40)) {
+      ctx.fillStyle = "#67b85c";
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y + bob, 13, 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   function paintInv() {
     if (!hud.inv) return;
-    paintCraft();
     hud.inv.innerHTML = state.inv.map((slot, i) => {
       const on = i === state.selected ? " on" : "";
-      if (!slot) return `<button type="button" class="mini-slot${on}" data-slot="${i}" aria-label="Empty slot ${i + 1}"></button>`;
-      return `<button type="button" class="mini-slot${on}" data-slot="${i}" title="${ITEMS[slot.id].name}">
-        <span class="swatch" style="background:${ITEMS[slot.id].color}"></span>
+      if (!slot) return `<button type="button" class="mini-slot${on}" data-slot="${i}" aria-label="Empty slot"></button>`;
+      const icon = art.items[slot.id];
+      const img = icon ? `<img alt="" src="${icon.toDataURL ? icon.toDataURL("image/png") : ""}">` : `<span class="swatch" style="background:${ITEMS[slot.id].color}"></span>`;
+      return `<button type="button" class="mini-slot${on}" data-slot="${i}" draggable="true">
+        ${icon ? `<canvas data-icon="${slot.id}" width="36" height="36"></canvas>` : img}
         <span class="qty">${slot.qty}</span>
         <span class="name">${ITEMS[slot.id].name}</span>
       </button>`;
     }).join("");
+    hud.inv.querySelectorAll("canvas[data-icon]").forEach((c) => {
+      const icon = art.items[c.dataset.icon];
+      if (!icon) return;
+      const g = c.getContext("2d");
+      g.imageSmoothingEnabled = false;
+      g.clearRect(0, 0, 36, 36);
+      g.drawImage(icon, 2, 2, 32, 32);
+    });
+    paintCraft();
   }
 
   function paintCraft() {
@@ -732,8 +870,7 @@
       const ok = canCraft(recipe);
       const need = Object.entries(recipe.need).map(([id, n]) => `${n} ${ITEMS[id].name.toLowerCase()}`).join(", ");
       return `<button type="button" class="mini-recipe${ok ? "" : " off"}" data-recipe="${recipe.id}" ${ok ? "" : "disabled"}>
-        <strong>${recipe.name}</strong>
-        <span>${need}${recipe.fire ? " · lit fire" : ""}</span>
+        <strong>${recipe.name}</strong><span>${need}${recipe.fire ? " · lit fire" : ""}</span>
       </button>`;
     }).join("");
   }
@@ -747,14 +884,20 @@
   function paintVitals() {
     if (hud.hp) hud.hp.style.width = `${state.player.hp}%`;
     if (hud.hunger) hud.hunger.style.width = `${state.player.hunger}%`;
-    if (hud.clock) {
-      const hour = Math.floor(state.day * 24);
-      hud.clock.textContent = `${String(hour).padStart(2, "0")}:00`;
-    }
+    if (hud.clock) hud.clock.textContent = `${String(Math.floor(state.day * 24)).padStart(2, "0")}:00`;
+  }
+
+  function resize() {
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth || 1280;
+    const h = canvas.clientHeight || 720;
+    canvas.width = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
   function tick(now) {
-    if (!running) return;
+    if (!running || !state) return;
     const dt = Math.min(.05, (now - last) / 1000 || .016);
     last = now;
     update(dt);
@@ -767,27 +910,36 @@
     giveItem("sticks", 1);
     running = true;
     last = performance.now();
-    hud.frame?.classList.add("live");
-    paintLog();
     paintInv();
-    paintCraft();
     paintSkills();
     paintVitals();
-    log("You wash up on the south beach. Gather, craft an axe, light a fire.");
+    log("You wash up on the south beach. Right-click the bag. Left-click the world.");
     requestAnimationFrame(tick);
   }
 
+  canvas.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    if (!state) return;
+    const w = worldFromEvent(event);
+    if (w.x < 0 || w.y < 0 || w.x >= W || w.y >= H) return;
+    worldMenu(w.x, w.y, event.clientX, event.clientY);
+  });
   canvas.addEventListener("pointermove", (event) => {
     if (!state) return;
     const w = worldFromEvent(event);
     hover = (w.x >= 0 && w.y >= 0 && w.x < W && w.y < H) ? w : null;
+    const first = hover ? inspect(hover.x, hover.y)[0] : null;
+    canvas.style.cursor = first && first.kind !== "walk" ? "pointer" : "default";
   });
   canvas.addEventListener("pointerdown", (event) => {
-    if (!state) return;
+    if (!state || event.button !== 0) return;
+    closeMenus();
     const w = worldFromEvent(event);
     if (w.x < 0 || w.y < 0 || w.x >= W || w.y >= H) return;
-    order(inspect(w.x, w.y));
+    const actions = inspect(w.x, w.y);
+    order(actions.find((a) => a.kind !== "look") || actions[0]);
   });
+
   addEventListener("keydown", (event) => {
     keys[event.code] = true;
     if (!state) return;
@@ -795,22 +947,58 @@
       const n = event.key === "0" ? 9 : Number(event.key) - 1;
       if (n >= 0 && n < INV) { state.selected = n; paintInv(); }
     }
-    if (event.code === "KeyE") eatSelected();
-    if (event.code === "KeyQ") dropSelected();
-    if (event.code === "KeyC") hud.craft?.classList.toggle("open");
+    if (event.code === "Escape") closeMenus();
   });
   addEventListener("keyup", (event) => { keys[event.code] = false; });
+  addEventListener("pointerdown", (event) => {
+    if (!event.target.closest("[data-ctx], [data-examine], [data-mini-inv]")) closeMenus();
+  });
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) running = false;
     else if (state) { running = true; last = performance.now(); requestAnimationFrame(tick); }
   });
+  addEventListener("resize", () => { resize(); if (state) draw(); });
+
   hud.inv?.addEventListener("click", (event) => {
     const btn = event.target.closest("[data-slot]");
     if (!btn || !state) return;
     state.selected = Number(btn.dataset.slot);
     paintInv();
   });
-  hud.inv?.addEventListener("dblclick", eatSelected);
+  hud.inv?.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    if (!state) return;
+    const btn = event.target.closest("[data-slot]");
+    if (!btn) return;
+    const slot = Number(btn.dataset.slot);
+    state.selected = slot;
+    paintInv();
+    bagMenu(slot, event.clientX, event.clientY);
+  });
+  hud.inv?.addEventListener("dblclick", (event) => {
+    const btn = event.target.closest("[data-slot]");
+    if (!btn || !state) return;
+    const slot = Number(btn.dataset.slot);
+    const item = state.inv[slot];
+    if (item && ITEMS[item.id].food) useSlot(slot, "eat");
+  });
+  hud.inv?.addEventListener("dragstart", (event) => {
+    const btn = event.target.closest("[data-slot]");
+    if (!btn) return;
+    dragSlot = Number(btn.dataset.slot);
+  });
+  hud.inv?.addEventListener("dragover", (event) => event.preventDefault());
+  hud.inv?.addEventListener("drop", (event) => {
+    const btn = event.target.closest("[data-slot]");
+    if (!btn || dragSlot < 0) return;
+    const dest = Number(btn.dataset.slot);
+    const a = state.inv[dragSlot];
+    state.inv[dragSlot] = state.inv[dest];
+    state.inv[dest] = a;
+    state.selected = dest;
+    dragSlot = -1;
+    paintInv();
+  });
   hud.craft?.addEventListener("click", (event) => {
     const btn = event.target.closest("[data-recipe]");
     if (!btn || !state) return;
@@ -822,9 +1010,8 @@
     start(Number.isFinite(seed) ? seed : 2187);
   });
 
-  ["campfire", "stone-pickaxe-item"].forEach((name) => {
-    const img = new Image();
-    img.src = `assets/${name === "stone-pickaxe-item" ? "stone-pickaxe-item" : name}.png`;
-    img.onload = () => { sprites[name === "stone-pickaxe-item" ? "pick" : "campfire"] = img; };
+  resize();
+  loadArt().then(() => {
+    if (hud.cursor) hud.cursor.textContent = "Art loaded. Press Begin.";
   });
 })();
