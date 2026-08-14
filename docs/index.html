@@ -1,309 +1,341 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <!-- Google tag (gtag.js) -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-Z1MYHL86Y0"></script>
   <script>
     window.dataLayer = window.dataLayer || [];
     function gtag(){dataLayer.push(arguments);}
-    gtag('js', new Date());
-    gtag('config', 'G-Z1MYHL86Y0');
+    gtag("js", new Date());
+    gtag("config", "G-Z1MYHL86Y0");
   </script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Island RPG is an experimental isometric survival and skilling RPG with persistent worlds, dedicated multiplayer, caves, crafting, mining and exploration.">
-  <meta name="theme-color" content="#10150f">
-  <meta property="og:title" content="Island RPG">
-  <meta property="og:description" content="Explore a persistent isometric world. Dig deeper. Play together.">
+  <title>Island RPG — Isometric Survival, Skills &amp; Multiplayer</title>
+  <meta name="description" content="Island RPG is a free Windows isometric survival game with persistent worlds, eight skills, caves, crafting, slime combat and dedicated multiplayer. Host a world or join a friend.">
+  <meta name="keywords" content="Island RPG, isometric survival RPG, multiplayer survival game, Windows RPG, crafting, mining, caves, dedicated server, SamGCoder">
+  <meta name="author" content="SamG-Coder">
+  <meta name="theme-color" content="#0b100c">
+  <meta name="robots" content="index,follow,max-image-preview:large">
+  <link rel="canonical" href="https://samg-coder.github.io/Island-RPG/">
+  <link rel="icon" href="assets/icon.jpg" type="image/jpeg">
+  <link rel="apple-touch-icon" href="assets/icon.jpg">
   <meta property="og:type" content="website">
-  <title>Island RPG — Explore. Gather. Descend.</title>
+  <meta property="og:site_name" content="Island RPG">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:url" content="https://samg-coder.github.io/Island-RPG/">
+  <meta property="og:title" content="Island RPG — Isometric Survival, Skills &amp; Multiplayer">
+  <meta property="og:description" content="A persistent isometric survival RPG for Windows. Gather, craft, descend into caves, and play together on a dedicated server.">
+  <meta property="og:image" content="https://samg-coder.github.io/Island-RPG/assets/og-cover.jpg">
+  <meta property="og:image:alt" content="A dark forest island at dusk with a campfire in the clearing.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:site" content="@SamGCoder">
+  <meta name="twitter:creator" content="@SamGCoder">
+  <meta name="twitter:title" content="Island RPG — Isometric Survival, Skills &amp; Multiplayer">
+  <meta name="twitter:description" content="Free Windows isometric survival RPG with dedicated multiplayer, caves, crafting and eight skills.">
+  <meta name="twitter:image" content="https://samg-coder.github.io/Island-RPG/assets/og-cover.jpg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "VideoGame",
+        "@id": "https://samg-coder.github.io/Island-RPG/#game",
+        "name": "Island RPG",
+        "url": "https://samg-coder.github.io/Island-RPG/",
+        "description": "A free Windows isometric survival and skilling RPG with persistent worlds, caves, crafting and dedicated multiplayer.",
+        "image": "https://samg-coder.github.io/Island-RPG/assets/og-cover.jpg",
+        "author": { "@id": "https://samg-coder.github.io/Island-RPG/#creator" },
+        "publisher": { "@id": "https://samg-coder.github.io/Island-RPG/#creator" },
+        "gamePlatform": "PC",
+        "operatingSystem": "Windows 10",
+        "applicationCategory": "GameApplication",
+        "genre": ["Survival", "Role-playing", "Sandbox", "Multiplayer"],
+        "gameItem": ["Woodcutting", "Farming", "Crafting", "Fishing", "Cooking", "Firemaking", "Digging", "Mining"],
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD",
+          "availability": "https://schema.org/InStock",
+          "url": "https://github.com/SamG-Coder/Island-RPG/releases"
+        },
+        "downloadUrl": "https://github.com/SamG-Coder/Island-RPG/releases",
+        "softwareVersion": "0.4.0",
+        "sameAs": [
+          "https://github.com/SamG-Coder/Island-RPG",
+          "https://x.com/SamGCoder",
+          "https://www.youtube.com/@SamGCoder"
+        ]
+      },
+      {
+        "@type": "Person",
+        "@id": "https://samg-coder.github.io/Island-RPG/#creator",
+        "name": "SamG-Coder",
+        "alternateName": "SamGCoder",
+        "url": "https://github.com/SamG-Coder",
+        "sameAs": [
+          "https://github.com/SamG-Coder",
+          "https://x.com/SamGCoder",
+          "https://www.youtube.com/@SamGCoder"
+        ]
+      },
+      {
+        "@type": "WebSite",
+        "name": "Island RPG",
+        "url": "https://samg-coder.github.io/Island-RPG/",
+        "publisher": { "@id": "https://samg-coder.github.io/Island-RPG/#creator" }
+      }
+    ]
+  }
+  </script>
   <script src="script.js" defer></script>
-  <script src="world-generator.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
-  <canvas class="world-background" data-world-background aria-hidden="true"></canvas>
 
   <header class="site-header" data-header>
-    <a class="brand" href="#top" aria-label="Island RPG home">
-      <span class="brand-mark" aria-hidden="true"></span>
-      <span>Island RPG</span>
+    <a class="brand" href="#top">
+      <img class="brand-mark" src="assets/icon.jpg" width="32" height="32" alt="">
+      Island RPG
     </a>
     <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav" data-menu>
       <span></span><span></span><span></span>
       <span class="sr-only">Open navigation</span>
     </button>
-    <nav id="site-nav" class="site-nav" aria-label="Main navigation" data-nav>
-      <a href="#world">The world</a>
+    <nav id="site-nav" class="site-nav" aria-label="Main" data-nav>
+      <a href="#play">Play</a>
+      <a href="#world">World</a>
       <a href="#skills">Skills</a>
-      <a href="#world-generator">Try a world</a>
       <a href="#releases">Releases</a>
       <a href="#install">Install</a>
-      <a class="nav-cta" href="https://github.com/SamG-Coder/Island-RPG">View repository</a>
+      <span class="nav-socials" aria-label="Social links">
+        <a href="https://www.youtube.com/@SamGCoder" rel="me noopener" target="_blank">YouTube</a>
+        <a href="https://x.com/SamGCoder" rel="me noopener" target="_blank">X</a>
+        <a href="https://github.com/SamG-Coder" rel="me noopener" target="_blank">GitHub</a>
+      </span>
+      <a class="nav-cta" href="https://github.com/SamG-Coder/Island-RPG/releases">Download v0.4</a>
     </nav>
   </header>
 
   <main id="main">
     <section class="hero" id="top">
-      <div class="hero-glow" aria-hidden="true"></div>
-      <div class="terrain terrain-one" aria-hidden="true"></div>
-      <div class="terrain terrain-two" aria-hidden="true"></div>
-      <div class="hero-content">
-        <p class="eyebrow"><span></span> Version 0.4 available now</p>
-        <h1>Build above.<br><em>Discover<span class="mobile-break"><br></span> below.</em></h1>
-        <p class="hero-copy">A persistent isometric survival RPG where every tree, tunnel and tool becomes part of your story. Now you can share the island.</p>
+      <div class="hero-copy-col">
+        <p class="eyebrow">Early access · Version 0.4</p>
+        <h1>Survive an island.<br><em>Share it.</em></h1>
+        <p class="lede">A free isometric survival RPG for Windows. Chop, mine, cook and dig through a persistent world — then host a dedicated server and play it with friends.</p>
         <div class="hero-actions">
-          <a class="button button-primary" href="https://github.com/SamG-Coder/Island-RPG/releases">Explore releases <span aria-hidden="true">→</span></a>
-          <a class="button button-ghost" href="#world">Discover the world</a>
+          <a class="button button-primary" href="https://github.com/SamG-Coder/Island-RPG/releases">Get Island RPG v0.4</a>
+          <a class="button button-ghost" href="https://www.youtube.com/@SamGCoder" rel="me noopener" target="_blank">Watch on YouTube</a>
         </div>
-        <dl class="hero-stats" aria-label="Game highlights">
-          <div><dt>8</dt><dd>skills</dd></div>
-          <div><dt>∞</dt><dd>world seeds</dd></div>
-          <div><dt>2</dt><dd>world layers</dd></div>
-        </dl>
+        <ul class="hero-meta">
+          <li>Windows 10+</li>
+          <li>Dedicated multiplayer</li>
+          <li>8 skills</li>
+          <li>Free &amp; open source</li>
+        </ul>
       </div>
-
-      <div class="world-renderer-label" aria-hidden="true">
-        <span>Live procedural world</span>
-        <b>Seed 2187</b>
-      </div>
-      <a class="scroll-cue" href="#world"><span></span>Scroll to explore</a>
+      <figure class="hero-art">
+        <img src="assets/og-cover.jpg" width="1600" height="900" alt="A dusk forest island with a campfire glowing in a coastal clearing.">
+        <figcaption>v0.4 is out — dedicated multiplayer, trade, follow and LAN join.</figcaption>
+      </figure>
     </section>
 
-    <section class="section world-section" id="world">
-      <div class="section-heading reveal">
-        <p class="eyebrow"><span></span> One world, two layers</p>
-        <h2>The island remembers<br><em>what you change.</em></h2>
-        <p>Cross wild coastlines, settle among changing biomes and carve your own route into the darkness beneath.</p>
-      </div>
-
-      <div class="world-grid">
-        <article class="world-card world-card-surface reveal">
-          <div class="card-number">01</div>
-          <div class="world-art surface-art" aria-hidden="true">
-            <div class="sun"></div>
-            <div class="ridge ridge-back"></div>
-            <div class="ridge ridge-front"></div>
-            <img src="assets/workbench.png" alt="">
-          </div>
-          <div class="world-card-copy">
-            <p class="card-kicker">The overworld</p>
-            <h3>Find your ground</h3>
-            <p>Follow rivers to the coast, gather from distinct climates and turn a wild landscape into somewhere worth returning to.</p>
-          </div>
-        </article>
-
-        <article class="world-card world-card-cave reveal">
-          <div class="card-number">02</div>
-          <div class="world-art cave-art" aria-hidden="true">
-            <div class="cave-light"></div>
-            <div class="cave-wall"></div>
-            <img src="assets/bloomery.png" alt="">
-          </div>
-          <div class="world-card-copy">
-            <p class="card-kicker">The underground</p>
-            <h3>Make your own entrance</h3>
-            <p>Excavate promising ground, secure a discovered shaft with rope and descend into persistent caves rich with ore and ruins.</p>
-          </div>
-        </article>
-      </div>
-    </section>
-
-    <section class="section loop-section" id="skills">
-      <div class="loop-intro reveal">
-        <p class="eyebrow"><span></span> A connected game loop</p>
-        <h2>Nothing gathered<br><em>goes to waste.</em></h2>
-      </div>
-      <div class="loop-track reveal">
-        <article>
-          <span class="loop-index">01</span>
-          <div class="loop-icon"><img src="assets/stone-pickaxe-item.png" alt=""></div>
-          <h3>Gather</h3>
-          <p>Fish, forage, chop and mine resources shaped by the world around you.</p>
-        </article>
-        <div class="loop-arrow" aria-hidden="true">→</div>
-        <article>
-          <span class="loop-index">02</span>
-          <div class="loop-icon"><img src="assets/bloomery.png" alt=""></div>
-          <h3>Refine</h3>
-          <p>Turn raw finds into charcoal, blooms, metal bars, meals and materials.</p>
-        </article>
-        <div class="loop-arrow" aria-hidden="true">→</div>
-        <article>
-          <span class="loop-index">03</span>
-          <div class="loop-icon"><img src="assets/anvil.png" alt=""></div>
-          <h3>Craft</h3>
-          <p>Forge better tools and build stations that unlock the next stage.</p>
-        </article>
-        <div class="loop-arrow" aria-hidden="true">→</div>
-        <article>
-          <span class="loop-index">04</span>
-          <div class="loop-icon"><img src="assets/storage-chest.png" alt=""></div>
-          <h3>Expand</h3>
-          <p>Store what matters, range farther and prepare for deeper expeditions.</p>
-        </article>
-      </div>
-
-      <div class="skill-list reveal">
-        <span>Woodcutting</span><span>Farming</span><span>Crafting</span><span>Fishing</span>
-        <span>Cooking</span><span>Firemaking</span><span>Digging</span><span>Mining</span>
-      </div>
-    </section>
-
-    <section class="section features-section">
-      <div class="feature-panel reveal">
+    <section class="strip" id="play">
+      <div class="strip-inner">
         <div>
-          <p class="eyebrow"><span></span> Built to feel alive</p>
-          <h2>A world with<br><em>long memory.</em></h2>
+          <p class="eyebrow">Play together</p>
+          <h2>One island. One server. Your character.</h2>
+          <p>Host a world or join a friend. The person you create is the person who arrives — name, colour and gender stay with you. Walk, pick up, craft, trade and follow with the same cursors as single-player.</p>
         </div>
-        <div class="feature-columns">
-          <article>
-            <span class="feature-symbol">◇</span>
-            <h3>Persistent changes</h3>
-            <p>Entrances, fires, mining progress, storage and placed stations remain where you left them.</p>
-          </article>
-          <article>
-            <span class="feature-symbol">◌</span>
-            <h3>Living atmosphere</h3>
-            <p>Day and night, animated water, cave darkness and merging local lights shape every journey.</p>
-          </article>
-          <article>
-            <span class="feature-symbol">⌁</span>
-            <h3>Endless geography</h3>
-            <p>Deterministic seeds create streamed terrain, rivers, coasts, caves and distinct biomes.</p>
-          </article>
-          <article>
-            <span class="feature-symbol">⚭</span>
-            <h3>Play together</h3>
-            <p>Host a dedicated world, join a friend or pick a LAN server. Trade, follow and gather on one authoritative island.</p>
-          </article>
-        </div>
+        <ul class="play-points">
+          <li>
+            <strong>Host or join</strong>
+            Start a dedicated world, resume a hosted save, or pick a LAN server from the list.
+          </li>
+          <li>
+            <strong>Trade &amp; follow</strong>
+            Right-click another player to trade or walk beside them. Friends, ignore and guilds live on the server.
+          </li>
+          <li>
+            <strong>Same island rules</strong>
+            Pickup, drop, caves, boats, combat and furniture commit on the dedicated server.
+          </li>
+        </ul>
       </div>
     </section>
 
-    <section class="section generator-section" id="world-generator">
-      <div class="section-heading reveal">
-        <p class="eyebrow"><span></span> The real world generator</p>
-        <h2>Try an island<br><em>from any seed.</em></h2>
-        <p>This is a browser port of the developer map. It uses the same deterministic terrain, climate, drainage, biome and atlas logic as the game.</p>
+    <section class="section" id="world">
+      <div class="section-intro">
+        <p class="eyebrow">The world</p>
+        <h2>What you change stays changed.</h2>
+        <p>Every seed is a full island and the caves beneath it. Trees you fell, holes you dig, fires you light and chests you place are still there when you come back.</p>
       </div>
-
-      <div class="generator-panel reveal" data-world-generator>
-        <div class="generator-toolbar">
-          <label>
-            <span>World seed</span>
-            <input data-world-seed type="text" value="2187" aria-label="World seed number or phrase" spellcheck="false">
-          </label>
-          <button class="button button-primary" type="button" data-world-generate>Generate world</button>
-          <button class="button button-ghost" type="button" data-world-random>Random seed</button>
-          <button class="button button-ghost" type="button" data-world-layer>Tree density</button>
-        </div>
-        <div class="generator-map-shell">
-          <canvas data-world-map width="160" height="160" aria-label="Procedurally generated isometric world map"></canvas>
-          <div class="generator-loading" aria-hidden="true"><span></span></div>
-          <p class="generator-status" data-world-status role="status">Enter a seed and generate</p>
-          <p class="generator-help">Drag to pan <span>·</span> Wheel to zoom <span>·</span> Switch terrain and tree density</p>
-        </div>
-        <p class="generator-note">Generation is cooperatively scheduled with Promises, keeping the page responsive without game threads or bundled terrain assets.</p>
+      <div class="world-cards">
+        <article>
+          <img src="assets/workbench.png" width="256" height="180" alt="A wooden workbench from Island RPG.">
+          <p class="kicker">Overworld</p>
+          <h3>Coasts, forests and camps</h3>
+          <p>Follow rivers to the beach, gather sticks, rocks and shells, and turn a wild clearing into a place worth returning to.</p>
+        </article>
+        <article>
+          <img src="assets/bloomery.png" width="220" height="200" alt="A clay bloomery used for smelting.">
+          <p class="kicker">Underground</p>
+          <h3>Dig your own way down</h3>
+          <p>Excavate a shaft, hang a rope and descend into persistent caves with ore, ruins and darker things that hunt first.</p>
+        </article>
+        <article>
+          <img src="assets/campfire.png" width="200" height="140" alt="A stone campfire ring.">
+          <p class="kicker">Survival</p>
+          <h3>Hunger, light and heat</h3>
+          <p>Cook fish and berries, keep a fire lit, and watch day turn to night while local lights pool around camp.</p>
+        </article>
       </div>
     </section>
 
-    <section class="section releases-section" id="releases">
-      <div class="section-heading release-heading reveal">
-        <p class="eyebrow"><span></span> Development journey</p>
+    <section class="section alt" id="skills">
+      <div class="section-intro">
+        <p class="eyebrow">A closed loop</p>
+        <h2>Nothing gathered goes to waste.</h2>
+      </div>
+      <ol class="loop">
+        <li>
+          <img src="assets/stone-pickaxe-item.png" width="96" height="96" alt="A stone pickaxe.">
+          <h3>Gather</h3>
+          <p>Fish, forage, chop and mine what the biome actually has.</p>
+        </li>
+        <li>
+          <img src="assets/bloomery.png" width="96" height="96" alt="">
+          <h3>Refine</h3>
+          <p>Burn charcoal, smelt blooms and cook meals at real stations.</p>
+        </li>
+        <li>
+          <img src="assets/anvil.png" width="96" height="96" alt="A smithing anvil.">
+          <h3>Craft</h3>
+          <p>Forge better tools and unlock the next placeable station.</p>
+        </li>
+        <li>
+          <img src="assets/storage-chest.png" width="96" height="96" alt="A wooden storage chest.">
+          <h3>Keep</h3>
+          <p>Store the haul, range farther and come back richer.</p>
+        </li>
+      </ol>
+      <ul class="skills" aria-label="Skills in Island RPG">
+        <li>Woodcutting</li>
+        <li>Farming</li>
+        <li>Crafting</li>
+        <li>Fishing</li>
+        <li>Cooking</li>
+        <li>Firemaking</li>
+        <li>Digging</li>
+        <li>Mining</li>
+      </ul>
+    </section>
+
+    <section class="section" id="releases">
+      <div class="section-intro">
+        <p class="eyebrow">Versions</p>
         <h2>Release history</h2>
       </div>
-      <div class="release-list">
-        <article class="release-card current reveal">
-          <div class="release-version">
-            <span>Latest release</span>
-            <strong>0.4</strong>
-          </div>
-          <div class="release-copy">
-            <p class="release-date">14 August 2026</p>
+      <ol class="releases">
+        <li class="current">
+          <div class="ver"><span>Latest</span><strong>0.4</strong></div>
+          <div>
+            <time datetime="2026-08-14">14 August 2026</time>
             <h3>Dedicated Multiplayer</h3>
-            <p>Host or join a dedicated world, keep your chosen character, and share pickup, combat, trade and follow on one authoritative island.</p>
-            <div class="release-tags"><span>Multiplayer</span><span>Dedicated server</span><span>Trade</span><span>LAN</span></div>
+            <p>Host or join a dedicated world, keep your chosen character, and share pickup, combat, trade and follow.</p>
+            <a href="https://github.com/SamG-Coder/Island-RPG/blob/master/release-notes/RELEASE_NOTES_0.4.md">Read the 0.4 notes</a>
           </div>
-          <a class="release-link" href="https://github.com/SamG-Coder/Island-RPG/blob/master/release-notes/RELEASE_NOTES_0.4.md" aria-label="Read version 0.4 release notes">Read notes <span>↗</span></a>
-        </article>
-
-        <article class="release-card reveal">
-          <div class="release-version">
-            <span>Living world</span>
-            <strong>0.3</strong>
-          </div>
-          <div class="release-copy">
-            <p class="release-date">3 August 2026</p>
+        </li>
+        <li>
+          <div class="ver"><strong>0.3</strong></div>
+          <div>
+            <time datetime="2026-08-03">3 August 2026</time>
             <h3>Living Survivors &amp; Slime Combat</h3>
-            <p>Autonomous survivors, leadership and settlement planning, a cinematic shipwreck opening, biome slimes, loot and unified combat.</p>
-            <div class="release-tags"><span>NPCs</span><span>Combat</span><span>Slimes</span><span>Observe</span></div>
+            <p>Autonomous survivors, a shipwreck opening, biome slimes and unified combat.</p>
+            <a href="https://github.com/SamG-Coder/Island-RPG/blob/master/release-notes/RELEASE_NOTES_0.3.md">Read the 0.3 notes</a>
           </div>
-          <a class="release-link" href="https://github.com/SamG-Coder/Island-RPG/blob/master/release-notes/RELEASE_NOTES_0.3.md" aria-label="Read version 0.3 release notes">Read notes <span>↗</span></a>
-        </article>
-
-        <article class="release-card reveal">
-          <div class="release-version">
-            <span>Connected progression</span>
-            <strong>0.2</strong>
-          </div>
-          <div class="release-copy">
-            <p class="release-date">29 July 2026</p>
+        </li>
+        <li>
+          <div class="ver"><strong>0.2</strong></div>
+          <div>
+            <time datetime="2026-07-29">29 July 2026</time>
             <h3>Caves &amp; Connected Progression</h3>
-            <p>Underground exploration, mining, metalworking, foraging, cooking, persistent storage and a faster, cleaner world renderer.</p>
-            <div class="release-tags"><span>Caves</span><span>Mining</span><span>Storage</span><span>Lighting</span></div>
+            <p>Underground exploration, mining, metalworking, cooking and persistent storage.</p>
+            <a href="https://github.com/SamG-Coder/Island-RPG/blob/master/release-notes/RELEASE_NOTES_0.2.md">Read the 0.2 notes</a>
           </div>
-          <a class="release-link" href="https://github.com/SamG-Coder/Island-RPG/blob/master/release-notes/RELEASE_NOTES_0.2.md" aria-label="Read version 0.2 release notes">Read notes <span>↗</span></a>
-        </article>
-
-        <article class="release-card reveal">
-          <div class="release-version">
-            <span>First playable</span>
-            <strong>0.1</strong>
-          </div>
-          <div class="release-copy">
-            <p class="release-date">27 July 2026</p>
+        </li>
+        <li>
+          <div class="ver"><strong>0.1</strong></div>
+          <div>
+            <time datetime="2026-07-27">27 July 2026</time>
             <h3>The First Island</h3>
-            <p>The original playable foundation: procedural islands, survival skills, crafting, fishing and persistent saves.</p>
-            <div class="release-tags"><span>World generation</span><span>Skills</span><span>Crafting</span></div>
+            <p>The playable foundation: procedural islands, survival skills, crafting and saves.</p>
+            <a href="https://github.com/SamG-Coder/Island-RPG/blob/master/release-notes/RELEASE_NOTES_0.1.md">Read the 0.1 notes</a>
           </div>
-          <a class="release-link" href="https://github.com/SamG-Coder/Island-RPG/blob/master/release-notes/RELEASE_NOTES_0.1.md" aria-label="Read version 0.1 release notes">Read notes <span>↗</span></a>
-        </article>
-      </div>
-      <a class="text-link reveal" href="https://github.com/SamG-Coder/Island-RPG/releases">View all releases on GitHub <span>→</span></a>
+        </li>
+      </ol>
     </section>
 
-    <section class="section install-section" id="install">
-      <div class="install-panel reveal">
-        <div class="install-copy">
-          <p class="eyebrow"><span></span> Play the prototype</p>
-          <h2>Your island is<br><em>waiting.</em></h2>
-          <p>Island RPG currently targets Windows and is built with C#, .NET 10 and OpenTK.</p>
+    <section class="follow" id="follow">
+      <div class="follow-inner">
+        <p class="eyebrow">Development</p>
+        <h2>Follow the build.</h2>
+        <p>Devlogs, playtests and release clips land on YouTube and X. Source and issues live on GitHub.</p>
+        <div class="follow-links">
+          <a class="follow-card" href="https://www.youtube.com/@SamGCoder" rel="me noopener" target="_blank">
+            <span class="follow-name">YouTube</span>
+            <span>@SamGCoder</span>
+          </a>
+          <a class="follow-card" href="https://x.com/SamGCoder" rel="me noopener" target="_blank">
+            <span class="follow-name">X</span>
+            <span>@SamGCoder</span>
+          </a>
+          <a class="follow-card" href="https://github.com/SamG-Coder" rel="me noopener" target="_blank">
+            <span class="follow-name">GitHub</span>
+            <span>SamG-Coder</span>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="install">
+      <div class="install">
+        <div>
+          <p class="eyebrow">Install</p>
+          <h2>Play the prototype.</h2>
+          <p>Island RPG targets Windows and needs a legally owned Age of Empires II HD install for compatible classic graphics. Those assets are never bundled or redistributed.</p>
           <div class="hero-actions">
-            <a class="button button-primary" href="https://github.com/SamG-Coder/Island-RPG/releases">Get the latest release <span>→</span></a>
+            <a class="button button-primary" href="https://github.com/SamG-Coder/Island-RPG/releases">Download the latest release</a>
             <a class="button button-ghost" href="https://github.com/SamG-Coder/Island-RPG#quick-start">Build from source</a>
           </div>
         </div>
-        <div class="requirements">
-          <p>Requirements</p>
+        <aside>
+          <h3>Requirements</h3>
           <ul>
-            <li><span>01</span> Windows 10 or later</li>
-            <li><span>02</span> .NET 10 runtime or SDK</li>
-            <li><span>03</span> OpenGL 3.3 graphics support</li>
-            <li><span>04</span> A legally owned Age of Empires II HD installation</li>
+            <li>Windows 10 or later</li>
+            <li>.NET 10 runtime or SDK</li>
+            <li>OpenGL 3.3 graphics support</li>
+            <li>Age of Empires II HD (owned locally)</li>
           </ul>
-        </div>
+        </aside>
       </div>
-      <p class="legal reveal">Island RPG is an unofficial, non-commercial project. Age of Empires assets are not included or distributed. Age of Empires is a trademark of Microsoft.</p>
+      <p class="legal">Island RPG is an unofficial, non-commercial project by <a href="https://github.com/SamG-Coder" rel="me">SamG-Coder</a>. Age of Empires is a trademark of Microsoft.</p>
     </section>
   </main>
 
   <footer>
-    <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span><span>Island RPG</span></a>
-    <p>Made with curiosity, campfires and far too many rocks.</p>
-    <nav aria-label="Footer navigation">
-      <a href="https://github.com/SamG-Coder/Island-RPG">GitHub</a>
+    <a class="brand" href="#top">
+      <img class="brand-mark" src="assets/icon.jpg" width="28" height="28" alt="">
+      Island RPG
+    </a>
+    <p>Made by <a href="https://x.com/SamGCoder" rel="me">SamGCoder</a>.</p>
+    <nav aria-label="Footer">
+      <a href="https://www.youtube.com/@SamGCoder" rel="me noopener" target="_blank">YouTube</a>
+      <a href="https://x.com/SamGCoder" rel="me noopener" target="_blank">X</a>
+      <a href="https://github.com/SamG-Coder" rel="me noopener" target="_blank">GitHub</a>
       <a href="https://github.com/SamG-Coder/Island-RPG/releases">Releases</a>
       <a href="https://github.com/SamG-Coder/Island-RPG/blob/master/LICENSE">License</a>
     </nav>
