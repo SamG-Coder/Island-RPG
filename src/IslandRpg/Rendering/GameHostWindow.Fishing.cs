@@ -210,8 +210,14 @@ internal sealed partial class GameHostWindow
         if (IsNetworkWorld)
         {
             var networkFish = FindFish(fishKey);
-            if (networkFish is not null)
-                QueueNetworkFishing(networkFish);
+            if (networkFish is null)
+            {
+                ReportBlockedAction(
+                    "network-fishing-unknown",
+                    "That fish school is not ready to catch.");
+                return;
+            }
+            QueueNetworkFishing(networkFish);
             return;
         }
         if (_player is null || _activePlayer is null) return;

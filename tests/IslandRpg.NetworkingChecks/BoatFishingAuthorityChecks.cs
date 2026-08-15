@@ -42,6 +42,8 @@ internal static class BoatFishingAuthorityChecks
             FishingRollsAreDeterministicAcrossRestart);
         checks.Add("session fishing derives aboard position and reach",
             SessionFishingUsesAuthoritativeBoatPosition);
+        checks.Add("in-range shore fishing still commits after PresentSkill Fish",
+            InRangeShoreFishingCommitsAfterPresentSkill);
         checks.Add("boat session movement restart and receipts remain authoritative",
             SessionBoatLifecycleIsDurableAndIdempotent);
     }
@@ -944,6 +946,53 @@ internal static class BoatFishingAuthorityChecks
             checkpoint.Resources!.ActorCadences,
             restored.CaptureCheckpoint().Resources!.ActorCadences,
             "receipt replay must preserve the exact fishing cadence ordinal");
+    }
+
+    private static void InRangeShoreFishingCommitsAfterPresentSkill()
+    {
+        var descriptor = FishDescriptor(
+            position: new(.8f, 1.5f), initialRemaining: 3);
+        var catalog = new FixedResourceCatalog(descriptor);
+        var resources = new AuthoritativeResourceTransactions(
+            91, catalog,
+            new AuthoritativeResourceTransactionOptions
+            {
+                InteractionRange = 3,
+                FishCadence = new(.1)
+            });
+        var session = Session(
+            new SessionId(Guid.Parse(
+                "bd000000-0000-0000-0000-000000000021")),
+            new TestBoatNavigation(),
+            resources);
+        var connection = ClientConnectionId.New();
+        var joined = Join(session, connection,
+            [new InitialInventoryItem(ItemIds.PrimitiveFishingNet)]);
+
+        var presentPending = session.EnqueueIntentAsync(new(
+            connection, joined.Identity.PlayerId, 1,
+            new PresentSkillIntent(EntityAction.Fish)));
+        session.Drain();
+        CheckAssert.True(presentPending.GetAwaiter().GetResult().Accepted,
+            "an in-range fisher must publish Fish before the catch");
+
+        var actor = session.CaptureSnapshot().Actors.Single();
+        var catchResult = Send(session, connection, joined.Identity.PlayerId, 2,
+            new CatchFishIntent(
+                Guid.Parse("bd000000-0000-0000-0000-000000000022"),
+                actor.Gameplay.Inventory.Revision,
+                actor.Gameplay.ActorRevision,
+                Node(descriptor), 0));
+        CheckAssert.True(catchResult.Accepted,
+            "starting in range with a net must still commit after PresentSkill");
+        CheckAssert.True(
+            catchResult.ResourceTransaction?.FishingOutcome is not null,
+            "the in-range catch must return a typed fishing outcome");
+        CheckAssert.Equal(
+            EntityAction.Fish,
+            ActorSkillStance.UnpackAction(
+                session.CaptureSnapshot().Actors.Single().AnimationState),
+            "the catch commit must not clear the looping Fish clip");
     }
 
     private static void SessionBoatLifecycleIsDurableAndIdempotent()

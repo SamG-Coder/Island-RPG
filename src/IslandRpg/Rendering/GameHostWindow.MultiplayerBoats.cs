@@ -20,8 +20,27 @@ namespace IslandRpg.Rendering;
 internal sealed partial class GameHostWindow
 {
     private const float NetworkBoatBoardingRange = WorldActionReach.BoatBoard;
-    private const float NetworkShoreFishingServerReach = 2.4f;
-    private const float NetworkBoatFishingServerReach = 2.85f;
+    internal const float NetworkShoreFishingServerReach = 2.4f;
+    internal const float NetworkBoatFishingServerReach = 2.85f;
+    internal static float NetworkShoreFishingWalkRange =>
+        NetworkShoreFishingServerReach - WorldActionReach.CompletionTolerance;
+
+    internal static bool NetworkShoreFishingInStartRange(
+        Vector2 origin, Vector2 target, float netReach) =>
+        WorldActionReach.InRange(origin, target, netReach);
+
+    internal static bool NetworkFishingWithinServerReach(
+        Vector2 origin, Vector2 target, bool aboard)
+    {
+        var reach = aboard
+            ? NetworkBoatFishingServerReach
+            : NetworkShoreFishingServerReach;
+        return (origin - target).LengthSquared <= reach * reach;
+    }
+
+    internal static bool ShouldCancelFishingWhenLeavingBoat(
+        bool wasBoarded, bool isBoarded, bool fishingActive) =>
+        wasBoarded && !isBoarded && fishingActive;
 
     private sealed class NetworkBoatPresentation(BoatState state)
     {
@@ -33,11 +52,6 @@ internal sealed partial class GameHostWindow
         public bool HasTransform { get; set; }
         public double AnimationTime { get; set; }
     }
-
-    private readonly record struct NetworkFishingTarget(
-        WorldFish Fish,
-        FishSchoolDescriptor Descriptor,
-        int FishingNetSlot);
 
     private readonly Dictionary<Guid, NetworkBoatPresentation>
         _networkBoats = [];
@@ -52,24 +66,6 @@ internal sealed partial class GameHostWindow
     private float _networkPendingBoardDistance;
     private Vector2? _networkPendingDisembarkTarget;
     private bool _networkDisembarkMoveAccepted;
-    private readonly Dictionary<string, FishSchoolDescriptor>
-        _networkFishDescriptors = new(StringComparer.Ordinal);
-    private NetworkFishingTarget? _networkPendingFishing;
-    private NetworkFishingTarget? _networkActiveFishing;
-    private Guid? _networkFishingCommandId;
-    private ResourceNodeReference? _networkFishingReference;
-    private int _networkFishingCompletedCycles;
-    private uint _networkFishingAwaitingActorRevision;
-    private uint _networkFishingAwaitingInventoryRevision;
-    private uint _networkFishingAwaitingNodeRevision;
-    private uint _networkFishingAwaitingChunkRevision;
-    private bool _networkFishingReceiptObserved;
-    private bool _networkFishingDeltaObserved;
-    private bool _networkFishingDeltaArrivedEarly;
-    private uint _networkFishingEarlyNodeRevision;
-    private uint _networkFishingEarlyChunkRevision;
-    private int _networkFishingExperienceBefore;
-
     private void InitializeNetworkBoats()
     {
         ClearNetworkBoatPresentation();
@@ -193,13 +189,19 @@ internal sealed partial class GameHostWindow
         var playerId = _networkClient?.State.PlayerId ?? Guid.Empty;
         var localBoat = _networkBoats.Values.FirstOrDefault(value =>
             value.State.OccupantPlayerId == playerId);
+        var wasBoarded = _fishingBoatBoarded;
         _fishingBoatBoarded = localBoat is not null;
         if (!_fishingBoatBoarded)
         {
             _fishingBoat = null;
             _fishingBoatRiderOffset = Vector2.Zero;
             _fishingBoatRiderTargetOffset = Vector2.Zero;
-            if (_networkActiveFishing is not null)
+            // Shore fishing is not a boat action. Only cancel if the
+            // player just left a boat; otherwise this ran every frame
+            // and killed the catch after "You begin fishing."
+            if (ShouldCancelFishingWhenLeavingBoat(
+                    wasBoarded, false,
+                    _activeNetworkFishingAction is not null))
                 CancelNetworkFishingPresentation();
             return;
         }
@@ -239,7 +241,7 @@ internal sealed partial class GameHostWindow
         if (!result.Accepted)
         {
             if (result.Action == BoatActionKind.Move &&
-                _networkPendingFishing is not null)
+                _pendingNetworkFishingAction is not null)
                 CancelNetworkFishingPresentation();
             _networkPendingDisembarkTarget = null;
             _networkDisembarkMoveAccepted = false;
@@ -511,53 +513,7 @@ internal sealed partial class GameHostWindow
             _networkDisembarkMoveAccepted = false;
             SendNetworkDisembark(localBoat, shore);
         }
-
-        if (_networkPendingFishing is { } pending &&
-            _player is not null &&
-            _player.Action != EntityAction.Move)
-        {
-            var origin = localBoat?.Position ?? _player.Position;
-            var target = new Vector2(
-                pending.Descriptor.Position.X,
-                pending.Descriptor.Position.Y);
-            if (NetworkFishingInStartRange(origin, target, localBoat is not null))
-                BeginNetworkFishing(pending);
-        }
-
-        if (_networkActiveFishing is not { } active || _player is null)
-            return;
-        if (NetworkFishIsDepleted(active.Descriptor))
-        {
-            CancelNetworkFishingPresentation();
-            return;
-        }
-        if (_player.Action != EntityAction.Fish)
-            _player.FishAt(new(
-                active.Descriptor.Position.X,
-                active.Descriptor.Position.Y));
-        if (localBoat is not null)
-        {
-            // Occupied actors are omitted from the independent actor draw
-            // list. Advance only the local rider here; remotes read Fish
-            // from the occupant's snapshot and draw it on the boat.
-            _player.AdvanceAction(elapsed);
-            var displacement =
-                _fishingBoatRiderTargetOffset - _fishingBoatRiderOffset;
-            var distance = displacement.Length;
-            if (distance > .0001f)
-                _fishingBoatRiderOffset += displacement / distance *
-                    Math.Min(distance, FishingBoatRiderMoveSpeed * elapsed);
-            _player.SyncPosition(
-                localBoat.Position + _fishingBoatRiderOffset);
-        }
-        var completed = (int)(_player.ActionTime /
-                              FishingAnimationCycleSeconds());
-        if (completed <= _networkFishingCompletedCycles ||
-            _networkFishingCommandId is not null ||
-            IsAwaitingNetworkFishingState())
-            return;
-        _networkFishingCompletedCycles = completed;
-        DispatchNetworkFishing(active);
+        UpdateNetworkBoatRiderFishing(elapsed, localBoat);
     }
 
     private double NetworkBoardingStartupTimeoutSeconds() =>
@@ -567,392 +523,23 @@ internal sealed partial class GameHostWindow
             6,
             30);
 
-    private void QueueNetworkFishing(WorldFish fish)
+    private void UpdateNetworkBoatRiderFishing(
+        float elapsed, NetworkBoatPresentation? localBoat)
     {
-        if (!TryDescribeNetworkFish(fish, out var descriptor))
-        {
-            ReportBlockedAction(
-                "network-fishing-unknown",
-                "That fish school is not ready to catch.");
-            return;
-        }
-        if (NetworkFishIsDepleted(descriptor))
-            return;
-        if (!TryFindNetworkFishingNetSlot(out var netSlot, out var netPower))
-        {
-            ReportBlockedAction(
-                "network-fishing-without-net",
-                "You need a fishing net to catch fish.");
-            return;
-        }
-        var level = FishingSkill.LevelForExperience(
-            _activePlayer?.FishingExperience ?? 0);
-        if (!FishingRules.CanCatch(descriptor.Species, level, netPower))
-        {
-            var profile = FishingRules.Profile(descriptor.Species);
-            ReportBlockedAction(
-                $"network-fishing-requirement-{descriptor.Species}",
-                level < profile.RequiredLevel
-                    ? $"You need Fishing level {profile.RequiredLevel} " +
-                      $"to catch {profile.DisplayName}."
-                    : $"You need a stronger fishing net to catch " +
-                      $"{profile.DisplayName}.");
-            return;
-        }
-
-        if (_activePlayer is not null &&
-            !ActivePlayerInventory().CanAdd(descriptor.ItemId))
-        {
-            ReportBlockedAction(
-                "network-fishing-inventory-full",
-                "Your inventory is too full to hold another catch.");
-            return;
-        }
-
-        ReleaseNetworkCookingPresentation();
-        CancelNetworkResourceInteraction();
-        CancelNetworkFishingPresentation();
-        var action = new NetworkFishingTarget(fish, descriptor, netSlot);
-        var target = new Vector2(
-            descriptor.Position.X, descriptor.Position.Y);
-        var localBoat = LocalNetworkBoat();
-        var origin = localBoat?.Position ?? _player?.Position ?? target;
-        if (NetworkFishingInStartRange(origin, target, localBoat is not null))
-        {
-            BeginNetworkFishing(action);
-            return;
-        }
-        _networkPendingFishing = action;
-        if (localBoat is not null)
-        {
-            SendNetworkBoatAction(
-                BoatActionKind.Move, localBoat.State.BoatId,
-                reference => new MoveBoatAction(
-                    reference, target.X, target.Y));
-            _moveMarker = new(target, 0, Action: true);
-        }
-        else
-            QueueNetworkWalkToAct(
-                target,
-                FishingNetReach(),
-                WorldActionType.Fish,
-                fishKey: fish.StableKey);
+        if (localBoat is null || _player is null) return;
+        if (_activeNetworkFishingAction is null) return;
+        _player.AdvanceAction(elapsed);
+        var displacement =
+            _fishingBoatRiderTargetOffset - _fishingBoatRiderOffset;
+        var distance = displacement.Length;
+        if (distance > .0001f)
+            _fishingBoatRiderOffset += displacement / distance *
+                Math.Min(distance, FishingBoatRiderMoveSpeed * elapsed);
+        _player.SyncPosition(localBoat.Position + _fishingBoatRiderOffset);
     }
 
-    internal static bool NetworkShoreFishingInStartRange(
-        Vector2 origin, Vector2 target, float netReach) =>
-        WorldActionReach.InRange(origin, target, netReach);
-
-    private bool NetworkFishingInStartRange(
-        Vector2 origin, Vector2 target, bool aboard)
-    {
-        if (aboard)
-        {
-            var reach = Math.Min(
-                FishingNetReach() + FishingBoatDeckRadius,
-                NetworkBoatFishingServerReach);
-            return (origin - target).Length <= reach;
-        }
-
-        return NetworkShoreFishingInStartRange(
-            origin, target, FishingNetReach());
-    }
-
-    private void BeginNetworkFishing(NetworkFishingTarget action)
-    {
-        _networkPendingFishing = null;
-        _networkActiveFishing = action;
-        _networkFishingCompletedCycles = 0;
-        _moveMarker = null;
-        if (_player?.Action == EntityAction.Move)
-            SendNetworkStopForFishing();
-        SendNetworkPresentSkill(EntityAction.Fish);
-        if (LocalNetworkBoat() is { } boat)
-        {
-            _fishingBoatRiderOffset = Vector2.Zero;
-            _fishingBoatRiderTargetOffset =
-                FishingBoatRiderPosition(new(
-                    action.Descriptor.Position.X,
-                    action.Descriptor.Position.Y)) - boat.Position;
-        }
-        _player?.FishAt(new(
-            action.Descriptor.Position.X,
-            action.Descriptor.Position.Y));
-    }
-
-    private void SendNetworkStopForFishing()
-    {
-        var localBoat = LocalNetworkBoat();
-        if (localBoat is null)
-            SendNetworkStop(preserveFishingAction: true);
-        else if (_networkBoatCommandId is null)
-            SendNetworkBoatAction(
-                BoatActionKind.Stop, localBoat.State.BoatId,
-                reference => new StopBoatAction(reference));
-    }
-
-    private void DispatchNetworkFishing(NetworkFishingTarget action)
-    {
-        if (_networkClient?.IsConnected != true ||
-            !TryFindNetworkFishingNetSlot(out var slot, out _))
-        {
-            CancelNetworkFishingPresentation();
-            return;
-        }
-        var reference = _networkClient.GetResourceReference(
-            action.Descriptor.Chunk, action.Descriptor.Id);
-        var commandId = Guid.NewGuid();
-        _networkFishingCommandId = commandId;
-        _networkFishingReference = reference;
-        _networkFishingReceiptObserved = false;
-        _networkFishingDeltaObserved = false;
-        _networkFishingDeltaArrivedEarly = false;
-        _networkFishingEarlyNodeRevision = 0;
-        _networkFishingEarlyChunkRevision = 0;
-        _networkFishingAwaitingActorRevision = 0;
-        _networkFishingAwaitingInventoryRevision = 0;
-        _networkFishingAwaitingNodeRevision = reference.ExpectedNodeRevision;
-        _networkFishingAwaitingChunkRevision =
-            reference.ExpectedResourceChunkRevision;
-        _networkFishingExperienceBefore =
-            _activePlayer?.FishingExperience ?? 0;
-        _networkActiveFishing = action with { FishingNetSlot = slot };
-        SendNetworkAction(new ResourceActionPayload(
-            ResourceActionKind.Fish, reference, slot), commandId);
-    }
-
-    private bool TryFindNetworkFishingNetSlot(
-        out int slot,
-        out int power)
-    {
-        slot = -1;
-        power = 0;
-        var items = _activePlayer?.Inventory;
-        if (items is null) return false;
-        for (var index = 0; index < items.Length; index++)
-        {
-            if (items[index] is not { } id ||
-                !ItemCatalog.TryGet(id, out var item) ||
-                !item.HasTag(ItemTag.FishingNet) ||
-                item.FishingPower <= power)
-                continue;
-            slot = index;
-            power = item.FishingPower;
-        }
-        return slot >= 0;
-    }
-
-    private bool TryDescribeNetworkFish(
-        WorldFish fish,
-        out FishSchoolDescriptor descriptor)
-    {
-        if (_networkFishDescriptors.TryGetValue(
-                fish.StableKey, out descriptor!))
-            return true;
-        var chunk = WorldChunkKey.At(
-            new System.Numerics.Vector2(fish.X, fish.Y),
-            _activeWorldLevel);
-        descriptor = new ProceduralFishSchoolSource()
-            .DescribeSchools(_worldSeed, chunk)
-            .FirstOrDefault(value =>
-                value.StableKey.Equals(
-                    fish.StableKey, StringComparison.Ordinal) &&
-                value.Species == (FishSpecies)fish.Species)!;
-        if (descriptor is null) return false;
-        _networkFishDescriptors[fish.StableKey] = descriptor;
-        _networkResourceHotPath.RememberFish(
-            fish.StableKey, descriptor.Id, descriptor.Chunk);
-        return true;
-    }
-
-    private bool NetworkFishIsDepleted(FishSchoolDescriptor? descriptor)
-    {
-        if (descriptor is null) return true;
-        if (_networkClient?.State.ResourceChunks.TryGetValue(
-                descriptor.Chunk, out var chunk) != true ||
-            chunk is null ||
-            !chunk.Nodes.TryGetValue(descriptor.Id, out var state))
-            return false;
-        return state.Depleted || state.Remaining <= 0;
-    }
-
-    private bool IsAwaitingNetworkFishingState()
-    {
-        if (!_networkFishingReceiptObserved) return false;
-        var gameplay = _networkClient?.State.Gameplay;
-        var gameplayReady = gameplay is not null &&
-            gameplay.ActorRevision >= _networkFishingAwaitingActorRevision &&
-            gameplay.InventoryRevision >=
-                _networkFishingAwaitingInventoryRevision;
-        if (!gameplayReady || !_networkFishingDeltaObserved) return true;
-        CompleteNetworkFishingObservation();
-        return false;
-    }
-
-    private void CompleteNetworkFishingObservation()
-    {
-        _networkFishingReference = null;
-        _networkFishingReceiptObserved = false;
-        _networkFishingDeltaObserved = false;
-        _networkFishingDeltaArrivedEarly = false;
-        _networkFishingEarlyNodeRevision = 0;
-        _networkFishingEarlyChunkRevision = 0;
-        _networkFishingAwaitingActorRevision = 0;
-        _networkFishingAwaitingInventoryRevision = 0;
-        _networkFishingAwaitingNodeRevision = 0;
-        _networkFishingAwaitingChunkRevision = 0;
-        if (_activePlayer is not null &&
-            _activePlayer.FishingExperience >
-            _networkFishingExperienceBefore)
-        {
-            var gained = _activePlayer.FishingExperience -
-                         _networkFishingExperienceBefore;
-            _chatUi.AddMessage(
-                FishingSkill.ExperienceMessage(gained),
-                ChatMessageStyle.Experience);
-            var previousLevel = FishingSkill.LevelForExperience(
-                _networkFishingExperienceBefore);
-            var currentLevel = FishingSkill.LevelForExperience(
-                _activePlayer.FishingExperience);
-            if (currentLevel > previousLevel)
-                _chatUi.AddMessage(
-                    FishingSkill.LevelUpMessage(currentLevel),
-                    ChatMessageStyle.LevelUp);
-        }
-    }
-
-    private void ObserveNetworkFishingResourceChanges(
-        NetworkResourcesChangedEventArgs value)
-    {
-        if (_networkFishingReference is not { } expected ||
-            value.Chunk != expected.Chunk)
-            return;
-        foreach (var change in value.Changes)
-        {
-            if (change.NodeId != expected.Id)
-                continue;
-            if (_networkFishingReceiptObserved &&
-                change.NodeRevision == _networkFishingAwaitingNodeRevision &&
-                change.ResourceChunkRevision ==
-                    _networkFishingAwaitingChunkRevision)
-                _networkFishingDeltaObserved = true;
-            else if (!_networkFishingReceiptObserved)
-            {
-                _networkFishingDeltaArrivedEarly = true;
-                _networkFishingEarlyNodeRevision = change.NodeRevision;
-                _networkFishingEarlyChunkRevision =
-                    change.ResourceChunkRevision;
-            }
-            break;
-        }
-        IsAwaitingNetworkFishingState();
-    }
-
-    private bool TryHandleNetworkFishingResult(
-        ResourceActionResultMessage result)
-    {
-        if (_networkFishingCommandId != result.CommandId)
-            return false;
-        _networkFishingCommandId = null;
-        var expected = _networkFishingReference;
-        if (result.Action != ResourceActionKind.Fish ||
-            result.FishingOutcome is not { } outcome ||
-            expected is null || result.Resource != expected.Value)
-        {
-            _chatUi.AddMessage(
-                "The server returned mismatched fishing state.",
-                ChatMessageStyle.Warning);
-            CancelNetworkFishingPresentation();
-            return true;
-        }
-        if (!result.Accepted)
-        {
-            if (result.RejectionCode == CommandRejectionCode.RateLimited)
-                return true;
-            _chatUi.AddMessage(
-                string.IsNullOrWhiteSpace(result.Detail)
-                    ? $"Server rejected fishing ({result.RejectionCode})."
-                    : result.Detail,
-                ChatMessageStyle.Warning);
-            CancelNetworkFishingPresentation();
-            return true;
-        }
-
-        var active = _networkActiveFishing;
-        if (active is null ||
-            outcome.Species != active.Value.Descriptor.Species)
-        {
-            _chatUi.AddMessage(
-                "The server returned a different fish species.",
-                ChatMessageStyle.Warning);
-            CancelNetworkFishingPresentation();
-            return true;
-        }
-        _entityFeedback.ShowLabel(
-            FishFeedbackKey(active.Value.Fish.StableKey),
-            outcome.Caught ? "Caught" : "Miss",
-            outcome.Caught,
-            _clock);
-        _networkFishingAwaitingActorRevision = result.ActorRevision;
-        _networkFishingAwaitingInventoryRevision = result.InventoryRevision;
-        _networkFishingAwaitingNodeRevision = checked(
-            expected.Value.ExpectedNodeRevision + 1);
-        _networkFishingAwaitingChunkRevision = checked(
-            expected.Value.ExpectedResourceChunkRevision + 1);
-        _networkFishingReceiptObserved = true;
-        if (_networkFishingDeltaArrivedEarly &&
-            _networkFishingEarlyNodeRevision ==
-                _networkFishingAwaitingNodeRevision &&
-            _networkFishingEarlyChunkRevision ==
-                _networkFishingAwaitingChunkRevision)
-            _networkFishingDeltaObserved = true;
-        if (!outcome.Caught)
-        {
-            // A miss advances cadence but cannot produce a resource delta.
-            _networkFishingDeltaObserved = true;
-            _networkFishingAwaitingNodeRevision =
-                expected.Value.ExpectedNodeRevision;
-            _networkFishingAwaitingChunkRevision =
-                expected.Value.ExpectedResourceChunkRevision;
-        }
-        else
-        {
-            foreach (var reward in result.Rewards)
-            {
-                if (reward.Quantity <= 0 ||
-                    !ItemCatalog.TryGet(reward.ItemId, out var item))
-                    continue;
-                _chatUi.AddMessage(
-                    FishingSkill.InventoryMessage(item.Name),
-                    ChatMessageStyle.Experience);
-            }
-        }
-        IsAwaitingNetworkFishingState();
-        return true;
-    }
-
-    private void CancelNetworkFishingPresentation()
-    {
-        _networkPendingFishing = null;
-        _networkActiveFishing = null;
-        _networkFishingCommandId = null;
-        _networkFishingReference = null;
-        _networkFishingCompletedCycles = 0;
-        _networkFishingReceiptObserved = false;
-        _networkFishingDeltaObserved = false;
-        _networkFishingDeltaArrivedEarly = false;
-        _networkFishingEarlyNodeRevision = 0;
-        _networkFishingEarlyChunkRevision = 0;
-        _activeFishKey = null;
-        if (_player?.Action == EntityAction.Fish)
-            _player.Stop();
-        if (_networkClient?.IsConnected == true)
-        {
-            SendNetworkPresentSkill(EntityAction.Idle);
-            SendNetworkStop(preserveFishingAction: true);
-        }
-        CenterFishingBoatRider();
-    }
+    private void CancelNetworkFishingPresentation() =>
+        ClearNetworkFishingAction();
 
     private void ApplyNetworkBoatSnapshot(
         EntitySnapshot snapshot,
@@ -1040,7 +627,7 @@ internal sealed partial class GameHostWindow
                 : remoteOccupant?.Gender ?? EntityGender.Male;
             var boarded = boat.State.OccupantPlayerId != Guid.Empty;
             var fishing = localOccupant
-                ? _networkActiveFishing is not null &&
+                ? _activeNetworkFishingAction is not null &&
                   _player?.Action == EntityAction.Fish
                 : remoteOccupant?.Action == EntityAction.Fish;
             var teamColor = localOccupant

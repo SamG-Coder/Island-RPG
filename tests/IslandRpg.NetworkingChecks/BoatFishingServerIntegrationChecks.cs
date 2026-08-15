@@ -38,6 +38,9 @@ internal static class BoatFishingServerIntegrationChecks
         checks.Add(
             "real server replicates boat fishing UDP privacy and restart",
             ReplicatesBoatFishingAndRestartAsync);
+        checks.Add(
+            "real server shore fishing with a net walks then catches",
+            ShoreFishingWithNetWalksThenCatchesAsync);
     }
 
     private static void IslandCapacityMatchesRaftAuthority()
@@ -424,6 +427,181 @@ internal static class BoatFishingServerIntegrationChecks
             cancellationToken);
     }
 
+    private static async ValueTask ShoreFishingWithNetWalksThenCatchesAsync(
+        CancellationToken cancellationToken)
+    {
+        var scenario = FindShoreScenario();
+        var worldId = Guid.NewGuid();
+        var options = new ServerOptions(
+            IPAddress.Loopback,
+            0,
+            worldId,
+            scenario.Seed,
+            BuildVersion,
+            ContentVersion,
+            8)
+        {
+            AutosaveInterval = TimeSpan.FromHours(1),
+            StartingPosition = scenario.Spawn,
+            StartingInventory =
+            [
+                new InitialInventoryItem(ItemIds.PrimitiveFishingNet)
+            ]
+        };
+
+        await using var host = await RunningServer.StartAsync(
+            options, cancellationToken);
+        await using var actor = new NetworkGameClient(TimeSpan.Zero);
+        var accepted = await ConnectAsync(
+            actor, host, worldId, Guid.NewGuid(), "Elara",
+            cancellationToken);
+        await EventuallyAsync(
+            () => actor.State.Gameplay is not null &&
+                  Quantity(
+                      actor.State.Gameplay, ItemIds.PrimitiveFishingNet) > 0,
+            "the shore fisher did not receive a fishing net",
+            cancellationToken);
+
+        var netSlot = actor.State.Gameplay!.InventorySlots
+            .First(slot => string.Equals(
+                slot.ItemId, ItemIds.PrimitiveFishingNet,
+                StringComparison.Ordinal))
+            .Slot;
+        CheckAssert.True(
+            GameHostWindowReach.WithinServerShoreReach(
+                scenario.Stand, scenario.Fish.Position),
+            "the chosen stand must be inside the 2.4 shore fishing reach");
+        CheckAssert.False(
+            GameHostWindowReach.WithinServerShoreReach(
+                scenario.Spawn, scenario.Fish.Position),
+            "the walk-to-act spawn must start outside server fishing reach");
+
+        await actor.SendWalkAsync(
+            scenario.Stand.X, scenario.Stand.Y, 0, cancellationToken);
+        await EventuallyAsync(
+            () => actor.State.Entities.TryGetValue(
+                      accepted.PlayerEntityId, out var pose) &&
+                  GameHostWindowReach.WithinServerShoreReach(
+                      new(pose.X, pose.Y), scenario.Fish.Position),
+            "the server pose never arrived inside fishing reach",
+            cancellationToken);
+
+        await actor.SendPresentSkillAsync(
+            (byte)EntityAction.Fish, cancellationToken: cancellationToken);
+
+        ResourceActionResultMessage caught = null!;
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            if (attempt != 0)
+                await Task.Delay(TimeSpan.FromSeconds(2.9), cancellationToken);
+            caught = await SendResourceAsync(
+                actor,
+                new ResourceActionPayload(
+                    ResourceActionKind.Fish,
+                    actor.GetResourceReference(
+                        scenario.Fish.Chunk, scenario.Fish.Id),
+                    netSlot),
+                cancellationToken);
+            CheckAssert.True(
+                caught.Accepted && caught.FishingOutcome is not null,
+                $"shore fishing with a net was rejected: {caught.Detail} " +
+                $"({caught.RejectionCode})");
+            CheckAssert.Equal(
+                scenario.Fish.Species, caught.FishingOutcome!.Value.Species,
+                "the shore catch changed species");
+            if (caught.FishingOutcome.Value.Caught) break;
+        }
+        CheckAssert.True(caught.FishingOutcome is { Caught: true },
+            "eight shore casts with a net never produced a catch");
+        await EventuallyAsync(
+            () => Quantity(actor.State.Gameplay, ItemIds.RawMinnows) > 0 &&
+                  actor.State.Gameplay!.FishingExperience > 0,
+            "the shore catch never appeared in inventory or Fishing XP",
+            cancellationToken);
+    }
+
+    private static ShoreScenario FindShoreScenario()
+    {
+        var fishSource = new ProceduralFishSchoolSource();
+        for (var seed = 1L; seed <= 2_048; seed++)
+        {
+            var land = new ProceduralSurfaceNavigationQuery(seed);
+            for (var chunkY = -2; chunkY <= 2; chunkY++)
+            for (var chunkX = -2; chunkX <= 2; chunkX++)
+            {
+                var chunk = new WorldChunkKey(chunkX, chunkY, 0);
+                foreach (var fish in fishSource.DescribeSchools(seed, chunk)
+                             .Where(static value =>
+                                 value.Species == FishSpecies.ShoreMinnows))
+                {
+                    if (!TryFindStand(land, fish.Position, 2.4f, out var stand))
+                        continue;
+                    if (!TryFindSpawnOutsideReach(
+                            land, fish.Position, stand, out var spawn))
+                        continue;
+                    return new ShoreScenario(seed, spawn, stand, fish);
+                }
+            }
+        }
+        throw new InvalidOperationException(
+            "No bounded land spawn/stand/minnow scenario was found.");
+    }
+
+    private static bool TryFindStand(
+        ProceduralSurfaceNavigationQuery land,
+        Vector2 fish,
+        float reach,
+        out Vector2 stand)
+    {
+        stand = default;
+        var best = float.MaxValue;
+        var tileX = (int)MathF.Floor(fish.X);
+        var tileY = (int)MathF.Floor(fish.Y);
+        for (var y = -3; y <= 3; y++)
+        for (var x = -3; x <= 3; x++)
+        {
+            var candidate = new Vector2(tileX + x + .5f, tileY + y + .5f);
+            var distance = Vector2.Distance(candidate, fish);
+            if (distance > reach || distance >= best ||
+                !land.CanStandAt(candidate, 0))
+                continue;
+            best = distance;
+            stand = candidate;
+        }
+        return best < float.MaxValue;
+    }
+
+    private static bool TryFindSpawnOutsideReach(
+        ProceduralSurfaceNavigationQuery land,
+        Vector2 fish,
+        Vector2 stand,
+        out Vector2 spawn)
+    {
+        spawn = default;
+        var best = float.MaxValue;
+        for (var y = -10; y <= 10; y++)
+        for (var x = -10; x <= 10; x++)
+        {
+            var candidate = new Vector2(stand.X + x, stand.Y + y);
+            var toFish = Vector2.Distance(candidate, fish);
+            var toStand = Vector2.Distance(candidate, stand);
+            if (toFish <= 2.4f || toStand is < 3 or > 8 ||
+                toStand >= best ||
+                !land.CanStandAt(candidate, 0))
+                continue;
+            best = toStand;
+            spawn = candidate;
+        }
+        return best < float.MaxValue;
+    }
+
+    private static class GameHostWindowReach
+    {
+        public static bool WithinServerShoreReach(
+            Vector2 origin, Vector2 target) =>
+            Vector2.DistanceSquared(origin, target) <= 2.4f * 2.4f;
+    }
+
     private static Scenario FindScenario()
     {
         var fishSource = new ProceduralFishSchoolSource();
@@ -670,5 +848,11 @@ internal static class BoatFishingServerIntegrationChecks
         long Seed,
         Vector2 Spawn,
         Vector2 Boat,
+        FishSchoolDescriptor Fish);
+
+    private sealed record ShoreScenario(
+        long Seed,
+        Vector2 Spawn,
+        Vector2 Stand,
         FishSchoolDescriptor Fish);
 }

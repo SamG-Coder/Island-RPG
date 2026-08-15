@@ -17,6 +17,8 @@ internal static class SkillPresentationChecks
         AttackStanceAndApproachMatchSinglePlayer();
         FishingStanceAndReachMatchSinglePlayer();
         ShoreFishingStartsAtNetReachLikePickup();
+        ShoreFishingCommitsInsideServerReach();
+        MultiplayerFishingUsesTheSameResourcePathAsChopping();
         BuildAndCancelReachMatchSinglePlayer();
         ConstructionWaitsForServerPoseBeforeCommit();
         InRangeWindupStillDispatchesAfterActionTimeReset();
@@ -222,6 +224,58 @@ internal static class SkillPresentationChecks
             "shore fishing must start at net reach the same way pickup starts at its stand-off");
     }
 
+    private static void ShoreFishingCommitsInsideServerReach()
+    {
+        const float reach = GameHostWindow.NetworkShoreFishingServerReach;
+        var from = new Vector2(6, 1);
+        var to = new Vector2(1, 1);
+        var stand = WorldActionReach.StandOff(
+            from, to, GameHostWindow.NetworkShoreFishingWalkRange);
+        var justOutside = to + new Vector2(reach + .05f, 0);
+        Assert(
+            WorldActionReach.CompletionRange(
+                GameHostWindow.NetworkShoreFishingWalkRange) <= reach &&
+            !GameHostWindow.NetworkFishingWithinServerReach(
+                from, to, aboard: false) &&
+            GameHostWindow.NetworkFishingWithinServerReach(
+                stand, to, aboard: false) &&
+            !GameHostWindow.NetworkFishingWithinServerReach(
+                justOutside, to, aboard: false) &&
+            GameHostWindow.NetworkResourceWindupReady(
+                0, 2.8, clock: 12.8, commitAt: 10) &&
+            !GameHostWindow.NetworkResourceWindupReady(
+                0, 2.8, clock: 10, commitAt: 12.8) &&
+            GameHostWindow.ShouldRetryNetworkResourceReject(
+                false,
+                CommandRejectionCode.Impossible,
+                "The fish school is beyond the fishing net's reach."),
+            "shore fishing must walk inside the 2.4 server reach, commit on the wall-clock cycle, and retry an OutOfRange catch");
+    }
+
+    private static void MultiplayerFishingUsesTheSameResourcePathAsChopping()
+    {
+        const float netReach = 1.5f;
+        var shore = new Vector2(2, 1);
+        var school = new Vector2(3.2f, 1);
+        var far = new Vector2(20, 20);
+        Assert(
+            WorldActionReach.InRange(shore, school, netReach) &&
+            !WorldActionReach.InRange(far, school, netReach) &&
+            GameHostWindow.NetworkResourceWindupReady(
+                actionTime: 0, durationSeconds: 2.8, clock: 12.8,
+                commitAt: 10) &&
+            !GameHostWindow.NetworkResourceWindupReady(
+                actionTime: 0, durationSeconds: 2.8, clock: 11,
+                commitAt: 12.8) &&
+            ActorSkillStance.IsPublished(EntityAction.Fish) &&
+            ActorSkillStance.IsLooping(EntityAction.Fish) &&
+            !GameHostWindow.ShouldCancelFishingWhenLeavingBoat(
+                wasBoarded: false, isBoarded: false, fishingActive: true) &&
+            GameHostWindow.ShouldCancelFishingWhenLeavingBoat(
+                wasBoarded: true, isBoarded: false, fishingActive: true),
+            "multiplayer fishing must begin at net reach, dispatch on the same resource windup as chopping, and keep shore fishing when no boat is involved");
+    }
+
     private static void BuildAndCancelReachMatchSinglePlayer()
     {
         var begun = ActorSkillStance.Begin(
@@ -272,6 +326,10 @@ internal static class SkillPresentationChecks
                 false,
                 CommandRejectionCode.Impossible,
                 "The resource is outside interaction range.") &&
+            GameHostWindow.ShouldRetryNetworkResourceReject(
+                false,
+                CommandRejectionCode.Impossible,
+                "The fish school is beyond the fishing net's reach.") &&
             GameHostWindow.ShouldRetryNetworkResourceReject(
                 false, CommandRejectionCode.OutOfOrder, "stale") &&
             !GameHostWindow.ShouldRetryNetworkResourceReject(

@@ -38,6 +38,7 @@ internal sealed partial class GameHostWindow
             string.IsNullOrWhiteSpace(detail))
             return false;
         return detail.Contains("range", StringComparison.OrdinalIgnoreCase) ||
+               detail.Contains("reach", StringComparison.OrdinalIgnoreCase) ||
                detail.Contains("stale", StringComparison.OrdinalIgnoreCase) ||
                detail.Contains("revision", StringComparison.OrdinalIgnoreCase);
     }
@@ -130,6 +131,7 @@ internal sealed partial class GameHostWindow
     private void UpdateNetworkResourceInteraction()
     {
         if (_player is null) return;
+        if (UpdateNetworkFishingInteraction()) return;
         if (UpdateNetworkVegetationInteraction()) return;
         if (UpdateNetworkMiningInteraction()) return;
         if (_pendingNetworkTreeAction is { } pending)
@@ -405,7 +407,7 @@ internal sealed partial class GameHostWindow
         NetworkResourcesChangedEventArgs value)
     {
         if (!IsNetworkWorld) return;
-        ObserveNetworkFishingResourceChanges(value);
+
         HandleNetworkVegetationChanged(value);
         HandleNetworkMiningChanged(value);
         if (_activeNetworkTreeAction is { } active &&
@@ -423,11 +425,11 @@ internal sealed partial class GameHostWindow
     private void HandleNetworkResourceActionResult(
         ResourceActionResultMessage result)
     {
-        if (TryHandleNetworkFishingResult(result)) return;
         if (_networkResourceCommandId != result.CommandId ||
             (_activeNetworkTreeAction is null &&
              _activeNetworkVegetationAction is null &&
-             _activeNetworkMiningAction is null))
+             _activeNetworkMiningAction is null &&
+             _activeNetworkFishingAction is null))
             return;
         _networkResourceCommandId = null;
         var expectedReference = _networkResourceCommandReference;
@@ -442,7 +444,9 @@ internal sealed partial class GameHostWindow
         }
         var activeKind = _activeNetworkTreeAction?.Kind ??
                          _activeNetworkVegetationAction?.Kind ??
-                         ResourceActionKind.Mine;
+                         (_activeNetworkFishingAction is not null
+                             ? ResourceActionKind.Fish
+                             : ResourceActionKind.Mine);
         if (result.Action != activeKind ||
             expectedReference is null ||
             result.Resource != expectedReference.Value)
@@ -521,6 +525,16 @@ internal sealed partial class GameHostWindow
             if (!string.IsNullOrWhiteSpace(result.Detail))
                 _chatUi.AddMessage(
                     result.Detail, ChatMessageStyle.Warning);
+        }
+        else if (result.Action == ResourceActionKind.Fish &&
+                 _activeNetworkFishingAction is { } fishing)
+        {
+            var caught = result.FishingOutcome is { Caught: true };
+            _entityFeedback.ShowLabel(
+                FishFeedbackKey(fishing.Target.Fish.StableKey),
+                caught ? "Caught" : "Miss",
+                caught,
+                _clock);
         }
 
         foreach (var reward in result.Rewards)
@@ -698,10 +712,11 @@ internal sealed partial class GameHostWindow
         }
         _lastNetworkMiningStrike = 0;
         _nextNetworkMiningStrikeAt = 0;
+        ClearNetworkFishingAction();
         if (stopPlayer && _networkResourcePresentationOwned)
         {
             if (_player?.Action is EntityAction.Work or EntityAction.Gather or
-                EntityAction.Mine)
+                EntityAction.Mine or EntityAction.Fish)
                 _player.Stop();
             SendNetworkPresentSkill(EntityAction.Idle);
         }
