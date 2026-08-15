@@ -55,6 +55,23 @@ internal sealed class NetworkResourceHotPath
         WorldChunkKey chunk) =>
         _trees[tileKey] = new(id, chunk, ResourceNodeKind.Tree, 0);
 
+    public void RememberTreeFromWorld(
+        long worldSeed,
+        int worldLevel,
+        int tileX,
+        int tileY,
+        int variant)
+    {
+        var chunk = WorldChunkKey.At(
+            new System.Numerics.Vector2(tileX + .5f, tileY + .5f),
+            worldLevel);
+        RememberTree(
+            WorldHoverSelection.TileKey(tileX, tileY),
+            ProceduralResourceIdentity.ForTree(
+                worldSeed, worldLevel, tileX, tileY, variant),
+            chunk);
+    }
+
     public void Clear()
     {
         _fish.Clear();

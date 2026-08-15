@@ -13,6 +13,7 @@ internal static class NetworkResourceHotPathChecks
         ApproachRangesMatchSinglePlayer();
         SecondPassDoesNotDescribeFishOrTrees();
         RememberFishFromWorldDoesNotDescribe();
+        RememberedTreeFallsFromPublicHealthDeltaWithoutClick();
     }
 
     private static void UnknownMeansPresent()
@@ -202,6 +203,52 @@ internal static class NetworkResourceHotPathChecks
             hotPath.Fish.ContainsKey(school.StableKey) &&
             hotPath.Fish[school.StableKey].Id == school.Id,
             "remembering a loaded fish must hash identity without describing schools");
+    }
+
+    private static void RememberedTreeFallsFromPublicHealthDeltaWithoutClick()
+    {
+        const long seed = 67;
+        var chunk = new WorldChunkKey(3, -4, 0);
+        var tree = new SurfaceTreeResourceDescriptorSource()
+            .DescribeChunk(seed, chunk)
+            .First();
+        var describes = SurfaceTreeCatalog.TryDescribeAtInvocations;
+        var hotPath = new NetworkResourceHotPath();
+        hotPath.RememberTreeFromWorld(
+            seed,
+            chunk.WorldLevel,
+            tree.Key.SourceX,
+            tree.Key.SourceY,
+            tree.Key.Variant);
+        var tileKey = WorldHoverSelection.TileKey(
+            tree.Key.SourceX, tree.Key.SourceY);
+        var id = ProceduralResourceIdentity.ForTree(
+            seed, chunk.WorldLevel,
+            tree.Key.SourceX, tree.Key.SourceY, tree.Key.Variant);
+        var chunks = new Dictionary<WorldChunkKey, NetworkResourceChunkState>
+        {
+            [chunk] = new(
+                chunk,
+                1,
+                new Dictionary<ResourceNodeId, ResourceNodeSparseState>
+                {
+                    [id] = new(
+                        id,
+                        ResourceNodeKind.Tree,
+                        chunk,
+                        NodeRevision: 1,
+                        Health: 0,
+                        Remaining: 0,
+                        ReadyAtGameSeconds: 0,
+                        Depleted: true)
+                },
+                new Dictionary<ResourceNodeId, uint> { [id] = 1 })
+        };
+        Assert(
+            SurfaceTreeCatalog.TryDescribeAtInvocations == describes &&
+            hotPath.IsTreeDepleted(tileKey, chunks) &&
+            !hotPath.TreeBlocks(tileKey, chunks),
+            "a public chop delta must fell a remembered tree without another click or describe");
     }
 
     private static void Assert(bool condition, string message)

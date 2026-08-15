@@ -756,6 +756,22 @@ internal sealed partial class GameHostWindow
                 (int)fish.Species,
                 fish.StableKey);
         }
+        if (level != 0) return;
+        foreach (var tree in gpu.Chunk.Trees)
+        {
+            if (!SurfaceTreeCatalog.TryDescribeAt(
+                    _worldSeed, tree.X, tree.Y, out var visual) ||
+                visual.FrameIndex != tree.FrameIndex ||
+                !visual.GraphicName.Equals(
+                    tree.GraphicName, StringComparison.OrdinalIgnoreCase))
+                continue;
+            _networkResourceHotPath.RememberTreeFromWorld(
+                _worldSeed,
+                level,
+                tree.X,
+                tree.Y,
+                visual.Variant);
+        }
     }
 
     private void RetryNetworkResourceCommitIfTimedOut()
