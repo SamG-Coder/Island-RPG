@@ -4690,9 +4690,8 @@ internal sealed partial class GameHostWindow : GameWindow
             0, CenteredIconBounds(_gameUi.InventoryButton.Bounds));
         DrawToolbarActionIcon(
             1, CenteredIconBounds(_gameUi.CraftingButton.Bounds));
-        DrawCenteredUiText(
-            "Build", _gameUi.BuildButton.Bounds,
-            new(232, 219, 177, 255));
+        DrawToolbarActionIcon(
+            2, CenteredIconBounds(_gameUi.BuildButton.Bounds));
         DrawToolbarActionIcon(
             0, CenteredIconBounds(_gameUi.QuestButton.Bounds));
         if (_gameUi.DisembarkButton.Visible)

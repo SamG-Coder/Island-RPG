@@ -20,9 +20,11 @@ internal sealed partial class GameHostWindow
         new SpriteFrame?[CombatSkillIconCount];
     private readonly int[] _combatSkillIconTextures =
         new int[CombatSkillIconCount];
+    private const int ToolbarActionIconCount = 3;
     private readonly SpriteFrame?[] _toolbarActionIconFrames =
-        new SpriteFrame?[2];
-    private readonly int[] _toolbarActionIconTextures = new int[2];
+        new SpriteFrame?[ToolbarActionIconCount];
+    private readonly int[] _toolbarActionIconTextures =
+        new int[ToolbarActionIconCount];
     private float _starvationDamageRemainder;
     private TimedHealingState _playerTimedHealing;
 
@@ -333,10 +335,10 @@ internal sealed partial class GameHostWindow
         using var stream = File.OpenRead(path);
         var sheet = ImageResult.FromStream(
             stream, ColorComponents.RedGreenBlueAlpha);
-        for (var cell = 0; cell < 2; cell++)
+        for (var cell = 0; cell < ToolbarActionIconCount; cell++)
         {
-            var left = cell * sheet.Width / 2;
-            var right = (cell + 1) * sheet.Width / 2;
+            var left = cell * sheet.Width / ToolbarActionIconCount;
+            var right = (cell + 1) * sheet.Width / ToolbarActionIconCount;
             var contentLeft = right;
             var contentRight = left;
             var contentTop = sheet.Height;
