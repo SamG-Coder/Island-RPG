@@ -148,7 +148,8 @@ internal sealed partial class GameHostWindow : GameWindow
         BoardFishingBoat,
         BuildConstruction,
         CutPlantedTree,
-        FillBucket
+        FillBucket,
+        NetworkWorldAction
     }
     private sealed record QueuedWorldAction(
         WorldActionType Type, Vector2 Target, float Range,

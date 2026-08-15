@@ -28,6 +28,8 @@ internal static class ServerWorldActionAdapterChecks
             ProjectsPrivateState);
         checks.Add("server maps every world transaction rejection",
             MapsEveryWorldRejection);
+        checks.Add("rejected world actions carry a readable reason",
+            RejectedWorldActionsCarryAReadableReason);
     }
 
     private static void MapsEveryWorldAction()
@@ -350,6 +352,40 @@ internal static class ServerWorldActionAdapterChecks
             WorldActionProtocolAdapter.MapRejection(
                 WorldTransactionStatus.OutOfRange),
             "valid actions that fail world rules should be impossible");
+    }
+
+    private static void RejectedWorldActionsCarryAReadableReason()
+    {
+        var empty = new WorldTransactionResult(
+            CommandId, WorldTransactionStatus.OutOfRange, 1, 1,
+            [], [], null, null);
+        var coded = WorldActionProtocolAdapter.ToActionResult(1, 1, empty);
+        CheckAssert.False(coded.Accepted, "OutOfRange must reject");
+        CheckAssert.True(
+            coded.Detail.Contains("stand closer", StringComparison.Ordinal),
+            "an empty OutOfRange detail must become a readable sentence");
+
+        var materials = WorldActionProtocolAdapter.ToActionResult(
+            1, 1,
+            empty with
+            {
+                Status = WorldTransactionStatus.MissingConstructionResources
+            });
+        CheckAssert.True(
+            materials.Detail.Contains("hammer", StringComparison.Ordinal),
+            "a missing-construction reject must tell the player about hammer and materials");
+
+        var custom = WorldActionProtocolAdapter.ToActionResult(
+            1, 1,
+            empty with
+            {
+                Status = WorldTransactionStatus.InvalidPlacement,
+                Detail = "Another object is blocking that construction footprint."
+            });
+        CheckAssert.Equal(
+            "Another object is blocking that construction footprint.",
+            custom.Detail,
+            "an authored sentence must be kept instead of a generic status name");
     }
 
     private static WorldGameplayIntent ToIntent(IActionCommandPayload payload)

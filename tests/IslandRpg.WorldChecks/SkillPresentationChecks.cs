@@ -18,6 +18,7 @@ internal static class SkillPresentationChecks
         FishingStanceAndReachMatchSinglePlayer();
         ShoreFishingStartsAtNetReachLikePickup();
         BuildAndCancelReachMatchSinglePlayer();
+        ConstructionWaitsForServerPoseBeforeCommit();
         InRangeWindupStillDispatchesAfterActionTimeReset();
         OutOfRangeResourceRejectRetries();
         Console.WriteLine(
@@ -281,6 +282,30 @@ internal static class SkillPresentationChecks
                 true, CommandRejectionCode.None, string.Empty),
             "an in-range start that the server still sees as far must retry, " +
             "but a full inventory must not");
+    }
+
+    private static void ConstructionWaitsForServerPoseBeforeCommit()
+    {
+        var site = new Vector2(8, 3);
+        var client = WorldActionReach.StandOff(
+            new Vector2(1, 3), site, WorldActionReach.Construction);
+        var authorityStillWalking = new Vector2(2, 3);
+        Assert(
+            WorldActionReach.InRange(
+                client, site, WorldActionReach.Construction) &&
+            !GameHostWindow.NetworkWorldActionReadyToCommit(
+                client, authorityStillWalking, site,
+                WorldActionReach.Construction) &&
+            GameHostWindow.NetworkWorldActionReadyToCommit(
+                client, client, site, WorldActionReach.Construction) &&
+            GameHostWindow.ShouldRetryNetworkWorldActionReject(
+                false, "OutOfRange") &&
+            GameHostWindow.DescribeNetworkActionRejection(
+                new ActionResultMessage(
+                    1, 1, Guid.NewGuid(), false,
+                    CommandRejectionCode.Impossible, "OutOfRange",
+                    1, 1)).Contains("stand closer", StringComparison.Ordinal),
+            "a construction commit must wait until the server pose is in range, then retry OutOfRange");
     }
 
     private static void Assert(bool condition, string message)

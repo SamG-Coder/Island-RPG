@@ -158,9 +158,54 @@ public static class WorldActionProtocolAdapter
             result.CommandId,
             result.Accepted,
             rejection,
-            result.Detail,
+            result.Accepted
+                ? result.Detail
+                : DescribeRejection(result.Status, result.Detail),
             result.ActorRevision,
             result.InventoryRevision);
+    }
+
+    public static string DescribeRejection(
+        WorldTransactionStatus status, string? detail)
+    {
+        if (!string.IsNullOrWhiteSpace(detail) &&
+            detail.Contains(' '))
+            return detail;
+        return status switch
+        {
+            WorldTransactionStatus.OutOfRange =>
+                "You need to stand closer before that will complete.",
+            WorldTransactionStatus.MissingConstructionResources =>
+                "You need the materials and a hammer to build that.",
+            WorldTransactionStatus.ConstructionLocked =>
+                "Your Crafting level is too low to build that.",
+            WorldTransactionStatus.InvalidPlacement =>
+                "That foundation cannot be placed there.",
+            WorldTransactionStatus.InvalidConstruction =>
+                "That is not a valid construction.",
+            WorldTransactionStatus.NotConstructionSite =>
+                "That is no longer a construction site.",
+            WorldTransactionStatus.NoDemolitionRefund =>
+                "That construction cannot be demolished for a refund.",
+            WorldTransactionStatus.AccessDenied =>
+                "You cannot change someone else's construction.",
+            WorldTransactionStatus.InventoryFull =>
+                "Your inventory is too full.",
+            WorldTransactionStatus.StaleChunkRevision or
+                WorldTransactionStatus.StaleObjectRevision or
+                WorldTransactionStatus.StaleActorRevision or
+                WorldTransactionStatus.StaleInventoryRevision =>
+                "The world changed before that action completed.",
+            WorldTransactionStatus.WrongWorldLevel =>
+                "You are on a different world level from that object.",
+            WorldTransactionStatus.ItemUnavailable =>
+                "You no longer have the required items.",
+            WorldTransactionStatus.ObjectNotFound =>
+                "That object is no longer there.",
+            _ => string.IsNullOrWhiteSpace(detail)
+                ? status.ToString()
+                : detail
+        };
     }
 
     public static WorldObjectStateMessage ToPublicWorldState(

@@ -449,17 +449,53 @@ internal sealed partial class GameHostWindow
             DispatchPendingNetworkWorldAction();
             return;
         }
-        var range = NetworkApproachRange(action);
-        if (WorldActionReach.InRange(
-                NetworkActionPosition, action.Target, range))
+        if (NetworkWorldActionReadyToCommit(action))
         {
             DispatchPendingNetworkWorldAction();
             return;
         }
-        SendNetworkWalk(
-            WorldActionReach.StandOff(
-                NetworkActionPosition, action.Target, range));
+        var range = NetworkApproachRange(action);
+        var type = action.Kind == NetworkWorldActionKind.BuildConstruction &&
+                   action.ObjectId != Guid.Empty
+            ? WorldActionType.BuildConstruction
+            : WorldActionType.NetworkWorldAction;
+        QueueNetworkWalkToAct(
+            action.Target,
+            range,
+            type,
+            groundObjectId: action.ObjectId == Guid.Empty
+                ? null
+                : action.ObjectId,
+            itemId: action.DefinitionId);
     }
+
+    internal void TryDispatchPendingNetworkWorldAction()
+    {
+        if (_pendingNetworkWorldAction is { } pending &&
+            NetworkWorldActionReadyToCommit(pending))
+            DispatchPendingNetworkWorldAction();
+    }
+
+    internal static bool NetworkWorldActionReadyToCommit(
+        Vector2 client,
+        Vector2 authority,
+        Vector2 target,
+        float clientStandOff,
+        float serverRange = AuthoritativeWorldTransactions.InteractionRange)
+    {
+        if (!WorldActionReach.InRange(client, target, clientStandOff))
+            return false;
+        var delta = authority - target;
+        return delta.LengthSquared <= serverRange * serverRange;
+    }
+
+    private bool NetworkWorldActionReadyToCommit(
+        PendingNetworkWorldAction action) =>
+        NetworkWorldActionReadyToCommit(
+            NetworkActionPosition,
+            _networkAuthoritativePosition,
+            action.Target,
+            NetworkApproachRange(action));
 
     private void UpdatePendingNetworkWorldAction()
     {
@@ -474,9 +510,7 @@ internal sealed partial class GameHostWindow
                 ChatMessageStyle.Warning);
             return;
         }
-        var range = NetworkApproachRange(pending);
-        if (WorldActionReach.InRange(
-                NetworkActionPosition, pending.Target, range))
+        if (NetworkWorldActionReadyToCommit(pending))
             DispatchPendingNetworkWorldAction();
     }
 
@@ -569,6 +603,7 @@ internal sealed partial class GameHostWindow
             return;
         }
         _pendingNetworkWorldAction = null;
+        _dispatchedNetworkWorldAction = pending;
         if (pending.Kind == NetworkWorldActionKind.StartExcavation)
         {
             SendNetworkPresentSkill(EntityAction.Dig);
@@ -999,13 +1034,54 @@ internal sealed partial class GameHostWindow
             transfer.Quantity), commandId);
     }
 
-    private void HandleNetworkWorldActionResult(ActionResultMessage result)
+    private PendingNetworkWorldAction? _dispatchedNetworkWorldAction;
+
+    internal static string DescribeNetworkActionRejection(
+        ActionResultMessage result)
+    {
+        if (!string.IsNullOrWhiteSpace(result.Detail) &&
+            result.Detail.Contains(' '))
+            return result.Detail;
+        return result.Detail switch
+        {
+            "OutOfRange" =>
+                "You need to stand closer before that will complete.",
+            "MissingConstructionResources" =>
+                "You need the materials and a hammer to build that.",
+            "ConstructionLocked" =>
+                "Your Crafting level is too low to build that.",
+            "InvalidPlacement" =>
+                "That foundation cannot be placed there.",
+            "InvalidConstruction" =>
+                "That is not a valid construction.",
+            "StaleChunkRevision" or "StaleObjectRevision" or
+                "StaleActorRevision" or "StaleInventoryRevision" =>
+                "The world changed before that action completed.",
+            "NotConstructionSite" =>
+                "That is no longer a construction site.",
+            "AccessDenied" =>
+                "You cannot change someone else's construction.",
+            "InventoryFull" =>
+                "Your inventory is too full.",
+            _ => string.IsNullOrWhiteSpace(result.Detail)
+                ? $"Server rejected the action ({result.RejectionCode})."
+                : result.Detail
+        };
+    }
+
+    internal static bool ShouldRetryNetworkWorldActionReject(
+        bool accepted, string? detail) =>
+        !accepted && detail is "OutOfRange" or "StaleChunkRevision" or
+            "StaleObjectRevision" or "StaleActorRevision" or
+            "StaleInventoryRevision";
+
+    private bool HandleNetworkWorldActionResult(ActionResultMessage result)
     {
         if (result.Accepted &&
             result.Detail.StartsWith("dummy_", StringComparison.Ordinal))
         {
             PresentNetworkDummyStrike(result.Detail);
-            return;
+            return false;
         }
         if (_networkCookingCommandId == result.CommandId)
         {
@@ -1021,8 +1097,18 @@ internal sealed partial class GameHostWindow
                 ClearNetworkCookingPresentation();
             _networkCookingCommandId = null;
         }
+        var retry = ShouldRetryNetworkWorldActionReject(
+            result.Accepted, result.Detail);
         if (_networkBuildCommandId == result.CommandId)
         {
+            if (retry && _dispatchedNetworkWorldAction is { } build)
+            {
+                _networkBuildCommandId = null;
+                _networkExpectedBuildMutation = null;
+                _networkBuildAwaitingDelta = false;
+                _pendingNetworkWorldAction = build;
+                return true;
+            }
             if (!result.Accepted ||
                 _networkExpectedBuildMutation is not { } expected ||
                 expected.CommandId != result.CommandId)
@@ -1034,6 +1120,12 @@ internal sealed partial class GameHostWindow
         }
         if (_networkPlacementCommandId == result.CommandId)
         {
+            if (retry && _dispatchedNetworkWorldAction is { } placed)
+            {
+                ClearNetworkPlacementExpectation();
+                _pendingNetworkWorldAction = placed;
+                return true;
+            }
             if (!result.Accepted ||
                 _networkExpectedPlacementMutation is not { } expected ||
                 expected.CommandId != result.CommandId)
@@ -1044,15 +1136,17 @@ internal sealed partial class GameHostWindow
             else
                 _networkPlacementAwaitingDelta = true;
         }
-        if (_networkContainerTransferCommandId != result.CommandId) return;
+        if (_networkContainerTransferCommandId != result.CommandId)
+            return false;
         if (result.Accepted)
         {
             _networkContainerTransferAwaitingState = true;
-            return;
+            return false;
         }
         _networkContainerTransferCommandId = null;
         _networkContainerTransferAwaitingState = false;
         _networkContainerTransfers.Clear();
+        return false;
     }
 
     private Vector2? _pendingNetworkCookingTarget;

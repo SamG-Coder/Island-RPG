@@ -349,12 +349,10 @@ internal sealed partial class GameHostWindow
 
     private void HandleNetworkActionResult(ActionResultMessage result)
     {
-        HandleNetworkWorldActionResult(result);
-        if (!result.Accepted)
+        var retried = HandleNetworkWorldActionResult(result);
+        if (!result.Accepted && !retried)
             _chatUi.AddMessage(
-                string.IsNullOrWhiteSpace(result.Detail)
-                    ? $"Server rejected the action ({result.RejectionCode})."
-                    : result.Detail,
+                DescribeNetworkActionRejection(result),
                 ChatMessageStyle.Warning);
     }
 
@@ -705,13 +703,15 @@ internal sealed partial class GameHostWindow
         WorldActionType type,
         Guid? groundObjectId = null,
         string? fishKey = null,
-        string? vegetationKey = null)
+        string? vegetationKey = null,
+        string? itemId = null)
     {
         _worldActions.QueuePath(
             target,
             range,
             type,
             groundObjectId: groundObjectId,
+            itemId: itemId,
             fishKey: fishKey,
             vegetationKey: vegetationKey,
             clearTreeActions: true);

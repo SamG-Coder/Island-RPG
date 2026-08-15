@@ -399,6 +399,9 @@ internal sealed partial class GameHostWindow
             }:
                 window.BeginPlayerConstructionWork(siteId);
                 break;
+            case { Type: GameHostWindow.WorldActionType.NetworkWorldAction }:
+                window.TryDispatchPendingNetworkWorldAction();
+                break;
             case
             {
                 Type: GameHostWindow.WorldActionType.DropGroundObject,
