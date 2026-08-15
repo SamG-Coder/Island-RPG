@@ -822,7 +822,10 @@ public sealed class AuthoritativeResourceTransactions
             input, command.Context, descriptor, current,
             inventoryChanges: caught, resourceChanges: caught);
         if (revisionFailure is not null) return revisionFailure;
-        var nextReadyAt = Cadence(ResourceActionKind.Fish)
+        var nextReadyAt = new ResourceActionCadence(
+                FishingRules.CycleSeconds(
+                    (float)Cadence(ResourceActionKind.Fish).IntervalSeconds,
+                    net.FishingPower))
             .NextReadyAt(command.GameSeconds);
         if (!caught)
         {

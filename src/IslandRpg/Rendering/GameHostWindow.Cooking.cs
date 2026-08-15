@@ -82,12 +82,18 @@ internal sealed partial class GameHostWindow
         }
         _worldActions.QueuePath(
             new Vector2(campfire.X, campfire.Y),
-            .72f,
+            WorldActionReach.Campfire,
             WorldActionType.CookOnCampfire,
             groundObjectId: campfire.Id,
             inventorySlot: inventorySlot,
             itemId: itemId,
             clearTreeActions: true);
+        if (IsNetworkWorld)
+            SendNetworkWalk(
+                WorldActionReach.StandOff(
+                    NetworkActionPosition,
+                    new Vector2(campfire.X, campfire.Y),
+                    WorldActionReach.Campfire));
     }
 
     internal void BeginCampfireCooking(
@@ -116,7 +122,17 @@ internal sealed partial class GameHostWindow
         _activeCampfireFuelPickupId = null;
         _activeCooking = new(
             campfireId, inventorySlot, itemId, target);
+        if (IsNetworkWorld)
+        {
+            SendNetworkPresentSkill(
+                EntityAction.Gather,
+                CookingSkill.PlacementAnimationSeconds);
+            _networkWorldActionCommitAt =
+                _clock + CookingSkill.PlacementAnimationSeconds;
+        }
         _player.GatherAt(target);
+        if (IsNetworkWorld)
+            _player.RestartActionTime();
     }
 
     internal void UpdateCooking()
@@ -133,9 +149,29 @@ internal sealed partial class GameHostWindow
                 _activeCooking = null;
                 return;
             }
-            if (_player.ActionTime <
-                CookingSkill.PlacementAnimationSeconds)
+            if (!NetworkResourceWindupReady(
+                    _player.ActionTime,
+                    CookingSkill.PlacementAnimationSeconds,
+                    _clock,
+                    _networkWorldActionCommitAt))
                 return;
+            if (IsNetworkWorld)
+            {
+                var networkFire = FindGroundObject(cooking.CampfireId);
+                if (networkFire is null)
+                {
+                    _activeCooking = null;
+                    _player.Stop();
+                    return;
+                }
+                QueueNetworkObjectAction(
+                    NetworkWorldActionKind.CookOnCampfire,
+                    networkFire,
+                    cooking.InventorySlot);
+                _activeCooking = null;
+                _player.Stop();
+                return;
+            }
             var campfire = FindGroundObject(cooking.CampfireId);
             var reason = string.Empty;
             if (campfire is null ||

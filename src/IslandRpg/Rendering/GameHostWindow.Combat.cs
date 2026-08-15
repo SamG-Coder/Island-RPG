@@ -49,6 +49,10 @@ internal sealed partial class GameHostWindow
             _nextMeleeAttackAt = _clock + MeleeImpactDelay();
             _swingStartedForAttackAt = _nextMeleeAttackAt;
             _player.RestartAttackAt(target);
+            if (IsNetworkWorld)
+                SendNetworkPresentSkill(
+                    EntityAction.Attack,
+                    (float)(MeleeImpactDelay() + MeleeRecoveryDelay()));
         }
         else if (_swingStartedForAttackAt == _nextMeleeAttackAt)
         {
@@ -244,12 +248,25 @@ internal sealed partial class GameHostWindow
         {
             _player.RestartAttackAt(target);
             _swingStartedForAttackAt = _nextMeleeAttackAt;
+            if (IsNetworkWorld)
+                SendNetworkPresentSkill(
+                    EntityAction.Attack,
+                    (float)(impactDelay + MeleeRecoveryDelay()));
         }
         else
         {
             _player.AttackAt(target);
         }
         if (_clock < _nextMeleeAttackAt) return;
+        if (IsNetworkWorld)
+        {
+            _nextMeleeAttackAt = PlayerMeleeReadyAt();
+            _meleeReturnToIdleAt = _clock + MeleeRecoveryDelay();
+            if (TryNetworkWorldObjectReference(targetId, out var dummy))
+                SendNetworkAction(
+                    new IslandRpg.Protocol.StrikeTrainingDummyAction(dummy));
+            return;
+        }
         var interaction = EntityInteractionService.TryMeleeAttack(
             _actionCooldowns,
             _activePlayer.Id,
@@ -298,6 +315,13 @@ internal sealed partial class GameHostWindow
         QueueChunkSave(location.Chunk);
 
         var award = interaction.Experience;
+        if (IsNetworkWorld)
+        {
+            _chatUi.AddMessage(
+                $"You hit for {roll.Damage}.",
+                ChatMessageStyle.Action);
+            return;
+        }
         _activePlayer = _activePlayer.CombatStance switch
         {
             MeleeCombatStance.Accurate => _activePlayer with

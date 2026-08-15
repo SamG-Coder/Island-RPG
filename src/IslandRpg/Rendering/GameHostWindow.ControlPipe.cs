@@ -638,6 +638,10 @@ internal sealed partial class GameHostWindow
             BeginCaveDigTargeting(sourceSlot);
         else if (item.HasTag(ItemTag.Seed))
             TryPlantSeed(sourceSlot, sourceItem);
+        else if (BucketService.IsEmpty(sourceItem))
+            BeginBucketFillTargeting(sourceSlot);
+        else if (BucketService.IsFilled(sourceItem))
+            EmptyBucket(sourceSlot);
         else
         {
             _activeInventorySlot = -1;

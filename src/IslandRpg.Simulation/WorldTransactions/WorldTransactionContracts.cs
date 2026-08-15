@@ -61,7 +61,10 @@ public enum WorldTransactionStatus
     ExcavationCadenceLocked,
     InvalidCaveLink,
     NotCrop,
-    CropNotReady
+    CropNotReady,
+    NotPlantedTree,
+    PlantLimitReached,
+    TreeAlreadyFelled
 }
 
 public enum WorldObjectChangeKind
@@ -288,6 +291,36 @@ public sealed record BeginCampfireCookingTransaction(
     WorldObjectHandle Campfire,
     int InventorySlot,
     double GameSeconds);
+
+public sealed record CookStewTransaction(
+    WorldTransactionContext Context,
+    WorldObjectHandle Pot,
+    double GameSeconds);
+
+public sealed record StrikeTrainingDummyTransaction(
+    WorldTransactionContext Context,
+    WorldObjectHandle Dummy,
+    long WorldSeed,
+    ulong AttackSequence);
+
+public sealed record PlantTreeTransaction(
+    WorldTransactionContext Context,
+    Guid TreeObjectId,
+    int SeedInventorySlot,
+    Vector2 Position,
+    int WorldLevel,
+    uint ExpectedChunkRevision,
+    double GameSeconds,
+    string PlanterDisplayName);
+
+public sealed record StrikePlantedTreeTransaction(
+    WorldTransactionContext Context,
+    WorldObjectHandle Tree,
+    int ToolInventorySlot,
+    double GameSeconds,
+    double WorldGameSeconds,
+    long WorldSeed,
+    ulong StrikeSequence);
 
 public sealed record CompleteCampfireCookingTransaction(
     Guid OperationId,

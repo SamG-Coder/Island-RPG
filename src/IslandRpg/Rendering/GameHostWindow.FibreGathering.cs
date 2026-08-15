@@ -79,8 +79,7 @@ internal sealed partial class GameHostWindow
         _fishContext.Close();
         _vegetationContext.Open(
             MouseState.Position,
-            [_vegetationContextBerries ? "Pick berries" : "Gather fibres",
-             "Walk Here", "Examine"],
+            VegetationContextRules.Labels(_vegetationContextBerries),
             SceneClientBounds(), 154);
     }
 
@@ -90,16 +89,18 @@ internal sealed partial class GameHostWindow
         var berries = _vegetationContextBerries;
         _vegetationContextKey = null;
         if (key is null) return;
-        switch (option)
+        switch (VegetationContextRules.Resolve(option, berries))
         {
-            case 0:
-                if (berries) QueueBerryGather(key);
-                else QueueFibreGather(key);
+            case VegetationContextRules.Choice.GatherBerries:
+                QueueBerryGather(key);
                 break;
-            case 1:
+            case VegetationContextRules.Choice.GatherFibres:
+                QueueFibreGather(key);
+                break;
+            case VegetationContextRules.Choice.WalkHere:
                 QueueWalk(_vegetationContextWalkTarget);
                 break;
-            case 2:
+            case VegetationContextRules.Choice.Examine:
                 _chatUi.AddMessage(
                     berries
                         ? "A wild berry bush ready to forage."
@@ -114,6 +115,13 @@ internal sealed partial class GameHostWindow
     {
         if (IsNetworkWorld)
         {
+            if (!TryDescribeNetworkVegetation(stableKey, out _))
+            {
+                ReportBlockedAction(
+                    "network-fibre-unknown",
+                    "That shrub is not ready to gather.");
+                return;
+            }
             QueueNetworkVegetationAction(
                 stableKey, ResourceActionKind.GatherFibre);
             return;
@@ -142,6 +150,12 @@ internal sealed partial class GameHostWindow
     internal void BeginFibreGather(
         string stableKey, Vector2 target)
     {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkVegetationAction(
+                stableKey, ResourceActionKind.GatherFibre);
+            return;
+        }
         if (_player is null || _activePlayer is null) return;
         var located = FindVegetation(stableKey);
         if (located is null ||

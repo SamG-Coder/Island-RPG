@@ -407,6 +407,57 @@ internal static class VegetationResourceAuthorityChecks
                 "receipt replay must preserve exact inventory state");
         });
 
+        checks.Add(
+            "in-range fibre gather still commits after the PresentSkill windup",
+            async _ =>
+        {
+            var fixture = Fixture(ResourceNodeKind.FibreShrub);
+            var session = new AuthoritativeWorldSession(
+                identitySource: new FixedIdentitySource(),
+                resourceTransactions: fixture.Authority);
+            var connection = ClientConnectionId.New();
+            var joinTask = session.EnqueueJoinAsync(new(
+                connection, "Windup Tester", fixture.Actor.Position));
+            session.Drain();
+            var join = await joinTask;
+            var presentTask = session.EnqueueIntentAsync(new(
+                connection, join.Identity.PlayerId, 1,
+                new PresentSkillIntent(EntityAction.Gather)));
+            session.Drain();
+            CheckAssert.True((await presentTask).Accepted,
+                "an in-range gather must publish Gather before the mutation");
+
+            for (var tick = 0; tick < ActorSkillStance.OneShotTicks; tick++)
+                session.Tick();
+            CheckAssert.Equal(
+                EntityAction.Idle,
+                ActorSkillStance.UnpackAction(
+                    session.CaptureSnapshot().Actors.Single().AnimationState),
+                "the published gather clip must expire before the late commit");
+
+            var actor = session.CaptureSnapshot().Actors.Single();
+            var gatherTask = session.EnqueueIntentAsync(new(
+                connection, join.Identity.PlayerId, 2,
+                new GatherFibreIntent(
+                    Guid.NewGuid(),
+                    actor.Gameplay.Inventory.Revision,
+                    actor.Gameplay.ActorRevision,
+                    fixture.Reference)));
+            session.Drain();
+            var gather = await gatherTask;
+            CheckAssert.True(gather.Accepted,
+                "starting in range must still yield the item after the windup");
+            CheckAssert.True(
+                gather.ResourceTransaction?.Rewards.Any(value =>
+                    value.Quantity > 0) == true,
+                "the late in-range fibre commit must award the gathered item");
+            CheckAssert.Equal(
+                EntityAction.Idle,
+                ActorSkillStance.UnpackAction(
+                    session.CaptureSnapshot().Actors.Single().AnimationState),
+                "the late fibre commit must not start a second Gather clip");
+        });
+
         checks.Add("vegetation intent fingerprints include action and exact tool slot", () =>
         {
             var fixture = Fixture(ResourceNodeKind.BerryBush);

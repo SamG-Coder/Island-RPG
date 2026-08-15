@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
 using System.Numerics;
 using IslandRpg.Gameplay;
+using IslandRpg.Protocol;
 using IslandRpg.Resources;
+using IslandRpg.Server;
 using IslandRpg.Simulation;
 
 namespace IslandRpg.NetworkingChecks;
@@ -521,6 +523,12 @@ internal static class ResourceAuthorityChecks
                 connection, "Resource Tester", fixture.Actor.Position));
             session.Drain();
             var join = await joinTask;
+            var presentTask = session.EnqueueIntentAsync(new(
+                connection, join.Identity.PlayerId, 1,
+                new PresentSkillIntent(EntityAction.Gather)));
+            session.Drain();
+            CheckAssert.True((await presentTask).Accepted,
+                "stick gather begin must publish Gather before the mutation");
             var commandId = Guid.NewGuid();
             var intent = new GatherTreeStickIntent(
                 commandId,
@@ -528,11 +536,11 @@ internal static class ResourceAuthorityChecks
                 join.Gameplay.ActorRevision,
                 fixture.Reference);
             var firstTask = session.EnqueueIntentAsync(new(
-                connection, join.Identity.PlayerId, 1, intent));
+                connection, join.Identity.PlayerId, 2, intent));
             session.Drain();
             var first = await firstTask;
             var duplicateTask = session.EnqueueIntentAsync(new(
-                connection, join.Identity.PlayerId, 2, intent));
+                connection, join.Identity.PlayerId, 3, intent));
             session.Drain();
             var duplicate = await duplicateTask;
 
@@ -543,6 +551,23 @@ internal static class ResourceAuthorityChecks
             CheckAssert.Equal(first.InventoryRevision,
                 duplicate.InventoryRevision,
                 "idempotent replay must not gather a second item");
+
+            var snapshot = session.CaptureSnapshot().Actors.Single();
+            CheckAssert.Equal(
+                EntityAction.Gather,
+                ActorSkillStance.UnpackAction(snapshot.AnimationState),
+                "an accepted stick gather must publish Gather for remotes");
+            var entities = DedicatedServer.MaterializeSnapshotEntities(
+                session.CaptureSnapshot());
+            var player = entities.Single(value =>
+                value.EntityKind == NetworkEntityKind.Player);
+            CheckAssert.Equal(
+                EntityAction.Gather,
+                ActorSkillStance.UnpackAction(player.AnimationState),
+                "the wire snapshot must carry the gather animation");
+            CheckAssert.True(
+                player.State.HasFlag(NetworkEntityState.Interacting),
+                "remotes must see the interacting flag while gathering");
         });
     }
 

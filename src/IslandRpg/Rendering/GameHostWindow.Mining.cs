@@ -109,7 +109,11 @@ internal sealed partial class GameHostWindow
 
     internal void BeginMining(string stableKey, Vector2 target)
     {
-        if (IsNetworkWorld) return;
+        if (IsNetworkWorld)
+        {
+            QueueNetworkMiningAction(stableKey);
+            return;
+        }
         if (_player is null || FindMiningNode(stableKey) is null) return;
         _activeMiningKey = stableKey;
         _lastMiningStrike = 0;

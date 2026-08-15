@@ -716,10 +716,14 @@ public sealed class DedicatedServer : IAsyncDisposable
             (world.ChunkRevisions.Count +
              ProtocolLimits.MaxWorldChunkRevisionsPerBatch - 1) /
             ProtocolLimits.MaxWorldChunkRevisionsPerBatch);
+        var pickedBatch = world.PickedProceduralGroundObjects.Count > 0
+            ? 1
+            : 0;
         return checked(
             chunkBatchCount +
             world.Objects.Count +
             resources.Chunks.Count +
+            pickedBatch +
             2); // Complete boat and enemy baselines are always present.
     }
 
@@ -746,6 +750,15 @@ public sealed class DedicatedServer : IAsyncDisposable
                 sequence,
                 tick,
                 batch);
+            sequence = checked(sequence + 1);
+        }
+
+        if (world.PickedProceduralGroundObjects.Count > 0)
+        {
+            yield return new PickedProceduralGroundObjectsMessage(
+                sequence,
+                tick,
+                world.PickedProceduralGroundObjects);
             sequence = checked(sequence + 1);
         }
 
@@ -798,6 +811,10 @@ public sealed class DedicatedServer : IAsyncDisposable
                 new Vector2(walk.DestinationX, walk.DestinationY),
                 walk.WorldLevel),
             StopCommandMessage => StopIntent.Instance,
+            PresentSkillCommandMessage present =>
+                new PresentSkillIntent(
+                    (EntityAction)present.Action,
+                    present.DurationSeconds),
             ChatCommandMessage chat => new ChatIntent(chat.Text),
             ActionCommandMessage action =>
                 WorldActionProtocolAdapter.TryToWorldIntent(
@@ -1462,6 +1479,18 @@ public sealed class DedicatedServer : IAsyncDisposable
                 command.InventoryRevision,
                 command.ActorRevision,
                 consume.Slot),
+            EmptyBucketAction empty => new EmptyBucketIntent(
+                command.CommandId,
+                command.InventoryRevision,
+                command.ActorRevision,
+                empty.Slot),
+            FillBucketAction fill => new FillBucketIntent(
+                command.CommandId,
+                command.InventoryRevision,
+                command.ActorRevision,
+                fill.Slot,
+                new Vector2(fill.X, fill.Y),
+                fill.WorldLevel),
             SocialAction social => new SocialIntent(
                 command.CommandId,
                 command.InventoryRevision,
@@ -1864,10 +1893,14 @@ public sealed class DedicatedServer : IAsyncDisposable
             new WorldObjectBaseline(
                 value.Object,
                 chunks[value.Object.Chunk])).ToArray();
+        var picked = checkpoint.PickedProceduralGroundObjects.IsDefault
+            ? Array.Empty<Guid>()
+            : checkpoint.PickedProceduralGroundObjects.ToArray();
         lock (_worldBootstrapSync)
             Volatile.Write(ref _worldBootstrap, new WorldBootstrapState(
                 Array.AsReadOnly(baselines),
-                Array.AsReadOnly(chunkRevisions)));
+                Array.AsReadOnly(chunkRevisions),
+                Array.AsReadOnly(picked)));
     }
 
     private void ApplyWorldTransactionToBootstrap(
@@ -1903,11 +1936,13 @@ public sealed class DedicatedServer : IAsyncDisposable
 
             var objects = current.Objects.ToDictionary(
                 static value => value.Object.ObjectId);
+            var picked = current.PickedProceduralGroundObjects.ToHashSet();
             foreach (var delta in transaction.ObjectDeltas)
             {
                 if (delta.Kind == WorldObjectChangeKind.Removed)
                 {
-                    objects.Remove(delta.ObjectId);
+                    if (!objects.Remove(delta.ObjectId))
+                        picked.Add(delta.ObjectId);
                     continue;
                 }
                 if (delta.Object is not { } value ||
@@ -1933,7 +1968,9 @@ public sealed class DedicatedServer : IAsyncDisposable
                 .ToArray();
             Volatile.Write(ref _worldBootstrap, new WorldBootstrapState(
                 Array.AsReadOnly(nextObjects),
-                Array.AsReadOnly(nextChunks)));
+                Array.AsReadOnly(nextChunks),
+                Array.AsReadOnly(
+                    picked.OrderBy(static id => id).ToArray())));
             AfterWorldBootstrapUpdatedForTest?.Invoke();
         }
         if (autonomous && publishAutonomous)
@@ -2187,7 +2224,7 @@ public sealed class DedicatedServer : IAsyncDisposable
             entities[index++] = new EntitySnapshot(
                 ActorNetworkEntityIdentity.Derive(actor.ActorId),
                 NetworkEntityKind.Player,
-                0,
+                actor.AnimationState,
                 checked((short)actor.WorldLevel),
                 actor.Position.X,
                 actor.Position.Y,
@@ -2198,6 +2235,9 @@ public sealed class DedicatedServer : IAsyncDisposable
                 (actor.Gameplay.LifeState == ActorLifeState.Dead ||
                  actor.Gameplay.Health <= 0
                     ? NetworkEntityState.Dead
+                    : NetworkEntityState.None) |
+                (IsPublishedSkillAnimation(actor.AnimationState)
+                    ? NetworkEntityState.Interacting
                     : NetworkEntityState.None),
                 revision);
         }
@@ -2249,6 +2289,9 @@ public sealed class DedicatedServer : IAsyncDisposable
                 "The authoritative snapshot exceeds its protocol entity bound.");
         return entities;
     }
+
+    private static bool IsPublishedSkillAnimation(byte animation) =>
+        ActorSkillStance.IsPublished(ActorSkillStance.UnpackAction(animation));
 
     private void BroadcastSnapshot(SessionSnapshot snapshot)
     {
@@ -2524,11 +2567,13 @@ internal readonly record struct WorldObjectBaseline(
 
 internal sealed record WorldBootstrapState(
     IReadOnlyList<WorldObjectBaseline> Objects,
-    IReadOnlyList<WorldChunkRevisionState> ChunkRevisions)
+    IReadOnlyList<WorldChunkRevisionState> ChunkRevisions,
+    IReadOnlyList<Guid> PickedProceduralGroundObjects)
 {
     public static WorldBootstrapState Empty { get; } = new(
         Array.Empty<WorldObjectBaseline>(),
-        Array.Empty<WorldChunkRevisionState>());
+        Array.Empty<WorldChunkRevisionState>(),
+        Array.Empty<Guid>());
 }
 
 internal sealed record ResourceBootstrapState(

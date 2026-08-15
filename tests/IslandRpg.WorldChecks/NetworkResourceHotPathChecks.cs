@@ -9,6 +9,8 @@ internal static class NetworkResourceHotPathChecks
     public static void Run()
     {
         UnknownMeansPresent();
+        StickGatherDoesNotHideTree();
+        ApproachRangesMatchSinglePlayer();
         SecondPassDoesNotDescribeFishOrTrees();
         RememberFishFromWorldDoesNotDescribe();
     }
@@ -21,6 +23,63 @@ internal static class NetworkResourceHotPathChecks
             !hotPath.IsTreeDepleted(0, chunks: null) &&
             hotPath.TreeBlocks(0, chunks: null),
             "unknown network resources must stay live and blocking");
+    }
+
+    private static void StickGatherDoesNotHideTree()
+    {
+        const long seed = 67;
+        var hotPath = new NetworkResourceHotPath();
+        var chunk = new WorldChunkKey(3, -4, 0);
+        var tree = new SurfaceTreeResourceDescriptorSource()
+            .DescribeChunk(seed, chunk)
+            .First();
+        var id = ProceduralResourceIdentity.ForTree(
+            seed, chunk.WorldLevel,
+            tree.Key.SourceX, tree.Key.SourceY, tree.Key.Variant);
+        var tileKey = WorldHoverSelection.TileKey(
+            tree.Key.SourceX, tree.Key.SourceY);
+        hotPath.RememberTree(tileKey, id, chunk);
+        var chunks = new Dictionary<WorldChunkKey, NetworkResourceChunkState>
+        {
+            [chunk] = new(
+                chunk,
+                1,
+                new Dictionary<ResourceNodeId, ResourceNodeSparseState>
+                {
+                    [id] = new(
+                        id,
+                        ResourceNodeKind.Tree,
+                        chunk,
+                        NodeRevision: 1,
+                        Health: tree.InitialHealth,
+                        Remaining: 0,
+                        ReadyAtGameSeconds: 0,
+                        Depleted: false)
+                },
+                new Dictionary<ResourceNodeId, uint> { [id] = 1 })
+        };
+        Assert(
+            !hotPath.IsTreeDepleted(tileKey, chunks) &&
+            hotPath.TreeBlocks(tileKey, chunks),
+            "gathering the last stick must leave the tree standing");
+    }
+
+    private static void ApproachRangesMatchSinglePlayer()
+    {
+        var from = new OpenTK.Mathematics.Vector2(4, 1);
+        var to = new OpenTK.Mathematics.Vector2(1, 1);
+        var stand = WorldActionReach.StandOff(
+            from, to, WorldActionReach.GroundPickup);
+        Assert(
+            WorldActionReach.GroundPickup == .46f &&
+            WorldActionReach.Vegetation == .72f &&
+            WorldActionReach.Mining == .82f &&
+            WorldActionReach.CaveDig == .82f &&
+            MathF.Abs((stand - to).Length - WorldActionReach.GroundPickup) <
+            .0001f &&
+            WorldActionReach.InRange(stand, to, WorldActionReach.GroundPickup) &&
+            !WorldActionReach.InRange(from, to, WorldActionReach.GroundPickup),
+            "multiplayer approach must walk to the single-player stand-off");
     }
 
     private static void SecondPassDoesNotDescribeFishOrTrees()

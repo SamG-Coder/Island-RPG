@@ -479,6 +479,13 @@ internal sealed partial class GameHostWindow
 
     private void TryInstallCaveRope(Guid holeId, int ropeSlot)
     {
+        if (IsNetworkWorld)
+        {
+            if (_networkWorldObjects.TryGetValue(holeId, out var hole))
+                QueueNetworkCaveObjectAction(
+                    NetworkWorldActionKind.InstallCaveRope, hole, ropeSlot);
+            return;
+        }
         if (_activeWorldLevel != (int)WorldLevel.Overworld ||
             _activePlayer is null ||
             !InventoryContainsAt(ropeSlot, ItemIds.Rope) ||
@@ -627,6 +634,13 @@ internal sealed partial class GameHostWindow
         int materialSlot,
         string materialItemId)
     {
+        if (IsNetworkWorld)
+        {
+            if (_networkWorldObjects.TryGetValue(holeId, out var hole))
+                QueueNetworkCaveObjectAction(
+                    NetworkWorldActionKind.FillExcavation, hole, materialSlot);
+            return;
+        }
         var requiredItemId = "";
         if (_activePlayer is null ||
             !InventoryContainsAt(materialSlot, materialItemId) ||

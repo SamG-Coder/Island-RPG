@@ -84,13 +84,19 @@ internal sealed partial class GameHostWindow
             window._player is null
                 ? Vector2.Zero
                 : window._player.Position - target;
+        var range = MeleeCombatService.InteractionRange(
+            (System.Numerics.Vector2)approachDirection);
         QueuePath(
             target,
-            MeleeCombatService.InteractionRange(
-                (System.Numerics.Vector2)approachDirection),
+            range,
             GameHostWindow.WorldActionType.AttackTrainingDummy,
             groundObjectId: groundObject.Id,
             clearTreeActions: true);
+        if (window.IsNetworkWorld)
+            window.SendNetworkWalk(
+                WorldActionReach.StandOff(
+                    window.NetworkActionPosition, target, range),
+                preserveCombatAction: true);
     }
 
     public void QueueVillagerAttack(VillagerState villager)
@@ -206,6 +212,7 @@ internal sealed partial class GameHostWindow
         window.CancelMeleeCombat();
         window._queuedAction = null;
         window._activeTreeId = null;
+        window._activePlantedTreeId = null;
         window._activeTreeStickGatherId = null;
         StartWalkPath(target);
     }
@@ -265,6 +272,7 @@ internal sealed partial class GameHostWindow
         if (clearTreeActions)
         {
             window._activeTreeId = null;
+            window._activePlantedTreeId = null;
             window._activeTreeStickGatherId = null;
         }
 
@@ -309,14 +317,29 @@ internal sealed partial class GameHostWindow
             return;
 
         var action = window._queuedAction;
-        window._queuedAction = null;
         if ((window._player.Position - action.Target).Length > action.Range)
             return;
+        window._queuedAction = null;
 
         switch (action)
         {
+            case
+            {
+                Type: GameHostWindow.WorldActionType.FillBucket,
+                InventorySlot: >= 0
+            }:
+                window.BeginBucketFill(
+                    action.Target, action.InventorySlot);
+                break;
             case { Type: GameHostWindow.WorldActionType.CutTree }:
                 BeginTreeCutting(action.Target);
+                break;
+            case
+            {
+                Type: GameHostWindow.WorldActionType.CutPlantedTree,
+                GroundObjectId: { } plantedTreeId
+            }:
+                window.TryStartPlantedTreeCutting(plantedTreeId);
                 break;
             case { Type: GameHostWindow.WorldActionType.GatherTreeSticks }:
                 BeginTreeStickGather(action.Target);
@@ -499,6 +522,8 @@ internal sealed partial class GameHostWindow
     public void Update()
     {
         window.UpdateActiveTreeCutting();
+        window.UpdateActivePlantedTreeCutting();
+        window.UpdateBucketFill();
         window.UpdateActiveTreeStickGather();
         window.UpdateGroundObjectPickup();
         window.UpdateGroundObjectDrop();

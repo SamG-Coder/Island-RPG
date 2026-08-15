@@ -59,6 +59,7 @@ internal sealed class WorldEntity
     public Vector2 Facing { get; private set; } = new(1, 1);
     public EntityGender Gender { get; private set; }
     public EntityAction Action { get; private set; } = EntityAction.Idle;
+    public byte VisualGeneration { get; private set; }
     public double ActionTime { get; private set; }
     public float MoveSpeed { get; set; } =
         ActorMovementService.BaseMoveSpeed;
@@ -205,6 +206,8 @@ internal sealed class WorldEntity
     public void AdvanceAction(float elapsed) =>
         ActionTime += Math.Max(0, elapsed);
 
+    public void RestartActionTime() => ActionTime = 0;
+
     public void PrepareForPathRequest()
     {
         // A replacement route is calculated from the current position. Do not
@@ -302,6 +305,20 @@ internal sealed class WorldEntity
         if (direction.LengthSquared > .0001f)
             Facing = direction.Normalized();
         SetAction(EntityAction.Fish);
+    }
+
+    public void PresentSkill(
+        EntityAction action, byte generation, Vector2 target)
+    {
+        _path.Clear();
+        Target = Position;
+        var direction = target - Position;
+        if (direction.LengthSquared > .0001f)
+            Facing = direction.Normalized();
+        if (Action == action && VisualGeneration == generation) return;
+        Action = action;
+        VisualGeneration = generation;
+        ActionTime = 0;
     }
 
     public void SetGender(EntityGender gender)

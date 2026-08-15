@@ -131,8 +131,17 @@ internal sealed partial class GameHostWindow
     {
         if (IsNetworkWorld)
         {
-            QueueNetworkObjectAction(
-                NetworkWorldActionKind.TakeCampfireFuel, campfire);
+            _worldActions.QueuePath(
+                new Vector2(campfire.X, campfire.Y),
+                WorldActionReach.Campfire,
+                WorldActionType.TakeCampfireFuel,
+                groundObjectId: campfire.Id,
+                clearTreeActions: true);
+            SendNetworkWalk(
+                WorldActionReach.StandOff(
+                    NetworkActionPosition,
+                    new Vector2(campfire.X, campfire.Y),
+                    WorldActionReach.Campfire));
             return;
         }
         if (_activePlayer is null) return;
@@ -171,7 +180,14 @@ internal sealed partial class GameHostWindow
         }
         _activeGroundPickupId = null;
         _activeCampfireFuelPickupId = campfireId;
+        if (IsNetworkWorld)
+        {
+            SendNetworkPresentSkill(EntityAction.Gather);
+            _networkWorldActionCommitAt = _clock + GroundItemActionSeconds;
+        }
         _player.GatherAt(target);
+        if (IsNetworkWorld)
+            _player.RestartActionTime();
     }
 
     internal void UpdateCampfireFuelPickup()
@@ -184,7 +200,10 @@ internal sealed partial class GameHostWindow
             _activeCampfireFuelPickupId = null;
             return;
         }
-        if (_player.ActionTime < GroundItemActionSeconds) return;
+        if (!NetworkResourceWindupReady(
+                _player.ActionTime, GroundItemActionSeconds, _clock,
+                _networkWorldActionCommitAt))
+            return;
         _activeCampfireFuelPickupId = null;
         TryTakeCampfireFuel(campfireId);
         _player.Stop();

@@ -108,6 +108,15 @@ public sealed record StopCommandMessage(
     public ProtocolMessageKind Kind => ProtocolMessageKind.StopCommand;
 }
 
+public sealed record PresentSkillCommandMessage(
+    ulong Sequence,
+    ulong Tick,
+    byte Action,
+    float DurationSeconds = 0.75f) : IProtocolMessage
+{
+    public ProtocolMessageKind Kind => ProtocolMessageKind.PresentSkillCommand;
+}
+
 public sealed record ChatCommandMessage(
     ulong Sequence,
     ulong Tick,

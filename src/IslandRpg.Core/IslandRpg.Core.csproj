@@ -37,6 +37,8 @@
     <Compile Include="..\IslandRpg\Gameplay\WoodcuttingSkill.cs" Link="Gameplay\WoodcuttingSkill.cs" />
     <Compile Include="..\IslandRpg\Gameplay\FarmingSkill.cs" Link="Gameplay\FarmingSkill.cs" />
     <Compile Include="..\IslandRpg\Gameplay\CropService.cs" Link="Gameplay\CropService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\PlantedTreeService.cs" Link="Gameplay\PlantedTreeService.cs" />
+    <Compile Include="..\IslandRpg\Gameplay\BucketService.cs" Link="Gameplay\BucketService.cs" />
     <Compile Include="..\IslandRpg\Gameplay\MiningSkill.cs" Link="Gameplay\MiningSkill.cs" />
     <Compile Include="..\IslandRpg\Gameplay\ResourceStrikeService.cs" Link="Gameplay\ResourceStrikeService.cs" />
     <Compile Include="..\IslandRpg\Gameplay\EntityAction.cs" Link="Gameplay\EntityAction.cs" />

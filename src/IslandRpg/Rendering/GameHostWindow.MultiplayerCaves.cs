@@ -129,6 +129,14 @@ internal sealed partial class GameHostWindow
         if (!IsNetworkWorld || !CaveEntranceService.IsDigSite(site) ||
             !InventoryHasTagAt(shovelSlot, ItemTag.Shovel))
             return;
+        var target = new Vector2(site.X, site.Y);
+        if (!WorldActionReach.InRange(
+                NetworkActionPosition, target, WorldActionReach.CaveDig))
+        {
+            QueueNetworkObjectAction(
+                NetworkWorldActionKind.WorkExcavation, site, shovelSlot);
+            return;
+        }
         CancelNetworkCaveInteraction(stopPlayer: false);
         _activeNetworkCaveWork = new(
             site.Id, new(site.X, site.Y), shovelSlot);
@@ -136,6 +144,7 @@ internal sealed partial class GameHostWindow
         _lastNetworkCaveStrike = 0;
         _nextNetworkCaveStrikeAt = 0;
         SendNetworkStop(preserveResourceAction: true);
+        SendNetworkPresentSkill(EntityAction.Dig);
         _player?.DigAt(new(site.X, site.Y));
         _chatUi.AddMessage(
             "You continue excavating.", ChatMessageStyle.Action);
@@ -452,9 +461,12 @@ internal sealed partial class GameHostWindow
         _activeNetworkCaveWork = null;
         _lastNetworkCaveStrike = 0;
         _nextNetworkCaveStrikeAt = 0;
-        if (stopPlayer && _networkCavePresentationOwned &&
-            _player?.Action == EntityAction.Dig)
-            _player.Stop();
+        if (stopPlayer && _networkCavePresentationOwned)
+        {
+            if (_player?.Action == EntityAction.Dig)
+                _player.Stop();
+            SendNetworkPresentSkill(EntityAction.Idle);
+        }
         _networkCavePresentationOwned = false;
     }
 

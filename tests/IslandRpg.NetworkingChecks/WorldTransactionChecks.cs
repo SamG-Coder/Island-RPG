@@ -44,6 +44,8 @@ internal static class WorldTransactionChecks
             ConstructionLifecycleIsAuthoritative);
         checks.Add("world furniture placement is atomic owned and collision safe",
             FurniturePlacementIsAtomicAndCollisionSafe);
+        checks.Add("training dummy strikes are authoritative and reset",
+            TrainingDummyStrikesAreAuthoritative);
         checks.Add("world dynamic obstacles and cross chunk footprints stay canonical",
             DynamicObstaclesAndCrossChunkFootprintsAreCanonical);
         checks.Add("world transactions pick up every generated ground item kind once",
@@ -958,6 +960,18 @@ internal static class WorldTransactionChecks
             "generated ground loot must never disconnect the client");
         CheckAssert.Equal(0, client.State.WorldObjects.Count,
             "generated loot tombstones must not invent published world objects");
+        var hidden = new HashSet<Guid>();
+        client.CopyTombstonedWorldObjectIds(hidden);
+        CheckAssert.Equal(
+            found.Count,
+            hidden.Count,
+            "generated loot removals must leave a presentation tombstone");
+        foreach (var (_, (_, placement)) in found)
+        {
+            CheckAssert.True(
+                hidden.Contains(placement.Id),
+                $"picked {placement.ItemId} must hide via its unpublished tombstone");
+        }
     }
 
     private static Dictionary<string, (WorldChunkKey Chunk,
@@ -992,6 +1006,49 @@ internal static class WorldTransactionChecks
         }
 
         return found;
+    }
+
+    private static void TrainingDummyStrikesAreAuthoritative()
+    {
+        var authority = new AuthoritativeWorldTransactions(worldSeed: 91);
+        var dummy = authority.AddObject(new(
+            Guid.NewGuid(),
+            ItemIds.TrainingDummy,
+            new(1, 0),
+            Health: MeleeCombatService.TrainingDummyMaximumHealth,
+            MaximumHealth: MeleeCombatService.TrainingDummyMaximumHealth));
+        var actor = Actor(new ActorId(Guid.NewGuid()), []);
+        WorldTransactionResult? lastHit = null;
+        for (ulong sequence = 0; sequence < 64; sequence++)
+        {
+            var result = authority.Execute(actor,
+                new StrikeTrainingDummyTransaction(
+                    Context(actor),
+                    Handle(dummy, authority.CaptureChunkRevision(dummy.Chunk)),
+                    91,
+                    sequence));
+            CheckAssert.True(result.Accepted,
+                "a ready dummy strike must accept");
+            actor = actor with { Gameplay = result.Gameplay!.Value };
+            dummy = authority.CaptureObject(dummy.ObjectId);
+            if (result.Detail.StartsWith("dummy_hit:", StringComparison.Ordinal) ||
+                result.Detail.StartsWith("dummy_reset:", StringComparison.Ordinal))
+            {
+                lastHit = result;
+                break;
+            }
+        }
+        CheckAssert.True(lastHit is not null,
+            "deterministic dummy swings must eventually hit");
+        CheckAssert.True(
+            dummy.Health > 0 &&
+            dummy.Health <= MeleeCombatService.TrainingDummyMaximumHealth,
+            "a hit must leave the dummy on the public health band");
+        CheckAssert.True(
+            actor.Gameplay.AttackExperience > 0 ||
+            actor.Gameplay.StrengthExperience > 0 ||
+            actor.Gameplay.DefenceExperience > 0,
+            "a dummy hit must award a combat skill");
     }
 
     private static WorldTransactionActorInput Actor(

@@ -208,6 +208,49 @@ public sealed record CookOnCampfireAction(
     public ActionCommandKind Kind => ActionCommandKind.CookOnCampfire;
 }
 
+public sealed record CookStewAction(
+    WorldObjectReference Pot) : IActionCommandPayload
+{
+    public ActionCommandKind Kind => ActionCommandKind.CookStew;
+}
+
+public sealed record StrikeTrainingDummyAction(
+    WorldObjectReference Dummy) : IActionCommandPayload
+{
+    public ActionCommandKind Kind => ActionCommandKind.StrikeTrainingDummy;
+}
+
+public sealed record PlantTreeAction(
+    int SeedInventorySlot,
+    float X,
+    float Y,
+    short WorldLevel,
+    uint ExpectedChunkRevision) : IActionCommandPayload
+{
+    public ActionCommandKind Kind => ActionCommandKind.PlantTree;
+}
+
+public sealed record StrikePlantedTreeAction(
+    WorldObjectReference Tree,
+    int ToolInventorySlot) : IActionCommandPayload
+{
+    public ActionCommandKind Kind => ActionCommandKind.StrikePlantedTree;
+}
+
+public sealed record EmptyBucketAction(int Slot) : IActionCommandPayload
+{
+    public ActionCommandKind Kind => ActionCommandKind.EmptyBucket;
+}
+
+public sealed record FillBucketAction(
+    int Slot,
+    float X,
+    float Y,
+    short WorldLevel) : IActionCommandPayload
+{
+    public ActionCommandKind Kind => ActionCommandKind.FillBucket;
+}
+
 public sealed record PlaceConstructionAction(
     string DefinitionId,
     int InventorySlot,

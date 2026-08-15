@@ -303,7 +303,8 @@ internal sealed class ClientConnection : IAsyncDisposable
                     break;
                 }
 
-                if (message is WalkCommandMessage or StopCommandMessage)
+                if (message is WalkCommandMessage or StopCommandMessage or
+                    PresentSkillCommandMessage)
                 {
                     _ = ProcessMovementCommandAsync(player.Value, message);
                     continue;

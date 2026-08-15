@@ -23,3 +23,17 @@ public sealed record WorldChunkRevisionBatchMessage(
     public ProtocolMessageKind Kind =>
         ProtocolMessageKind.WorldChunkRevisionBatch;
 }
+
+/// <summary>
+/// Generated ground loot is never published as world objects. Late joiners
+/// receive this list so locally generated sticks/rocks/seeds stay hidden
+/// after someone else already picked them.
+/// </summary>
+public sealed record PickedProceduralGroundObjectsMessage(
+    ulong Sequence,
+    ulong Tick,
+    IReadOnlyList<Guid> ObjectIds) : IProtocolMessage
+{
+    public ProtocolMessageKind Kind =>
+        ProtocolMessageKind.PickedProceduralGroundObjects;
+}

@@ -19,8 +19,9 @@ namespace IslandRpg.Rendering;
 /// </summary>
 internal sealed partial class GameHostWindow
 {
-    private const float NetworkBoatBoardingRange = 2.15f;
-    private const float NetworkBoatFishingReach = 2.85f;
+    private const float NetworkBoatBoardingRange = WorldActionReach.BoatBoard;
+    private const float NetworkShoreFishingServerReach = 2.4f;
+    private const float NetworkBoatFishingServerReach = 2.85f;
 
     private sealed class NetworkBoatPresentation(BoatState state)
     {
@@ -343,7 +344,9 @@ internal sealed partial class GameHostWindow
     {
         if (_player is null) return;
         SendNetworkWalk(
-            boat.Position,
+            WorldActionReach.StandOff(
+                NetworkActionPosition, boat.Position,
+                NetworkBoatBoardingRange),
             preserveFishingAction: true,
             preserveBoatBoarding: true);
         _networkPendingBoardBoatId = boat.State.BoatId;
@@ -514,13 +517,10 @@ internal sealed partial class GameHostWindow
             _player.Action != EntityAction.Move)
         {
             var origin = localBoat?.Position ?? _player.Position;
-            var reach = localBoat is null
-                ? FishingNetReach()
-                : NetworkBoatFishingReach;
-            if (Vector2.DistanceSquared(
-                    origin,
-                    new(pending.Descriptor.Position.X,
-                        pending.Descriptor.Position.Y)) <= reach * reach)
+            var target = new Vector2(
+                pending.Descriptor.Position.X,
+                pending.Descriptor.Position.Y);
+            if (NetworkFishingInStartRange(origin, target, localBoat is not null))
                 BeginNetworkFishing(pending);
         }
 
@@ -537,9 +537,9 @@ internal sealed partial class GameHostWindow
                 active.Descriptor.Position.Y));
         if (localBoat is not null)
         {
-            // Occupied actors are deliberately suppressed from UDP actor
-            // snapshots. Advance only their presentation animation here;
-            // catches still occur exclusively through server Fish actions.
+            // Occupied actors are omitted from the independent actor draw
+            // list. Advance only the local rider here; remotes read Fish
+            // from the occupant's snapshot and draw it on the boat.
             _player.AdvanceAction(elapsed);
             var displacement =
                 _fishingBoatRiderTargetOffset - _fishingBoatRiderOffset;
@@ -569,8 +569,14 @@ internal sealed partial class GameHostWindow
 
     private void QueueNetworkFishing(WorldFish fish)
     {
-        if (!TryDescribeNetworkFish(fish, out var descriptor) ||
-            NetworkFishIsDepleted(descriptor))
+        if (!TryDescribeNetworkFish(fish, out var descriptor))
+        {
+            ReportBlockedAction(
+                "network-fishing-unknown",
+                "That fish school is not ready to catch.");
+            return;
+        }
+        if (NetworkFishIsDepleted(descriptor))
             return;
         if (!TryFindNetworkFishingNetSlot(out var netSlot, out var netPower))
         {
@@ -594,6 +600,15 @@ internal sealed partial class GameHostWindow
             return;
         }
 
+        if (_activePlayer is not null &&
+            !ActivePlayerInventory().CanAdd(descriptor.ItemId))
+        {
+            ReportBlockedAction(
+                "network-fishing-inventory-full",
+                "Your inventory is too full to hold another catch.");
+            return;
+        }
+
         ReleaseNetworkCookingPresentation();
         CancelNetworkResourceInteraction();
         CancelNetworkFishingPresentation();
@@ -602,10 +617,7 @@ internal sealed partial class GameHostWindow
             descriptor.Position.X, descriptor.Position.Y);
         var localBoat = LocalNetworkBoat();
         var origin = localBoat?.Position ?? _player?.Position ?? target;
-        var reach = localBoat is null
-            ? FishingNetReach()
-            : NetworkBoatFishingReach;
-        if (Vector2.DistanceSquared(origin, target) <= reach * reach)
+        if (NetworkFishingInStartRange(origin, target, localBoat is not null))
         {
             BeginNetworkFishing(action);
             return;
@@ -620,7 +632,30 @@ internal sealed partial class GameHostWindow
             _moveMarker = new(target, 0, Action: true);
         }
         else
-            SendNetworkWalk(target, preserveFishingAction: true);
+            QueueNetworkWalkToAct(
+                target,
+                FishingNetReach(),
+                WorldActionType.Fish,
+                fishKey: fish.StableKey);
+    }
+
+    internal static bool NetworkShoreFishingInStartRange(
+        Vector2 origin, Vector2 target, float netReach) =>
+        WorldActionReach.InRange(origin, target, netReach);
+
+    private bool NetworkFishingInStartRange(
+        Vector2 origin, Vector2 target, bool aboard)
+    {
+        if (aboard)
+        {
+            var reach = Math.Min(
+                FishingNetReach() + FishingBoatDeckRadius,
+                NetworkBoatFishingServerReach);
+            return (origin - target).Length <= reach;
+        }
+
+        return NetworkShoreFishingInStartRange(
+            origin, target, FishingNetReach());
     }
 
     private void BeginNetworkFishing(NetworkFishingTarget action)
@@ -629,7 +664,9 @@ internal sealed partial class GameHostWindow
         _networkActiveFishing = action;
         _networkFishingCompletedCycles = 0;
         _moveMarker = null;
-        SendNetworkStopForFishing();
+        if (_player?.Action == EntityAction.Move)
+            SendNetworkStopForFishing();
+        SendNetworkPresentSkill(EntityAction.Fish);
         if (LocalNetworkBoat() is { } boat)
         {
             _fishingBoatRiderOffset = Vector2.Zero;
@@ -830,6 +867,8 @@ internal sealed partial class GameHostWindow
         }
         if (!result.Accepted)
         {
+            if (result.RejectionCode == CommandRejectionCode.RateLimited)
+                return true;
             _chatUi.AddMessage(
                 string.IsNullOrWhiteSpace(result.Detail)
                     ? $"Server rejected fishing ({result.RejectionCode})."
@@ -907,6 +946,11 @@ internal sealed partial class GameHostWindow
         _activeFishKey = null;
         if (_player?.Action == EntityAction.Fish)
             _player.Stop();
+        if (_networkClient?.IsConnected == true)
+        {
+            SendNetworkPresentSkill(EntityAction.Idle);
+            SendNetworkStop(preserveFishingAction: true);
+        }
         CenterFishingBoatRider();
     }
 
@@ -986,24 +1030,38 @@ internal sealed partial class GameHostWindow
         {
             var localOccupant =
                 boat.State.OccupantPlayerId == playerId;
+            WorldEntity? remoteOccupant = null;
+            if (!localOccupant &&
+                boat.State.OccupantEntityId != 0)
+                _networkActors.TryGetValue(
+                    boat.State.OccupantEntityId, out remoteOccupant);
             var gender = localOccupant
                 ? _activePlayer?.Gender ?? EntityGender.Male
-                : EntityGender.Male;
+                : remoteOccupant?.Gender ?? EntityGender.Male;
             var boarded = boat.State.OccupantPlayerId != Guid.Empty;
-            if (localOccupant &&
-                _networkActiveFishing is not null &&
+            var fishing = localOccupant
+                ? _networkActiveFishing is not null &&
+                  _player?.Action == EntityAction.Fish
+                : remoteOccupant?.Action == EntityAction.Fish;
+            var teamColor = localOccupant
+                ? _activePlayer?.TeamColor ?? 0
+                : boat.State.OccupantEntityId != 0
+                    ? TeamColorForNetworkEntity(boat.State.OccupantEntityId)
+                    : 1 + (int)(boat.State.EntityId % 7);
+            if (fishing &&
                 _fishingBoatFishingComposites.TryGetValue(
                     gender, out var fishingComposite) &&
                 _entityAnimations.TryGetValue(
                     (gender, EntityAction.Fish), out var fishingAnimation))
             {
+                var fisher = localOccupant ? _player : remoteOccupant;
                 DrawNetworkBoatComposite(
                     boat,
                     fishingComposite,
-                    _player?.Facing ?? boat.Facing,
-                    (int)((_player?.ActionTime ?? 0) /
+                    fisher?.Facing ?? boat.Facing,
+                    (int)((fisher?.ActionTime ?? 0) /
                           fishingAnimation.SecondsPerFrame),
-                    _activePlayer?.TeamColor ?? 0);
+                    teamColor);
                 continue;
             }
             if (!_fishingBoatComposites.TryGetValue(
@@ -1023,9 +1081,7 @@ internal sealed partial class GameHostWindow
                     ? (int)(boat.AnimationTime /
                             (_fishingBoatAnimation?.SecondsPerFrame ?? .1f))
                     : 0,
-                localOccupant
-                    ? _activePlayer?.TeamColor ?? 0
-                    : 1 + (int)(boat.State.EntityId % 7));
+                teamColor);
         }
     }
 

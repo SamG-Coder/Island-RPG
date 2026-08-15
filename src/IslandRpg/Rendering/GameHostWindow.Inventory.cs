@@ -207,6 +207,8 @@ internal sealed partial class GameHostWindow
                     ["Plant", "Drop", "Examine"],
                 { } item when item.HasTag(ItemTag.PlaceableObject) =>
                     ["Place", "Examine"],
+                { } item when BucketService.IsFilled(item.Id) =>
+                    ["Empty", "Drop", "Examine"],
                 _ => ["Use", "Drop", "Examine"]
             },
             SceneClientBounds());
@@ -243,6 +245,16 @@ internal sealed partial class GameHostWindow
                 ItemTag.PlaceableObject))
         {
             BeginPlaceableObjectPlacement(slot, itemId);
+            return;
+        }
+        if (BucketService.IsEmpty(itemId))
+        {
+            BeginBucketFillTargeting(slot);
+            return;
+        }
+        if (BucketService.IsFilled(itemId))
+        {
+            EmptyBucket(slot);
             return;
         }
         if (_activeInventorySlot == slot)
@@ -328,6 +340,16 @@ internal sealed partial class GameHostWindow
             if (item.HasTag(ItemTag.Seed))
             {
                 TryPlantSeed(slot, itemId);
+                return;
+            }
+            if (BucketService.IsEmpty(itemId))
+            {
+                BeginBucketFillTargeting(slot);
+                return;
+            }
+            if (BucketService.IsFilled(itemId))
+            {
+                EmptyBucket(slot);
                 return;
             }
             ActivateInventorySlot(slot);

@@ -44,6 +44,12 @@ internal sealed partial class GameHostWindow
 
     internal void BeginBerryGather(string stableKey, Vector2 target)
     {
+        if (IsNetworkWorld)
+        {
+            QueueNetworkVegetationAction(
+                stableKey, ResourceActionKind.GatherBerries);
+            return;
+        }
         if (_player is null || _activePlayer is null) return;
         var located = FindVegetation(stableKey);
         if (located is null ||

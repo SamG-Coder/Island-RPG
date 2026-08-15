@@ -36,6 +36,8 @@ internal static class BoatFishingAuthorityChecks
             CheckpointRejectsInvalidIdentityAndOccupancy);
         checks.Add("fishing validates equipment skill range cadence stock and XP",
             FishingLifecycleIsAuthoritative);
+        checks.Add("a stronger fishing net shortens the server fish cadence",
+            StrongerNetShortensFishCadence);
         checks.Add("fishing miss and catch rolls survive checkpoint restore",
             FishingRollsAreDeterministicAcrossRestart);
         checks.Add("session fishing derives aboard position and reach",
@@ -607,6 +609,41 @@ internal static class BoatFishingAuthorityChecks
             "JSON-rounded facing must restore to a canonical unit vector");
         CheckAssert.True(boarded.Accepted,
             "the fixture must establish an occupied boat");
+    }
+
+    private static void StrongerNetShortensFishCadence()
+    {
+        var descriptor = FishDescriptor(initialRemaining: 4);
+        var catalog = new FixedResourceCatalog(descriptor);
+        var authority = new AuthoritativeResourceTransactions(91, catalog);
+        var weak = ResourceActor(
+            [(ItemIds.PrimitiveFishingNet, 1)], Actor(81));
+        var strong = ResourceActor(
+            [(ItemIds.AdvancedFishingNet, 1)], Actor(82));
+        var firstWeak = authority.Execute(weak, new CatchFishTransaction(
+            ResourceContext(weak), Node(descriptor), 0, 2.4f, 0));
+        var firstStrong = authority.Execute(strong, new CatchFishTransaction(
+            ResourceContext(strong), Node(authority, descriptor), 0, 2.4f, 0));
+        CheckAssert.True(firstWeak.Accepted && firstStrong.Accepted,
+            "the first cast with each net must accept");
+        weak = weak with { Gameplay = firstWeak.Gameplay!.Value };
+        strong = strong with { Gameplay = firstStrong.Gameplay!.Value };
+        const double retryAt = 2.2;
+        var retryWeak = authority.Execute(weak, new CatchFishTransaction(
+            ResourceContext(weak), Node(authority, descriptor), 0, 2.4f,
+            retryAt));
+        var retryStrong = authority.Execute(strong, new CatchFishTransaction(
+            ResourceContext(strong), Node(authority, descriptor), 0, 2.4f,
+            retryAt));
+        CheckAssert.Equal(
+            ResourceTransactionStatus.CadenceLocked, retryWeak.Status,
+            "a primitive net must still wait the 2.8s fish cadence");
+        CheckAssert.True(retryStrong.Accepted,
+            "an advanced net must be ready on the CycleSeconds interval");
+        CheckAssert.True(
+            FishingRules.CycleSeconds(2.8f, 3) < retryAt &&
+            FishingRules.CycleSeconds(2.8f, 1) > retryAt,
+            "the retry instant must sit between power-1 and power-3 cycles");
     }
 
     private static void FishingLifecycleIsAuthoritative()

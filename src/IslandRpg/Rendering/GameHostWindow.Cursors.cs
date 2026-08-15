@@ -105,7 +105,7 @@ internal sealed partial class GameHostWindow
             return;
         var next = GameCursorKind.Default;
         MouseCursor cursor = _defaultNativeCursor;
-        if (_digTargetingSlot >= 0 &&
+        if ((_digTargetingSlot >= 0 || _bucketFillSlot >= 0) &&
             !pointerBlocked &&
             _digNativeCursor is not null)
         {

@@ -4,7 +4,7 @@ namespace IslandRpg.Gameplay;
 /// Stable actor action categories shared by headless gameplay rules and the
 /// presentation layer. Keep this enum free of renderer-specific state.
 /// </summary>
-internal enum EntityAction
+public enum EntityAction
 {
     Idle,
     Move,

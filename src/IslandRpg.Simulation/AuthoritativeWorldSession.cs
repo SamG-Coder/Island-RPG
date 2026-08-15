@@ -281,7 +281,9 @@ public sealed partial class AuthoritativeWorldSession
             SynchronizeBoatOccupants();
             AdvanceCombat();
             AdvanceSurvival();
+            ExpirePlantedTrees();
             var publish = Clock.AdvanceOneTick();
+            ExpireVisualStances();
             AdvanceCookingJobs();
             if (!publish)
             {
@@ -1341,6 +1343,7 @@ public sealed partial class AuthoritativeWorldSession
                     IntentStatus.AlreadyAboard, actor,
                     "Use an exact revisioned boat stop while aboard."),
             StopIntent => ProcessStop(actor),
+            PresentSkillIntent present => ProcessPresentSkill(actor, present),
             ChatIntent chat => ProcessChat(actor, chat),
             _ => Rejected(IntentStatus.InvalidIntent, actor, "The intent type is unsupported.")
         };
@@ -1413,6 +1416,8 @@ public sealed partial class AuthoritativeWorldSession
                 ProcessCombineInventorySlots(actor, combine),
             CraftRecipeIntent craft => ProcessCraftRecipe(actor, craft),
             ConsumeFoodIntent consume => ProcessConsumeFood(actor, consume),
+            EmptyBucketIntent empty => ProcessEmptyBucket(actor, empty),
+            FillBucketIntent fill => ProcessFillBucket(actor, fill),
             SocialIntent social => ProcessSocialIntent(actor, social),
             _ => Rejected(
                 IntentStatus.InvalidIntent,
@@ -1457,6 +1462,26 @@ public sealed partial class AuthoritativeWorldSession
                 IntentStatus.InvalidPlacement,
                 actor,
                 "Crops must be planted at the centre of a clear traversable surface tile.",
+                intent.CommandId);
+        }
+
+        if (intent is PlantTreeIntent tree &&
+            (tree.WorldLevel != 0 ||
+             !PlantedTreeService.IsTileCenter(tree.Position) ||
+             !_navigation.SupportsWorldLevel(tree.WorldLevel) ||
+             !_navigation.CanStandAt(tree.Position, tree.WorldLevel) ||
+             _resourceTransactions?.HasBlockingTreeAt(
+                 tree.Position, tree.WorldLevel) == true ||
+             _obstacles.GetObstacles(
+                 tree.WorldLevel,
+                 tree.Position - new Vector2(.25f),
+                 tree.Position + new Vector2(.25f)).Any(value =>
+                 value.Contains(tree.Position))))
+        {
+            return Rejected(
+                IntentStatus.InvalidPlacement,
+                actor,
+                "Trees must be planted at the centre of a clear traversable surface tile.",
                 intent.CommandId);
         }
 
@@ -1629,6 +1654,36 @@ public sealed partial class AuthoritativeWorldSession
                     worldGameSeconds)),
             CookOnCampfireIntent cook => BeginCooking(
                 actor, input, context, cook, worldGameSeconds),
+            CookStewIntent stew => _worldTransactions.Execute(
+                input,
+                new CookStewTransaction(
+                    context, stew.Pot, worldGameSeconds)),
+            StrikeTrainingDummyIntent dummy => StrikeTrainingDummy(
+                actor, input, context, dummy),
+            PlantTreeIntent plantTree => _worldTransactions.Execute(
+                input,
+                new PlantTreeTransaction(
+                    context,
+                    AuthoritativeWorldTransactions.DerivePlantedTreeObjectId(
+                        actor.Identity.ActorId,
+                        plantTree.CommandId,
+                        plantTree.ExpectedActorRevision),
+                    plantTree.SeedInventorySlot,
+                    plantTree.Position,
+                    plantTree.WorldLevel,
+                    plantTree.ExpectedChunkRevision,
+                    worldGameSeconds,
+                    actor.DisplayName)),
+            StrikePlantedTreeIntent strikeTree => _worldTransactions.Execute(
+                input,
+                new StrikePlantedTreeTransaction(
+                    context,
+                    strikeTree.Tree,
+                    strikeTree.ToolInventorySlot,
+                    gameSeconds,
+                    worldGameSeconds,
+                    _worldTransactions.WorldSeed,
+                    actor.Gameplay.ActorRevision)),
             PlaceConstructionIntent place => _worldTransactions.Execute(
                 input,
                 new PlaceConstructionTransaction(
@@ -1715,6 +1770,9 @@ public sealed partial class AuthoritativeWorldSession
             transaction = RebaseTransaction(
                 transaction, actor.Gameplay.ToSnapshot());
         }
+
+        if (transaction.Accepted)
+            ApplyVisualStance(actor, intent);
 
         if (transaction.Accepted &&
             (!transaction.ObjectDeltas.IsDefaultOrEmpty ||
@@ -1842,6 +1900,12 @@ public sealed partial class AuthoritativeWorldSession
             WorldTransactionStatus.NotCrop => IntentStatus.NotCrop,
             WorldTransactionStatus.CropNotReady =>
                 IntentStatus.CropNotReady,
+            WorldTransactionStatus.NotPlantedTree =>
+                IntentStatus.NotPlantedTree,
+            WorldTransactionStatus.PlantLimitReached =>
+                IntentStatus.PlantLimitReached,
+            WorldTransactionStatus.TreeAlreadyFelled =>
+                IntentStatus.TreeAlreadyFelled,
             _ => throw new ArgumentOutOfRangeException(nameof(status))
         };
 
@@ -1942,7 +2006,10 @@ public sealed partial class AuthoritativeWorldSession
         // Accepted misses still carry authoritative hit/damage feedback and
         // cadence progression even though no node revision changed.
         if (transaction.Accepted)
+        {
+            ApplyVisualStance(actor, intent);
             ResourceTransactionCommitted?.Invoke(transaction);
+        }
 
         return new IntentResult(
             MapResourceStatus(transaction.Status),
@@ -2541,6 +2608,47 @@ public sealed partial class AuthoritativeWorldSession
         return transaction;
     }
 
+    private WorldTransactionResult StrikeTrainingDummy(
+        MutableActor actor,
+        WorldTransactionActorInput input,
+        WorldTransactionContext context,
+        StrikeTrainingDummyIntent intent)
+    {
+        if (Clock.Tick < actor.Gameplay.NextCombatAttackTick)
+            return new WorldTransactionResult(
+                context.CommandId,
+                WorldTransactionStatus.ExcavationCadenceLocked,
+                actor.Gameplay.ActorRevision,
+                actor.Gameplay.InventoryRevision,
+                [], [], actor.Gameplay.ToSnapshot(), null,
+                "The training dummy swing is not ready.");
+        var sequence = actor.Gameplay.CombatAttackSequence;
+        var transaction = _worldTransactions.Execute(
+            input,
+            new StrikeTrainingDummyTransaction(
+                context,
+                intent.Dummy,
+                _worldTransactions.WorldSeed,
+                sequence));
+        if (!transaction.Accepted) return transaction;
+        var nextSequence = checked(sequence + 1);
+        var nextReady = Clock.Tick +
+            ActorSkillStance.TicksForSeconds(
+                MeleeCombatService.AttackIntervalSeconds);
+        actor.Gameplay.CombatAttackSequence = nextSequence;
+        actor.Gameplay.NextCombatAttackTick = nextReady;
+        return transaction.Gameplay is { } gameplay
+            ? transaction with
+            {
+                Gameplay = gameplay with
+                {
+                    CombatAttackSequence = nextSequence,
+                    NextCombatAttackTick = nextReady
+                }
+            }
+            : transaction;
+    }
+
     private void AdvanceCookingJobs()
     {
         if (_cookingJobs.Count == 0) return;
@@ -2917,6 +3025,129 @@ public sealed partial class AuthoritativeWorldSession
         return Accepted(actor, intent.CommandId);
     }
 
+    private static IntentResult ProcessEmptyBucket(
+        MutableActor actor,
+        EmptyBucketIntent intent)
+    {
+        var gameplay = actor.Gameplay;
+        if (!IsSlot(gameplay.Inventory, intent.Slot))
+        {
+            return Rejected(
+                IntentStatus.InvalidInventorySlot,
+                actor,
+                "The inventory slot is outside the carried inventory.",
+                intent.CommandId);
+        }
+
+        if (gameplay.Inventory[intent.Slot] is not { } stack ||
+            !BucketService.IsFilled(stack.ItemId))
+        {
+            return Rejected(
+                IntentStatus.InvalidItem,
+                actor,
+                "The selected item is not a filled bucket.",
+                intent.CommandId);
+        }
+
+        var updated = gameplay.Inventory.Clone();
+        if (!updated.TryReplace(intent.Slot, ItemIds.Bucket))
+        {
+            return Rejected(
+                IntentStatus.ItemUnavailable,
+                actor,
+                "The filled bucket could not be emptied.",
+                intent.CommandId);
+        }
+
+        gameplay.Inventory = updated;
+        gameplay.InventoryRevision = checked(gameplay.InventoryRevision + 1);
+        return Accepted(actor, intent.CommandId);
+    }
+
+    private IntentResult ProcessFillBucket(
+        MutableActor actor,
+        FillBucketIntent intent)
+    {
+        var gameplay = actor.Gameplay;
+        if (!IsSlot(gameplay.Inventory, intent.Slot))
+        {
+            return Rejected(
+                IntentStatus.InvalidInventorySlot,
+                actor,
+                "The inventory slot is outside the carried inventory.",
+                intent.CommandId);
+        }
+
+        if (gameplay.Inventory[intent.Slot] is not { } stack ||
+            !BucketService.IsEmpty(stack.ItemId))
+        {
+            return Rejected(
+                IntentStatus.InvalidItem,
+                actor,
+                "The selected item is not an empty bucket.",
+                intent.CommandId);
+        }
+
+        if (intent.WorldLevel != actor.WorldLevel)
+        {
+            return Rejected(
+                IntentStatus.WrongWorldLevel,
+                actor,
+                "The water source is on another world level.",
+                intent.CommandId);
+        }
+
+        var target = BucketService.TileCenter(
+            intent.Position.X, intent.Position.Y);
+        if (!float.IsFinite(target.X) || !float.IsFinite(target.Y))
+        {
+            return Rejected(
+                IntentStatus.InvalidPlacement,
+                actor,
+                "The water source is not a valid location.",
+                intent.CommandId);
+        }
+
+        var delta = actor.Position - target;
+        if (delta.LengthSquared() >
+            BucketService.FillRange * BucketService.FillRange)
+        {
+            return Rejected(
+                IntentStatus.OutOfRange,
+                actor,
+                "The water source is too far away.",
+                intent.CommandId);
+        }
+
+        var kind = BucketService.ClassifyAt(
+            _worldTransactions.WorldSeed,
+            intent.WorldLevel,
+            (int)MathF.Floor(target.X),
+            (int)MathF.Floor(target.Y));
+        if (kind == BucketWaterKind.None)
+        {
+            return Rejected(
+                IntentStatus.InvalidPlacement,
+                actor,
+                "There is no water to fill the bucket from.",
+                intent.CommandId);
+        }
+
+        var updated = gameplay.Inventory.Clone();
+        if (!updated.TryReplace(intent.Slot, BucketService.FilledItemId(kind)))
+        {
+            return Rejected(
+                IntentStatus.ItemUnavailable,
+                actor,
+                "The bucket could not be filled.",
+                intent.CommandId);
+        }
+
+        gameplay.Inventory = updated;
+        gameplay.InventoryRevision = checked(gameplay.InventoryRevision + 1);
+        return Accepted(actor, intent.CommandId);
+    }
+
     private static bool IsSlot(InventoryContainer inventory, int slot) =>
         (uint)slot < (uint)inventory.Capacity;
 
@@ -3080,6 +3311,31 @@ public sealed partial class AuthoritativeWorldSession
         var social = StopFollowPublication(actor);
         actor.ClearRoute();
         return Accepted(actor) with { Social = social };
+    }
+
+    private IntentResult ProcessPresentSkill(
+        MutableActor actor, PresentSkillIntent intent)
+    {
+        if (actor.Gameplay.LifeState == ActorLifeState.Dead ||
+            actor.Gameplay.Health <= 0)
+            return Rejected(IntentStatus.DeadActor, actor,
+                "A dead actor cannot present a skill.");
+        if (!ActorSkillStance.CanPresent(intent.Action))
+            return Rejected(IntentStatus.InvalidIntent, actor,
+                "The skill presentation is not a published clip.");
+        ApplyVisualStance(actor, intent);
+        return Accepted(actor);
+    }
+
+    private void ApplyVisualStance(MutableActor actor, SessionIntent intent) =>
+        actor.VisualStance = ActorSkillStance.FromAcceptedIntent(
+            intent, actor.VisualStance, Clock.Tick);
+
+    private void ExpireVisualStances()
+    {
+        foreach (var actor in _actors.Values)
+            actor.VisualStance = ActorSkillStance.Advance(
+                actor.VisualStance, Clock.Tick);
     }
 
     private static void CancelCombatForMovement(MutableActor actor)
@@ -3299,6 +3555,19 @@ public sealed partial class AuthoritativeWorldSession
             EnemyStateCommitted?.Invoke(delta);
         foreach (var combatEvent in update.Events)
             CombatEventCommitted?.Invoke(combatEvent);
+    }
+
+    private void ExpirePlantedTrees()
+    {
+        if ((Clock.Tick + 1) % SimulationTiming.TicksPerSecond != 0)
+            return;
+        var worldGameSeconds = AuthoritativeWorldTime.FromElapsedRealSeconds(
+            Clock.Current.ElapsedSeconds);
+        var expired = _worldTransactions.ExpirePlantedTrees(worldGameSeconds);
+        if (expired is null || !expired.Accepted ||
+            expired.ObjectDeltas.IsDefaultOrEmpty)
+            return;
+        WorldTransactionCommitted?.Invoke(expired);
     }
 
     private void AdvanceSurvival()
@@ -3667,6 +3936,9 @@ public sealed partial class AuthoritativeWorldSession
 
         public Vector2 Velocity { get; set; }
 
+        public ActorSkillStance.Snapshot VisualStance { get; set; } =
+            ActorSkillStance.Idle;
+
         public Vector2? Destination { get; set; }
 
         public int WorldLevel { get; set; }
@@ -3700,6 +3972,8 @@ public sealed partial class AuthoritativeWorldSession
             _routeIndex = 0;
             Destination = route.Count == 0 ? null : route[^1];
             Velocity = Vector2.Zero;
+            VisualStance = new(
+                EntityAction.Idle, VisualStance.Generation, null);
         }
 
         public void CompleteWaypoint()
@@ -3717,6 +3991,8 @@ public sealed partial class AuthoritativeWorldSession
             _routeIndex = 0;
             Destination = null;
             Velocity = Vector2.Zero;
+            VisualStance = new(
+                EntityAction.Idle, VisualStance.Generation, null);
         }
 
         public bool TryGetReceipt(Guid commandId, out CommandReceipt receipt) =>
@@ -3819,7 +4095,8 @@ public sealed partial class AuthoritativeWorldSession
                 LastProcessedCommandSequence,
                 DisconnectedAtTick)
             {
-                Gameplay = Gameplay.ToSnapshot()
+                Gameplay = Gameplay.ToSnapshot(),
+                AnimationState = ActorSkillStance.Pack(VisualStance)
             };
     }
 

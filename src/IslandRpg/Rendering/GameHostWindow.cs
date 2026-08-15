@@ -15,6 +15,7 @@ using StbImageSharp;
 using System.Buffers;
 using IslandRpg.Client;
 using PlantCropAction = IslandRpg.Protocol.PlantCropAction;
+using PlantTreeAction = IslandRpg.Protocol.PlantTreeAction;
 using IslandRpg.Resources;
 
 namespace IslandRpg.Rendering;
@@ -145,7 +146,9 @@ internal sealed partial class GameHostWindow : GameWindow
         AttackEnemy,
         GiveItemToVillager,
         BoardFishingBoat,
-        BuildConstruction
+        BuildConstruction,
+        CutPlantedTree,
+        FillBucket
     }
     private sealed record QueuedWorldAction(
         WorldActionType Type, Vector2 Target, float Range,
@@ -403,6 +406,12 @@ internal sealed partial class GameHostWindow : GameWindow
         new SpriteFrame?[ItemSpriteSheetCatalog.SlimeCrafted.CellCount];
     private readonly SpriteFrame?[] _slimeCraftedShadowFrames =
         new SpriteFrame?[ItemSpriteSheetCatalog.SlimeCrafted.CellCount];
+    private readonly int[] _bucketTextures =
+        new int[ItemSpriteSheetCatalog.Buckets.CellCount];
+    private readonly SpriteFrame?[] _bucketFrames =
+        new SpriteFrame?[ItemSpriteSheetCatalog.Buckets.CellCount];
+    private readonly SpriteFrame?[] _bucketShadowFrames =
+        new SpriteFrame?[ItemSpriteSheetCatalog.Buckets.CellCount];
     private readonly int[] _stoneToolTextures = new int[14];
     private readonly SpriteFrame?[] _stoneToolFrames = new SpriteFrame?[14];
     private readonly SpriteFrame?[] _stoneToolShadowFrames = new SpriteFrame?[14];
@@ -709,6 +718,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 SkipOpeningCinematic();
             else if (_digTargetingSlot >= 0)
                 CancelCaveDigTargeting();
+            else if (_bucketFillSlot >= 0)
+                CancelBucketFillTargeting();
             else if (_placeableObjectPlacement.Active)
                 CancelPlaceableObjectPlacement();
             else if (_screen == ScreenState.MainMenu &&
@@ -1833,133 +1844,11 @@ internal sealed partial class GameHostWindow : GameWindow
             !IsPointerOverGameUi(MouseState.Position))
         {
             var target = ScreenToTerrain(SceneMousePosition());
-            if (TryGetEnemyUnderMouse(
-                    SceneMousePosition(), out var contextEnemy))
+            if (TryTargetBucketFill(target))
             {
-                OpenEnemyContext(contextEnemy, target);
             }
-            else if (TryGetVillagerUnderMouse(
-                    SceneMousePosition(), out var contextVillager))
-            {
-                _villagerContextTargetId = contextVillager.Id;
-                _villagerContextWalkTarget = target;
-                _villagerContextOptions = VillagerInteractionMenu.Build(
-                    _activePlayer?.Inventory, _activeInventorySlot);
-                _inventoryContext.Close();
-                _treeContext.Close();
-                _groundObjectContext.Close();
-                _fishContext.Close();
-                _vegetationContext.Close();
-                _miningContext.Close();
-                _villagerContext.Open(
-                    MouseState.Position,
-                    _villagerContextOptions.Select(value => value.Label).ToArray(),
-                    SceneClientBounds(), 178);
-            }
-            else if (TryGetGroundObjectUnderMouse(
-                    SceneMousePosition(), out var contextObject, out _))
-            {
-                _groundObjectContextTarget = contextObject;
-                _groundObjectContextWalkTarget = target;
-                _inventoryContext.Close();
-                _treeContext.Close();
-                _fishContext.Close();
-                _vegetationContext.Close();
-                _miningContext.Close();
-                var fixedObject =
-                    PlaceableObjectCatalog.IsPlaceable(
-                        contextObject.ItemId);
-                var campfireState = CampfireService.IsCampfire(contextObject)
-                    ? CampfireService.State(
-                        contextObject, _worldGameSeconds)
-                    : (CampfireState?)null;
-                var canCookSelected =
-                    campfireState == CampfireState.Lit &&
-                    TrySelectedRawCookingItem(
-                        out _, out _);
-                _groundObjectContext.Open(
-                    MouseState.Position,
-                    ConstructionService.IsConstructionSite(contextObject)
-                        ? [
-                            "Walk here",
-                            "Build",
-                            "Build All (Same Type)",
-                            "Demolish",
-                            "Examine"
-                        ]
-                    : contextObject.ItemId == ItemIds.TrainingDummy
-                        ? ["Attack", "Walk Here", "Examine"]
-                    : CaveEntranceService.IsEntrance(contextObject)
-                        ? _activeWorldLevel == (int)WorldLevel.Overworld
-                            ? ["Climb down", "Take rope",
-                               "Walk Here", "Examine"]
-                            : ["Climb up", "Walk Here", "Examine"]
-                        : CaveEntranceService.IsHole(contextObject)
-                        ? ["Walk Here", "Examine"]
-                        : CaveEntranceService.IsDigSite(contextObject)
-                        ? ["Continue digging", "Restore ground",
-                           "Walk Here", "Examine"]
-                        : CaveEntranceService.IsShallowHole(contextObject)
-                        ? ["Walk Here", "Examine"]
-                        : canCookSelected
-                        ? ["Cook", "Walk Here", "Examine"]
-                        : campfireState == CampfireState.Fueled
-                        ? ["Light", "Take log", "Walk Here", "Examine"]
-                        : WorldItemContainerService.IsContainer(
-                            contextObject.ItemId)
-                        ? ["Open", "Walk Here", "Examine"]
-                        : contextObject.ItemId == ItemIds.CookingPot
-                        ? ["Cook stew", "Walk Here", "Examine"]
-                        : CraftingStationService.IsStation(
-                            contextObject.ItemId)
-                        ? [
-                            CraftingStationService.ActionLabel(
-                                contextObject.ItemId),
-                            "Walk Here", "Examine"
-                        ]
-                        : fixedObject
-                        ? ["Walk Here", "Examine"]
-                        : ["Pick up", "Walk Here", "Examine"],
-                    SceneClientBounds(),
-                    ConstructionService.IsConstructionSite(contextObject)
-                        ? 214
-                        : 142);
-            }
-            else if (TryGetFishUnderMouse(
-                         SceneMousePosition(), out var contextFish))
-            {
-                OpenFishContext(contextFish, target);
-            }
-            else if (TryGetMiningNodeUnderMouse(
-                         SceneMousePosition(),
-                         out var miningNode, out var miningKey))
-            {
-                OpenMiningContext(miningNode, miningKey, target);
-            }
-            else if (TryGetGatherableVegetationUnderMouse(
-                         SceneMousePosition(),
-                         out var contextVegetation,
-                         out var vegetationKey))
-            {
-                OpenVegetationContext(
-                    contextVegetation, vegetationKey, target);
-            }
-            else if (TryGetTreeUnderMouse(
-                    SceneMousePosition(), out var contextTree))
-            {
-                _treeContextTarget = contextTree;
-                _treeContextWalkTarget = target;
-                _inventoryContext.Close();
-                _groundObjectContext.Close();
-                _fishContext.Close();
-                _vegetationContext.Close();
-                _miningContext.Close();
-                _treeContext.Open(
-                    MouseState.Position,
-                    ["Chop tree", "Gather sticks", "Walk Here", "Examine"],
-                    SceneClientBounds(), 142);
-            }
-            else
+            else if (!TryOpenWorldRightClickContext(
+                    SceneMousePosition(), target))
                 QueueWalk(target);
         }
         _gameRightWasDown = rightDown;
@@ -1969,6 +1858,12 @@ internal sealed partial class GameHostWindow : GameWindow
             leftDown && !_gameLeftWasDown &&
             !IsPointerOverGameUi(MouseState.Position))
         {
+            if (TryTargetBucketFill(
+                    ScreenToTerrain(SceneMousePosition())))
+            {
+                _gameLeftWasDown = leftDown;
+                return;
+            }
             if (TryTargetCaveDig(
                     ScreenToTerrain(SceneMousePosition())))
             {
@@ -1978,7 +1873,12 @@ internal sealed partial class GameHostWindow : GameWindow
             if (TryGetGroundObjectUnderMouse(
                     SceneMousePosition(), out var groundObject, out _))
             {
-                if (ConstructionService.IsConstructionSite(groundObject))
+                if (PlantedTreeService.IsPlantedTree(groundObject))
+                {
+                    if (!PlantedTreeService.IsFelled(groundObject))
+                        QueuePlantedTreeChop(groundObject);
+                }
+                else if (ConstructionService.IsConstructionSite(groundObject))
                     QueuePlayerConstructionWork(groundObject);
                 else if (groundObject.ItemId == ItemIds.TrainingDummy)
                     QueueTrainingDummyAttack(groundObject);
@@ -2102,6 +2002,7 @@ internal sealed partial class GameHostWindow : GameWindow
             UpdateWaterRipples(wading);
         }
         UpdateExpiredCampfires();
+        UpdateExpiredPlantedTrees();
         _activeWorldChunkBuffer.Clear();
         foreach (var gpu in _worldChunks.Values)
         {
@@ -2422,18 +2323,42 @@ internal sealed partial class GameHostWindow : GameWindow
             _worldActions.QueueTree(tree, actionType);
     }
 
-    internal void TryStartTreeCutting(Vector2 target)
+    private bool TryFindTreeAt(
+        Vector2 target, out IslandTree tree, out GpuWorldChunk gpu)
     {
-        if (_player is null) return;
         var x = (int)MathF.Floor(target.X);
         var y = (int)MathF.Floor(target.Y);
         var coordinate = new ChunkCoordinate(
             FloorDiv(x, WorldChunk.Size),
             FloorDiv(y, WorldChunk.Size),
             _activeWorldLevel);
-        if (!_worldChunks.TryGetValue(coordinate, out var gpu)) return;
-        var source = gpu.Chunk.Trees.FirstOrDefault(tree => tree.X == x && tree.Y == y);
-        if (source is null) return;
+        if (_worldChunks.TryGetValue(coordinate, out gpu!) &&
+            gpu.Chunk.Trees.FirstOrDefault(
+                value => value.X == x && value.Y == y) is { } source)
+        {
+            tree = source;
+            return true;
+        }
+
+        tree = null!;
+        gpu = null!;
+        return false;
+    }
+
+    private bool TryFindTreeAt(Vector2 target, out IslandTree tree) =>
+        TryFindTreeAt(target, out tree, out _);
+
+    internal void TryStartTreeCutting(Vector2 target)
+    {
+        if (IsNetworkWorld)
+        {
+            if (TryFindTreeAt(target, out var networkTree))
+                QueueNetworkTreeAction(
+                    networkTree, ResourceActionKind.CutTree);
+            return;
+        }
+        if (_player is null) return;
+        if (!TryFindTreeAt(target, out var source, out var gpu)) return;
         if (EntityInteractionService.TryAutoSharpenStoneTool(
                 _activePlayer?.Inventory,
                 ItemIds.BluntStoneAxe,
@@ -2489,17 +2414,15 @@ internal sealed partial class GameHostWindow : GameWindow
 
     internal void TryStartTreeStickGather(Vector2 target)
     {
+        if (IsNetworkWorld)
+        {
+            if (TryFindTreeAt(target, out var networkTree))
+                QueueNetworkTreeAction(
+                    networkTree, ResourceActionKind.GatherTreeStick);
+            return;
+        }
         if (_player is null || _activePlayer is null) return;
-        var x = (int)MathF.Floor(target.X);
-        var y = (int)MathF.Floor(target.Y);
-        var coordinate = new ChunkCoordinate(
-            FloorDiv(x, WorldChunk.Size),
-            FloorDiv(y, WorldChunk.Size),
-            _activeWorldLevel);
-        if (!_worldChunks.TryGetValue(coordinate, out var gpu)) return;
-        var source = gpu.Chunk.Trees.FirstOrDefault(
-            tree => tree.X == x && tree.Y == y);
-        if (source is null) return;
+        if (!TryFindTreeAt(target, out var source, out var gpu)) return;
 
         var instance = EnsureTreeInstance(
             gpu, source, initializeSticks: true, out _);
@@ -4728,6 +4651,7 @@ internal sealed partial class GameHostWindow : GameWindow
             _clock, MeleeCombatService.HitSplatSeconds);
         RenderNavigationBlocks(scene);
         RenderTreeHealthBars(scene);
+        RenderPlantedTreeOverlays(scene);
         RenderMiningHealthBars(scene);
         RenderDigSiteHealthBar(scene);
         RenderConstructionHealthBars(scene);
@@ -4991,6 +4915,28 @@ internal sealed partial class GameHostWindow : GameWindow
         if (TryHandleNetworkGroundObjectContextSelection(
                 groundObject, option))
             return;
+        if (PlantedTreeService.IsPlantedTree(groundObject))
+        {
+            if (PlantedTreeService.IsFelled(groundObject))
+            {
+                if (option == 0)
+                    QueueWalk(_groundObjectContextWalkTarget);
+                else if (option == 1)
+                    _chatUi.AddMessage(
+                        PlantedTreeService.Examine(groundObject),
+                        ChatMessageStyle.Normal);
+                return;
+            }
+            if (option == 0)
+                QueuePlantedTreeChop(groundObject);
+            else if (option == 1)
+                QueueWalk(_groundObjectContextWalkTarget);
+            else if (option == 2)
+                _chatUi.AddMessage(
+                    PlantedTreeService.Examine(groundObject),
+                    ChatMessageStyle.Normal);
+            return;
+        }
         if (ConstructionService.IsConstructionSite(groundObject))
         {
             if (option == 0)
@@ -5234,20 +5180,29 @@ internal sealed partial class GameHostWindow : GameWindow
         if (inventory[slot]?.ItemId != itemId)
             return;
         var (plantX, plantY, targetGpu) = planting.Value;
+        if (!cropSeed &&
+            CountLivingPlantedTrees(_activePlayer.Id) >=
+            PlantedTreeService.MaximumLivingTreesPerPlanter)
+        {
+            ReportBlockedAction(
+                "planted-tree-limit",
+                "You have already planted as many trees as you can tend.");
+            return;
+        }
         if (IsNetworkWorld)
         {
-            if (!cropSeed)
-            {
-                ReportBlockedAction(
-                    "network-tree-planting-unavailable",
-                    "Tree planting is not yet available in multiplayer.");
-                return;
-            }
-            SendNetworkAction(new PlantCropAction(
-                slot, plantX + .5f, plantY + .5f,
-                checked((short)_activeWorldLevel),
-                NetworkChunkRevision(
-                    new(plantX + .5f, plantY + .5f), _activeWorldLevel)));
+            if (cropSeed)
+                SendNetworkAction(new PlantCropAction(
+                    slot, plantX + .5f, plantY + .5f,
+                    checked((short)_activeWorldLevel),
+                    NetworkChunkRevision(
+                        new(plantX + .5f, plantY + .5f), _activeWorldLevel)));
+            else
+                SendNetworkAction(new PlantTreeAction(
+                    slot, plantX + .5f, plantY + .5f,
+                    checked((short)_activeWorldLevel),
+                    NetworkChunkRevision(
+                        new(plantX + .5f, plantY + .5f), _activeWorldLevel)));
             return;
         }
         if (!inventory.TryTake(slot, 1, out _)) return;
@@ -5259,18 +5214,9 @@ internal sealed partial class GameHostWindow : GameWindow
         }
         else
         {
-            var frameIndex = WorldTreeCatalog.SelectFrame(
-                _worldSeed, plantX, plantY, treeType!);
-            targetGpu.Chunk.Trees =
-            [
-                .. targetGpu.Chunk.Trees,
-                new IslandTree(plantX, plantY, treeType!, frameIndex)
-            ];
-            var maximumHealth = TreeMaximumHealth(treeType!);
-            targetGpu.Chunk.TreeInstances.Add(new(
-                Guid.NewGuid(), plantX, plantY, treeType!,
-                maximumHealth, maximumHealth,
-                TreeLifecycleState.Standing, 0, 0));
+            targetGpu.Chunk.GroundObjects.Add(PlantedTreeService.Plant(
+                itemId, plantX + .5f, plantY + .5f,
+                _worldGameSeconds, _activePlayer.Name, _activePlayer.Id));
         }
         QueueChunkSave(targetGpu.Chunk);
         _activePlayer = _activePlayer with
@@ -5306,18 +5252,8 @@ internal sealed partial class GameHostWindow : GameWindow
                 ChatMessageStyle.LevelUp);
     }
 
-    internal static string? SeedTreeType(string itemId) => itemId switch
-    {
-        ItemIds.TreeSeeds => "TREEA_NN",
-        ItemIds.PalmSeeds => "FPAL_NN",
-        ItemIds.PineSeeds => "FPIN_NN",
-        ItemIds.OakSeeds => "FOAK_NN",
-        ItemIds.JungleTreeSeeds => "FJUN_NN",
-        ItemIds.SnowTreeSeeds => "FSNO_NN",
-        ItemIds.BambooSeeds => "FBAM_NN",
-        ItemIds.CactusSeeds => "FCAC_NN",
-        _ => null
-    };
+    internal static string? SeedTreeType(string itemId) =>
+        PlantedTreeService.TreeTypeForSeed(itemId);
 
     private void DrawPanelCaption(string caption, Vector4 panel)
     {
@@ -5348,6 +5284,7 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.CropSprite) ||
             item.HasTag(ItemTag.SlimeLootSprite) ||
             item.HasTag(ItemTag.SlimeCraftedSprite) ||
+            item.HasTag(ItemTag.BucketSprite) ||
             item.HasTag(ItemTag.Fish) ||
             item.HasTag(ItemTag.FibreNetSprite) ||
             item.HasTag(ItemTag.PlaceableObject))
@@ -5423,6 +5360,11 @@ internal sealed partial class GameHostWindow : GameWindow
             return item.SpriteCell is { } craftedCell &&
                    (uint)craftedCell < (uint)_slimeCraftedTextures.Length
                 ? _slimeCraftedTextures[craftedCell]
+                : 0;
+        if (item.HasTag(ItemTag.BucketSprite))
+            return item.SpriteCell is { } bucketCell &&
+                   (uint)bucketCell < (uint)_bucketTextures.Length
+                ? _bucketTextures[bucketCell]
                 : 0;
         if (item.HasTag(ItemTag.CoastalSprite))
             return item.SpriteCell is { } coastalCell &&
@@ -5502,6 +5444,9 @@ internal sealed partial class GameHostWindow : GameWindow
         if (item.HasTag(ItemTag.SlimeCraftedSprite) &&
             (uint)cell < (uint)_slimeCraftedFrames.Length)
             return _slimeCraftedFrames[cell] ?? WoodcuttingItemsFrame;
+        if (item.HasTag(ItemTag.BucketSprite) &&
+            (uint)cell < (uint)_bucketFrames.Length)
+            return _bucketFrames[cell] ?? WoodcuttingItemsFrame;
         if (item.HasTag(ItemTag.CoastalSprite) &&
             (uint)cell < (uint)_coastalSprites.Frames.Length)
             return _coastalSprites.Frames[cell] ?? WoodcuttingItemsFrame;
@@ -5541,6 +5486,7 @@ internal sealed partial class GameHostWindow : GameWindow
             item.HasTag(ItemTag.CropSprite) ||
             item.HasTag(ItemTag.SlimeLootSprite) ||
             item.HasTag(ItemTag.SlimeCraftedSprite) ||
+            item.HasTag(ItemTag.BucketSprite) ||
             item.HasTag(ItemTag.SupplementalSprite) ||
             item.HasTag(ItemTag.NaturalMaterial) ||
             item.HasTag(ItemTag.Fish) ||
@@ -6643,6 +6589,27 @@ internal sealed partial class GameHostWindow : GameWindow
                 itemAtlasKey = GateVisuals.Resolve(item.Object);
                 shadowAtlasKey = GateVisuals.ResolveShadow(item.Object);
             }
+            else if (PlantedTreeService.IsPlantedTree(item.Object))
+            {
+                var plantedType = PlantedTreeService.TreeType(item.Object);
+                var plantedFrame = WorldTreeCatalog.SelectFrame(
+                    _worldSeed,
+                    (int)MathF.Floor(item.Object.X),
+                    (int)MathF.Floor(item.Object.Y),
+                    plantedType);
+                if (PlantedTreeService.IsFelled(item.Object))
+                {
+                    itemAtlasKey = StumpAtlasKey(plantedType, shadow: false);
+                    shadowAtlasKey = StumpAtlasKey(plantedType, shadow: true);
+                }
+                else
+                {
+                    itemAtlasKey = WorldTreeCatalog.AtlasKey(
+                        plantedType, plantedFrame);
+                    shadowAtlasKey = WorldTreeCatalog.AtlasKey(
+                        plantedType[..^2] + "N0", plantedFrame);
+                }
+            }
             else
             {
                 if (!TryGroundItemVisual(
@@ -6656,25 +6623,37 @@ internal sealed partial class GameHostWindow : GameWindow
                         item.Object, _worldGameSeconds, _clock);
             }
             var world = GroundObjectWorld(item.Object);
+            var plantedScale = PlantedTreeService.IsPlantedTree(item.Object)
+                ? PlantedTreeService.GrowthScale(
+                    item.Object, _worldGameSeconds)
+                : 1f;
             var objectOpacity = item.Opacity *
                 distantDetailOpacity *
                 CaveEntranceService.Opacity(item.Object) *
-                LootBagOpacity(item.Object);
-            if (!IsAtlasItemVisible(itemAtlasKey, world) &&
-                (shadowAtlasKey is null ||
-                 !IsAtlasItemVisible(shadowAtlasKey, world)))
+                LootBagOpacity(item.Object) *
+                (PlantedTreeService.IsPlantedTree(item.Object)
+                    ? PlantedTreeService.FadeOpacity(
+                        item.Object, _worldGameSeconds)
+                    : 1f);
+            if (objectOpacity <= .01f)
                 continue;
-            if (shadowAtlasKey is not null)
+            if (!IsAtlasItemVisible(itemAtlasKey, world, plantedScale) &&
+                (shadowAtlasKey is null ||
+                 !IsAtlasItemVisible(shadowAtlasKey, world, plantedScale)))
+                continue;
+            if (!string.IsNullOrEmpty(shadowAtlasKey))
                 _worldRenderQueue.AddShadow(
                     world,
                     objectOpacity,
                     $"ground-shadow:{item.Object.Id:N}",
-                    shadowAtlasKey);
+                    shadowAtlasKey,
+                    plantedScale);
             _worldRenderQueue.AddObject(
                 world,
                 objectOpacity,
                 $"ground:{item.Object.Id:N}",
-                itemAtlasKey);
+                itemAtlasKey,
+                plantedScale);
             if (_activeWorldLevel == (int)WorldLevel.Overworld &&
                 CaveEntranceService.IsEntrance(item.Object))
             {
@@ -6686,7 +6665,8 @@ internal sealed partial class GameHostWindow : GameWindow
                         $"ground:{item.Object.Id:N}:rope",
                         ropeAtlasKey);
             }
-            if (showGroundItemOutlines)
+            if (showGroundItemOutlines &&
+                !PlantedTreeService.IsPlantedTree(item.Object))
                 AddGroundItemOutline(
                     itemAtlasKey,
                     world,
@@ -6743,7 +6723,8 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var shadow in shadows)
             AddAtlasQuad(
                 shadow.AtlasKey!, shadow.World,
-                shadow.Opacity, shadowVertices);
+                shadow.Opacity, shadowVertices,
+                shadow.RenderScale);
         DrawTreeBatch(shadowVertices);
 
         var atlasVertices = _worldRenderQueue.AtlasVertices;
@@ -6794,7 +6775,8 @@ internal sealed partial class GameHostWindow : GameWindow
 
             AddAtlasQuad(
                 item.AtlasKey, item.World,
-                item.Opacity, atlasVertices);
+                item.Opacity, atlasVertices,
+                item.RenderScale);
             if (_occludedPlayerOutlineEnabled && nextActor > 0 &&
                 _treeAtlas.TryGetValue(item.AtlasKey, out var occluder))
             {
@@ -6881,12 +6863,13 @@ internal sealed partial class GameHostWindow : GameWindow
                bounds.Top <= ReferenceHeight;
     }
 
-    private bool IsAtlasItemVisible(string atlasKey, Vector2 world)
+    private bool IsAtlasItemVisible(
+        string atlasKey, Vector2 world, float renderScale = 1)
     {
         if (!_treeAtlas.TryGetValue(atlasKey, out var entry))
             return false;
         var screen = SpriteAnchor(world);
-        var scale = SpritePixelScale();
+        var scale = SpritePixelScale() * Math.Max(.01f, renderScale);
         var left = screen.X - entry.Frame.HotspotX * scale;
         var top = screen.Y - entry.Frame.HotspotY * scale;
         return left + entry.Frame.Width * scale >= 0 &&
@@ -6963,10 +6946,11 @@ internal sealed partial class GameHostWindow : GameWindow
     }
 
     private (float Left, float Top, float Right, float Bottom) SpriteBounds(
-        SpriteFrame frame, Vector2 world, bool mirror = false)
+        SpriteFrame frame, Vector2 world, bool mirror = false,
+        float renderScale = 1)
     {
         var anchor = SpriteAnchor(world);
-        var spriteScale = SpritePixelScale();
+        var spriteScale = SpritePixelScale() * Math.Max(.01f, renderScale);
         var hotspotX = mirror ? frame.Width - frame.HotspotX : frame.HotspotX;
         var left = anchor.X - hotspotX * spriteScale;
         var top = anchor.Y - frame.HotspotY * spriteScale;
@@ -6987,7 +6971,8 @@ internal sealed partial class GameHostWindow : GameWindow
         string atlasKey,
         Vector2 world,
         float opacity,
-        AtlasDrawBatch batch)
+        AtlasDrawBatch batch,
+        float renderScale = 1)
     {
         if (!_treeAtlas.TryGetValue(atlasKey, out var entry)) return;
         var vertices = batch.ForPage(
@@ -6996,7 +6981,7 @@ internal sealed partial class GameHostWindow : GameWindow
         var width = ReferenceWidth;
         var height = ReferenceHeight;
         var screen = SpriteAnchor(world);
-        var spriteScale = SpritePixelScale();
+        var spriteScale = SpritePixelScale() * Math.Max(.01f, renderScale);
         var margin = Math.Max(frame.Width, frame.Height) * spriteScale;
         if (screen.X < -margin || screen.Y < -margin ||
             screen.X > width + margin || screen.Y > height + margin)
@@ -7493,6 +7478,11 @@ internal sealed partial class GameHostWindow : GameWindow
             _slimeCraftedFrames,
             _slimeCraftedShadowFrames,
             _slimeCraftedTextures);
+        LoadHorizontalItemSheet(
+            ItemSpriteSheetCatalog.Buckets.FileName,
+            _bucketFrames,
+            _bucketShadowFrames,
+            _bucketTextures);
         var stoneToolSheetPath = Path.Combine(
             AppContext.BaseDirectory, "Resources", "Images",
             "stone-tools-items.png");
@@ -8120,6 +8110,13 @@ internal sealed partial class GameHostWindow : GameWindow
             if (_slimeCraftedShadowFrames[cell] is { } shadowFrame)
                 Place(SlimeCraftedAtlasKey(cell, true), null, shadowFrame);
         }
+        for (var cell = 0; cell < _bucketFrames.Length; cell++)
+        {
+            if (_bucketFrames[cell] is { } itemFrame)
+                Place(BucketAtlasKey(cell, false), null, itemFrame);
+            if (_bucketShadowFrames[cell] is { } shadowFrame)
+                Place(BucketAtlasKey(cell, true), null, shadowFrame);
+        }
         for (var cell = 0; cell < _stoneToolFrames.Length; cell++)
         {
             if (_stoneToolFrames[cell] is { } itemFrame)
@@ -8314,6 +8311,9 @@ internal sealed partial class GameHostWindow : GameWindow
 
     private static string SlimeCraftedAtlasKey(int cell, bool shadow) =>
         shadow ? $"SLIME_CRAFTED_SHADOW#{cell}" : $"SLIME_CRAFTED#{cell}";
+
+    private static string BucketAtlasKey(int cell, bool shadow) =>
+        shadow ? $"BUCKET_SHADOW#{cell}" : $"BUCKET#{cell}";
 
     private static string StoneToolAtlasKey(int cell, bool shadow) =>
         shadow ? $"STONE_TOOL_SHADOW#{cell}" : $"STONE_TOOL#{cell}";
@@ -9283,6 +9283,8 @@ internal sealed partial class GameHostWindow : GameWindow
         foreach (var texture in _advancedToolTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _fishingNetUpgradeTextures)
+            if (texture != 0) GL.DeleteTexture(texture);
+        foreach (var texture in _bucketTextures)
             if (texture != 0) GL.DeleteTexture(texture);
         foreach (var texture in _stoneToolTextures)
             if (texture != 0) GL.DeleteTexture(texture);

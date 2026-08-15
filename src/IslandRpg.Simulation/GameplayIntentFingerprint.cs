@@ -42,6 +42,16 @@ public static class GameplayIntentFingerprint
                 writer.Tag(4);
                 writer.Int32(value.Slot);
                 break;
+            case EmptyBucketIntent value:
+                writer.Tag(43);
+                writer.Int32(value.Slot);
+                break;
+            case FillBucketIntent value:
+                writer.Tag(44);
+                writer.Int32(value.Slot);
+                writer.Vector(value.Position);
+                writer.Int32(value.WorldLevel);
+                break;
             case PickUpWorldObjectIntent value:
                 writer.Tag(5);
                 writer.Handle(value.Object);
@@ -99,6 +109,26 @@ public static class GameplayIntentFingerprint
                 writer.Tag(15);
                 writer.Handle(value.Campfire);
                 writer.Int32(value.InventorySlot);
+                break;
+            case CookStewIntent value:
+                writer.Tag(24);
+                writer.Handle(value.Pot);
+                break;
+            case StrikeTrainingDummyIntent value:
+                writer.Tag(25);
+                writer.Handle(value.Dummy);
+                break;
+            case PlantTreeIntent value:
+                writer.Tag(41);
+                writer.Int32(value.SeedInventorySlot);
+                writer.Vector(value.Position);
+                writer.Int32(value.WorldLevel);
+                writer.UInt32(value.ExpectedChunkRevision);
+                break;
+            case StrikePlantedTreeIntent value:
+                writer.Tag(42);
+                writer.Handle(value.Tree);
+                writer.Int32(value.ToolInventorySlot);
                 break;
             case GatherTreeStickIntent value:
                 writer.Tag(16);

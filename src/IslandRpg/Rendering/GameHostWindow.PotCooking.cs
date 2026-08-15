@@ -43,10 +43,16 @@ internal sealed partial class GameHostWindow
         }
         _worldActions.QueuePath(
             new Vector2(pot.X, pot.Y),
-            .82f,
+            WorldActionReach.CookStew,
             WorldActionType.CookStew,
             groundObjectId: pot.Id,
             clearTreeActions: true);
+        if (IsNetworkWorld)
+            SendNetworkWalk(
+                WorldActionReach.StandOff(
+                    NetworkActionPosition,
+                    new Vector2(pot.X, pot.Y),
+                    WorldActionReach.CookStew));
     }
 
     internal void BeginPotCooking(Guid potId, Vector2 target)
@@ -60,7 +66,16 @@ internal sealed partial class GameHostWindow
                 _activePlayer.Inventory))
             return;
         _activePotCooking = new(potId, target);
+        if (IsNetworkWorld)
+        {
+            var seconds = CookingSkill.PlacementAnimationSeconds +
+                          (float)CookingSkill.CookingSeconds;
+            SendNetworkPresentSkill(EntityAction.Gather, seconds);
+            _networkWorldActionCommitAt = _clock + seconds;
+        }
         _player.GatherAt(target);
+        if (IsNetworkWorld)
+            _player.RestartActionTime();
     }
 
     internal void UpdatePotCooking()
@@ -74,12 +89,27 @@ internal sealed partial class GameHostWindow
             _activePotCooking = null;
             return;
         }
-        if (_player.ActionTime <
-            CookingSkill.PlacementAnimationSeconds +
-            CookingSkill.CookingSeconds)
+        var potSeconds = CookingSkill.PlacementAnimationSeconds +
+                         CookingSkill.CookingSeconds;
+        if (!NetworkResourceWindupReady(
+                _player.ActionTime, potSeconds, _clock,
+                _networkWorldActionCommitAt))
             return;
 
         _activePotCooking = null;
+        if (IsNetworkWorld)
+        {
+            var networkPot = FindGroundObject(cooking.PotId);
+            if (networkPot is null)
+            {
+                _player.Stop();
+                return;
+            }
+            QueueNetworkObjectAction(
+                NetworkWorldActionKind.CookStew, networkPot);
+            _player.Stop();
+            return;
+        }
         var pot = FindGroundObject(cooking.PotId);
         if (pot is null ||
             pot.ItemId != ItemIds.CookingPot ||

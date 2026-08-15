@@ -67,6 +67,40 @@ public sealed class NetworkGameClient : IAsyncDisposable
 
     public event EventHandler<NetworkCaveActionResultEventArgs>?
         CaveActionCompleted;
+    /// <summary>
+    /// Object IDs that have a revision tombstone but no live public state.
+    /// Generated ground loot is never upserted, so presentation must hide
+    /// these IDs after a removal delta or they stay drawn locally.
+    /// </summary>
+    public void RememberPickedProceduralGroundObjects(
+        IReadOnlyList<Guid> objectIds)
+    {
+        ArgumentNullException.ThrowIfNull(objectIds);
+        lock (_stateSync)
+        {
+            foreach (var id in objectIds)
+            {
+                if (id == Guid.Empty) continue;
+                _worldObjectRevisions.TryAdd(
+                    id,
+                    GeneratedPortableGroundLoot.UnpublishedObjectRevision);
+            }
+        }
+    }
+
+    public void CopyTombstonedWorldObjectIds(HashSet<Guid> into)
+    {
+        ArgumentNullException.ThrowIfNull(into);
+        lock (_stateSync)
+        {
+            foreach (var id in _worldObjectRevisions.Keys)
+            {
+                if (!_state.WorldObjects.ContainsKey(id))
+                    into.Add(id);
+            }
+        }
+    }
+
     public event EventHandler<NetworkWorldObjectsChangedEventArgs>? WorldObjectsChanged;
     public event EventHandler<NetworkContainerStateEventArgs>? ContainerStateChanged;
     public event EventHandler<NetworkResourcesChangedEventArgs>? ResourcesChanged;
@@ -347,6 +381,15 @@ public sealed class NetworkGameClient : IAsyncDisposable
 
     public ValueTask<ulong> SendStopAsync(CancellationToken cancellationToken = default) =>
         QueueCommandAsync(sequence => new StopCommandMessage(sequence, State.ServerTick), cancellationToken);
+
+    public ValueTask<ulong> SendPresentSkillAsync(
+        byte action,
+        float durationSeconds = 0.75f,
+        CancellationToken cancellationToken = default) =>
+        QueueCommandAsync(
+            sequence => new PresentSkillCommandMessage(
+                sequence, State.ServerTick, action, durationSeconds),
+            cancellationToken);
 
     public ValueTask<ulong> SendChatAsync(
         string text,
@@ -639,6 +682,10 @@ public sealed class NetworkGameClient : IAsyncDisposable
                 break;
             case WorldChunkRevisionBatchMessage chunks:
                 ConsumeWorldChunkRevisions(chunks);
+                break;
+            case PickedProceduralGroundObjectsMessage picked:
+                RememberPickedProceduralGroundObjects(picked.ObjectIds);
+                UpdateTick(picked.Tick);
                 break;
             case ContainerStateMessage container:
                 ConsumeContainer(container);

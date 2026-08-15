@@ -583,6 +583,15 @@ internal static class CraftingSkill
                 "Weave them around a rigid stick rim and handles."
             ]),
         new(
+            "wooden-bucket", ItemIds.Bucket,
+            CraftingCategory.Tools, 3, 40,
+            [new(ItemIds.Plank, 1), new(ItemIds.PlantFibres, 3)],
+            [
+                "Hollow and bend the plank into a staved wooden pail.",
+                "Bind the staves with fibre and twist a sturdy handle."
+            ],
+            RequiredTools: [new(ItemTag.Knife, "knife")]),
+        new(
             "open-pearl-oyster", ItemIds.Pearl,
             CraftingCategory.Resources, 1, 12,
             [new(ItemIds.PearlOysterShell, 1)],

@@ -100,6 +100,27 @@ public static class WorldActionProtocolAdapter
                 command.ActorRevision,
                 Handle(value.Campfire),
                 value.InventorySlot),
+            CookStewAction value => new CookStewIntent(
+                command.CommandId,
+                command.InventoryRevision,
+                command.ActorRevision,
+                Handle(value.Pot)),
+            StrikeTrainingDummyAction value => new StrikeTrainingDummyIntent(
+                command.CommandId,
+                command.InventoryRevision,
+                command.ActorRevision,
+                Handle(value.Dummy)),
+            PlantTreeAction value => new PlantTreeIntent(
+                command.CommandId, command.InventoryRevision,
+                command.ActorRevision, value.SeedInventorySlot,
+                new Vector2(value.X, value.Y), value.WorldLevel,
+                value.ExpectedChunkRevision),
+            StrikePlantedTreeAction value => new StrikePlantedTreeIntent(
+                command.CommandId,
+                command.InventoryRevision,
+                command.ActorRevision,
+                Handle(value.Tree),
+                value.ToolInventorySlot),
             PlaceConstructionAction value => new PlaceConstructionIntent(
                 command.CommandId,
                 command.InventoryRevision,

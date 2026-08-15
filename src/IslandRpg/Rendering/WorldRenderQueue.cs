@@ -8,24 +8,28 @@ internal sealed class WorldRenderItem : IComparable<WorldRenderItem>
     public float Opacity { get; private set; }
     public string StableKey { get; private set; } = "";
     public string AtlasKey { get; private set; } = "";
+    public float RenderScale { get; private set; } = 1;
 
     public WorldRenderItem(
         Vector2 world,
         float opacity,
         string stableKey,
-        string atlasKey) =>
-        Set(world, opacity, stableKey, atlasKey);
+        string atlasKey,
+        float renderScale = 1) =>
+        Set(world, opacity, stableKey, atlasKey, renderScale);
 
     public void Set(
         Vector2 world,
         float opacity,
         string stableKey,
-        string atlasKey)
+        string atlasKey,
+        float renderScale = 1)
     {
         World = world;
         Opacity = opacity;
         StableKey = stableKey;
         AtlasKey = atlasKey;
+        RenderScale = renderScale;
     }
 
     public int CompareTo(WorldRenderItem? other)
@@ -118,19 +122,21 @@ internal sealed class WorldRenderQueue
         Vector2 world,
         float opacity,
         string stableKey,
-        string atlasKey) =>
+        string atlasKey,
+        float renderScale = 1) =>
         Add(
             Shadows, _shadowPool, ref _shadowCount,
-            world, opacity, stableKey, atlasKey);
+            world, opacity, stableKey, atlasKey, renderScale);
 
     public void AddObject(
         Vector2 world,
         float opacity,
         string stableKey,
-        string atlasKey) =>
+        string atlasKey,
+        float renderScale = 1) =>
         Add(
             Objects, _objectPool, ref _objectCount,
-            world, opacity, stableKey, atlasKey);
+            world, opacity, stableKey, atlasKey, renderScale);
 
     public void Sort()
     {
@@ -170,17 +176,18 @@ internal sealed class WorldRenderQueue
         Vector2 world,
         float opacity,
         string stableKey,
-        string atlasKey)
+        string atlasKey,
+        float renderScale)
     {
         WorldRenderItem item;
         if (count < pool.Count)
         {
             item = pool[count];
-            item.Set(world, opacity, stableKey, atlasKey);
+            item.Set(world, opacity, stableKey, atlasKey, renderScale);
         }
         else
         {
-            item = new(world, opacity, stableKey, atlasKey);
+            item = new(world, opacity, stableKey, atlasKey, renderScale);
             pool.Add(item);
         }
         count++;

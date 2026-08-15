@@ -28,4 +28,6 @@ internal static class ItemSpriteSheetCatalog
         new("slime-loot-items.png", 4);
     public static readonly ItemSpriteSheetDefinition SlimeCrafted =
         new("slime-crafted-items.png", 2);
+    public static readonly ItemSpriteSheetDefinition Buckets =
+        new("bucket-items.png", 3);
 }

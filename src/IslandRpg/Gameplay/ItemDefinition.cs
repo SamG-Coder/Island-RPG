@@ -39,7 +39,8 @@ internal enum ItemTag : long
     CropSprite = 1L << 32,
     SlimeLootSprite = 1L << 33,
     SlimeCraftedSprite = 1L << 34,
-    Medicine = 1L << 35
+    Medicine = 1L << 35,
+    BucketSprite = 1L << 36
 }
 
 internal sealed record ItemDefinition(
@@ -116,6 +117,10 @@ internal static class ItemIds
     public const string WildGrainCrop = "wild_grain_crop";
     public const string BeanCrop = "bean_crop";
     public const string RootCrop = "root_crop";
+    public const string PlantedTree = "planted_tree";
+    public const string Bucket = "bucket";
+    public const string BucketOfWater = "bucket_of_water";
+    public const string BucketOfSeawater = "bucket_of_seawater";
     public const string SharpenedRock = "sharpened_rock";
     public const string Coal = "coal";
     public const string TinOre = "tin_ore";
@@ -439,6 +444,23 @@ internal static class ItemCatalog
                 ItemIds.BeanCrop, "bean crop", 1),
             [ItemIds.RootCrop] = Crop(
                 ItemIds.RootCrop, "root crop", 2),
+            [ItemIds.PlantedTree] = new(
+                ItemIds.PlantedTree, "planted tree", "Planted tree",
+                "A tree planted by a settler that grows from a shrub into a full tree.",
+                SpriteCell: null,
+                Droppable: false),
+            [ItemIds.Bucket] = new(
+                ItemIds.Bucket, "bucket", "Bucket",
+                "A wooden pail that can be filled from a water source.", 0,
+                Tags: ItemTag.Tool | ItemTag.BucketSprite),
+            [ItemIds.BucketOfWater] = new(
+                ItemIds.BucketOfWater, "bucket of water", "Water",
+                "A wooden bucket filled with fresh water.", 1,
+                Tags: ItemTag.Tool | ItemTag.BucketSprite),
+            [ItemIds.BucketOfSeawater] = new(
+                ItemIds.BucketOfSeawater, "bucket of seawater", "Seawater",
+                "A wooden bucket filled with seawater.", 2,
+                Tags: ItemTag.Tool | ItemTag.BucketSprite),
             [ItemIds.SharpenedRock] = new(
                 ItemIds.SharpenedRock, "sharpened rock", "Sharp rock",
                 "A stone deliberately knapped to form a sharp edge.", 8,

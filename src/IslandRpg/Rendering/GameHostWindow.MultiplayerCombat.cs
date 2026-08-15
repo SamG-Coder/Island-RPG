@@ -344,6 +344,16 @@ internal sealed partial class GameHostWindow
             return;
         }
         PrepareNetworkCombatInteraction();
+        var target = _networkEnemies.TryGetValue(enemyId, out var enemy)
+            ? enemy.Position
+            : NetworkActionPosition;
+        _enemyCombatPathTarget = target;
+        _enemyCombatRepathAt =
+            _clock + MeleeCombatService.MovingTargetRepathSeconds;
+        SendNetworkWalk(
+            WorldActionReach.StandOff(
+                NetworkActionPosition, target, WorldActionReach.Melee),
+            preserveCombatAction: true);
         SendNetworkCombatCommand(
             new SetCombatTargetAction(reference),
             new(CombatActionKind.SetTarget, enemyId));
@@ -464,6 +474,64 @@ internal sealed partial class GameHostWindow
         if (_player?.Action == EntityAction.Attack) _player.Stop();
     }
 
+    private void UpdateNetworkMeleePresentation()
+    {
+        if (_player is null ||
+            _combatEnemyId is not { } enemyId ||
+            !_networkEnemies.TryGetValue(enemyId, out var enemy) ||
+            enemy.State.Health <= 0 ||
+            enemy.State.Behavior == CombatEnemyBehavior.Dead)
+            return;
+        var target = enemy.Position;
+        if (Vector2.Distance(_player.Position, target) >
+            WorldActionReach.Melee + .22f)
+        {
+            if (MeleeCombatService.ShouldRequestMovingTargetPath(
+                    false,
+                    _clock,
+                    _enemyCombatRepathAt,
+                    (System.Numerics.Vector2)_enemyCombatPathTarget,
+                    (System.Numerics.Vector2)target))
+            {
+                _enemyCombatRepathAt = _clock +
+                    MeleeCombatService.MovingTargetRepathSeconds;
+                _enemyCombatPathTarget = target;
+                SendNetworkWalk(
+                    WorldActionReach.StandOff(
+                        NetworkActionPosition, target, WorldActionReach.Melee),
+                    preserveCombatAction: true);
+            }
+            return;
+        }
+
+        var impactDelay = MeleeImpactDelay();
+        if (_swingStartedForAttackAt != _nextMeleeAttackAt &&
+            _clock < _nextMeleeAttackAt - impactDelay)
+        {
+            if (_player.Action == EntityAction.Attack &&
+                _clock >= _meleeReturnToIdleAt)
+                _player.Stop();
+            return;
+        }
+        if (_clock >= _nextMeleeAttackAt - impactDelay &&
+            _swingStartedForAttackAt != _nextMeleeAttackAt)
+            BeginNetworkMeleeSwing(target);
+        else
+            _player.AttackAt(target);
+        if (_clock < _nextMeleeAttackAt) return;
+        _nextMeleeAttackAt = _clock + MeleeCombatService.AttackIntervalSeconds;
+        _meleeReturnToIdleAt = _clock + MeleeRecoveryDelay();
+    }
+
+    private void BeginNetworkMeleeSwing(Vector2 target)
+    {
+        _player!.RestartAttackAt(target);
+        _swingStartedForAttackAt = _nextMeleeAttackAt;
+        SendNetworkPresentSkill(
+            EntityAction.Attack,
+            (float)(MeleeImpactDelay() + MeleeRecoveryDelay()));
+    }
+
     private void ApplyNetworkCombatPlayerState(
         NetworkPlayerGameplayState state)
     {
@@ -481,8 +549,7 @@ internal sealed partial class GameHostWindow
             _deathMessage = state.RespawnTick > _networkWorldClockTick
                 ? "The server is preparing your respawn."
                 : "Choose respawn when you are ready.";
-            _deathOverlayAt = _clock;
-            _modalScreen.Open(ModalScreenKind.Death);
+            _deathOverlayAt = _clock + DeathAnimationSeconds();
             if (!wasDefeated)
                 _chatUi.AddMessage(
                     "You have been defeated.",
@@ -563,9 +630,13 @@ internal sealed partial class GameHostWindow
 
         if (combatEvent.SourceEntityId ==
             _networkClient?.State.PlayerEntityId)
-            _player?.RestartAttackAt(targetPosition);
+        {
+            if (_player?.Action != EntityAction.Attack)
+                _player?.RestartAttackAt(targetPosition);
+        }
         else if (_networkActors.TryGetValue(
-                     combatEvent.SourceEntityId, out var actor))
+                     combatEvent.SourceEntityId, out var actor) &&
+                 actor.Action != EntityAction.Attack)
             actor.RestartAttackAt(targetPosition);
     }
 

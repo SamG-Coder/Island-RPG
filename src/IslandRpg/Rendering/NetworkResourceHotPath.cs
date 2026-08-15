@@ -117,8 +117,12 @@ internal sealed class NetworkResourceHotPath
         IReadOnlyDictionary<WorldChunkKey, NetworkResourceChunkState>? chunks)
     {
         var state = Lookup(known, chunks);
-        return state is not null &&
-               (state.Depleted || state.Remaining <= 0);
+        if (state is null) return false;
+        // Tree sticks are secondary stock. Remaining == 0 must not hide or
+        // fell the tree — only health/depleted does that.
+        if (known.Kind == ResourceNodeKind.Tree)
+            return state.Depleted || state.Health <= 0;
+        return state.Depleted || state.Remaining <= 0;
     }
 
     private static ResourceNodeSparseState? Lookup(

@@ -40,6 +40,8 @@ public sealed class AuthoritativeWorldTransactions :
     private readonly HashSet<Guid> _pickedProceduralGroundObjects = [];
     private readonly Dictionary<(ActorId ActorId, Guid ExcavationId), double>
         _excavationCadences = [];
+    private readonly Dictionary<(ActorId ActorId, Guid TreeId), double>
+        _plantedTreeCadences = [];
 
     public AuthoritativeWorldTransactions(
         Func<Guid>? newObjectId = null,
@@ -50,6 +52,12 @@ public sealed class AuthoritativeWorldTransactions :
         _caves = caves;
         _worldSeed = worldSeed;
     }
+
+    public long WorldSeed => _worldSeed;
+
+    public static Guid DerivePlantedTreeObjectId(
+        ActorId actorId, Guid commandId, uint expectedActorRevision) =>
+        DeriveCropObjectId(actorId, commandId, expectedActorRevision);
 
     public static Guid DeriveCropObjectId(
         ActorId actorId, Guid commandId, uint expectedActorRevision)
@@ -138,9 +146,11 @@ public sealed class AuthoritativeWorldTransactions :
             GroupOwnerId: seed.GroupOwnerId,
             VisualFrame: seed.Rotation,
             GateState: ToCoreGateState(seed.GateState));
-        if (!CropService.HasValidPersistentState(value))
+        if (!CropService.HasValidPersistentState(value) ||
+            !PlantedTreeService.HasValidPersistentState(value))
             throw new ArgumentException(
-                "The seeded crop state is invalid.", nameof(seed));
+                "The seeded crop or planted-tree state is invalid.",
+                nameof(seed));
         if (seed.ContainerItems is { Count: > 0 })
         {
             if (!WorldItemContainerService.IsContainer(seed.DefinitionId))
@@ -521,9 +531,10 @@ public sealed class AuthoritativeWorldTransactions :
                 snapshot.GroupOwnerId,
                 snapshot.Rotation,
                 ToCoreGateState(snapshot.GateState));
-            if (!CropService.HasValidPersistentState(value))
+            if (!CropService.HasValidPersistentState(value) ||
+                !PlantedTreeService.HasValidPersistentState(value))
                 throw new InvalidDataException(
-                    "The world checkpoint contains invalid crop state.");
+                    "The world checkpoint contains invalid crop or planted-tree state.");
             objects.Add(snapshot.ObjectId, new ObjectState(
                 value,
                 snapshot.Chunk,
@@ -638,6 +649,30 @@ public sealed class AuthoritativeWorldTransactions :
         BeginCampfireCookingTransaction command) =>
         ExecuteCached(actor, command.Context, command,
             state => BeginCooking(state, command));
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        CookStewTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => CookStew(state, command));
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        StrikeTrainingDummyTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => StrikeTrainingDummy(state, command));
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        PlantTreeTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => PlantTree(state, command));
+
+    public WorldTransactionResult Execute(
+        WorldTransactionActorInput actor,
+        StrikePlantedTreeTransaction command) =>
+        ExecuteCached(actor, command.Context, command,
+            state => StrikePlantedTree(state, command));
 
     /// <summary>
     /// Completes a previously persisted server-owned cooking job. Completion
@@ -1272,6 +1307,258 @@ public sealed class AuthoritativeWorldTransactions :
             [chunk]) with { Detail = "crop_harvested" };
     }
 
+    private WorldTransactionResult PlantTree(
+        ActorState actor, PlantTreeTransaction command)
+    {
+        if (command.TreeObjectId == Guid.Empty ||
+            _objects.ContainsKey(command.TreeObjectId) ||
+            !ValidGameSeconds(command.GameSeconds))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCommand, actor);
+        if (!PlantedTreeService.IsTileCenter(command.Position))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidPlacement, actor);
+        if (command.WorldLevel != actor.WorldLevel)
+            return Rejected(command.Context,
+                WorldTransactionStatus.WrongWorldLevel, actor);
+        if (command.WorldLevel != 0)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidPlacement, actor,
+                "Trees can only be planted on the surface.");
+        if (!InRange(actor.Position, command.Position))
+            return Rejected(command.Context,
+                WorldTransactionStatus.OutOfRange, actor);
+
+        var chunkKey = WorldChunkKey.At(
+            command.Position, command.WorldLevel);
+        if (ChunkRevision(chunkKey) != command.ExpectedChunkRevision)
+            return Rejected(command.Context,
+                WorldTransactionStatus.StaleChunkRevision, actor);
+        if (actor.ActorRevision == uint.MaxValue ||
+            actor.InventoryRevision == uint.MaxValue ||
+            ChunkRevision(chunkKey) == uint.MaxValue)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCommand, actor,
+                "A planted-tree revision cannot advance any further.");
+        if (TileOccupied(command.Position, command.WorldLevel))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidPlacement, actor,
+                "The planting tile is occupied.");
+        if ((uint)command.SeedInventorySlot >=
+            (uint)actor.Inventory.Capacity)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidInventorySlot, actor);
+        if (actor.Inventory[command.SeedInventorySlot] is not { } seed)
+            return Rejected(command.Context,
+                WorldTransactionStatus.ItemUnavailable, actor);
+        if (!PlantedTreeService.TryTreeType(seed.ItemId, out _))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidItem, actor);
+
+        var ownerId = actor.ActorId.ToString();
+        if (LivingPlantedTreeCount(ownerId) >=
+            PlantedTreeService.MaximumLivingTreesPerPlanter)
+            return Rejected(command.Context,
+                WorldTransactionStatus.PlantLimitReached, actor,
+                "You have already planted as many trees as you can tend.");
+
+        var inventory = actor.Inventory.Clone();
+        if (!inventory.TryTake(
+                command.SeedInventorySlot, 1, out var consumed) ||
+            !string.Equals(
+                consumed.ItemId, seed.ItemId, StringComparison.Ordinal))
+            return Rejected(command.Context,
+                WorldTransactionStatus.ItemUnavailable, actor);
+
+        var tree = PlantedTreeService.Plant(
+            command.TreeObjectId,
+            consumed.ItemId,
+            command.Position.X,
+            command.Position.Y,
+            command.GameSeconds,
+            command.PlanterDisplayName,
+            ownerId);
+        var state = new ObjectState(tree, chunkKey, 1, 1, null);
+        _objects.Add(command.TreeObjectId, state);
+        IndexObject(state);
+        var chunk = AdvanceChunk(chunkKey);
+        AwardFarming(actor, FarmingSkill.PlantingExperience);
+        CommitInventory(actor, inventory);
+        return Accepted(command.Context, actor,
+            [new(WorldObjectChangeKind.Added,
+                tree.Id, chunkKey, 0, state.ObjectRevision,
+                Snapshot(state))],
+            [chunk]) with { Detail = "tree_planted" };
+    }
+
+    private WorldTransactionResult StrikePlantedTree(
+        ActorState actor, StrikePlantedTreeTransaction command)
+    {
+        var rejected = ValidateObject(
+            actor, command.Context, command.Tree, out var state);
+        if (rejected is not null) return rejected;
+        if (!ValidGameSeconds(command.GameSeconds) ||
+            !ValidGameSeconds(command.WorldGameSeconds))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCommand, actor);
+        if (!PlantedTreeService.IsPlantedTree(state!.Value))
+            return Rejected(command.Context,
+                WorldTransactionStatus.NotPlantedTree, actor);
+        if (PlantedTreeService.IsFelled(state.Value))
+            return Rejected(command.Context,
+                WorldTransactionStatus.TreeAlreadyFelled, actor,
+                "That planted tree has already been felled.");
+        if ((uint)command.ToolInventorySlot >=
+            (uint)actor.Inventory.Capacity)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidInventorySlot, actor);
+        if (actor.Inventory[command.ToolInventorySlot] is not { } tool)
+            return Rejected(command.Context,
+                WorldTransactionStatus.ItemUnavailable, actor);
+        var axe = ItemCatalog.Get(tool.ItemId);
+        if (!axe.HasTag(ItemTag.Axe) || axe.WoodcuttingPower <= 0 ||
+            axe.Id == ItemIds.BluntStoneAxe)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidItem, actor,
+                "The selected inventory slot does not contain a usable axe.");
+        if (actor.ActorRevision == uint.MaxValue ||
+            actor.InventoryRevision == uint.MaxValue ||
+            state.ObjectRevision == uint.MaxValue ||
+            ChunkRevision(state.Chunk) == uint.MaxValue)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCommand, actor,
+                "A planted-tree revision cannot advance any further.");
+
+        var cadenceKey = (actor.ActorId, state.Value.Id);
+        if (_plantedTreeCadences.TryGetValue(cadenceKey, out var readyAt) &&
+            command.GameSeconds < readyAt)
+            return Rejected(command.Context,
+                WorldTransactionStatus.ExcavationCadenceLocked, actor,
+                "The next axe swing is not ready.");
+
+        var roll = DeterministicCombatRandom.Create(new CombatRollKey(
+            command.WorldSeed,
+            actor.ActorId.Value,
+            state.Value.Id,
+            command.StrikeSequence));
+        var strike = ResourceStrikeService.Woodcut(
+            actor.WoodcuttingExperience,
+            state.Value.Health,
+            state.Value.MaxHealth,
+            axe.WoodcuttingPower,
+            roll.HitRoll,
+            roll.DamageRoll);
+        _plantedTreeCadences[cadenceKey] =
+            command.GameSeconds + PlantedTreeService.StrikeCadenceSeconds;
+        if (!strike.Hit)
+        {
+            AdvanceActor(actor);
+            return Accepted(command.Context, actor, [], []) with
+            {
+                Detail = "planted_tree_miss"
+            };
+        }
+
+        var treeType = PlantedTreeService.TreeType(state.Value);
+        var compacted = PlantedTreeService.IsCompacted(
+            state.Value, command.WorldGameSeconds);
+        var next = PlantedTreeService.ApplyStrike(
+            state.Value, strike.Health, command.WorldGameSeconds);
+        var inventory = actor.Inventory.Clone();
+        var inventoryChanged = false;
+        var rewardItemId = PlantedTreeService.LogItemId(treeType);
+        var rolledReward = 0;
+        if (compacted)
+        {
+            rolledReward = strike.Depleted
+                ? WoodcuttingSkill.FellingLogCount(state.Value.MaxHealth)
+                : WoodcuttingSkill.GrantsSwingLog(
+                    strike.Experience.Level, roll.DamageRoll)
+                    ? 1
+                    : 0;
+        }
+
+        var granted = 0;
+        if (rolledReward > 0)
+            granted = inventory.AddUpTo(rewardItemId, rolledReward);
+        if (granted > 0)
+            inventoryChanged = true;
+
+        var previousObjectRevision = state.ObjectRevision;
+        state.Value = next;
+        state.ObjectRevision = checked(state.ObjectRevision + 1);
+        if (strike.Depleted)
+            _plantedTreeCadences.Remove(cadenceKey);
+        var chunk = AdvanceChunk(state.Chunk);
+        AwardWoodcutting(actor, strike.Experience.Gained);
+        if (inventoryChanged)
+            CommitInventory(actor, inventory);
+        else
+            AdvanceActor(actor);
+        return Accepted(command.Context, actor,
+            [UpdatedDelta(state, previousObjectRevision)], [chunk]) with
+        {
+            Detail = strike.Depleted
+                ? compacted
+                    ? $"planted_tree_felled:{granted}"
+                    : "planted_tree_felled:0"
+                : granted > 0
+                    ? $"planted_tree_hit:{strike.Damage}:{granted}"
+                    : $"planted_tree_hit:{strike.Damage}"
+        };
+    }
+
+    public WorldTransactionResult? ExpirePlantedTrees(double gameSeconds)
+    {
+        EnsureOwner();
+        if (!ValidGameSeconds(gameSeconds))
+            return null;
+
+        List<ObjectState>? expired = null;
+        foreach (var state in _objects.Values)
+        {
+            if (!PlantedTreeService.IsExpired(state.Value, gameSeconds))
+                continue;
+            expired ??= [];
+            expired.Add(state);
+        }
+
+        if (expired is null)
+            return null;
+
+        var objectDeltas = ImmutableArray.CreateBuilder<
+            WorldObjectTransactionDelta>(expired.Count);
+        var chunkDeltas = ImmutableArray.CreateBuilder<
+            WorldChunkRevisionDelta>();
+        var advancedChunks = new HashSet<WorldChunkKey>();
+        foreach (var state in expired)
+        {
+            var previous = state.ObjectRevision;
+            UnindexObject(state);
+            _objects.Remove(state.Value.Id);
+            objectDeltas.Add(new(
+                WorldObjectChangeKind.Removed,
+                state.Value.Id,
+                state.Chunk,
+                previous,
+                checked(previous + 1),
+                null));
+            if (advancedChunks.Add(state.Chunk))
+                chunkDeltas.Add(AdvanceChunk(state.Chunk));
+        }
+
+        return new WorldTransactionResult(
+            Guid.Empty,
+            WorldTransactionStatus.Accepted,
+            0,
+            0,
+            objectDeltas.MoveToImmutable(),
+            chunkDeltas.MoveToImmutable(),
+            null,
+            null,
+            "planted_tree_expired");
+    }
+
     private WorldTransactionResult OpenContainer(
         ActorState actor, OpenWorldContainerTransaction command)
     {
@@ -1508,6 +1795,122 @@ public sealed class AuthoritativeWorldTransactions :
                 WorldTransactionStatus.ItemUnavailable, actor);
         CommitInventory(actor, inventory);
         return Accepted(command.Context, actor, [], []);
+    }
+
+    private WorldTransactionResult CookStew(
+        ActorState actor, CookStewTransaction command)
+    {
+        var rejected = ValidateObject(actor, command.Context,
+            command.Pot, out var state);
+        if (rejected is not null) return rejected;
+        if (state!.Value.ItemId != ItemIds.CookingPot)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidItem, actor,
+                "Stew can only be cooked in a cooking pot.");
+        if (!HasLitCampfireWithin(
+                new(state.Value.X, state.Value.Y),
+                state.Chunk.WorldLevel,
+                command.GameSeconds,
+                StewCookingService.CampfireRange))
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidCampfireState, actor,
+                "Place the cooking pot close to a lit campfire.");
+        if (CookingSkill.LevelForExperience(actor.CookingExperience) <
+            StewCookingService.RequiredLevel)
+            return Rejected(command.Context,
+                WorldTransactionStatus.CookingLocked, actor,
+                $"You need Cooking level {StewCookingService.RequiredLevel} " +
+                "to make stew.");
+        var inventory = actor.Inventory.Clone();
+        if (!StewCookingService.TryPrepare(
+                inventory, out var updated, out _, out _))
+            return Rejected(command.Context,
+                WorldTransactionStatus.ItemUnavailable, actor,
+                "You need one raw fish and one handful of raw berries.");
+        CommitInventory(actor, updated);
+        var cooking = CookingSkill.AwardExperience(
+            actor.CookingExperience, StewCookingService.Experience);
+        var adventure = AdventureService.AwardFromAction(
+            actor.AdventureExperience, cooking.Gained);
+        actor.CookingExperience = cooking.Experience;
+        actor.AdventureExperience = adventure.Experience;
+        AdvanceActor(actor);
+        return Accepted(command.Context, actor, [], []);
+    }
+
+    private WorldTransactionResult StrikeTrainingDummy(
+        ActorState actor, StrikeTrainingDummyTransaction command)
+    {
+        var rejected = ValidateObject(actor, command.Context,
+            command.Dummy, out var state);
+        if (rejected is not null) return rejected;
+        if (state!.Value.ItemId != ItemIds.TrainingDummy)
+            return Rejected(command.Context,
+                WorldTransactionStatus.InvalidItem, actor,
+                "That is not a training dummy.");
+        var roll = DeterministicCombatRandom.Create(new CombatRollKey(
+            command.WorldSeed,
+            actor.ActorId.Value,
+            state.Value.Id,
+            command.AttackSequence));
+        var attack = MeleeCombatService.Roll(
+            actor.AttackExperience,
+            actor.StrengthExperience,
+            roll.HitRoll,
+            roll.DamageRoll,
+            actor.Inventory.ItemIds());
+        if (!attack.Hit)
+            return Accepted(command.Context, actor, [], []) with
+            {
+                Detail = "dummy_miss"
+            };
+
+        var maximum = MeleeCombatService.TrainingDummyMaximumHealth;
+        var health = state.Value.Health <= 0
+            ? maximum
+            : state.Value.Health;
+        health -= attack.Damage;
+        var reset = health <= 0;
+        if (reset) health = maximum;
+        var previousObjectRevision = state.ObjectRevision;
+        state.Value = state.Value with
+        {
+            Health = health,
+            MaxHealth = maximum
+        };
+        state.ObjectRevision = checked(state.ObjectRevision + 1);
+        var chunk = AdvanceChunk(state.Chunk);
+        var stance = actor.CombatStance;
+        var current = stance switch
+        {
+            MeleeCombatStance.Accurate => actor.AttackExperience,
+            MeleeCombatStance.Aggressive => actor.StrengthExperience,
+            _ => actor.DefenceExperience
+        };
+        var award = SkillService.AwardExperience(current, attack.Experience);
+        var adventure = AdventureService.AwardFromAction(
+            actor.AdventureExperience, award.Gained);
+        switch (stance)
+        {
+            case MeleeCombatStance.Accurate:
+                actor.AttackExperience = award.Experience;
+                break;
+            case MeleeCombatStance.Aggressive:
+                actor.StrengthExperience = award.Experience;
+                break;
+            default:
+                actor.DefenceExperience = award.Experience;
+                break;
+        }
+        actor.AdventureExperience = adventure.Experience;
+        AdvanceActor(actor);
+        return Accepted(command.Context, actor,
+            [UpdatedDelta(state, previousObjectRevision)], [chunk]) with
+        {
+            Detail = reset
+                ? $"dummy_reset:{attack.Damage}"
+                : $"dummy_hit:{attack.Damage}"
+        };
     }
 
     private WorldTransactionResult PlaceConstruction(
@@ -1971,6 +2374,7 @@ public sealed class AuthoritativeWorldTransactions :
         !WorldItemContainerService.IsContainer(value.ItemId) &&
         !CampfireService.IsCampfire(value) &&
         !CropService.IsCrop(value) &&
+        !PlantedTreeService.IsPlantedTree(value) &&
         !ConstructionService.IsConstructible(value.ItemId) &&
         Kind(value.ItemId) == ExcavationKind.None;
 
@@ -2142,6 +2546,27 @@ public sealed class AuthoritativeWorldTransactions :
             actor.AdventureExperience, digging.Gained);
         actor.DiggingExperience = digging.Experience;
         actor.AdventureExperience = adventure.Experience;
+    }
+
+    private static void AwardWoodcutting(ActorState actor, int experience)
+    {
+        var woodcutting = WoodcuttingSkill.AwardExperience(
+            actor.WoodcuttingExperience, experience);
+        var adventure = AdventureService.AwardFromAction(
+            actor.AdventureExperience, woodcutting.Gained);
+        actor.WoodcuttingExperience = woodcutting.Experience;
+        actor.AdventureExperience = adventure.Experience;
+    }
+
+    private int LivingPlantedTreeCount(string ownerId)
+    {
+        var count = 0;
+        foreach (var state in _objects.Values)
+            if (PlantedTreeService.IsLiving(state.Value) &&
+                string.Equals(
+                    state.Value.OwnerId, ownerId, StringComparison.Ordinal))
+                count++;
+        return count;
     }
 
     private static void AwardFarming(ActorState actor, int experience)
@@ -2465,9 +2890,14 @@ public sealed class AuthoritativeWorldTransactions :
                 input.Gameplay.CraftingExperience);
             CraftingExperience = input.Gameplay.CraftingExperience;
             CookingExperience = input.Gameplay.CookingExperience;
+            WoodcuttingExperience = input.Gameplay.WoodcuttingExperience;
             FarmingExperience = input.Gameplay.FarmingExperience;
             DiggingExperience = input.Gameplay.DiggingExperience;
             AdventureExperience = input.Gameplay.AdventureExperience;
+            AttackExperience = input.Gameplay.AttackExperience;
+            StrengthExperience = input.Gameplay.StrengthExperience;
+            DefenceExperience = input.Gameplay.DefenceExperience;
+            CombatStance = input.Gameplay.CombatStance;
             FiremakingLevel = Math.Clamp(input.FiremakingLevel, 1, 20);
             Energy = Math.Clamp(input.Energy, 0, 100);
             GroupId = input.GroupId;
@@ -2483,9 +2913,14 @@ public sealed class AuthoritativeWorldTransactions :
         public int CraftingLevel { get; }
         public int CraftingExperience { get; set; }
         public int CookingExperience { get; set; }
+        public int WoodcuttingExperience { get; set; }
         public int FarmingExperience { get; set; }
         public int DiggingExperience { get; set; }
         public int AdventureExperience { get; set; }
+        public int AttackExperience { get; set; }
+        public int StrengthExperience { get; set; }
+        public int DefenceExperience { get; set; }
+        public MeleeCombatStance CombatStance { get; }
         public int FiremakingLevel { get; }
         public float Energy { get; }
         public string? GroupId { get; }
@@ -2505,9 +2940,13 @@ public sealed class AuthoritativeWorldTransactions :
                 ActorRevision = ActorRevision,
                 CraftingExperience = CraftingExperience,
                 CookingExperience = CookingExperience,
+                WoodcuttingExperience = WoodcuttingExperience,
                 FarmingExperience = FarmingExperience,
                 DiggingExperience = DiggingExperience,
                 AdventureExperience = AdventureExperience,
+                AttackExperience = AttackExperience,
+                StrengthExperience = StrengthExperience,
+                DefenceExperience = DefenceExperience,
                 Inventory = new(InventoryRevision, slots.MoveToImmutable())
             };
         }

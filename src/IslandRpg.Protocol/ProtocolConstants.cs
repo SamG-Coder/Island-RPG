@@ -85,6 +85,8 @@ public enum ProtocolMessageKind : byte
     CombatEventBatch = 50,
     CombatActionResult = 51,
     SocialState = 52,
+    PresentSkillCommand = 53,
+    PickedProceduralGroundObjects = 54,
 }
 
 [Flags]
@@ -179,6 +181,12 @@ public enum ActionCommandKind : byte
     HarvestCrop = 21,
     PlaceInventoryWorldObject = 22,
     Social = 23,
+    CookStew = 24,
+    StrikeTrainingDummy = 25,
+    PlantTree = 26,
+    StrikePlantedTree = 27,
+    EmptyBucket = 28,
+    FillBucket = 29,
 }
 
 public enum BoatActionKind : byte

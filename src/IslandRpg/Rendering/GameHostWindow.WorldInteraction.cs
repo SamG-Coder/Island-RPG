@@ -24,7 +24,8 @@ internal sealed partial class GameHostWindow
         int InventorySlot,
         string ItemId,
         Vector2 Target,
-        Guid? TargetObjectId = null);
+        Guid? TargetObjectId = null,
+        int Rotation = 0);
 
     private bool AtlasOverlapsActor(
         SpriteAtlasEntry entry,
@@ -140,6 +141,174 @@ internal sealed partial class GameHostWindow
         return hoveredTree is not null;
     }
 
+    /// <summary>
+    /// Single-player and multiplayer share this hover order so fibre
+    /// shrubs are not swallowed by trees. Vegetation is tested before trees.
+    /// </summary>
+    private bool TryOpenWorldRightClickContext(
+        Vector2 mouse, Vector2 walkTarget)
+    {
+        if (IsNetworkWorld &&
+            TryGetNetworkPlayerUnderMouse(mouse, out var playerId))
+        {
+            OpenNetworkPlayerContext(playerId, walkTarget);
+            return true;
+        }
+        if (TryGetEnemyUnderMouse(mouse, out var enemy))
+        {
+            OpenEnemyContext(enemy, walkTarget);
+            return true;
+        }
+        if (!IsNetworkWorld &&
+            TryGetVillagerUnderMouse(mouse, out var villager))
+        {
+            OpenVillagerContext(villager, walkTarget);
+            return true;
+        }
+        if (TryGetGroundObjectUnderMouse(mouse, out var groundObject, out _))
+        {
+            if (IsNetworkWorld)
+                OpenNetworkGroundObjectContext(groundObject, walkTarget);
+            else
+                OpenSinglePlayerGroundObjectContext(
+                    groundObject, walkTarget);
+            return true;
+        }
+        if (TryGetFishUnderMouse(mouse, out var fish))
+        {
+            OpenFishContext(fish, walkTarget);
+            return true;
+        }
+        if (TryGetMiningNodeUnderMouse(
+                mouse, out var miningNode, out var miningKey))
+        {
+            OpenMiningContext(miningNode, miningKey, walkTarget);
+            return true;
+        }
+        if (TryGetGatherableVegetationUnderMouse(
+                mouse, out var vegetation, out var vegetationKey))
+        {
+            OpenVegetationContext(vegetation, vegetationKey, walkTarget);
+            return true;
+        }
+        if (TryGetTreeUnderMouse(mouse, out var tree))
+        {
+            OpenTreeContext(tree, walkTarget);
+            return true;
+        }
+        return false;
+    }
+
+    private void OpenVillagerContext(VillagerState villager, Vector2 walkTarget)
+    {
+        _villagerContextTargetId = villager.Id;
+        _villagerContextWalkTarget = walkTarget;
+        _villagerContextOptions = VillagerInteractionMenu.Build(
+            _activePlayer?.Inventory, _activeInventorySlot);
+        _inventoryContext.Close();
+        _treeContext.Close();
+        _groundObjectContext.Close();
+        _fishContext.Close();
+        _vegetationContext.Close();
+        _miningContext.Close();
+        _villagerContext.Open(
+            MouseState.Position,
+            _villagerContextOptions.Select(value => value.Label).ToArray(),
+            SceneClientBounds(), 178);
+    }
+
+    private void OpenTreeContext(IslandTree tree, Vector2 walkTarget)
+    {
+        _treeContextTarget = tree;
+        _treeContextWalkTarget = walkTarget;
+        _inventoryContext.Close();
+        _groundObjectContext.Close();
+        _fishContext.Close();
+        _vegetationContext.Close();
+        _miningContext.Close();
+        _treeContext.Open(
+            MouseState.Position,
+            ["Chop tree", "Gather sticks", "Walk Here", "Examine"],
+            SceneClientBounds(), 142);
+    }
+
+    private void OpenSinglePlayerGroundObjectContext(
+        WorldGroundObject contextObject, Vector2 walkTarget)
+    {
+        _groundObjectContextTarget = contextObject;
+        _groundObjectContextWalkTarget = walkTarget;
+        _inventoryContext.Close();
+        _treeContext.Close();
+        _fishContext.Close();
+        _vegetationContext.Close();
+        _miningContext.Close();
+        if (PlantedTreeService.IsPlantedTree(contextObject))
+        {
+            _groundObjectContext.Open(
+                MouseState.Position,
+                PlantedTreeService.IsFelled(contextObject)
+                    ? ["Walk Here", "Examine"]
+                    : ["Chop tree", "Walk Here", "Examine"],
+                SceneClientBounds(), 142);
+            return;
+        }
+        var fixedObject =
+            PlaceableObjectCatalog.IsPlaceable(contextObject.ItemId);
+        var campfireState = CampfireService.IsCampfire(contextObject)
+            ? CampfireService.State(contextObject, _worldGameSeconds)
+            : (CampfireState?)null;
+        var canCookSelected =
+            campfireState == CampfireState.Lit &&
+            TrySelectedRawCookingItem(out _, out _);
+        _groundObjectContext.Open(
+            MouseState.Position,
+            ConstructionService.IsConstructionSite(contextObject)
+                ? [
+                    "Walk here",
+                    "Build",
+                    "Build All (Same Type)",
+                    "Demolish",
+                    "Examine"
+                ]
+            : contextObject.ItemId == ItemIds.TrainingDummy
+                ? ["Attack", "Walk Here", "Examine"]
+            : CaveEntranceService.IsEntrance(contextObject)
+                ? _activeWorldLevel == (int)WorldLevel.Overworld
+                    ? ["Climb down", "Take rope",
+                       "Walk Here", "Examine"]
+                    : ["Climb up", "Walk Here", "Examine"]
+                : CaveEntranceService.IsHole(contextObject)
+                ? ["Walk Here", "Examine"]
+                : CaveEntranceService.IsDigSite(contextObject)
+                ? ["Continue digging", "Restore ground",
+                   "Walk Here", "Examine"]
+                : CaveEntranceService.IsShallowHole(contextObject)
+                ? ["Walk Here", "Examine"]
+                : canCookSelected
+                ? ["Cook", "Walk Here", "Examine"]
+                : campfireState == CampfireState.Fueled
+                ? ["Light", "Take log", "Walk Here", "Examine"]
+                : WorldItemContainerService.IsContainer(
+                    contextObject.ItemId)
+                ? ["Open", "Walk Here", "Examine"]
+                : contextObject.ItemId == ItemIds.CookingPot
+                ? ["Cook stew", "Walk Here", "Examine"]
+                : CraftingStationService.IsStation(
+                    contextObject.ItemId)
+                ? [
+                    CraftingStationService.ActionLabel(
+                        contextObject.ItemId),
+                    "Walk Here", "Examine"
+                ]
+                : fixedObject
+                ? ["Walk Here", "Examine"]
+                : ["Pick up", "Walk Here", "Examine"],
+            SceneClientBounds(),
+            ConstructionService.IsConstructionSite(contextObject)
+                ? 214
+                : 142);
+    }
+
     private bool TryGetGroundObjectUnderMouse(
         Vector2 mouse,
         out WorldGroundObject groundObject,
@@ -168,7 +337,11 @@ internal sealed partial class GameHostWindow
                 continue;
             var world = GroundObjectWorld(candidate);
             var visualBounds = SpriteBounds(
-                frame, world);
+                frame, world,
+                renderScale: PlantedTreeService.IsPlantedTree(candidate)
+                    ? PlantedTreeService.GrowthScale(
+                        candidate, _worldGameSeconds)
+                    : 1f);
             const float minimumHitSize = 24;
             var centerX = (visualBounds.Left + visualBounds.Right) * .5f;
             var centerY = (visualBounds.Top + visualBounds.Bottom) * .5f;
@@ -201,6 +374,31 @@ internal sealed partial class GameHostWindow
         out string atlasKey,
         out string? shadowKey)
     {
+        if (PlantedTreeService.IsPlantedTree(value))
+        {
+            var treeType = PlantedTreeService.TreeType(value);
+            var frameIndex = WorldTreeCatalog.SelectFrame(
+                _worldSeed,
+                (int)MathF.Floor(value.X),
+                (int)MathF.Floor(value.Y),
+                treeType);
+            atlasKey = PlantedTreeService.IsFelled(value)
+                ? StumpAtlasKey(treeType, shadow: false)
+                : WorldTreeCatalog.AtlasKey(treeType, frameIndex);
+            shadowKey = PlantedTreeService.IsFelled(value)
+                ? StumpAtlasKey(treeType, shadow: true)
+                : WorldTreeCatalog.AtlasKey(
+                    treeType[..^2] + "N0", frameIndex);
+            if (_treeAtlas.TryGetValue(atlasKey, out var plantedAtlas))
+            {
+                frame = plantedAtlas.Frame;
+                texture = plantedAtlas.Texture;
+                return true;
+            }
+            texture = 0;
+            frame = null!;
+            return false;
+        }
         if (HouseCatalog.IsHouse(value.ItemId))
         {
             atlasKey = HouseVisuals.Resolve(value);
@@ -303,16 +501,13 @@ internal sealed partial class GameHostWindow
 
     private void QueueGroundObjectPickup(WorldGroundObject groundObject)
     {
-        if (IsNetworkWorld && CropService.IsCrop(groundObject))
-        {
-            QueueNetworkObjectAction(
-                NetworkWorldActionKind.HarvestCrop, groundObject);
-            return;
-        }
         _worldActions.QueueGroundObjectPickup(groundObject);
         if (IsNetworkWorld)
             SendNetworkWalkCommand(
-                new Vector2(groundObject.X, groundObject.Y));
+                WorldActionReach.StandOff(
+                    NetworkActionPosition,
+                    new Vector2(groundObject.X, groundObject.Y),
+                    WorldActionReach.GroundPickup));
     }
 
     private void TryPickUpGroundObject(Guid groundObjectId)
@@ -328,7 +523,10 @@ internal sealed partial class GameHostWindow
                     "That object is no longer there.");
                 return;
             }
-            SendNetworkGroundPickup(target);
+            if (CropService.IsCrop(target))
+                SendNetworkHarvest(target);
+            else
+                SendNetworkGroundPickup(target);
             return;
         }
         var chunk = _worldChunks.Values.FirstOrDefault(gpu =>
@@ -345,6 +543,8 @@ internal sealed partial class GameHostWindow
                 "You are no longer permitted to take from this settlement's cache.");
             return;
         }
+        if (PlantedTreeService.IsPlantedTree(groundObject))
+            return;
         var itemId = groundObject.ItemId;
         var crop = CropService.IsCrop(groundObject);
         if (crop && !CropService.IsReady(
@@ -411,7 +611,8 @@ internal sealed partial class GameHostWindow
         if (_player is null || _activePlayer is null) return;
         var groundObject = FindGroundObject(groundObjectId);
         if (groundObject is null ||
-            PlaceableObjectCatalog.IsPlaceable(groundObject.ItemId))
+            PlaceableObjectCatalog.IsPlaceable(groundObject.ItemId) ||
+            PlantedTreeService.IsPlantedTree(groundObject))
             return;
         if (!CanPlayerAccessGroundObject(groundObject))
         {
@@ -435,7 +636,14 @@ internal sealed partial class GameHostWindow
 
         _activeTreeId = null;
         _activeGroundPickupId = groundObjectId;
+        if (IsNetworkWorld)
+        {
+            SendNetworkPresentSkill(EntityAction.Gather);
+            _networkWorldActionCommitAt = _clock + GroundItemActionSeconds;
+        }
         _player.GatherAt(target);
+        if (IsNetworkWorld)
+            _player.RestartActionTime();
     }
 
     internal void UpdateGroundObjectPickup()
@@ -457,7 +665,10 @@ internal sealed partial class GameHostWindow
             return;
         }
 
-        if (_player.ActionTime < GroundItemActionSeconds) return;
+        if (!NetworkResourceWindupReady(
+                _player.ActionTime, GroundItemActionSeconds, _clock,
+                _networkWorldActionCommitAt))
+            return;
 
         var groundObjectId = _activeGroundPickupId.Value;
         _activeGroundPickupId = null;
@@ -684,49 +895,19 @@ internal sealed partial class GameHostWindow
     private void QueueGroundObjectDrop(GroundDropPreview preview)
     {
         if (_player is null || !preview.Valid) return;
-        if (IsNetworkWorld)
+        if (IsNetworkWorld &&
+            preview.TargetObjectId is { } fuelTargetId &&
+            _networkWorldObjects.TryGetValue(
+                fuelTargetId, out var fuelTarget) &&
+            CampfireService.IsCampfire(fuelTarget) &&
+            preview.ItemId != ItemIds.Rope &&
+            preview.ItemId is not (ItemIds.Dirt or ItemIds.Sand))
         {
-            if (preview.TargetObjectId is { } targetObjectId &&
-                _networkWorldObjects.TryGetValue(
-                    targetObjectId, out var targetObject))
-            {
-                if (preview.ItemId == ItemIds.Rope &&
-                    CaveEntranceService.IsHole(targetObject))
-                {
-                    QueueNetworkCaveObjectAction(
-                        NetworkWorldActionKind.InstallCaveRope,
-                        targetObject, preview.InventorySlot);
-                    return;
-                }
-                if (CanFillExcavation(
-                        targetObject, preview.ItemId, out _) &&
-                    FindNetworkCaveFillSlot(targetObject) ==
-                    preview.InventorySlot)
-                {
-                    QueueNetworkCaveObjectAction(
-                        NetworkWorldActionKind.FillExcavation,
-                        targetObject, preview.InventorySlot);
-                    return;
-                }
-                if (CampfireService.IsCampfire(targetObject))
-                {
-                    QueueNetworkObjectAction(
-                        NetworkWorldActionKind.AddCampfireFuel,
-                        targetObject,
-                        preview.InventorySlot);
-                    return;
-                }
-            }
-            if (PlaceableObjectCatalog.IsPlaceable(preview.ItemId))
-            {
-                QueueNetworkPointAction(
-                    NetworkWorldActionKind.PlaceInventoryWorldObject,
-                    preview.Target,
-                    preview.InventorySlot,
-                    definitionId: preview.ItemId,
-                    rotation: preview.Rotation);
-                return;
-            }
+            QueueNetworkObjectAction(
+                NetworkWorldActionKind.AddCampfireFuel,
+                fuelTarget,
+                preview.InventorySlot);
+            return;
         }
         if (preview.TargetObjectId is { } cookingFireId &&
             CookingSkill.TryProfile(preview.ItemId, out _) &&
@@ -760,7 +941,7 @@ internal sealed partial class GameHostWindow
         {
             BeginGroundObjectDrop(
                 preview.InventorySlot, preview.ItemId, preview.Target,
-                preview.TargetObjectId);
+                preview.TargetObjectId, preview.Rotation);
             return;
         }
         _worldActions.QueuePath(
@@ -771,14 +952,18 @@ internal sealed partial class GameHostWindow
             itemId: preview.ItemId,
             groundObjectId: preview.TargetObjectId);
         if (IsNetworkWorld)
-            SendNetworkWalkCommand(preview.Target);
+            SendNetworkWalkCommand(
+                WorldActionReach.StandOff(
+                    NetworkActionPosition, preview.Target,
+                    interactionRange));
     }
 
     internal void BeginGroundObjectDrop(
         int inventorySlot,
         string itemId,
         Vector2 target,
-        Guid? targetObjectId = null)
+        Guid? targetObjectId = null,
+        int rotation = 0)
     {
         if (_player is null ||
             !InventoryContainsAt(inventorySlot, itemId) ||
@@ -816,8 +1001,15 @@ internal sealed partial class GameHostWindow
         _activeTreeId = null;
         _activeGroundPickupId = null;
         _activeGroundDrop = new(
-            inventorySlot, itemId, target, targetObjectId);
+            inventorySlot, itemId, target, targetObjectId, rotation);
+        if (IsNetworkWorld)
+        {
+            SendNetworkPresentSkill(EntityAction.Gather);
+            _networkWorldActionCommitAt = _clock + GroundItemActionSeconds;
+        }
         _player.GatherAt(target);
+        if (IsNetworkWorld)
+            _player.RestartActionTime();
     }
 
     internal void UpdateGroundObjectDrop()
@@ -828,7 +1020,10 @@ internal sealed partial class GameHostWindow
             _activeGroundDrop = null;
             return;
         }
-        if (_player.ActionTime < GroundItemActionSeconds) return;
+        if (!NetworkResourceWindupReady(
+                _player.ActionTime, GroundItemActionSeconds, _clock,
+                _networkWorldActionCommitAt))
+            return;
 
         _activeGroundDrop = null;
         if (!InventoryContainsAt(drop.InventorySlot, drop.ItemId))
@@ -879,7 +1074,15 @@ internal sealed partial class GameHostWindow
         }
         if (IsNetworkWorld)
         {
-            SendNetworkGroundDrop(drop.InventorySlot, drop.Target);
+            if (PlaceableObjectCatalog.IsPlaceable(drop.ItemId))
+                QueueNetworkPointAction(
+                    NetworkWorldActionKind.PlaceInventoryWorldObject,
+                    drop.Target,
+                    drop.InventorySlot,
+                    definitionId: drop.ItemId,
+                    rotation: drop.Rotation);
+            else
+                SendNetworkGroundDrop(drop.InventorySlot, drop.Target);
             _player.Stop();
             return;
         }
@@ -1300,6 +1503,27 @@ internal sealed partial class GameHostWindow
             shadowKey = _slimeLootShadowFrames[cell] is null
                 ? null
                 : SlimeLootAtlasKey(cell, true);
+            return true;
+        }
+
+        if (item.HasTag(ItemTag.BucketSprite))
+        {
+            if ((uint)cell >= (uint)_bucketFrames.Length ||
+                _bucketFrames[cell] is not { } bucketFrame ||
+                _bucketTextures[cell] == 0)
+            {
+                frame = null!;
+                texture = 0;
+                atlasKey = "";
+                shadowKey = null;
+                return false;
+            }
+            frame = bucketFrame;
+            texture = _bucketTextures[cell];
+            atlasKey = BucketAtlasKey(cell, false);
+            shadowKey = _bucketShadowFrames[cell] is null
+                ? null
+                : BucketAtlasKey(cell, true);
             return true;
         }
 

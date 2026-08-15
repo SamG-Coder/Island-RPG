@@ -17,6 +17,12 @@ public readonly record struct ActorSnapshot(
     long? DisconnectedAtTick)
 {
     /// <summary>
+    /// Presentation-only stance published on snapshots so remotes can play
+    /// Work/Gather/Mine/Dig/Fish. Idle is zero.
+    /// </summary>
+    public byte AnimationState { get; init; }
+
+    /// <summary>
     /// Immutable authoritative gameplay state belonging to this actor's player.
     /// </summary>
     public PlayerGameplaySnapshot Gameplay { get; init; }

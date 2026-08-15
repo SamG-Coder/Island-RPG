@@ -54,13 +54,18 @@ internal sealed partial class GameHostWindow
         CancelNetworkResourceInteraction(stopPlayer: false);
         var pending = new NetworkMiningAction(target, toolSlot);
         _pendingNetworkMiningAction = pending;
-        if (Vector2.DistanceSquared(NetworkActionPosition, target.Position) <=
-            NetworkResourceDispatchRange * NetworkResourceDispatchRange)
+        const float miningRange = WorldActionReach.Mining;
+        if (WorldActionReach.InRange(
+                NetworkActionPosition, target.Position, miningRange))
         {
             BeginNetworkMiningAction(pending);
             return;
         }
-        SendNetworkWalk(target.Position, preserveResourceAction: true);
+        QueueNetworkWalkToAct(
+            target.Position,
+            miningRange,
+            WorldActionType.Mine,
+            vegetationKey: stableKey);
     }
 
     private bool UpdateNetworkMiningInteraction()
@@ -73,9 +78,10 @@ internal sealed partial class GameHostWindow
                 CancelNetworkResourceInteraction();
                 return true;
             }
-            if (Vector2.DistanceSquared(
-                    NetworkActionPosition, pending.Target.Position) <=
-                NetworkResourceDispatchRange * NetworkResourceDispatchRange)
+            if (WorldActionReach.InRange(
+                    NetworkActionPosition,
+                    pending.Target.Position,
+                    WorldActionReach.Mining))
                 BeginNetworkMiningAction(pending);
         }
 
@@ -136,8 +142,10 @@ internal sealed partial class GameHostWindow
         _lastNetworkMiningStrike = 0;
         _nextNetworkMiningStrikeAt = 0;
         _networkResourcePresentationOwned = true;
-        SendNetworkStop(preserveResourceAction: true);
+        _networkResourceCommitAt = 0;
+        SendNetworkPresentSkill(EntityAction.Mine);
         _player!.MineAt(action.Target.Position);
+        _player.RestartActionTime();
         _chatUi.AddMessage(
             $"You begin mining the {action.Target.Visual.DisplayName}.",
             Rendering.Ui.ChatMessageStyle.Action);

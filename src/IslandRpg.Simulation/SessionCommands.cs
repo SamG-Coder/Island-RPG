@@ -55,6 +55,15 @@ public sealed record StopIntent : ActorIntent
     }
 }
 
+/// <summary>
+/// Presentation-only stance so remotes start Work/Mine/Dig/Fish/Gather
+/// when the local player begins the single-player clip, not after the
+/// first mutating hit.
+/// </summary>
+public sealed record PresentSkillIntent(
+    EntityAction Action,
+    float DurationSeconds = (float)ActorSkillStance.OneShotSeconds) : ActorIntent;
+
 public sealed record ChatIntent(string Message) : ActorIntent;
 
 /// <summary>
@@ -99,6 +108,26 @@ public sealed record ConsumeFoodIntent(
     uint ExpectedInventoryRevision,
     uint ExpectedActorRevision,
     int Slot) : GameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record EmptyBucketIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    int Slot) : GameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record FillBucketIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    int Slot,
+    Vector2 Position,
+    int WorldLevel) : GameplayIntent(
         CommandId,
         ExpectedInventoryRevision,
         ExpectedActorRevision);
@@ -413,6 +442,46 @@ public sealed record CookOnCampfireIntent(
         ExpectedInventoryRevision,
         ExpectedActorRevision);
 
+public sealed record CookStewIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Pot) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record StrikeTrainingDummyIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Dummy) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record PlantTreeIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    int SeedInventorySlot,
+    Vector2 Position,
+    int WorldLevel,
+    uint ExpectedChunkRevision) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
+public sealed record StrikePlantedTreeIntent(
+    Guid CommandId,
+    uint ExpectedInventoryRevision,
+    uint ExpectedActorRevision,
+    WorldObjectHandle Tree,
+    int ToolInventorySlot) : WorldGameplayIntent(
+        CommandId,
+        ExpectedInventoryRevision,
+        ExpectedActorRevision);
+
 public sealed record PlaceConstructionIntent(
     Guid CommandId,
     uint ExpectedInventoryRevision,
@@ -681,6 +750,9 @@ public enum IntentStatus
     InvalidCaveLink,
     NotCrop,
     CropNotReady,
+    NotPlantedTree,
+    PlantLimitReached,
+    TreeAlreadyFelled,
     BoatNotFound,
     StaleBoatRevision,
     AlreadyAboard,

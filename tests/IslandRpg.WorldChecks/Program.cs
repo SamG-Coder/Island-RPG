@@ -1,4 +1,5 @@
 using IslandRpg.World;
+using IslandRpg.Resources;
 using IslandRpg.Assets;
 using IslandRpg.Audio;
 using IslandRpg.Gameplay;
@@ -13,6 +14,7 @@ SurfaceTreeResourceChecks.Run();
 SurfaceVegetationResourceChecks.Run();
 UndergroundMiningResourceChecks.Run();
 NetworkResourceHotPathChecks.Run();
+SkillPresentationChecks.Run();
 Console.WriteLine(
     "Network resource hot-path checks passed: second pass described zero fish or trees.");
 NetworkSessionReuseChecks.Run();
@@ -11208,10 +11210,55 @@ Require(
     CraftingSkill.Recipes.Any(recipe =>
         recipe.ResultItemId == ItemIds.GatheringBasket) &&
     CraftingSkill.Recipes.Any(recipe =>
+        recipe.ResultItemId == ItemIds.Bucket &&
+        recipe.RequiredTools?.Any(tool =>
+            tool.Tag == ItemTag.Knife) == true) &&
+    CraftingSkill.Recipes.Any(recipe =>
         recipe.ResultItemId == ItemIds.Pearl &&
         recipe.RequiredTools?.Any(tool =>
             tool.Tag == ItemTag.Knife) == true),
-    "new tools, basket, torch and pearl must have complete crafting recipes");
+    "new tools, basket, bucket, torch and pearl must have complete crafting recipes");
+var bucketRecipe = CraftingSkill.Recipes.Single(
+    recipe => recipe.ResultItemId == ItemIds.Bucket);
+Require(
+    CraftingService.TryCraft(
+        bucketRecipe, 3,
+        [ItemIds.StoneKnife, ItemIds.Plank, ItemIds.PlantFibres,
+            ItemIds.PlantFibres, ItemIds.PlantFibres],
+        out var craftedBucket) &&
+    craftedBucket.Contains(ItemIds.Bucket) &&
+    craftedBucket.Contains(ItemIds.StoneKnife) &&
+    !craftedBucket.Contains(ItemIds.Plank),
+    "a wooden bucket is crafted from a plank and fibres with a knife");
+Require(
+    BucketService.ClassifySurface(
+        ProceduralSurfaceTerrain.Material.DeepWater) ==
+        BucketWaterKind.Sea &&
+    BucketService.ClassifySurface(
+        ProceduralSurfaceTerrain.Material.ShallowWater) ==
+        BucketWaterKind.Sea &&
+    BucketService.ClassifySurface(
+        ProceduralSurfaceTerrain.Material.RiverWater) ==
+        BucketWaterKind.Fresh &&
+    BucketService.ClassifySurface(
+        ProceduralSurfaceTerrain.Material.MangroveShallows) ==
+        BucketWaterKind.Fresh &&
+    BucketService.ClassifyUnderground(
+        ProceduralUndergroundTerrain.Material.ShallowWater) ==
+        BucketWaterKind.Fresh &&
+    BucketService.ClassifyUnderground(
+        ProceduralUndergroundTerrain.Material.RiverWater) ==
+        BucketWaterKind.Fresh &&
+    BucketService.ClassifyUnderground(
+        ProceduralUndergroundTerrain.Material.Rock) ==
+        BucketWaterKind.None &&
+    BucketService.IsEmpty(ItemIds.Bucket) &&
+    !BucketService.IsFilled(ItemIds.Bucket) &&
+    BucketService.FilledItemId(BucketWaterKind.Fresh) ==
+        ItemIds.BucketOfWater &&
+    BucketService.FilledItemId(BucketWaterKind.Sea) ==
+        ItemIds.BucketOfSeawater,
+    "sea fills seawater; rivers and cave water fill fresh water");
 Require(
     PlayerInventory.BestSickle(
         [ItemIds.StoneSickle, ItemIds.IronSickle])?.Id ==
@@ -11249,6 +11296,31 @@ Require(
     plantedCrop.FuelItemId == ItemIds.Beans &&
     CropService.HarvestCount([ItemIds.GatheringBasket]) == 3,
     "crop planting must persist its harvest, maturity time, owner and basket yield");
+var plantedUserTree = PlantedTreeService.Plant(
+    ItemIds.OakSeeds, 6.5f, 7.5f, 2_000, "Mira", "farmer");
+Require(
+    PlantedTreeService.IsPlantedTree(plantedUserTree) &&
+    plantedUserTree.ItemId == ItemIds.PlantedTree &&
+    PlantedTreeService.TreeType(plantedUserTree) == "FOAK_NN" &&
+    PlantedTreeService.Title(plantedUserTree) == "Planted by Mira" &&
+    PlantedTreeService.GrowthScale(plantedUserTree, 2_000) ==
+        PlantedTreeService.ShrubScale &&
+    PlantedTreeService.GrowthScale(
+        plantedUserTree,
+        2_000 + PlantedTreeService.GrowthGameSeconds +
+        PlantedTreeService.CompactGameSeconds) == 1f &&
+    PlantedTreeService.IsCompacted(
+        plantedUserTree,
+        2_000 + PlantedTreeService.GrowthGameSeconds +
+        PlantedTreeService.CompactGameSeconds) &&
+    PlantedTreeService.IsFelled(
+        PlantedTreeService.ApplyStrike(plantedUserTree, 0, 3_000)) &&
+    PlantedTreeService.IsExpired(
+        PlantedTreeService.ApplyStrike(plantedUserTree, 0, 3_000),
+        3_000 + PlantedTreeService.FadeGameSeconds) &&
+    GameHostWindow.SeedTreeType(ItemIds.OakSeeds) ==
+        PlantedTreeService.TreeTypeForSeed(ItemIds.OakSeeds),
+    "planted trees must start as shrubs, compact at full size, stay titled, and fade when felled");
 var cropSheetPath = Path.Combine(
     AppContext.BaseDirectory, "Resources", "Images",
     ItemSpriteSheetCatalog.Crops.FileName);
@@ -11284,6 +11356,18 @@ using (var slimeCraftedSheetStream = File.OpenRead(slimeCraftedSheetPath))
         slimeCraftedSheet.Width == ItemSpriteSheetCatalog.SlimeCrafted.Width &&
         slimeCraftedSheet.Height == ItemSpriteSheetCatalog.SlimeCrafted.Height,
         "salted fish and poultices must use the converted two-cell item sprite sheet");
+}
+var bucketSheetPath = Path.Combine(
+    AppContext.BaseDirectory, "Resources", "Images",
+    ItemSpriteSheetCatalog.Buckets.FileName);
+using (var bucketSheetStream = File.OpenRead(bucketSheetPath))
+{
+    var bucketSheet = ImageResult.FromStream(
+        bucketSheetStream, ColorComponents.RedGreenBlueAlpha);
+    Require(
+        bucketSheet.Width == ItemSpriteSheetCatalog.Buckets.Width &&
+        bucketSheet.Height == ItemSpriteSheetCatalog.Buckets.Height,
+        "empty, fresh-water and seawater buckets must share a three-cell item sheet");
 }
 
 var slimeFrontPath = Path.Combine(

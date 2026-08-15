@@ -13,6 +13,34 @@ internal sealed partial class GameHostWindow
 {
     private const float NetworkResourceDispatchRange = 2.6f;
     private const double NetworkTreeStrikeCadenceSeconds = 1.05;
+    private const double NetworkResourceCommitRetrySeconds = .2;
+    private const double NetworkResourceCommitTimeoutSeconds = 2;
+
+    internal static bool NetworkResourceWindupReady(
+        double actionTime,
+        double durationSeconds,
+        double clock,
+        double commitAt) =>
+        actionTime >= durationSeconds ||
+        (commitAt > 0 && clock >= commitAt);
+
+    internal static bool ShouldRetryNetworkResourceReject(
+        bool accepted,
+        CommandRejectionCode code,
+        string? detail)
+    {
+        if (accepted) return false;
+        if (code is CommandRejectionCode.OutOfOrder or
+            CommandRejectionCode.RateLimited or
+            CommandRejectionCode.ServerBusy)
+            return true;
+        if (code != CommandRejectionCode.Impossible ||
+            string.IsNullOrWhiteSpace(detail))
+            return false;
+        return detail.Contains("range", StringComparison.OrdinalIgnoreCase) ||
+               detail.Contains("stale", StringComparison.OrdinalIgnoreCase) ||
+               detail.Contains("revision", StringComparison.OrdinalIgnoreCase);
+    }
 
     private sealed record NetworkTreeTarget(
         IslandTree Tree,
@@ -33,6 +61,8 @@ internal sealed partial class GameHostWindow
     private int _lastNetworkTreeStrike;
     private double _nextNetworkTreeStrikeAt;
     private bool _networkResourcePresentationOwned;
+    private double _networkResourceCommitAt;
+    private double _networkWorldActionCommitAt;
     private uint _networkResourceAwaitingActorRevision;
     private uint _networkResourceAwaitingInventoryRevision;
     private int _networkResourceExperienceGained;
@@ -82,13 +112,19 @@ internal sealed partial class GameHostWindow
         CancelNetworkResourceInteraction(stopPlayer: false);
         var pending = new NetworkTreeAction(action, target, toolSlot);
         _pendingNetworkTreeAction = pending;
-        if (Vector2.DistanceSquared(NetworkActionPosition, target.Position) <=
-            NetworkResourceDispatchRange * NetworkResourceDispatchRange)
+        var range = TreeInteractionDistance(tree.GraphicName);
+        if (WorldActionReach.InRange(
+                NetworkActionPosition, target.Position, range))
         {
             BeginNetworkTreeAction(pending);
             return;
         }
-        SendNetworkWalk(target.Position, preserveResourceAction: true);
+        QueueNetworkWalkToAct(
+            target.Position,
+            range,
+            action == ResourceActionKind.CutTree
+                ? WorldActionType.CutTree
+                : WorldActionType.GatherTreeSticks);
     }
 
     private void UpdateNetworkResourceInteraction()
@@ -103,10 +139,10 @@ internal sealed partial class GameHostWindow
                 CancelNetworkResourceInteraction();
                 return;
             }
-            if (Vector2.DistanceSquared(
-                    NetworkActionPosition, pending.Target.Position) <=
-                NetworkResourceDispatchRange *
-                NetworkResourceDispatchRange)
+            if (WorldActionReach.InRange(
+                    NetworkActionPosition,
+                    pending.Target.Position,
+                    TreeInteractionDistance(pending.Target.Tree.GraphicName)))
                 BeginNetworkTreeAction(pending);
         }
 
@@ -132,7 +168,10 @@ internal sealed partial class GameHostWindow
         {
             if (_player.Action != EntityAction.Gather)
                 _player.GatherAt(active.Target.Position);
-            if (_player.ActionTime >= GroundItemActionSeconds &&
+            RetryNetworkResourceCommitIfTimedOut();
+            if (NetworkResourceWindupReady(
+                    _player.ActionTime, GroundItemActionSeconds, _clock,
+                    _networkResourceCommitAt) &&
                 _networkResourceCommandId is null)
                 DispatchNetworkResourceAction(active);
             return;
@@ -172,17 +211,27 @@ internal sealed partial class GameHostWindow
         _lastNetworkTreeStrike = 0;
         _nextNetworkTreeStrikeAt = 0;
         _networkResourcePresentationOwned = true;
-        SendNetworkStop(preserveResourceAction: true);
+        _networkResourceCommitAt = action.Kind == ResourceActionKind.CutTree
+            ? 0
+            : _clock + GroundItemActionSeconds;
+        SendNetworkPresentSkill(
+            action.Kind == ResourceActionKind.CutTree
+                ? EntityAction.Work
+                : EntityAction.Gather);
         if (action.Kind == ResourceActionKind.CutTree)
         {
             _player!.WorkAt(action.Target.Position);
+            _player.RestartActionTime();
             _chatUi.AddMessage(
                 $"You begin cutting the " +
                 $"{TreeDisplayName(action.Target.Visual.GraphicName)}.",
                 ChatMessageStyle.Action);
         }
         else
+        {
             _player!.GatherAt(action.Target.Position);
+            _player.RestartActionTime();
+        }
     }
 
     private void DispatchNetworkResourceAction(NetworkTreeAction action)
@@ -383,6 +432,14 @@ internal sealed partial class GameHostWindow
         _networkResourceCommandId = null;
         var expectedReference = _networkResourceCommandReference;
         _networkResourceCommandReference = null;
+        if (!result.Accepted &&
+            ShouldRetryNetworkResourceReject(
+                result.Accepted, result.RejectionCode, result.Detail))
+        {
+            _networkVegetationActionDispatched = false;
+            _networkResourceCommitAt = _clock + NetworkResourceCommitRetrySeconds;
+            return;
+        }
         var activeKind = _activeNetworkTreeAction?.Kind ??
                          _activeNetworkVegetationAction?.Kind ??
                          ResourceActionKind.Mine;
@@ -630,6 +687,7 @@ internal sealed partial class GameHostWindow
         _networkVegetationActionDispatched = false;
         _networkResourceCommandId = null;
         _networkResourceCommandReference = null;
+        _networkResourceCommitAt = 0;
         _lastNetworkTreeStrike = 0;
         _nextNetworkTreeStrikeAt = 0;
         ResetNetworkResourceExperienceObservation();
@@ -640,10 +698,13 @@ internal sealed partial class GameHostWindow
         }
         _lastNetworkMiningStrike = 0;
         _nextNetworkMiningStrikeAt = 0;
-        if (stopPlayer && _networkResourcePresentationOwned &&
-            _player?.Action is EntityAction.Work or EntityAction.Gather or
+        if (stopPlayer && _networkResourcePresentationOwned)
+        {
+            if (_player?.Action is EntityAction.Work or EntityAction.Gather or
                 EntityAction.Mine)
-            _player.Stop();
+                _player.Stop();
+            SendNetworkPresentSkill(EntityAction.Idle);
+        }
         _networkResourcePresentationOwned = false;
     }
 
@@ -695,6 +756,19 @@ internal sealed partial class GameHostWindow
                 (int)fish.Species,
                 fish.StableKey);
         }
+    }
+
+    private void RetryNetworkResourceCommitIfTimedOut()
+    {
+        if (_networkResourceCommandId is null ||
+            _networkResourceCommitAt <= 0 ||
+            _clock < _networkResourceCommitAt +
+            NetworkResourceCommitTimeoutSeconds)
+            return;
+        _networkResourceCommandId = null;
+        _networkResourceCommandReference = null;
+        _networkVegetationActionDispatched = false;
+        _networkResourceCommitAt = _clock + NetworkResourceCommitRetrySeconds;
     }
 
     private void ResetNetworkResourceExperienceObservation()

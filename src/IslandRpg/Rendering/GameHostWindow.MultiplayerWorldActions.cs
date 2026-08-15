@@ -12,6 +12,7 @@ namespace IslandRpg.Rendering;
 internal sealed partial class GameHostWindow
 {
     private const float NetworkInteractionDispatchRange = 2.6f;
+    private const float NetworkGroundPickupRange = WorldActionReach.GroundPickup;
 
     private enum NetworkWorldActionKind
     {
@@ -34,7 +35,9 @@ internal sealed partial class GameHostWindow
         TakeCaveRope,
         FillExcavation,
         TraverseCave,
-        HarvestCrop
+        HarvestCrop,
+        CookStew,
+        CutPlantedTree
     }
 
     private readonly record struct PendingNetworkWorldAction(
@@ -126,40 +129,11 @@ internal sealed partial class GameHostWindow
             !IsPointerOverGameUi(MouseState.Position))
         {
             var target = ScreenToTerrain(SceneMousePosition());
-            if (TryGetNetworkPlayerUnderMouse(
-                    SceneMousePosition(), out var contextPlayerId))
-                OpenNetworkPlayerContext(contextPlayerId, target);
-            else if (TryGetEnemyUnderMouse(
-                    SceneMousePosition(), out var contextEnemy))
-                OpenEnemyContext(contextEnemy, target);
-            else if (TryGetFishUnderMouse(
-                    SceneMousePosition(), out var contextFish))
-                OpenFishContext(contextFish, target);
-            else if (TryGetGroundObjectUnderMouse(
-                    SceneMousePosition(), out var contextObject, out _))
-                OpenNetworkGroundObjectContext(contextObject, target);
-            else if (TryGetGatherableVegetationUnderMouse(
-                         SceneMousePosition(),
-                         out var contextVegetation,
-                         out var vegetationKey))
-                OpenVegetationContext(
-                    contextVegetation, vegetationKey, target);
-            else if (TryGetTreeUnderMouse(
-                         SceneMousePosition(), out var contextTree))
+            if (TryTargetBucketFill(target))
             {
-                _treeContextTarget = contextTree;
-                _treeContextWalkTarget = target;
-                _inventoryContext.Close();
-                _groundObjectContext.Close();
-                _fishContext.Close();
-                _vegetationContext.Close();
-                _miningContext.Close();
-                _treeContext.Open(
-                    MouseState.Position,
-                    ["Chop tree", "Gather sticks", "Walk Here", "Examine"],
-                    SceneClientBounds(), 142);
             }
-            else
+            else if (!TryOpenWorldRightClickContext(
+                    SceneMousePosition(), target))
             {
                 _pendingNetworkWorldAction = null;
                 StopNetworkRepeatedConstruction();
@@ -172,6 +146,11 @@ internal sealed partial class GameHostWindow
             TryGetEnemyUnderMouse(
                 SceneMousePosition(), out var combatEnemy))
             SendNetworkCombatTarget(combatEnemy.Id);
+        else if (!placingObject && leftDown && !_gameLeftWasDown &&
+            !IsPointerOverGameUi(MouseState.Position) &&
+            TryTargetBucketFill(ScreenToTerrain(SceneMousePosition())))
+        {
+        }
         else if (!placingObject && leftDown && !_gameLeftWasDown &&
             !IsPointerOverGameUi(MouseState.Position) &&
             TryTargetCaveDig(ScreenToTerrain(SceneMousePosition())))
@@ -187,10 +166,14 @@ internal sealed partial class GameHostWindow
                     NetworkWorldActionKind.BuildConstruction, groundObject);
             else if (IsNetworkContainer(groundObject.Id))
                 QueueNetworkOpenContainer(groundObject);
+            else if (groundObject.ItemId == ItemIds.TrainingDummy)
+                QueueTrainingDummyAttack(groundObject);
             else if (CaveEntranceService.IsEntrance(groundObject))
                 QueueCaveEntry(groundObject);
             else if (CaveEntranceService.IsDigSite(groundObject))
                 QueueContinueCaveDig(groundObject);
+            else if (groundObject.ItemId == ItemIds.CookingPot)
+                QueuePotCooking(groundObject);
             else if (CraftingStationService.IsStation(
                          groundObject.ItemId))
                 QueueNetworkCraftingStation(groundObject);
@@ -294,8 +277,15 @@ internal sealed partial class GameHostWindow
         else if (CaveEntranceService.IsShallowHole(value) &&
                  FindNetworkCaveFillSlot(value) is >= 0)
             Add("Fill hole", NetworkWorldActionKind.FillExcavation);
+        else if (PlantedTreeService.IsPlantedTree(value))
+        {
+            if (PlantedTreeService.IsLiving(value))
+                Add("Chop tree", NetworkWorldActionKind.CutPlantedTree);
+        }
         else if (CropService.IsCrop(value))
             Add("Harvest", NetworkWorldActionKind.HarvestCrop);
+        else if (value.ItemId == ItemIds.CookingPot)
+            Add("Cook stew", NetworkWorldActionKind.CookStew);
         else if (CraftingStationService.IsStation(value.ItemId))
             Add(
                 CraftingStationService.ActionLabel(value.ItemId),
@@ -326,16 +316,57 @@ internal sealed partial class GameHostWindow
                 QueueNetworkOpenContainer(value);
             else if (action == NetworkWorldActionKind.UseCraftingStation)
                 QueueNetworkCraftingStation(value);
+            else if (action == NetworkWorldActionKind.CookStew)
+                QueuePotCooking(value);
             else if (action == NetworkWorldActionKind.WorkExcavation)
                 QueueContinueCaveDig(value);
             else if (action == NetworkWorldActionKind.InstallCaveRope)
-                QueueNetworkCaveObjectAction(
-                    action, value, FindNetworkInventorySlot(ItemIds.Rope));
+            {
+                var ropeSlot = FindNetworkInventorySlot(ItemIds.Rope);
+                if (ropeSlot >= 0)
+                    QueueGroundObjectDrop(new(
+                        ropeSlot, ItemIds.Rope,
+                        new(value.X, value.Y), true, value.Id));
+            }
             else if (action == NetworkWorldActionKind.FillExcavation)
-                QueueNetworkCaveObjectAction(
-                    action, value, FindNetworkCaveFillSlot(value));
-            else if (action == NetworkWorldActionKind.PickUp)
+            {
+                var fillSlot = FindNetworkCaveFillSlot(value);
+                if (fillSlot >= 0 &&
+                    _activePlayer?.Inventory?.ElementAtOrDefault(fillSlot)
+                        is { } fillItem)
+                    QueueGroundObjectDrop(new(
+                        fillSlot, fillItem,
+                        new(value.X, value.Y), true, value.Id));
+            }
+            else if (action == NetworkWorldActionKind.CutPlantedTree)
+                QueuePlantedTreeChop(value);
+            else if (action == NetworkWorldActionKind.PickUp ||
+                     action == NetworkWorldActionKind.HarvestCrop)
                 QueueGroundObjectPickup(value);
+            else if (action == NetworkWorldActionKind.TakeCampfireFuel)
+                QueueCampfireFuelPickup(value);
+            else if (action == NetworkWorldActionKind.CookOnCampfire &&
+                     TrySelectedRawCookingItem(out var cookSlot, out var cookItem))
+                QueueCampfireCooking(value, cookSlot, cookItem);
+            else if (action == NetworkWorldActionKind.AddCampfireFuel &&
+                     _activeInventorySlot >= 0 &&
+                     _activePlayer?.Inventory?.ElementAtOrDefault(
+                         _activeInventorySlot) is { } fuelItemId)
+            {
+                _worldActions.QueuePath(
+                    new Vector2(value.X, value.Y),
+                    WorldActionReach.Campfire,
+                    WorldActionType.DropGroundObject,
+                    inventorySlot: _activeInventorySlot,
+                    itemId: fuelItemId,
+                    groundObjectId: value.Id,
+                    clearTreeActions: true);
+                SendNetworkWalkCommand(
+                    WorldActionReach.StandOff(
+                        NetworkActionPosition,
+                        new Vector2(value.X, value.Y),
+                        WorldActionReach.Campfire));
+            }
             else
                 QueueNetworkObjectAction(
                     action, value,
@@ -354,7 +385,9 @@ internal sealed partial class GameHostWindow
         }
         else if (trailing == 1)
             _chatUi.AddMessage(
-                ItemCatalog.Get(value.ItemId).Examine,
+                PlantedTreeService.IsPlantedTree(value)
+                    ? PlantedTreeService.Examine(value)
+                    : ItemCatalog.Get(value.ItemId).Examine,
                 ChatMessageStyle.Normal);
         return true;
     }
@@ -380,11 +413,18 @@ internal sealed partial class GameHostWindow
     {
         if (kind == NetworkWorldActionKind.BuildConstruction)
             _networkRepeatedConstructionId = value.Id;
+        var target = new Vector2(value.X, value.Y);
+        if (kind == NetworkWorldActionKind.BuildConstruction &&
+            _player is not null)
+            target = PlaceableObjectCatalog.ClosestInteractionPoint(
+                value.ItemId, target, _player.Position,
+                rotation: value.VisualFrame);
         QueueNetworkWorldAction(new(
             kind,
-            new Vector2(value.X, value.Y),
+            target,
             value.Id,
-            inventorySlot));
+            inventorySlot,
+            DefinitionId: value.ItemId));
     }
 
     private void QueueNetworkPointAction(
@@ -404,14 +444,21 @@ internal sealed partial class GameHostWindow
         if (_player is null) return;
         ReleaseNetworkCookingPresentation();
         _pendingNetworkWorldAction = action;
-        if (Vector2.DistanceSquared(NetworkActionPosition, action.Target) <=
-            NetworkInteractionDispatchRange *
-            NetworkInteractionDispatchRange)
+        if (action.Kind == NetworkWorldActionKind.Demolish)
         {
             DispatchPendingNetworkWorldAction();
             return;
         }
-        SendNetworkWalk(action.Target);
+        var range = NetworkApproachRange(action);
+        if (WorldActionReach.InRange(
+                NetworkActionPosition, action.Target, range))
+        {
+            DispatchPendingNetworkWorldAction();
+            return;
+        }
+        SendNetworkWalk(
+            WorldActionReach.StandOff(
+                NetworkActionPosition, action.Target, range));
     }
 
     private void UpdatePendingNetworkWorldAction()
@@ -419,7 +466,7 @@ internal sealed partial class GameHostWindow
         if (_player is null || _pendingNetworkWorldAction is not { } pending)
             return;
         if (pending.ObjectId != Guid.Empty &&
-            !_networkClient!.State.WorldObjects.ContainsKey(pending.ObjectId))
+            NetworkWorldActionTargetGone(pending))
         {
             _pendingNetworkWorldAction = null;
             _chatUi.AddMessage(
@@ -427,15 +474,72 @@ internal sealed partial class GameHostWindow
                 ChatMessageStyle.Warning);
             return;
         }
-        if (Vector2.DistanceSquared(NetworkActionPosition, pending.Target) <=
-            NetworkInteractionDispatchRange *
-            NetworkInteractionDispatchRange)
+        var range = NetworkApproachRange(pending);
+        if (WorldActionReach.InRange(
+                NetworkActionPosition, pending.Target, range))
             DispatchPendingNetworkWorldAction();
     }
+
+    private bool NetworkWorldActionTargetGone(PendingNetworkWorldAction pending)
+    {
+        if (pending.Kind == NetworkWorldActionKind.PickUp)
+            return FindGroundObject(pending.ObjectId) is null &&
+                   !_networkClient!.State.WorldObjects.ContainsKey(
+                       pending.ObjectId);
+        return !_networkClient!.State.WorldObjects.ContainsKey(pending.ObjectId);
+    }
+
+    private float NetworkApproachRange(PendingNetworkWorldAction action) =>
+        action.Kind switch
+        {
+            NetworkWorldActionKind.PickUp or
+                NetworkWorldActionKind.Drop or
+                NetworkWorldActionKind.HarvestCrop =>
+                WorldActionReach.GroundPickup,
+            NetworkWorldActionKind.AddCampfireFuel or
+                NetworkWorldActionKind.TakeCampfireFuel or
+                NetworkWorldActionKind.LightCampfire or
+                NetworkWorldActionKind.CookOnCampfire =>
+                WorldActionReach.Campfire,
+            NetworkWorldActionKind.CookStew =>
+                WorldActionReach.CookStew,
+            NetworkWorldActionKind.OpenContainer =>
+                WorldActionReach.Container,
+            NetworkWorldActionKind.UseCraftingStation =>
+                WorldActionReach.CraftingStation,
+            NetworkWorldActionKind.BuildConstruction =>
+                WorldActionReach.Construction,
+            NetworkWorldActionKind.PlaceInventoryWorldObject or
+                NetworkWorldActionKind.PlaceConstruction =>
+                WorldActionReach.Placeable(action.DefinitionId),
+            NetworkWorldActionKind.InstallCaveRope or
+                NetworkWorldActionKind.FillExcavation =>
+                WorldActionReach.GroundPickup,
+            NetworkWorldActionKind.StartExcavation or
+                NetworkWorldActionKind.WorkExcavation or
+                NetworkWorldActionKind.RestoreExcavation or
+                NetworkWorldActionKind.TakeCaveRope =>
+                WorldActionReach.CaveDig,
+            NetworkWorldActionKind.TraverseCave =>
+                WorldActionReach.CaveEnter,
+            _ => NetworkInteractionDispatchRange
+        };
+
+    private static Vector2 NetworkStandOff(
+        Vector2 from, Vector2 to, float range) =>
+        WorldActionReach.StandOff(from, to, range);
 
     private void DispatchPendingNetworkWorldAction()
     {
         if (_pendingNetworkWorldAction is not { } pending) return;
+        if (pending.Kind == NetworkWorldActionKind.WorkExcavation)
+        {
+            _pendingNetworkWorldAction = null;
+            if (_networkWorldObjects.TryGetValue(
+                    pending.ObjectId, out var excavation))
+                QueueNetworkCaveWork(excavation, pending.InventorySlot);
+            return;
+        }
         if (pending.Kind == NetworkWorldActionKind.UseCraftingStation)
         {
             _pendingNetworkWorldAction = null;
@@ -465,6 +569,16 @@ internal sealed partial class GameHostWindow
             return;
         }
         _pendingNetworkWorldAction = null;
+        if (pending.Kind == NetworkWorldActionKind.StartExcavation)
+        {
+            SendNetworkPresentSkill(EntityAction.Dig);
+            _player?.DigAt(pending.Target);
+        }
+        else if (pending.Kind == NetworkWorldActionKind.BuildConstruction)
+        {
+            SendNetworkPresentSkill(EntityAction.Build);
+            _player?.BuildAt(pending.Target);
+        }
         var commandId = Guid.NewGuid();
         if (pending.Kind == NetworkWorldActionKind.CookOnCampfire)
         {
@@ -635,6 +749,8 @@ internal sealed partial class GameHostWindow
                 new LightCampfireAction(reference),
             NetworkWorldActionKind.CookOnCampfire =>
                 new CookOnCampfireAction(reference, action.InventorySlot),
+            NetworkWorldActionKind.CookStew =>
+                new CookStewAction(reference),
             NetworkWorldActionKind.BuildConstruction =>
                 new BuildConstructionAction(reference),
             NetworkWorldActionKind.Demolish =>
@@ -668,6 +784,18 @@ internal sealed partial class GameHostWindow
             return;
         }
         SendNetworkAction(new PickUpWorldObjectAction(reference), Guid.NewGuid());
+    }
+
+    private void SendNetworkHarvest(WorldGroundObject value)
+    {
+        if (!TryNetworkWorldObjectReference(value.Id, out var reference))
+        {
+            _chatUi.AddMessage(
+                "The authoritative state changed before that action could begin.",
+                ChatMessageStyle.Warning);
+            return;
+        }
+        SendNetworkAction(new HarvestCropAction(reference), Guid.NewGuid());
     }
 
     private void SendNetworkGroundDrop(int inventorySlot, Vector2 target)
@@ -873,14 +1001,17 @@ internal sealed partial class GameHostWindow
 
     private void HandleNetworkWorldActionResult(ActionResultMessage result)
     {
+        if (result.Accepted &&
+            result.Detail.StartsWith("dummy_", StringComparison.Ordinal))
+        {
+            PresentNetworkDummyStrike(result.Detail);
+            return;
+        }
         if (_networkCookingCommandId == result.CommandId)
         {
-            if (result.Accepted && _player is not null &&
-                _pendingNetworkCookingTarget is { } target &&
+            if (result.Accepted &&
                 _networkCookingRawItemId is { } rawItemId)
             {
-                _player.GatherAt(target);
-                _networkCookingPresentationOwned = true;
                 _chatUi.AddMessage(
                     $"You place the {ItemCatalog.Get(rawItemId).Name} " +
                     "over the fire.",
@@ -888,6 +1019,7 @@ internal sealed partial class GameHostWindow
             }
             else
                 ClearNetworkCookingPresentation();
+            _networkCookingCommandId = null;
         }
         if (_networkBuildCommandId == result.CommandId)
         {
@@ -939,6 +1071,30 @@ internal sealed partial class GameHostWindow
             _player?.Action == EntityAction.Gather)
             _player.Stop();
         _networkCookingPresentationOwned = false;
+    }
+
+    private void PresentNetworkDummyStrike(string detail)
+    {
+        var targetId = _combatTargetId;
+        if (detail == "dummy_miss")
+        {
+            if (targetId is { } missId)
+                ShowEntityImpact(GroundFeedbackKey(missId), 0, false);
+            _chatUi.AddMessage("You miss.", ChatMessageStyle.Action);
+            return;
+        }
+        var separator = detail.LastIndexOf(':');
+        var damage = 0;
+        if (separator > 0)
+            int.TryParse(detail[(separator + 1)..], out damage);
+        if (targetId is { } hitId)
+            ShowEntityImpact(GroundFeedbackKey(hitId), damage, true);
+        _chatUi.AddMessage(
+            $"You hit for {damage}.", ChatMessageStyle.Action);
+        if (detail.StartsWith("dummy_reset:", StringComparison.Ordinal))
+            _chatUi.AddMessage(
+                "The training dummy is knocked down and reset.",
+                ChatMessageStyle.Action);
     }
 
     private void ResetNetworkContainerInteraction()
@@ -1013,6 +1169,12 @@ internal sealed partial class GameHostWindow
 
     private void StopNetworkRepeatedConstruction()
     {
+        if (_networkRepeatedConstructionId is not null &&
+            _player?.Action == EntityAction.Build)
+        {
+            _player.Stop();
+            SendNetworkPresentSkill(EntityAction.Idle);
+        }
         _networkRepeatedConstructionId = null;
         _networkBuildCommandId = null;
         _networkExpectedBuildMutation = null;

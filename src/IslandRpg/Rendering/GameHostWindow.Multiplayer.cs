@@ -6,6 +6,7 @@ using IslandRpg.Persistence;
 using IslandRpg.Protocol;
 using IslandRpg.Rendering.Ui;
 using IslandRpg.World;
+using ActorSkillStance = IslandRpg.Simulation.ActorSkillStance;
 using OpenTK.Mathematics;
 using ProtocolChatChannel = IslandRpg.Protocol.ChatChannel;
 
@@ -481,7 +482,14 @@ internal sealed partial class GameHostWindow
             AdvanceNetworkMoveMarker(simulationStep);
             _worldActions.CompleteQueuedAction();
             UpdateGroundObjectPickup();
+            UpdateBucketFill();
             UpdateGroundObjectDrop();
+            UpdateCampfireFuelPickup();
+            UpdateCooking();
+            UpdatePotCooking();
+            if (_combatTargetId is not null || _combatVillagerId is not null)
+                UpdateMeleeCombat();
+            UpdateNetworkMeleePresentation();
             _gameSimulationAccumulator -= simulationStep;
             steps++;
         }
@@ -531,15 +539,18 @@ internal sealed partial class GameHostWindow
                 continue;
             }
             if (snapshot.EntityKind != NetworkEntityKind.Player ||
-                snapshot.State.HasFlag(NetworkEntityState.Hidden) ||
-                IsNetworkActorAboard(snapshot.EntityId))
+                snapshot.State.HasFlag(NetworkEntityState.Hidden))
+                continue;
+            var isLocal =
+                snapshot.EntityId == _networkClient.State.PlayerEntityId;
+            // Local riders use the boat composite. Remote riders stay in
+            // _networkActors so DrawNetworkBoats can play their Fish clip.
+            if (isLocal && IsNetworkActorAboard(snapshot.EntityId))
                 continue;
             seen.Add(snapshot.EntityId);
             var position = new Vector2(snapshot.X, snapshot.Y);
             var velocity = new Vector2(
                 snapshot.VelocityX, snapshot.VelocityY);
-            var isLocal =
-                snapshot.EntityId == _networkClient.State.PlayerEntityId;
             if (isLocal)
             {
                 ApplyLocalNetworkSnapshot(
@@ -548,20 +559,9 @@ internal sealed partial class GameHostWindow
                 continue;
             }
             var entity = GetOrCreateNetworkActor(snapshot.EntityId, position);
-            var snapshotWorldLevel = (int)snapshot.WorldLevel;
-            var preservePresentedAction =
-                snapshotWorldLevel == _activeWorldLevel &&
-                ((_networkCookingPresentationOwned &&
-                  entity.Action == EntityAction.Gather) ||
-                 (_networkResourcePresentationOwned &&
-                  entity.Action is EntityAction.Gather or EntityAction.Work or
-                      EntityAction.Mine) ||
-                 (_networkCavePresentationOwned &&
-                  entity.Action == EntityAction.Dig) ||
-                 (_networkActiveFishing is not null &&
-                  entity.Action == EntityAction.Fish));
-            SyncNetworkEntity(entity, position, velocity, snapshot.State,
-                elapsed, preservePresentedAction);
+            SyncNetworkEntity(
+                entity, position, velocity, snapshot.State,
+                snapshot.AnimationState, elapsed);
         }
         foreach (var id in _networkActors.Keys
                      .Where(id => !seen.Contains(id)).ToArray())
@@ -629,34 +629,17 @@ internal sealed partial class GameHostWindow
         Vector2 position,
         Vector2 velocity,
         NetworkEntityState state,
-        float elapsed,
-        bool preserveIdleAction)
-    {
-        if (state.HasFlag(NetworkEntityState.Dead))
-        {
-            entity.Die();
-            entity.CorrectPosition(position);
-            entity.AdvanceAction(elapsed);
-            return;
-        }
-
-        var moving = velocity.LengthSquared > .0001f ||
-                     state.HasFlag(NetworkEntityState.Moving);
-        if (preserveIdleAction && !moving)
-        {
-            entity.CorrectPosition(position);
-            entity.AdvanceAction(elapsed);
-            return;
-        }
-
-        entity.PresentRemoteWalk(position, velocity, moving, elapsed);
-    }
+        byte animationState,
+        float elapsed) =>
+        NetworkRemotePresentation.Apply(
+            entity, position, velocity, state, animationState, elapsed);
 
     private void AddNetworkActorVisuals(List<ActorVisual> actors)
     {
         if (!IsNetworkWorld) return;
         foreach (var (id, entity) in _networkActors)
-            if (GetNetworkActorVisual(entity, id) is { } visual &&
+            if (!IsNetworkActorAboard(id) &&
+                GetNetworkActorVisual(entity, id) is { } visual &&
                 IsActorVisible(visual))
                 actors.Add(visual);
     }
@@ -711,6 +694,32 @@ internal sealed partial class GameHostWindow
         SendNetworkWalkCommand(target);
     }
 
+    /// <summary>
+    /// Same local approach as single-player pickup: find a reachable stand
+    /// tile, show the green action marker, and let CompleteQueuedAction start
+    /// the skill. The server only receives the walk command.
+    /// </summary>
+    private void QueueNetworkWalkToAct(
+        Vector2 target,
+        float range,
+        WorldActionType type,
+        Guid? groundObjectId = null,
+        string? fishKey = null,
+        string? vegetationKey = null)
+    {
+        _worldActions.QueuePath(
+            target,
+            range,
+            type,
+            groundObjectId: groundObjectId,
+            fishKey: fishKey,
+            vegetationKey: vegetationKey,
+            clearTreeActions: true);
+        SendNetworkWalkCommand(
+            WorldActionReach.StandOff(
+                NetworkActionPosition, target, range));
+    }
+
     private void SendNetworkWalkCommand(Vector2 target)
     {
         if (_networkClient?.IsConnected != true) return;
@@ -741,6 +750,17 @@ internal sealed partial class GameHostWindow
             _player?.Stop();
         QueueNetworkSend(cancellationToken =>
             _networkClient.SendStopAsync(cancellationToken).AsTask());
+    }
+
+    private void SendNetworkPresentSkill(
+        EntityAction action,
+        float durationSeconds = (float)ActorSkillStance.OneShotSeconds)
+    {
+        if (_networkClient?.IsConnected != true) return;
+        if (!ActorSkillStance.CanPresent(action)) return;
+        QueueNetworkSend(cancellationToken =>
+            _networkClient.SendPresentSkillAsync(
+                (byte)action, durationSeconds, cancellationToken).AsTask());
     }
 
     private void SendNetworkChat(string text)
@@ -1127,6 +1147,8 @@ internal sealed partial class GameHostWindow
             if (slice.Complete)
                 _polledWorldObjects = state.WorldObjects;
         }
+        _networkClient.CopyTombstonedWorldObjectIds(
+            _networkWorldChangeApply.KnownObjectIds);
         if (_polledBoats is null)
         {
             _polledBoats = state.Boats;

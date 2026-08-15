@@ -167,6 +167,14 @@ public static class ReliableProtocolCodec
                 break;
             case StopCommandMessage:
                 break;
+            case PresentSkillCommandMessage value:
+                EnsureFinite(value.DurationSeconds, nameof(value.DurationSeconds));
+                if (value.DurationSeconds < 0 || value.DurationSeconds > 30)
+                    throw new ProtocolException(
+                        "Skill presentation duration is out of range.");
+                writer.WriteByte(value.Action);
+                writer.WriteSingle(value.DurationSeconds);
+                break;
             case ChatCommandMessage value:
                 writer.WriteByte((byte)value.Channel);
                 writer.WriteGuid(value.TargetPlayerId);
@@ -212,6 +220,9 @@ public static class ReliableProtocolCodec
                 break;
             case WorldChunkRevisionBatchMessage value:
                 WriteWorldChunkRevisionBatch(writer, value);
+                break;
+            case PickedProceduralGroundObjectsMessage value:
+                WritePickedProceduralGroundObjects(writer, value);
                 break;
             case ResourceChunkBaselineMessage value:
                 WriteResourceChunkBaseline(writer, value);
@@ -298,6 +309,9 @@ public static class ReliableProtocolCodec
                 reader.ReadString(ProtocolLimits.LeaveReasonBytes, "Detail")),
             ProtocolMessageKind.WalkCommand => ReadWalk(sequence, tick, ref reader),
             ProtocolMessageKind.StopCommand => new StopCommandMessage(sequence, tick),
+            ProtocolMessageKind.PresentSkillCommand =>
+                new PresentSkillCommandMessage(
+                    sequence, tick, reader.ReadByte(), reader.ReadSingle()),
             ProtocolMessageKind.ChatCommand => new ChatCommandMessage(
                 sequence, tick, ReadEnum<ChatChannel>(reader.ReadByte(), "ChatChannel"),
                 reader.ReadGuid(), reader.ReadString(ProtocolLimits.ChatTextBytes, "Text")),
@@ -325,6 +339,8 @@ public static class ReliableProtocolCodec
                 ReadContainerState(sequence, tick, ref reader),
             ProtocolMessageKind.WorldChunkRevisionBatch =>
                 ReadWorldChunkRevisionBatch(sequence, tick, ref reader),
+            ProtocolMessageKind.PickedProceduralGroundObjects =>
+                ReadPickedProceduralGroundObjects(sequence, tick, ref reader),
             ProtocolMessageKind.ResourceChunkBaseline =>
                 ReadResourceChunkBaseline(sequence, tick, ref reader),
             ProtocolMessageKind.ResourceNodeDeltaBatch =>
@@ -489,6 +505,44 @@ public static class ReliableProtocolCodec
                 WriteInventorySlot(
                     writer, action.InventorySlot, nameof(action.InventorySlot));
                 break;
+            case CookStewAction action:
+                writer.WriteByte((byte)ActionCommandKind.CookStew);
+                WriteWorldObjectReference(writer, action.Pot);
+                break;
+            case StrikeTrainingDummyAction action:
+                writer.WriteByte((byte)ActionCommandKind.StrikeTrainingDummy);
+                WriteWorldObjectReference(writer, action.Dummy);
+                break;
+            case PlantTreeAction action:
+                writer.WriteByte((byte)ActionCommandKind.PlantTree);
+                WriteInventorySlot(writer, action.SeedInventorySlot,
+                    nameof(action.SeedInventorySlot));
+                EnsureFinite(action.X, nameof(action.X));
+                EnsureFinite(action.Y, nameof(action.Y));
+                writer.WriteSingle(action.X);
+                writer.WriteSingle(action.Y);
+                writer.WriteInt16(action.WorldLevel);
+                writer.WriteUInt32(action.ExpectedChunkRevision);
+                break;
+            case StrikePlantedTreeAction action:
+                writer.WriteByte((byte)ActionCommandKind.StrikePlantedTree);
+                WriteWorldObjectReference(writer, action.Tree);
+                WriteInventorySlot(writer, action.ToolInventorySlot,
+                    nameof(action.ToolInventorySlot));
+                break;
+            case EmptyBucketAction action:
+                writer.WriteByte((byte)ActionCommandKind.EmptyBucket);
+                WriteInventorySlot(writer, action.Slot, nameof(action.Slot));
+                break;
+            case FillBucketAction action:
+                writer.WriteByte((byte)ActionCommandKind.FillBucket);
+                WriteInventorySlot(writer, action.Slot, nameof(action.Slot));
+                EnsureFinite(action.X, nameof(action.X));
+                EnsureFinite(action.Y, nameof(action.Y));
+                writer.WriteSingle(action.X);
+                writer.WriteSingle(action.Y);
+                writer.WriteInt16(action.WorldLevel);
+                break;
             case PlaceConstructionAction action:
                 EnsureIdentifier(action.DefinitionId, nameof(action.DefinitionId));
                 EnsureConstructionRotation(action.Rotation);
@@ -597,6 +651,26 @@ public static class ReliableProtocolCodec
             ActionCommandKind.CookOnCampfire => new CookOnCampfireAction(
                 ReadWorldObjectReference(ref reader),
                 ReadInventorySlot(ref reader, "InventorySlot")),
+            ActionCommandKind.CookStew => new CookStewAction(
+                ReadWorldObjectReference(ref reader)),
+            ActionCommandKind.StrikeTrainingDummy =>
+                new StrikeTrainingDummyAction(
+                    ReadWorldObjectReference(ref reader)),
+            ActionCommandKind.PlantTree => new PlantTreeAction(
+                ReadInventorySlot(ref reader, "SeedInventorySlot"),
+                ReadFinite(ref reader, "X"), ReadFinite(ref reader, "Y"),
+                reader.ReadInt16(), reader.ReadUInt32()),
+            ActionCommandKind.StrikePlantedTree =>
+                new StrikePlantedTreeAction(
+                    ReadWorldObjectReference(ref reader),
+                    ReadInventorySlot(ref reader, "ToolInventorySlot")),
+            ActionCommandKind.EmptyBucket => new EmptyBucketAction(
+                ReadInventorySlot(ref reader, "Slot")),
+            ActionCommandKind.FillBucket => new FillBucketAction(
+                ReadInventorySlot(ref reader, "Slot"),
+                ReadFinite(ref reader, "X"),
+                ReadFinite(ref reader, "Y"),
+                reader.ReadInt16()),
             ActionCommandKind.PlaceConstruction => ReadPlaceConstruction(
                 ref reader),
             ActionCommandKind.BuildConstruction => new BuildConstructionAction(
@@ -1225,6 +1299,51 @@ public static class ReliableProtocolCodec
         }
         ValidateWorldChunkRevisionBatch(chunks);
         return new WorldChunkRevisionBatchMessage(sequence, tick, chunks);
+    }
+
+    private static void WritePickedProceduralGroundObjects(
+        WireWriter writer,
+        PickedProceduralGroundObjectsMessage value)
+    {
+        if (value.ObjectIds is null)
+            throw new ProtocolException(
+                "Picked procedural ground objects cannot be null.");
+        if (value.ObjectIds.Count > ProtocolLimits.MaxWorldObjectsPerBatch)
+            throw new ProtocolException(
+                "Picked procedural ground objects exceed one batch.");
+        writer.WriteUInt16((ushort)value.ObjectIds.Count);
+        var seen = new HashSet<Guid>();
+        foreach (var id in value.ObjectIds)
+        {
+            if (id == Guid.Empty || !seen.Add(id))
+                throw new ProtocolException(
+                    "Picked procedural ground objects must be unique.");
+            writer.WriteGuid(id);
+        }
+    }
+
+    private static PickedProceduralGroundObjectsMessage
+        ReadPickedProceduralGroundObjects(
+            ulong sequence,
+            ulong tick,
+            ref WireReader reader)
+    {
+        var count = reader.ReadUInt16();
+        if (count > ProtocolLimits.MaxWorldObjectsPerBatch)
+            throw new ProtocolException(
+                "Picked procedural ground objects exceed one batch.");
+        var ids = new Guid[count];
+        var seen = new HashSet<Guid>();
+        for (var index = 0; index < ids.Length; index++)
+        {
+            var id = reader.ReadGuid();
+            if (id == Guid.Empty || !seen.Add(id))
+                throw new ProtocolException(
+                    "Picked procedural ground objects must be unique.");
+            ids[index] = id;
+        }
+        return new PickedProceduralGroundObjectsMessage(
+            sequence, tick, ids);
     }
 
     private static void ValidateWorldChunkRevisionBatch(

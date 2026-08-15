@@ -58,13 +58,20 @@ internal sealed partial class GameHostWindow
         var pending = new NetworkVegetationAction(
             action, target, toolSlot, sickle);
         _pendingNetworkVegetationAction = pending;
-        if (Vector2.DistanceSquared(NetworkActionPosition, target.Position) <=
-            NetworkResourceDispatchRange * NetworkResourceDispatchRange)
+        const float vegetationRange = WorldActionReach.Vegetation;
+        if (WorldActionReach.InRange(
+                NetworkActionPosition, target.Position, vegetationRange))
         {
             BeginNetworkVegetationAction(pending);
             return;
         }
-        SendNetworkWalk(target.Position, preserveResourceAction: true);
+        QueueNetworkWalkToAct(
+            target.Position,
+            vegetationRange,
+            action == ResourceActionKind.GatherBerries
+                ? WorldActionType.GatherBerries
+                : WorldActionType.GatherFibres,
+            vegetationKey: stableKey);
     }
 
     private bool UpdateNetworkVegetationInteraction()
@@ -77,9 +84,10 @@ internal sealed partial class GameHostWindow
                 CancelNetworkResourceInteraction();
                 return true;
             }
-            if (Vector2.DistanceSquared(
-                    NetworkActionPosition, pending.Target.Position) <=
-                NetworkResourceDispatchRange * NetworkResourceDispatchRange)
+            if (WorldActionReach.InRange(
+                    NetworkActionPosition,
+                    pending.Target.Position,
+                    WorldActionReach.Vegetation))
                 BeginNetworkVegetationAction(pending);
         }
 
@@ -107,7 +115,10 @@ internal sealed partial class GameHostWindow
         var duration = active.Kind == ResourceActionKind.GatherBerries
             ? FarmingSkill.GatherSeconds(active.Sickle)
             : GroundItemActionSeconds;
-        if (_player.ActionTime >= duration &&
+        RetryNetworkResourceCommitIfTimedOut();
+        if (NetworkResourceWindupReady(
+                _player.ActionTime, duration, _clock,
+                _networkResourceCommitAt) &&
             !_networkVegetationActionDispatched &&
             _networkResourceCommandId is null)
         {
@@ -132,8 +143,16 @@ internal sealed partial class GameHostWindow
         _networkVegetationActionDispatched = false;
         _networkResourceCommandId = null;
         _networkResourcePresentationOwned = true;
-        SendNetworkStop(preserveResourceAction: true);
+        var clipSeconds = action.Kind == ResourceActionKind.GatherBerries
+            ? FarmingSkill.GatherSeconds(action.Sickle)
+            : GroundItemActionSeconds;
+        _networkResourceCommitAt = _clock + clipSeconds;
+        // Leave any in-flight walk running so the server finishes the
+        // stand-off. Stopping here froze the authority behind the local
+        // clip and the later ResourceAction never committed.
+        SendNetworkPresentSkill(EntityAction.Gather, clipSeconds);
         _player!.GatherAt(action.Target.Position);
+        _player.RestartActionTime();
     }
 
     private void DispatchNetworkVegetationAction(

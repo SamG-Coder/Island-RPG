@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using IslandRpg.Gameplay;
 using IslandRpg.Protocol;
 
 namespace IslandRpg.NetworkingChecks;
@@ -46,6 +47,9 @@ internal static class ProtocolChecks
         checks.Add(
             "world chunk revision batches round trip exactly",
             WorldChunkRevisionBatchesRoundTrip);
+        checks.Add(
+            "picked procedural ground objects round trip",
+            PickedProceduralGroundObjectsRoundTrip);
         checks.Add(
             "world chunk revision batches reject malformed state",
             WorldChunkRevisionBatchesRejectMalformedState);
@@ -138,6 +142,7 @@ internal static class ProtocolChecks
                 "farewell"),
             new WalkCommandMessage(6, 15, 12.5f, -7.25f, 2),
             new StopCommandMessage(7, 16),
+            new PresentSkillCommandMessage(7, 16, (byte)EntityAction.Work),
             new ChatCommandMessage(
                 8, 17, ChatChannel.Group,
                 Guid.Parse("55555555-5555-5555-5555-555555555555"),
@@ -316,6 +321,18 @@ internal static class ProtocolChecks
                     Guid.Parse("77777777-0000-0000-0000-000000000001"),
                     1, -2, 0, 4, 9),
                 6),
+            new CookStewAction(
+                new WorldObjectReference(
+                    Guid.Parse("77777777-0000-0000-0000-000000000003"),
+                    1, -2, 0, 4, 9)),
+            new PlantTreeAction(2, 8.5f, -3.5f, 0, 6),
+            new StrikePlantedTreeAction(
+                new WorldObjectReference(
+                    Guid.Parse("77777777-0000-0000-0000-000000000004"),
+                    1, -2, 0, 4, 9),
+                3),
+            new EmptyBucketAction(4),
+            new FillBucketAction(4, 8.5f, -2.5f, 0),
         ];
 
         for (var index = 0; index < payloads.Length; index++)
@@ -611,6 +628,12 @@ internal static class ProtocolChecks
             new TakeCampfireFuelAction(objectReference),
             new LightCampfireAction(objectReference),
             new CookOnCampfireAction(objectReference, 5),
+            new CookStewAction(objectReference),
+            new StrikeTrainingDummyAction(objectReference),
+            new PlantTreeAction(2, 14.5f, -6.5f, 0, 11),
+            new StrikePlantedTreeAction(objectReference, 3),
+            new EmptyBucketAction(6),
+            new FillBucketAction(6, 3.5f, 8.5f, -1),
             new PlaceConstructionAction(
                 "wooden_wall", 11, 22.75f, -3.5f, 0, 3, 73),
             new BuildConstructionAction(objectReference),
@@ -1319,6 +1342,28 @@ internal static class ProtocolChecks
             expected.Chunks,
             actual.Chunks,
             "every chunk revision must round trip exactly");
+    }
+
+    private static void PickedProceduralGroundObjectsRoundTrip()
+    {
+        var expected = new PickedProceduralGroundObjectsMessage(
+            911,
+            1201,
+            [
+                Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1"),
+                Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2")
+            ]);
+        var encoded = ReliableProtocolCodec.Encode(expected);
+        var actual = (PickedProceduralGroundObjectsMessage)
+            ReliableProtocolCodec.Decode(encoded);
+        CheckAssert.Equal(
+            expected with { ObjectIds = actual.ObjectIds },
+            actual,
+            "picked-loot metadata must round trip exactly");
+        CheckAssert.SequenceEqual(
+            expected.ObjectIds,
+            actual.ObjectIds,
+            "every picked generated-loot id must round trip exactly");
     }
 
     private static void WorldChunkRevisionBatchesRejectMalformedState()
